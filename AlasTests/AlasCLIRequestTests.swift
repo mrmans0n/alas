@@ -149,6 +149,24 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test func decodesReviewReplyAndResolve() throws {
+        let reply = #"{"v":1,"kind":"cli","command":"review_reply","session_id":"s1","params":{"comment_id":"c1","body":"done"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(reply.utf8)).command == .review(.reply(commentID: "c1", body: "done")))
+
+        let resolve = #"{"v":1,"kind":"cli","command":"review_resolve","session_id":"s1","params":{"comment_id":"c1"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(resolve.utf8)).command == .review(.resolve(commentID: "c1", reply: nil, reopen: false)))
+
+        let reopen = #"{"v":1,"kind":"cli","command":"review_resolve","session_id":"s1","params":{"comment_id":"c1","reply":"oops","reopen":true}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(reopen.utf8)).command == .review(.resolve(commentID: "c1", reply: "oops", reopen: true)))
+    }
+
+    @Test func reviewReplyRequiresParams() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_reply","session_id":"s1"}"#
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

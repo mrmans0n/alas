@@ -35,6 +35,8 @@ struct AlasCLIRequest: Equatable {
         case localChanges
         case provider(target: String)
         case comments(sessionID: String?, state: ReviewCommentWireFilter)
+        case reply(commentID: String, body: String)
+        case resolve(commentID: String, reply: String?, reopen: Bool)
     }
 
     let version: Int
@@ -69,6 +71,17 @@ struct AlasCLIRequest: Equatable {
     private struct ReviewCommentsParams: Decodable {
         var session_id: String?
         var state: String?
+    }
+
+    private struct ReviewReplyParams: Decodable {
+        var comment_id: String
+        var body: String
+    }
+
+    private struct ReviewResolveParams: Decodable {
+        var comment_id: String
+        var reply: String?
+        var reopen: Bool?
     }
 
     /// Typed access to the `params` object new-style commands carry.
@@ -176,6 +189,19 @@ struct AlasCLIRequest: Equatable {
                 filter = .active
             }
             command = .review(.comments(sessionID: params?.session_id?.nilIfBlank, state: filter))
+        case "review_reply":
+            let params = try Self.decodeParams(ReviewReplyParams.self, from: data)
+            command = .review(.reply(
+                commentID: try requiredNonEmpty(params.comment_id),
+                body: try requiredNonEmpty(params.body)
+            ))
+        case "review_resolve":
+            let params = try Self.decodeParams(ReviewResolveParams.self, from: data)
+            command = .review(.resolve(
+                commentID: try requiredNonEmpty(params.comment_id),
+                reply: params.reply?.nilIfBlank,
+                reopen: params.reopen ?? false
+            ))
         case "resolve":
             command = .resolve
         default:

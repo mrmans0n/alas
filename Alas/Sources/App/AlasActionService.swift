@@ -25,6 +25,11 @@ struct AlasActionService {
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
+    var reviewSessionStore: () -> ReviewSessionStore = { ReviewSessionStore() }
+    var notifyReviewCommentsChanged: () -> Void = {
+        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+    }
+    var now: () -> Date = Date.init
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -139,6 +144,79 @@ struct AlasActionService {
             }
         }
         return .text([ReviewCommentWireDTO.jsonLine(filtered.map(ReviewCommentWireDTO.init))])
+    }
+
+    /// The author identity CLI/MCP mutations write. Phase 2+ can thread a
+    /// real agent name through the wire; the enum already supports it.
+    static let cliAgentAuthor = ReviewDraftCommentAuthor.agent(name: "Agent")
+
+    func reviewReply(origin: Worktree, commentID: String, body: String) -> AlasCLIResponse {
+        let store = draftCommentStore()
+        do {
+            guard var comment = try store.find(commentID: commentID),
+                  comment.sessionID.isFor(worktreeID: origin.id) else {
+                return .error("unknown review comment id \"\(commentID)\"")
+            }
+            let timestamp = now()
+            var replies = comment.allReplies
+            replies.append(ReviewCommentReply(
+                id: UUID().uuidString,
+                author: Self.cliAgentAuthor,
+                bodyMarkdown: body,
+                createdAt: timestamp
+            ))
+            comment.replies = replies
+            comment.updatedAt = timestamp
+            try store.save(comment)
+        } catch {
+            return .error("could not update review comment: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .ok
+    }
+
+    func reviewResolve(origin: Worktree, commentID: String, reply: String?, reopen: Bool) -> AlasCLIResponse {
+        let store = draftCommentStore()
+        do {
+            guard var comment = try store.find(commentID: commentID),
+                  comment.sessionID.isFor(worktreeID: origin.id) else {
+                return .error("unknown review comment id \"\(commentID)\"")
+            }
+            let timestamp = now()
+            if let reply {
+                var replies = comment.allReplies
+                replies.append(ReviewCommentReply(
+                    id: UUID().uuidString,
+                    author: Self.cliAgentAuthor,
+                    bodyMarkdown: reply,
+                    createdAt: timestamp
+                ))
+                comment.replies = replies
+            }
+            comment.state = reopen ? .active : .resolved
+            comment.resolvedBy = reopen ? nil : Self.cliAgentAuthor
+            comment.updatedAt = timestamp
+            try store.save(comment)
+            if !reopen {
+                try markAddressedHandoffs(worktreeID: origin.id, store: store, timestamp: timestamp)
+            }
+        } catch {
+            return .error("could not update review comment: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .ok
+    }
+
+    private func markAddressedHandoffs(worktreeID: String, store: ReviewDraftCommentStore, timestamp: Date) throws {
+        let sessions = reviewSessionStore()
+        for record in try sessions.list(worktreeID: worktreeID) {
+            guard let updated = ReviewHandoffProgress.recomputingAddressed(
+                record: record,
+                isResolved: { id in (try? store.find(commentID: id))?.state == .resolved },
+                now: timestamp
+            ) else { continue }
+            try sessions.save(updated)
+        }
     }
 
     // MARK: - Worktree matching (moved verbatim from AlasCLICommandRouter)

@@ -19,6 +19,10 @@ struct AlasCLICommandRouter {
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
+    var reviewSessionStore: () -> ReviewSessionStore = { ReviewSessionStore() }
+    var notifyReviewCommentsChanged: () -> Void = {
+        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+    }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -32,6 +36,8 @@ struct AlasCLICommandRouter {
             openReviewChanges: openReviewChanges,
             openProviderReview: openProviderReview,
             draftCommentStore: draftCommentStore,
+            reviewSessionStore: reviewSessionStore,
+            notifyReviewCommentsChanged: notifyReviewCommentsChanged,
             activateApp: activateApp
         )
     }
@@ -72,6 +78,10 @@ struct AlasCLICommandRouter {
             return await service.reviewProvider(origin: origin, target: target)
         case .review(.comments(let sessionID, let state)):
             return service.reviewComments(origin: origin, sessionID: sessionID, filter: state)
+        case .review(.reply(let commentID, let body)):
+            return service.reviewReply(origin: origin, commentID: commentID, body: body)
+        case .review(.resolve(let commentID, let reply, let reopen)):
+            return service.reviewResolve(origin: origin, commentID: commentID, reply: reply, reopen: reopen)
         }
     }
 }
