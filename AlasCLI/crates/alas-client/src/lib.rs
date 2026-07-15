@@ -130,6 +130,14 @@ pub enum Command {
     ReviewComments { session_id: Option<String>, state: Option<String> },
     ReviewReply { comment_id: String, body: String },
     ReviewResolve { comment_id: String, reply: Option<String>, reopen: bool },
+    ReviewCommentAdd {
+        path: String,
+        start_line: u64,
+        end_line: Option<u64>,
+        side: Option<String>,
+        body: String,
+        session_id: Option<String>,
+    },
     Resolve,
 }
 
@@ -199,6 +207,24 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             }
             if *reopen {
                 params.insert("reopen".into(), serde_json::Value::Bool(true));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::ReviewCommentAdd { path, start_line, end_line, side, body, session_id } => {
+            let mut r = Request::new("review_comment_add");
+            let mut params = serde_json::Map::new();
+            params.insert("path".into(), serde_json::Value::String(path.clone()));
+            params.insert("start_line".into(), serde_json::Value::from(*start_line));
+            if let Some(end_line) = end_line {
+                params.insert("end_line".into(), serde_json::Value::from(*end_line));
+            }
+            if let Some(side) = side {
+                params.insert("side".into(), serde_json::Value::String(side.clone()));
+            }
+            params.insert("body".into(), serde_json::Value::String(body.clone()));
+            if let Some(session_id) = session_id {
+                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
             }
             r.params = Some(serde_json::Value::Object(params));
             r
@@ -551,6 +577,30 @@ mod tests {
             Some("/wt".into()),
         );
         assert_eq!(reopen.params, Some(serde_json::json!({"comment_id": "c1", "reopen": true})));
+    }
+
+    #[test]
+    fn builds_review_comment_add_params() {
+        let cmd = Command::ReviewCommentAdd {
+            path: "src/a.swift".into(),
+            start_line: 10,
+            end_line: Some(12),
+            side: Some("new".into()),
+            body: "consider guard".into(),
+            session_id: None,
+        };
+        let req = build_request(&cmd, None, Some("/wt".into()));
+        assert_eq!(req.command, "review_comment_add");
+        assert_eq!(
+            req.params,
+            Some(serde_json::json!({
+                "path": "src/a.swift",
+                "start_line": 10,
+                "end_line": 12,
+                "side": "new",
+                "body": "consider guard"
+            }))
+        );
     }
 
     #[test]

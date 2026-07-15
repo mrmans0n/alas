@@ -144,7 +144,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "review",
-            "description": "Open Alas's review pane for the user: on the current local changes when target is omitted, or on a provider pull/merge request when target (a PR/MR number or URL) is given.",
+            "description": "Open Alas's review pane for the user: on the current local changes when target is omitted, or on a provider pull/merge request when target (a PR/MR number or URL) is given. Returns the review session id for use with review_comment_add.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -186,6 +186,22 @@ pub fn tool_definitions() -> Vec<Value> {
                     "state": { "type": "string", "enum": ["resolved", "active"], "description": "Target state. Default: resolved." }
                 },
                 "required": ["comment_id"]
+            }
+        }),
+        json!({
+            "name": "review_comment_add",
+            "description": "File a review comment into the user's Alas review pane, attributed to the agent. The user sees it inline in the diff. Use after the review tool to leave findings on specific lines.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path relative to the worktree root." },
+                    "start_line": { "type": "integer", "minimum": 1, "description": "First line the comment refers to." },
+                    "end_line": { "type": "integer", "minimum": 1, "description": "Last line of the range, when commenting on a range." },
+                    "side": { "type": "string", "enum": ["old", "new"], "description": "Which side of the diff the lines refer to. Default: new." },
+                    "body": { "type": "string", "description": "Comment body, Markdown." },
+                    "session_id": { "type": "string", "description": "Review session to file into (returned by the review tool). Omit for the worktree's local-changes review." }
+                },
+                "required": ["path", "start_line", "body"]
             }
         }),
     ]
@@ -250,6 +266,36 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 comment_id: required_string(args, "comment_id")?,
                 reply: optional_string(args, "reply"),
                 reopen,
+            })
+        }
+        "review_comment_add" => {
+            let start_line = args
+                .get("start_line")
+                .and_then(Value::as_u64)
+                .filter(|line| *line >= 1)
+                .ok_or("review_comment_add requires an integer 'start_line' >= 1")?;
+            let end_line = match args.get("end_line") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_u64()
+                        .filter(|line| *line >= start_line)
+                        .ok_or("review_comment_add 'end_line' must be an integer >= start_line")?,
+                ),
+            };
+            let side = optional_string(args, "side");
+            if let Some(side) = &side {
+                if side != "old" && side != "new" {
+                    return Err("review_comment_add 'side' must be 'old' or 'new'".into());
+                }
+            }
+            Ok(Command::ReviewCommentAdd {
+                path: required_string(args, "path")?,
+                start_line,
+                end_line,
+                side,
+                body: required_string(args, "body")?,
+                session_id: optional_string(args, "session_id"),
             })
         }
         other => Err(format!("unknown tool: {other}")),
@@ -334,6 +380,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewReply { .. } => "Reply posted.".into(),
         Command::ReviewResolve { reopen: false, .. } => "Comment resolved.".into(),
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
+        Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -471,7 +518,8 @@ mod tests {
                 "review",
                 "review_comments",
                 "review_reply",
-                "review_resolve"
+                "review_resolve",
+                "review_comment_add"
             ]
         );
         for tool in tools {
@@ -593,6 +641,36 @@ mod tests {
             alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: Some("done".into()), reopen: true }
         );
         assert!(command_for_tool("review_resolve", &json!({"comment_id": "c1", "state": "bogus"}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_comment_add_tool_maps_and_validates() {
+        assert_eq!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 3, "body": "hm"}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::ReviewCommentAdd {
+                path: "a.swift".into(),
+                start_line: 3,
+                end_line: None,
+                side: None,
+                body: "hm".into(),
+                session_id: None,
+            }
+        );
+        assert!(command_for_tool("review_comment_add", &json!({"path": "a.swift", "body": "hm"}), "/wt").is_err());
+        assert!(command_for_tool("review_comment_add", &json!({"path": "a.swift", "start_line": 0, "body": "hm"}), "/wt").is_err());
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 3, "body": "hm", "side": "sideways"}),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]

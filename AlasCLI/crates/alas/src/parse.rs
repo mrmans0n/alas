@@ -18,7 +18,8 @@ usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
 usage: alas review [pr-number-or-url]
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
 usage: alas review reply <comment-id> <body>
-usage: alas review resolve <comment-id> [--reply <body>] [--reopen]";
+usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
+usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
@@ -51,6 +52,7 @@ fn parse_review(args: &[&str]) -> Result<Command, String> {
     match args.first().copied() {
         None => Ok(Command::Review { target: None }),
         Some("comments") => parse_review_comments(&args[1..]),
+        Some("comment") => parse_review_comment(&args[1..]),
         Some("reply") => {
             const USAGE: &str = "usage: alas review reply <comment-id> <body>";
             if args.len() != 3 || args[1].starts_with("--") {
@@ -113,6 +115,53 @@ fn parse_review_comments(args: &[&str]) -> Result<Command, String> {
         i += 1;
     }
     Ok(Command::ReviewComments { session_id, state })
+}
+
+fn parse_review_comment(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]";
+    if args.len() < 3 || args[..3].iter().any(|a| a.starts_with("--")) {
+        return Err(USAGE.into());
+    }
+    let path = args[0].to_string();
+    let start_line: u64 = args[1].parse().map_err(|_| USAGE.to_string())?;
+    if start_line == 0 {
+        return Err(USAGE.into());
+    }
+    let body = args[2].to_string();
+
+    let mut end_line: Option<u64> = None;
+    let mut side: Option<String> = None;
+    let mut session_id: Option<String> = None;
+    let rest = &args[3..];
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--end-line" => {
+                i += 1;
+                let value = flag_value(rest, i).ok_or(USAGE)?;
+                let parsed: u64 = value.parse().map_err(|_| USAGE.to_string())?;
+                if parsed < start_line {
+                    return Err(USAGE.into());
+                }
+                end_line = Some(parsed);
+            }
+            "--side" => {
+                i += 1;
+                let value = flag_value(rest, i).ok_or(USAGE)?;
+                if value != "old" && value != "new" {
+                    return Err(USAGE.into());
+                }
+                side = Some(value.to_string());
+            }
+            "--session" => {
+                i += 1;
+                session_id = Some(flag_value(rest, i).ok_or(USAGE)?.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewCommentAdd { path, start_line, end_line, side, body, session_id })
 }
 
 /// Value at `i` unless it is missing or looks like another flag.
@@ -313,6 +362,40 @@ mod tests {
         assert!(parse(&s(&["review", "resolve"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "resolve", "--reopen"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "resolve", "c1", "--reply"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_comment_parses_positionals_and_flags() {
+        assert_eq!(
+            parse(&s(&["review", "comment", "src/a.swift", "10", "fix this"]), Path::new("/b")).unwrap(),
+            Command::ReviewCommentAdd {
+                path: "src/a.swift".into(),
+                start_line: 10,
+                end_line: None,
+                side: None,
+                body: "fix this".into(),
+                session_id: None,
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "comment", "a.swift", "3", "b", "--end-line", "5", "--side", "old", "--session", "sid"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::ReviewCommentAdd {
+                path: "a.swift".into(),
+                start_line: 3,
+                end_line: Some(5),
+                side: Some("old".into()),
+                body: "b".into(),
+                session_id: Some("sid".into()),
+            }
+        );
+        assert!(parse(&s(&["review", "comment", "a.swift", "0", "b"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comment", "a.swift", "x", "b"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comment", "a.swift", "3", "b", "--side", "sideways"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comment", "a.swift"]), Path::new("/b")).is_err());
     }
 
     #[test]
