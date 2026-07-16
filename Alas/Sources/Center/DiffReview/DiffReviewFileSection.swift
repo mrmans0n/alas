@@ -432,8 +432,12 @@ struct DiffReviewFileSection: View {
         Set([focusedFeedbackID, inlineFeedbackScrollTargetID].compactMap(\.self))
     }
 
-    private var requiredDraftCommentIDs: Set<String> {
-        Set([focusedDraftCommentID, draftCommentScrollTargetID].compactMap(\.self))
+    private var commandedInlineFeedbackIDs: Set<String> {
+        Set([inlineFeedbackScrollTargetID].compactMap(\.self))
+    }
+
+    private var commandedDraftCommentIDs: Set<String> {
+        Set([draftCommentScrollTargetID].compactMap(\.self))
     }
 
     private func fileLevelInlineFeedback(renderContext: DiffReviewRenderContext?) -> [DiffReviewInlineFeedback] {
@@ -561,16 +565,22 @@ struct DiffReviewFileSection: View {
     private func content(renderContext: DiffReviewRenderContext?) -> some View {
         if let displayModel = file.displayModel, let renderContext {
             let groups = renderContext.groups
-            if let requiredGroupID = DiffReviewRequiredGroupResolver.groupID(
+            let requiredGroupIDs = DiffReviewRequiredGroupResolver.groupIDs(
                 in: groups,
-                inlineFeedbackIDs: requiredInlineFeedbackIDs,
-                draftCommentIDs: requiredDraftCommentIDs
-            ), let requiredIndex = groups.firstIndex(where: { $0.id == requiredGroupID }) {
-                // Keep the commanded card's real ID available without eagerly rendering unrelated hunks.
+                inlineFeedbackIDs: commandedInlineFeedbackIDs,
+                draftCommentIDs: commandedDraftCommentIDs
+            )
+            if !requiredGroupIDs.isEmpty {
                 VStack(spacing: 0) {
-                    lazyGroupStack(Array(groups[..<requiredIndex]), displayModel: displayModel)
-                    groupContent(groups[requiredIndex], displayModel: displayModel)
-                    lazyGroupStack(Array(groups[groups.index(after: requiredIndex)...]), displayModel: displayModel)
+                    ForEach(DiffReviewGroupRenderRun.runs(in: groups, requiredGroupIDs: requiredGroupIDs)) { run in
+                        switch run.content {
+                        case .lazy(let groups):
+                            lazyGroupStack(groups, displayModel: displayModel)
+                        case .required(let group):
+                            // Keep commanded card IDs available without eagerly rendering unrelated hunks.
+                            groupContent(group, displayModel: displayModel)
+                        }
+                    }
                 }
             } else {
                 lazyGroupStack(groups, displayModel: displayModel)
@@ -1108,17 +1118,56 @@ struct DiffReviewFileSection: View {
 }
 
 enum DiffReviewRequiredGroupResolver {
-    static func groupID(
+    static func groupIDs(
         in groups: [DiffReviewRenderContext.Group],
         inlineFeedbackIDs: Set<String>,
         draftCommentIDs: Set<String>
-    ) -> String? {
-        groups.first { group in
-            group.inlineFeedback.contains { inlineFeedbackIDs.contains($0.id) }
+    ) -> Set<String> {
+        Set(groups.compactMap { group in
+            let isRequired = group.inlineFeedback.contains { inlineFeedbackIDs.contains($0.id) }
                 || group.segments.contains { segment in
                     segment.draftComments.contains { draftCommentIDs.contains($0.id) }
                 }
-        }?.id
+            return isRequired ? group.id : nil
+        })
+    }
+}
+
+private struct DiffReviewGroupRenderRun: Identifiable {
+    enum Content {
+        case lazy([DiffReviewRenderContext.Group])
+        case required(DiffReviewRenderContext.Group)
+    }
+
+    let id: String
+    let content: Content
+
+    static func runs(
+        in groups: [DiffReviewRenderContext.Group],
+        requiredGroupIDs: Set<String>
+    ) -> [DiffReviewGroupRenderRun] {
+        var runs: [DiffReviewGroupRenderRun] = []
+        var lazyGroups: [DiffReviewRenderContext.Group] = []
+
+        func appendLazyRun() {
+            guard let first = lazyGroups.first, let last = lazyGroups.last else { return }
+            runs.append(DiffReviewGroupRenderRun(
+                id: "lazy:\(first.id):\(last.id)",
+                content: .lazy(lazyGroups)
+            ))
+            lazyGroups.removeAll(keepingCapacity: true)
+        }
+
+        for group in groups {
+            if requiredGroupIDs.contains(group.id) {
+                appendLazyRun()
+                runs.append(DiffReviewGroupRenderRun(id: "required:\(group.id)", content: .required(group)))
+            } else {
+                lazyGroups.append(group)
+            }
+        }
+        appendLazyRun()
+        return runs
     }
 }
 

@@ -206,6 +206,12 @@ struct DiffReviewSurfaceTests {
             anchor: DiffReviewInlineFeedbackAnchor(path: path, line: 80, side: .new),
             evidenceItemID: "deep-feedback"
         )
+        let staleDraft = draftComment(
+            id: "stale-draft",
+            fileID: file.id,
+            path: path,
+            startLine: 1
+        )
         let session = DiffReviewLoadedSession(
             files: [file],
             summary: DiffReviewSessionModel(files: [file.summary], groupsEnabled: false)
@@ -229,7 +235,9 @@ struct DiffReviewSurfaceTests {
                 feedbackID: feedback.id,
                 fileID: file.id,
                 generation: 1
-            )
+            ),
+            draftCommentsByFileID: [file.id: [staleDraft]],
+            focusedDraftCommentID: staleDraft.id
         )
         .environment(\.theme, theme())
 
@@ -261,7 +269,7 @@ struct DiffReviewSurfaceTests {
             id: "deep-draft",
             fileID: fileID,
             path: path,
-            startLine: 80
+            startLine: 1
         )
 
         let renderContext = DiffReviewRenderContextBuilder.build(
@@ -278,16 +286,16 @@ struct DiffReviewSurfaceTests {
             annotations: []
         )
 
-        #expect(DiffReviewRequiredGroupResolver.groupID(
+        #expect(DiffReviewRequiredGroupResolver.groupIDs(
             in: renderContext.groups,
             inlineFeedbackIDs: [feedback.id],
             draftCommentIDs: []
-        ) == "group-79")
-        #expect(DiffReviewRequiredGroupResolver.groupID(
+        ) == ["group-79"])
+        #expect(DiffReviewRequiredGroupResolver.groupIDs(
             in: renderContext.groups,
-            inlineFeedbackIDs: [],
+            inlineFeedbackIDs: [feedback.id],
             draftCommentIDs: [comment.id]
-        ) == "group-79")
+        ) == ["group-0", "group-79"])
     }
 
     @Test func fileSectionEmbedsDiffPaneWithoutToolbarAndShowsOpenFile() {
