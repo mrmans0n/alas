@@ -271,6 +271,10 @@ struct ReviewReadinessModel: Equatable, Sendable {
             } else if request.worstCheckBucket == .fail || request.hasActionableFeedback {
                 actions.append(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true))
             }
+            if request.provider == .gitlab,
+               !actions.contains(where: { $0.kind == .inspectReviewEvidence }) {
+                actions.append(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true))
+            }
         } else if canCreateReviewRequest(snapshot) {
             actions.append(Action(kind: .createReviewRequest, title: "Create \(requestLabel)", isEnabled: true))
         }
