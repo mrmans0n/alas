@@ -434,6 +434,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }),
         "review" => Ok(Command::Review {
             target: review_target(args)?,
+            worktree: None,
         }),
         "review_comments" => {
             let state = optional_string(args, "state");
@@ -652,8 +653,9 @@ fn success_message(command: &Command) -> String {
         Command::WtDelete { target, .. } => format!("Deleted worktree '{target}'."),
         Command::Review {
             target: Some(target),
+            ..
         } => format!("Opened review for '{target}' in Alas."),
-        Command::Review { target: None } => "Opened review of local changes in Alas.".into(),
+        Command::Review { target: None, .. } => "Opened review of local changes in Alas.".into(),
         Command::ReviewComments { .. } => "No review comments found.".into(),
         Command::ReviewReply { .. } => "Reply posted.".into(),
         Command::ReviewResolve { reopen: false, .. } => "Comment resolved.".into(),
@@ -1054,12 +1056,13 @@ mod tests {
     fn review_target_is_optional() {
         assert_eq!(
             command_for_tool("review", &json!({}), "/wt").unwrap(),
-            alas_client::Command::Review { target: None }
+            alas_client::Command::Review { target: None, worktree: None }
         );
         assert_eq!(
             command_for_tool("review", &json!({"target": "123"}), "/wt").unwrap(),
             alas_client::Command::Review {
-                target: Some("123".into())
+                target: Some("123".into()),
+                worktree: None
             }
         );
     }
@@ -1069,12 +1072,13 @@ mod tests {
         assert_eq!(
             command_for_tool("review", &json!({"target": 123}), "/wt").unwrap(),
             alas_client::Command::Review {
-                target: Some("123".into())
+                target: Some("123".into()),
+                worktree: None
             }
         );
         assert_eq!(
             command_for_tool("review", &json!({"target": null}), "/wt").unwrap(),
-            alas_client::Command::Review { target: None }
+            alas_client::Command::Review { target: None, worktree: None }
         );
         assert!(command_for_tool("review", &json!({"target": true}), "/wt").is_err());
         assert!(command_for_tool("review", &json!({"target": ["1"]}), "/wt").is_err());

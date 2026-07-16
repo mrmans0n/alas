@@ -20,7 +20,7 @@ usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
-usage: alas review [pr-number-or-url]
+usage: alas review [target] [--worktree <name-or-path>]
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
 usage: alas review reply <comment-id> <body>
 usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
@@ -219,7 +219,10 @@ pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
 
 fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
     match args.first().copied() {
-        None => Ok(Command::Review { target: None }),
+        None => Ok(Command::Review {
+            target: None,
+            worktree: None,
+        }),
         Some("comments") => parse_review_comments(&args[1..]),
         Some("comment") => parse_review_comment(&args[1..], base),
         Some("reply") => {
@@ -234,11 +237,35 @@ fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String
         }
         Some("resolve") => parse_review_resolve(&args[1..]),
         Some("finish") => parse_review_finish(&args[1..]),
-        Some(target) if args.len() == 1 && !target.starts_with("--") => Ok(Command::Review {
-            target: Some(target.to_string()),
-        }),
-        _ => Err(USAGE_ALL.into()),
+        Some(_) => parse_review_open(args),
     }
+}
+
+/// `alas review [target] [--worktree <name-or-path>]`. The target is a PR/MR
+/// number or URL, a commit range (`base..head` / `base...head`), a branch, or
+/// a revision — classified by the app, not here.
+fn parse_review_open(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review [target] [--worktree <name-or-path>]";
+    let mut target: Option<String> = None;
+    let mut worktree: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--worktree" => {
+                if worktree.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                worktree = Some(flag_value(args, i).ok_or(USAGE)?.to_string());
+            }
+            value if !value.starts_with("--") && target.is_none() => {
+                target = Some(value.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::Review { target, worktree })
 }
 
 fn parse_review_finish(args: &[&str]) -> Result<Command, String> {
@@ -711,7 +738,10 @@ mod tests {
         assert!(parse(&s(&["review", "1", "2"]), Path::new("/b")).is_err());
         assert_eq!(
             parse(&s(&["review"]), Path::new("/b")).unwrap(),
-            Command::Review { target: None }
+            Command::Review {
+                target: None,
+                worktree: None
+            }
         );
     }
 
@@ -956,9 +986,63 @@ mod tests {
         assert_eq!(
             parse(&s(&["review", "123"]), Path::new("/b")).unwrap(),
             Command::Review {
-                target: Some("123".into())
+                target: Some("123".into()),
+                worktree: None
             }
         );
+    }
+
+    #[test]
+    fn review_parses_worktree_flag_with_and_without_target() {
+        assert_eq!(
+            parse(
+                &s(&["review", "abc123", "--worktree", "feature-x"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("abc123".into()),
+                worktree: Some("feature-x".into())
+            }
+        );
+        assert_eq!(
+            parse(&s(&["review", "--worktree", "feature-x"]), Path::new("/b")).unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("feature-x".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "main..HEAD", "--worktree", "feature-x"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("main..HEAD".into()),
+                worktree: Some("feature-x".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_rejects_bad_worktree_flag_usage() {
+        assert!(parse(&s(&["review", "--worktree"]), Path::new("/b")).is_err());
+        assert!(
+            parse(
+                &s(&["review", "x", "--worktree", "--flag"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["review", "x", "--worktree", "a", "--worktree", "b"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(parse(&s(&["review", "x", "--unknown", "v"]), Path::new("/b")).is_err());
     }
 
     #[test]
