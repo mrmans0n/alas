@@ -39,6 +39,7 @@ final class ACPSessionManager: ObservableObject {
     let worktreePath: String
     let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
+    private let delegatedMessageNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
     let onDirtyCheck: ((String) -> Bool)?
@@ -49,6 +50,7 @@ final class ACPSessionManager: ObservableObject {
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
+    private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     /// Builds the app-provided "alas" MCP server entry for a worktree path
     /// and local ACP session id,
@@ -293,6 +295,7 @@ final class ACPSessionManager: ObservableObject {
     /// release the lease after `connection.shutdown` — preserving the
     /// correct shutdown order (connection down before lease freed).
     private var attachingSessions: Set<ACPSession.ID> = []
+    private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
@@ -303,7 +306,9 @@ final class ACPSessionManager: ObservableObject {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
+         onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
+         delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
@@ -321,9 +326,12 @@ final class ACPSessionManager: ObservableObject {
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onInputAwaiting = onInputAwaiting
+        self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.builtInMCPProvider = builtInMCPProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
+        self.delegatedMessageNotifier = delegatedMessageNotifier
+            ?? DarwinChangeNotifier(worktreeId: worktreeId, channel: "delegated-inbox")
         _ = hydratorPath
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
@@ -1713,6 +1721,13 @@ extension ACPSessionManager {
             }
         }
         writerWatchTokens[sessionId] = token
+        let delegatedMessageToken = delegatedMessageNotifier.subscribe { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self._ownedLeases.contains(sessionId) else { return }
+                self.onDelegatedMessageAvailable?(sessionId)
+            }
+        }
+        delegatedMessageWatchTokens[sessionId] = delegatedMessageToken
     }
 
     private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID) {
@@ -1730,7 +1745,17 @@ extension ACPSessionManager {
 
     private func stopWriterWatch(sessionId: ACPSession.ID) {
         if let t = writerWatchTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
+        if let t = delegatedMessageWatchTokens.removeValue(forKey: sessionId) {
+            delegatedMessageNotifier.unsubscribe(t)
+        }
         writerWatchDebounce.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    /// Wake the active owner of this worktree to drain delegated messages.
+    /// This uses a dedicated channel so normal transcript persistence does not
+    /// trigger inbox scans.
+    func notifyDelegatedMessagesAvailable() {
+        delegatedMessageNotifier.post()
     }
 
     // MARK: - Test accessors for writer watch
@@ -2722,6 +2747,12 @@ extension ACPSessionManager {
     ) async -> Bool {
         guard let session = sessions[sessionId] else { return false }
         guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
+            return true
+        }
+        guard !session.transcript.messages.contains(where: { message in
+            guard case .user(_, _, _, _, let recordedSource) = message else { return false }
+            return recordedSource == source
+        }) else {
             return true
         }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: [])

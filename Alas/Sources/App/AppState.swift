@@ -536,7 +536,6 @@ final class AppState {
             let worktree = record.childWorktreeId.flatMap(worktree(withId:))
                 ?? worktree(atPersistedDestinationPath: record.worktreeRequest.destinationPath)
             guard let worktree,
-                  let prompt = record.pendingInitialPrompt,
                   let manager = acpManager(for: worktree)
             else {
                 try? await acpOrchestrationPersistence.updatePhase(
@@ -556,21 +555,36 @@ final class AppState {
                 )
             }
             delegatedSessionParents[record.childSessionId] = record.parentSessionId
-            if await manager.persistedSessionRow(id: record.childSessionId) != nil {
+            let sessionAlreadyPersisted = await manager.persistedSessionRow(id: record.childSessionId) != nil
+            if sessionAlreadyPersisted {
                 _ = manager.placeholderSession(id: record.childSessionId)
                 await manager.hydrateIfNeeded(id: record.childSessionId)
             } else {
                 _ = manager.createSession(id: record.childSessionId, agentId: record.agentId)
             }
-            let accepted = await manager.enqueueDelegatedPrompt(
-                text: prompt,
-                source: ACPDelegatedPromptSource(
-                    sessionId: record.parentSessionId,
-                    messageId: "initial-\(record.childSessionId)"
-                ),
-                into: record.childSessionId
-            )
-            guard accepted else {
+            if let prompt = record.pendingInitialPrompt {
+                let accepted = await manager.enqueueDelegatedPrompt(
+                    text: prompt,
+                    source: ACPDelegatedPromptSource(
+                        sessionId: record.parentSessionId,
+                        messageId: "initial-\(record.childSessionId)"
+                    ),
+                    into: record.childSessionId
+                )
+                guard accepted else {
+                    try? await acpOrchestrationPersistence.updatePhase(
+                        childSessionId: record.childSessionId,
+                        phase: .failed,
+                        failureMessage: "Could not restore delegated session prompt.",
+                        updatedAt: Int64(Date().timeIntervalSince1970)
+                    )
+                    continue
+                }
+                try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
+                    childSessionId: record.childSessionId,
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+            } else if !sessionAlreadyPersisted {
                 try? await acpOrchestrationPersistence.updatePhase(
                     childSessionId: record.childSessionId,
                     phase: .failed,
@@ -579,10 +593,6 @@ final class AppState {
                 )
                 continue
             }
-            try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
-                childSessionId: record.childSessionId,
-                updatedAt: Int64(Date().timeIntervalSince1970)
-            )
             try? await acpOrchestrationPersistence.updatePhase(
                 childSessionId: record.childSessionId,
                 phase: .ready,
@@ -4497,6 +4507,12 @@ final class AppState {
                     requestId: self.notificationRequestId(for: request)
                 )
             },
+            onDelegatedMessageAvailable: { [weak self] sessionId in
+                Task { @MainActor [weak self] in
+                    guard let self, let manager = self.acpManagers[worktree.id] else { return }
+                    await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
+                }
+            },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
                     return nil
@@ -4741,7 +4757,7 @@ final class AppState {
     func delegatedSessionSummaries(for sessionId: String) async -> [ACPOrchestrationSessionSummary] {
         let parent = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
         let children = (try? await acpOrchestrationPersistence.children(parentSessionId: sessionId)) ?? []
-        var summaries = children.map { record in
+        var summaries: [ACPOrchestrationSessionSummary] = children.map { record in
             let runtime = record.childWorktreeId
                 .flatMap { acpManagers[$0]?.liveSession(for: record.childSessionId) }
                 .map { session -> ACPOrchestrationRuntimeState in
@@ -4751,7 +4767,7 @@ final class AppState {
                     case .awaitingPermission, .awaitingInput: return .awaitingInput
                     }
                 }
-            ACPOrchestrationSessionSummary(
+            return ACPOrchestrationSessionSummary(
                 sessionId: record.childSessionId,
                 relationship: "child",
                 agentId: record.agentId,

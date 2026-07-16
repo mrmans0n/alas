@@ -5,6 +5,29 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager")
 struct ACPSessionManagerTests {
+    @Test("delegated prompt already recorded in the transcript is not requeued")
+    func delegatedPromptRecordedInTranscriptIsNotRequeued() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-delegated-dedupe-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(agentId: "claude")
+        let source = ACPDelegatedPromptSource(sessionId: "parent", messageId: "message")
+        session.transcript.messages.append(.user(
+            id: UUID(),
+            messageId: nil,
+            text: "already sent",
+            attachments: [],
+            delegatedSource: source
+        ))
+
+        #expect(await manager.enqueueDelegatedPrompt(
+            text: "already sent",
+            source: source,
+            into: session.id
+        ))
+        #expect(session.queue.isEmpty)
+    }
+
     @Test("creating a session inserts it and persists the row")
     func create() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-\(UUID()).sqlite")

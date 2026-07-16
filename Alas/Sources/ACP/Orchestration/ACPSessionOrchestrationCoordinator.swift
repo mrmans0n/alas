@@ -398,10 +398,7 @@ final class ACPSessionOrchestrationCoordinator {
         await target.manager.attach(to: claimed.message.targetSessionId, freshlyCreated: false)
         guard target.manager.isWriter(for: claimed.message.targetSessionId) else {
             try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                await self.deliver(messageID, to: target)
-            }
+            target.manager.notifyDelegatedMessagesAvailable()
             return
         }
         let accepted = await target.manager.enqueueDelegatedPrompt(
