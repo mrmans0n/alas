@@ -939,7 +939,7 @@ struct ACPSessionTests {
 
         #expect(changed.isEmpty)
         #expect(session.transcript.messages.count == 2)
-        if case .user(_, _, let text, let attachments) = session.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _) = session.transcript.messages[0] {
             #expect(text == "earlier prompt")
             #expect(attachments.isEmpty)
         } else {
@@ -1027,7 +1027,7 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.recordUserPrompt(text: "hi", attachments: [])
         #expect(session.transcript.messages.count == 1)
-        if case .user(_, _, let text, _) = session.transcript.messages[0] { #expect(text == "hi") }
+        if case .user(_, _, let text, _, _) = session.transcript.messages[0] { #expect(text == "hi") }
         else { Issue.record("expected user message") }
     }
 

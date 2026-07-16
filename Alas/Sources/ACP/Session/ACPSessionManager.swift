@@ -401,6 +401,11 @@ final class ACPSessionManager: ObservableObject {
 
     func createSession(agentId: String, autoRunDefault: Bool = false) -> ACPSession {
         let id = UUID().uuidString
+        return createSession(id: id, agentId: agentId, autoRunDefault: autoRunDefault)
+    }
+
+    func createSession(id: String, agentId: String, autoRunDefault: Bool = false) -> ACPSession {
+        precondition(sessions[id] == nil && persistedRows[id] == nil, "ACP session id already exists")
         let now = Int64(Date().timeIntervalSince1970)
         let row = ACPSessionRow(
             id: id, agentId: agentId, title: "New session",
@@ -651,7 +656,7 @@ final class ACPSessionManager: ObservableObject {
     private static func wireMessagesHaveConversation(_ wires: [ACPMessageWire]) -> Bool {
         wires.contains { wire in
             switch wire {
-            case let .user(_, text, _):
+            case let .user(_, text, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case let .agent(_, text):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2703,6 +2708,24 @@ extension ACPSessionManager {
                 fence: fence
             )
         }
+    }
+
+    @discardableResult
+    func enqueueDelegatedPrompt(
+        text: String,
+        source: ACPDelegatedPromptSource,
+        into sessionId: ACPSession.ID
+    ) async -> Bool {
+        guard let session = sessions[sessionId] else { return false }
+        let blocks = ACPSessionRunner.blocks(text: text, attachments: [])
+        session.enqueue(blocks: blocks, delegatedSource: source)
+        let fence = leaseFence(sessionId: sessionId)
+        let items = session.queue
+        let task = enqueuePersistence { persistence in
+            _ = try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }
+        await task.value
+        return true
     }
 
     /// Composer submit. Returns `true` if the prompt was accepted (either

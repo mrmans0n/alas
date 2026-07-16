@@ -6,7 +6,7 @@ import Foundation
 /// converts each variant into a full `ACPMessage`, which is the only
 /// place we allocate `StreamingText` (a `@MainActor` class).
 enum ACPMessageWire: Sendable {
-    case user(messageId: String?, text: String, attachments: [ACPMessage.Attachment])
+    case user(messageId: String?, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource?)
     case agent(messageId: String?, text: String)
     case thought(messageId: String?, text: String)
     case toolCall(ACPMessage.ToolCall)
@@ -39,7 +39,7 @@ enum ACPMessageWire: Sendable {
         switch kind {
         case "user":
             let p = try decoder.decode(UserPayload.self, from: payload)
-            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments)
+            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource)
         case "agent":
             let p = try decoder.decode(TextPayload.self, from: payload)
             return .agent(messageId: p.messageId, text: p.text)
@@ -64,8 +64,8 @@ enum ACPMessageWire: Sendable {
     @MainActor
     func toMessage() -> ACPMessage {
         switch self {
-        case .user(let messageId, let text, let attachments):
-            return .user(id: UUID(), messageId: messageId, text: text, attachments: attachments)
+        case .user(let messageId, let text, let attachments, let delegatedSource):
+            return .user(id: UUID(), messageId: messageId, text: text, attachments: attachments, delegatedSource: delegatedSource)
         case .agent(let messageId, let text):
             return .agent(id: UUID(), messageId: messageId, StreamingText(text))
         case .thought(let messageId, let text):
@@ -89,6 +89,7 @@ enum ACPMessageWire: Sendable {
         let messageId: String?
         let text: String
         let attachments: [ACPMessage.Attachment]
+        let delegatedSource: ACPDelegatedPromptSource?
     }
     private struct PlanPayload: Decodable { let items: [ACPMessage.PlanItem] }
 }

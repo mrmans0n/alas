@@ -10,7 +10,7 @@ struct ACPMessageTests {
         let m = ACPMessage.user(id: UUID(), text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        guard case .user(_, _, let text, let atts) = back else {
+        guard case .user(_, _, let text, let atts, _) = back else {
             Issue.record("expected user message")
             return
         }

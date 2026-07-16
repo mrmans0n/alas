@@ -107,7 +107,7 @@ struct ACPSessionRunnerTests {
 
         try await waitUntil {
             session.transcript.messages.contains {
-                    if case .user(_, _, "hello", _) = $0 { return true }
+                    if case .user(_, _, "hello", _, _, _) = -e { return true }
                     return false
                 }
         }
@@ -208,9 +208,9 @@ struct ACPSessionRunnerTests {
                 && session.transcript.messages.count >= 3
         }
 
-        if case .user(_, _, let firstUser, _) = session.transcript.messages[0],
+        if case .user(_, _, let firstUser, _, _) = session.transcript.messages[0],
            case .agent(_, _, let firstAnswer) = session.transcript.messages[1],
-           case .user(_, _, let secondUser, _) = session.transcript.messages[2] {
+           case .user(_, _, let secondUser, _, _) = session.transcript.messages[2] {
             #expect(firstUser == "hello")
             #expect(firstAnswer.value == "first second")
             #expect(secondUser == "next")
@@ -1408,7 +1408,7 @@ struct ACPSessionRunnerTests {
             session.transcript.messages.count >= 2
         }
         guard case .agent(_, _, let text) = session.transcript.messages[0],
-              case .user(_, _, let prompt, _) = session.transcript.messages[1]
+              case .user(_, _, let prompt, _, _) = session.transcript.messages[1]
         else {
             Issue.record("expected buffered agent text before the next user prompt")
             return

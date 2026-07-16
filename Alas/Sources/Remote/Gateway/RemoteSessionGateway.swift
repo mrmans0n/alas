@@ -892,7 +892,7 @@ final class RemoteSessionGateway {
     ) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
-        case .user(_, _, let text, let attachments):
+        case .user(_, _, let text, let attachments, _):
             // The wire carries user text only; surface attachments as a labelled
             // placeholder so an image-only prompt isn't a blank bubble on the
             // phone (we don't serve the image bytes to the client in v1).

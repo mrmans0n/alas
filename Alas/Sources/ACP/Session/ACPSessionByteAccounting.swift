@@ -10,7 +10,7 @@ extension ACPSession {
         var total: UInt64 = 0
         for m in transcript.messages {
             switch m {
-            case .user(_, _, let text, let atts):
+            case .user(_, _, let text, let atts, _):
                 total &+= UInt64(text.utf8.count)
                 for a in atts {
                     total &+= UInt64(a.uri.utf8.count)

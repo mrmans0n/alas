@@ -999,7 +999,7 @@ struct ACPMessageList: View {
     @ViewBuilder
     private func row(for m: ACPMessage, stableId: String) -> some View {
         switch m {
-        case .user(_, _, let text, let attachments):
+        case .user(_, _, let text, let attachments, _):
             ACPMessageGutter(copySource: .text(text)) {
                 UserMessageRow(
                     text: text,
