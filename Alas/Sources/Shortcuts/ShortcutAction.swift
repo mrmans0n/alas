@@ -16,7 +16,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
     case searchFiles, switchRepository, findAndReplace, replaceInEditor, toggleSidebar, toggleRightPane,
          createProject, newWorktree, focusMainWorktree, newTerminalTab, launchAgentTerminal, launchAgentChat,
-         increaseFontSize, decreaseFontSize, resetFontSize
+         openReviewPalette, increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
     case splitSelectionIntoLines, toggleMarkdownPreview, commitInComposer
     // Terminal
@@ -28,7 +28,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
              .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
-             .increaseFontSize, .decreaseFontSize, .resetFontSize:
+             .openReviewPalette, .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
         case .splitSelectionIntoLines, .toggleMarkdownPreview:
             return .codeEditor
@@ -55,6 +55,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .newTerminalTab:           return "New Terminal Tab"
         case .launchAgentTerminal:      return "Launch Agent Terminal"
         case .launchAgentChat:          return "Launch Agent Chat"
+        case .openReviewPalette:        return "Review Worktree"
         case .increaseFontSize:         return "Increase Font Size"
         case .decreaseFontSize:         return "Decrease Font Size"
         case .resetFontSize:            return "Reset Font Size"
@@ -80,6 +81,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .switchRepository:   return "Open the repository picker"
         case .launchAgentTerminal: return "Open the agent launcher in Terminal mode"
         case .launchAgentChat:     return "Open the agent launcher in Chat mode"
+        case .openReviewPalette:   return "Open the review target palette"
         case .commitInComposer:   return "In the draft commit tab"
         default:                  return nil
         }
@@ -114,6 +116,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .newTerminalTab:           return .init(key: "t",          modifiers: [.command])
         case .launchAgentTerminal:      return .init(key: "t",          modifiers: [.command, .option])
         case .launchAgentChat:          return .init(key: "t",          modifiers: [.command, .option, .shift])
+        case .openReviewPalette:        return .init(key: "r",          modifiers: [.command, .shift])
         case .increaseFontSize:         return .init(key: "=",          modifiers: [.command])
         case .decreaseFontSize:         return .init(key: "-",          modifiers: [.command])
         case .resetFontSize:            return .init(key: "0",          modifiers: [.command])

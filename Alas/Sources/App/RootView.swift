@@ -600,7 +600,12 @@ private struct RootBaseHandlers: ViewModifier {
                 // continuing in the background under the new overlay.
                 state.toggleRepoSelectorOverlay()
             }
-        let q = p
+        let p_review = p
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenReviewPalette)) { _ in
+                guard !state.projects.isEmpty else { return }
+                state.openReviewPaletteOverlay()
+            }
+        let q = p_review
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { notification in
                 guard selectedWorktree() != nil else { return }
                 let mode = notification.object as? AppConfig.LauncherMode
@@ -697,6 +702,7 @@ extension Notification.Name {
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
     static let alasOpenRepoSelector = Notification.Name("AlasOpenRepoSelector")
+    static let alasOpenReviewPalette = Notification.Name("AlasOpenReviewPalette")
     static let alasSaveActiveTab   = Notification.Name("AlasSaveActiveTab")
     static let alasSaveActiveTabAs = Notification.Name("AlasSaveActiveTabAs")
     static let alasSaveAllTabs     = Notification.Name("AlasSaveAllTabs")

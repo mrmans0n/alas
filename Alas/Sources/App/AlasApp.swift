@@ -332,6 +332,11 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasOpenRepoSelector, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .switchRepository))
+            Button("Review Worktree…") {
+                NotificationCenter.default.post(name: .alasOpenReviewPalette, object: nil)
+            }
+            .keyboardShortcut(state.shortcut(for: .openReviewPalette))
+            .disabled(state.projects.isEmpty)
             Divider()
             Button("Refresh Worktrees") {
                 NotificationCenter.default.post(name: .alasRefreshWorktrees, object: nil)
