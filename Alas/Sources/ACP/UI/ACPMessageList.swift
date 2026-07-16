@@ -40,7 +40,10 @@ struct ACPMessageList: View {
     @State private var latestRememberedScrollAnchorIndex: Int?
     @State private var restoredRememberedAnchor: String?
     @State private var pendingTailScrollTask: Task<Void, Never>?
-    @State private var modernRowFrames: [String: CGRect] = [:]
+    // Geometry callbacks can run while AppKit is tracking a native menu. Keep
+    // their per-row bookkeeping out of SwiftUI-observed value state: changing
+    // a cached frame must not invalidate the entire lazy transcript list.
+    @State private var modernRowFrameCache = ACPRowFrameCache()
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -480,13 +483,8 @@ struct ACPMessageList: View {
 
     private func handleModernRowFrame(id: String, frame: CGRect) {
         let lookup = visibleMessageLookup
-        modernRowFrames = modernRowFrames.filter { lookup.contains($0.key) }
-        if lookup.contains(id), frame.height > 0, frame.maxY > 0 {
-            modernRowFrames[id] = frame
-        } else {
-            modernRowFrames.removeValue(forKey: id)
-        }
-        guard let anchor = Self.topVisibleAnchorID(in: modernRowFrames) else { return }
+        modernRowFrameCache.update(id: id, frame: frame, lookup: lookup)
+        guard let anchor = Self.topVisibleAnchorID(in: modernRowFrameCache.frames) else { return }
         let anchorChanged = latestTopVisibleAnchor.value != anchor
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
@@ -1046,6 +1044,41 @@ private final class ACPWeakScrollViewRef {
 
 private final class ACPMutableScrollAnchor {
     var value: String?
+}
+
+/// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's
+/// `onGeometryChange` may be serviced by nested AppKit run loops (such as an
+/// open `NSMenu`), so assigning a dictionary held in `@State` here would
+/// invalidate the full list for every callback.
+final class ACPRowFrameCache {
+    private(set) var frames: [String: CGRect] = [:]
+
+    /// Returns whether the cached frame set changed. Keeping stable reports as
+    /// no-ops prevents needless work even outside nested menu tracking loops.
+    @discardableResult
+    func update(
+        id: String,
+        frame: CGRect,
+        lookup: ACPMessageList.VisibleMessageLookup
+    ) -> Bool {
+        var changed = false
+        let staleIDs = frames.keys.filter { !lookup.contains($0) }
+        for staleID in staleIDs {
+            frames.removeValue(forKey: staleID)
+            changed = true
+        }
+
+        if lookup.contains(id), frame.height > 0, frame.maxY > 0 {
+            guard frames[id] != frame else { return changed }
+            frames[id] = frame
+            return true
+        }
+
+        if frames.removeValue(forKey: id) != nil {
+            changed = true
+        }
+        return changed
+    }
 }
 
 private struct ACPHeadFramePreferenceKey: PreferenceKey {

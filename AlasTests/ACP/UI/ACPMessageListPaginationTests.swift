@@ -184,6 +184,34 @@ struct ACPMessageListPaginationTests {
         ))
     }
 
+    @Test("modern row-frame cache ignores stable geometry reports")
+    func modernRowFrameCacheIgnoresStableGeometryReports() {
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40")
+        ])
+        let cache = ACPRowFrameCache()
+        let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+
+        #expect(cache.update(id: "message-40", frame: frame, lookup: lookup))
+        #expect(!cache.update(id: "message-40", frame: frame, lookup: lookup))
+        #expect(cache.frames == ["message-40": frame])
+    }
+
+    @Test("modern row-frame cache removes stale rows without repeated writes")
+    func modernRowFrameCachePrunesStaleRowsOnce() {
+        let cache = ACPRowFrameCache()
+        let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let originalLookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40")
+        ])
+        let emptyLookup = ACPMessageList.visibleMessageLookup(rows: [])
+
+        #expect(cache.update(id: "message-40", frame: frame, lookup: originalLookup))
+        #expect(cache.update(id: "message-40", frame: frame, lookup: emptyLookup))
+        #expect(!cache.update(id: "message-40", frame: frame, lookup: emptyLookup))
+        #expect(cache.frames.isEmpty)
+    }
+
     @Test("visible message lookup records ids and transcript indices")
     func visibleMessageLookupRecordsIdsAndTranscriptIndices() {
         let lookup = ACPMessageList.visibleMessageLookup(rows: [
