@@ -2759,10 +2759,13 @@ extension ACPSessionManager {
         session.enqueue(blocks: blocks, delegatedSource: source)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
-        let task = enqueuePersistence { persistence in
-            _ = try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
-        await task.value
+        guard await task.value == true else {
+            session.queue.removeAll { $0.delegatedSource == source }
+            return false
+        }
         runners[sessionId]?.flushQueueIfIdle()
         return true
     }

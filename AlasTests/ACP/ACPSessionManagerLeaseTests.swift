@@ -227,6 +227,32 @@ import Foundation
                 "writer must be able to persist the queue when it holds the lease")
     }
 
+    @Test("delegated delivery is not acknowledged when its fenced queue write fails")
+    func delegatedPromptRejectsFailedFencedQueueWrite() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("delegated-fenced-queue-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = tempManager(instanceId: "A", store: store)
+        let session = manager.createSession(agentId: "claude")
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+
+        try store.seizeLease(
+            sessionId: session.id,
+            instanceId: "B",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+
+        let accepted = await manager.enqueueDelegatedPrompt(
+            text: "retry through the active writer",
+            source: .init(sessionId: "parent", messageId: "message"),
+            into: session.id
+        )
+        #expect(!accepted)
+        #expect(session.queue.isEmpty)
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+    }
+
     // MARK: - P1: Stale-owner write block (store re-read)
 
     @Test("a former owner whose lease was seized cannot persist (store-lease re-read)")

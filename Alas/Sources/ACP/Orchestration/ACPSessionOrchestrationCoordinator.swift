@@ -231,6 +231,13 @@ final class ACPSessionOrchestrationCoordinator {
             guard ACPSessionOrchestrationPolicy.acceptsMessages(target: targetParent) else {
                 return .error("The target delegated session is not available.")
             }
+            guard await resolveDeliveryTarget(
+                sessionID: request.targetSessionId,
+                callerParent: callerParent,
+                targetParent: targetParent
+            ) != nil else {
+                return .error("The target ACP session is not available.")
+            }
         } catch {
             return .error("Could not verify session delegation.")
         }
