@@ -53,6 +53,7 @@ struct DiffReviewFileSection: View {
     var inlineFeedbackScrollTargetID: String? = nil
     var draftComments: [ReviewDraftComment] = []
     var focusedDraftCommentID: String? = nil
+    var draftCommentScrollTargetID: String? = nil
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -431,6 +432,10 @@ struct DiffReviewFileSection: View {
         Set([focusedFeedbackID, inlineFeedbackScrollTargetID].compactMap(\.self))
     }
 
+    private var requiredDraftCommentIDs: Set<String> {
+        Set([focusedDraftCommentID, draftCommentScrollTargetID].compactMap(\.self))
+    }
+
     private func fileLevelInlineFeedback(renderContext: DiffReviewRenderContext?) -> [DiffReviewInlineFeedback] {
         guard let renderContext else { return inlineFeedback }
         return renderContext.fileLevelInlineFeedback
@@ -555,17 +560,20 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private func content(renderContext: DiffReviewRenderContext?) -> some View {
         if let displayModel = file.displayModel, let renderContext {
-            LazyVStack(spacing: 0) {
-                ForEach(renderContext.groups) { group in
-                    if !group.inlineFeedback.isEmpty {
-                        inlineFeedbackStack(
-                            group.inlineFeedback,
-                            file: file.summary,
-                            rows: group.displayGroup.rows
-                        )
-                    }
-                    reviewGroup(group, displayModel: displayModel)
+            let groups = renderContext.groups
+            if let requiredGroupID = DiffReviewRequiredGroupResolver.groupID(
+                in: groups,
+                inlineFeedbackIDs: requiredInlineFeedbackIDs,
+                draftCommentIDs: requiredDraftCommentIDs
+            ), let requiredIndex = groups.firstIndex(where: { $0.id == requiredGroupID }) {
+                // Keep the commanded card's real ID available without eagerly rendering unrelated hunks.
+                VStack(spacing: 0) {
+                    lazyGroupStack(Array(groups[..<requiredIndex]), displayModel: displayModel)
+                    groupContent(groups[requiredIndex], displayModel: displayModel)
+                    lazyGroupStack(Array(groups[groups.index(after: requiredIndex)...]), displayModel: displayModel)
                 }
+            } else {
+                lazyGroupStack(groups, displayModel: displayModel)
             }
         } else {
             let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
@@ -582,6 +590,33 @@ struct DiffReviewFileSection: View {
                         label: message
                     )
                 )
+        }
+    }
+
+    private func lazyGroupStack(
+        _ groups: [DiffReviewRenderContext.Group],
+        displayModel: DiffDisplayModel
+    ) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(groups) { group in
+                groupContent(group, displayModel: displayModel)
+            }
+        }
+    }
+
+    private func groupContent(
+        _ group: DiffReviewRenderContext.Group,
+        displayModel: DiffDisplayModel
+    ) -> some View {
+        VStack(spacing: 0) {
+            if !group.inlineFeedback.isEmpty {
+                inlineFeedbackStack(
+                    group.inlineFeedback,
+                    file: file.summary,
+                    rows: group.displayGroup.rows
+                )
+            }
+            reviewGroup(group, displayModel: displayModel)
         }
     }
 
@@ -1072,6 +1107,21 @@ struct DiffReviewFileSection: View {
     }
 }
 
+enum DiffReviewRequiredGroupResolver {
+    static func groupID(
+        in groups: [DiffReviewRenderContext.Group],
+        inlineFeedbackIDs: Set<String>,
+        draftCommentIDs: Set<String>
+    ) -> String? {
+        groups.first { group in
+            group.inlineFeedback.contains { inlineFeedbackIDs.contains($0.id) }
+                || group.segments.contains { segment in
+                    segment.draftComments.contains { draftCommentIDs.contains($0.id) }
+                }
+        }?.id
+    }
+}
+
 /// Wraps `DiffReviewFileSection` for `.equatable()`, with `layoutMode`,
 /// `wrapLines`, and `showWhitespace` captured as plain values rather than
 /// compared as live `@Binding`s, plus per-item action-availability
@@ -1137,6 +1187,7 @@ struct EquatableDiffReviewFileSection: View, Equatable {
             && lhs.section.inlineFeedbackScrollTargetID == rhs.section.inlineFeedbackScrollTargetID
             && lhs.section.draftComments == rhs.section.draftComments
             && lhs.section.focusedDraftCommentID == rhs.section.focusedDraftCommentID
+            && lhs.section.draftCommentScrollTargetID == rhs.section.draftCommentScrollTargetID
             && lhs.section.codeFontFamily == rhs.section.codeFontFamily
             && lhs.section.codeFontSize == rhs.section.codeFontSize
             && lhs.section.showsSourceBadge == rhs.section.showsSourceBadge
