@@ -843,6 +843,61 @@ struct AlasCLICommandRouterTests {
         #expect(saved[0].fileID == DiffReviewFileID(namespace: "unstaged", path: "a.swift"))
     }
 
+    /// Regression test: the CLI (`alas review comment`) always absolutizes a
+    /// relative `path` against the calling terminal's own cwd, regardless of
+    /// which worktree the review session actually targets. When a session was
+    /// opened against a sibling worktree via `--worktree`, but the comment is
+    /// later filed from a terminal still rooted in `origin`, the path the CLI
+    /// hands Swift is absolute and rooted in `origin`, not the sibling — even
+    /// though the user typed an ordinary relative path. Recovering that
+    /// relative form by relativizing against `origin` instead (once the
+    /// primary attempt against the sibling fails) must still succeed.
+    @Test func commentAddRecoversARelativePathWhenTheAbsolutizedPathIsRootedInTheOriginWorktree() async throws {
+        let originRoot = try makeFile("origin/a.swift").deletingLastPathComponent()
+        let siblingRoot = try makeFile("sibling/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: originRoot, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: siblingRoot, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: "wt2", worktreePath: siblingRoot, scope: .all)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "Sources/Foo.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            },
+            visibleWorktrees: [worktree, sibling]
+        )
+        // Simulates exactly what the CLI parser produces: it absolutizes the
+        // bare relative path "Sources/Foo.swift" against the caller's cwd
+        // (`origin`), even though `sessionID` targets the sibling session.
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: originRoot.appendingPathComponent("Sources/Foo.swift").path,
+                startLine: 10, endLine: nil, side: nil,
+                body: "recovered path comment", sessionID: session.rawValue
+            ))
+        ))
+
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        #expect(lines[1].contains("comment_id"))
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].path == "Sources/Foo.swift")
+    }
+
     @Test func reviewFinishSucceedsForASiblingWorktreeSession() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(

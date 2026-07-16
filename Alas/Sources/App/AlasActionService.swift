@@ -323,7 +323,19 @@ struct AlasActionService {
             targetSessionID = .localChanges(worktreeID: origin.id, worktreePath: origin.path, scope: .all)
             worktreeForPath = origin
         }
-        guard let relativePath = Self.worktreeRelativePath(path, worktreeRoot: worktreeForPath.path),
+        // The CLI always absolutizes `path` against the calling terminal's
+        // own cwd (`origin`), never against `worktreeForPath` — so when a
+        // `--worktree` override put the session on a sibling worktree, a
+        // perfectly ordinary relative path the user typed arrives here as an
+        // absolute path rooted in `origin`, not the sibling. Falling back to
+        // relativizing against `origin` recovers that original relative form
+        // whenever the primary attempt (against the session's own worktree)
+        // fails and an override is actually in play; the recovered string is
+        // already worktree-agnostic, so no further resolution is needed.
+        guard let relativePath = Self.worktreeRelativePath(path, worktreeRoot: worktreeForPath.path)
+            ?? (worktreeForPath.id != origin.id
+                ? Self.worktreeRelativePath(path, worktreeRoot: origin.path)
+                : nil),
               !relativePath.isEmpty else {
             return .error("review comment path must point at a file inside the worktree")
         }
