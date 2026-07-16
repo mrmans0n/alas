@@ -42,6 +42,9 @@ struct AlasCLIRequest: Equatable {
         case notify(body: String, title: String?, level: AlasCLINotifyLevel)
         case worktree(WorktreeCommand)
         case review(ReviewCommand)
+        case sessionList
+        case sessionNew(prompt: String, agentID: String?, worktree: SessionWorktreeSelector)
+        case sessionSend(sessionID: String, prompt: String)
         case resolve
     }
 
@@ -60,6 +63,12 @@ struct AlasCLIRequest: Equatable {
         case resolve(commentID: String, reply: String?, reopen: Bool)
         case commentAdd(path: String, startLine: Int, endLine: Int?, side: String?, body: String, sessionID: String?)
         case finish(sessionID: String?, verdict: ReviewVerdict, summary: String)
+    }
+
+    enum SessionWorktreeSelector: Equatable {
+        case current
+        case existing(worktreeID: String)
+        case new(branch: String, base: String?)
     }
 
     let version: Int
@@ -137,6 +146,25 @@ struct AlasCLIRequest: Equatable {
         var body: String
         var title: String?
         var level: String?
+    }
+
+    private struct SessionListParams: Decodable {}
+
+    private struct SessionNewParams: Decodable {
+        struct NewWorktree: Decodable {
+            var branch: String
+            var base: String?
+        }
+
+        var prompt: String
+        var agent: String?
+        var worktree: String?
+        var new_worktree: NewWorktree?
+    }
+
+    private struct SessionSendParams: Decodable {
+        var session_id: String
+        var prompt: String
     }
 
     /// Typed access to the `params` object new-style commands carry.
@@ -319,6 +347,37 @@ struct AlasCLIRequest: Equatable {
                 verdict: verdict,
                 summary: params?.summary ?? ""
             ))
+        case "session_list":
+            _ = try Self.decodeParams(SessionListParams.self, from: data)
+            command = .sessionList
+        case "session_new":
+            let params = try Self.decodeParams(SessionNewParams.self, from: data)
+            let worktree: SessionWorktreeSelector
+            let existingWorktree = try params.worktree.map(requiredNonEmpty)
+            if let newWorktree = params.new_worktree {
+                guard existingWorktree == nil else {
+                    throw AlasCLIRequestError.malformed
+                }
+                worktree = .new(
+                    branch: try requiredNonEmpty(newWorktree.branch),
+                    base: newWorktree.base?.nilIfBlank
+                )
+            } else if let existingWorktree {
+                worktree = .existing(worktreeID: existingWorktree)
+            } else {
+                worktree = .current
+            }
+            command = .sessionNew(
+                prompt: try requiredNonEmpty(params.prompt),
+                agentID: try params.agent.map(requiredNonEmpty),
+                worktree: worktree
+            )
+        case "session_send":
+            let params = try Self.decodeParams(SessionSendParams.self, from: data)
+            command = .sessionSend(
+                sessionID: try requiredNonEmpty(params.session_id),
+                prompt: try requiredNonEmpty(params.prompt)
+            )
         case "resolve":
             command = .resolve
         default:

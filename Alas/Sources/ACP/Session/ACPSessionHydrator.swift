@@ -64,7 +64,7 @@ actor ACPSessionHydrator {
                 }
                 if let storedDraft,
                    storedDraft.submittedRecovery,
-                   case .user(_, let text, let attachments) = w,
+                   case .user(_, let text, let attachments, _) = w,
                    storedDraft.draft.matchesSubmittedRecoveryPrompt(
                     seq: m.seq,
                     text: text,

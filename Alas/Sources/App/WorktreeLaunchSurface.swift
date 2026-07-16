@@ -12,4 +12,6 @@ enum WorktreeLaunchSurface: Equatable {
     /// An ACP chat session tab is opened for `agentId`. The agent must be
     /// ACP-capable (present in `ACPLaunchCatalog.specs`).
     case acp(agentId: String)
+    /// An API-created worktree. It must not alter selection or open a tab.
+    case delegated
 }

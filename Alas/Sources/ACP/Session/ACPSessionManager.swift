@@ -28,6 +28,10 @@ final class ACPSessionManager: ObservableObject {
         _ worktreePath: String
     ) throws -> ACPConnection
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
+    typealias BuiltInMCPProvider = @MainActor (
+        _ worktreePath: String,
+        _ sessionId: ACPSession.ID
+    ) async -> BuiltInAlasMCP.Injection?
 
     let instanceId: String
     let pid: Int64
@@ -35,6 +39,7 @@ final class ACPSessionManager: ObservableObject {
     let worktreePath: String
     let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
+    private let delegatedMessageNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
     let onDirtyCheck: ((String) -> Bool)?
@@ -45,12 +50,13 @@ final class ACPSessionManager: ObservableObject {
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
+    private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     /// Builds the app-provided "alas" MCP server entry for a worktree path
     /// and local ACP session id,
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
-    private let builtInMCPProvider: ((String, ACPSession.ID) -> BuiltInAlasMCP.Injection?)?
+    private let builtInMCPProvider: BuiltInMCPProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
@@ -289,6 +295,7 @@ final class ACPSessionManager: ObservableObject {
     /// release the lease after `connection.shutdown` — preserving the
     /// correct shutdown order (connection down before lease freed).
     private var attachingSessions: Set<ACPSession.ID> = []
+    private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
@@ -299,12 +306,14 @@ final class ACPSessionManager: ObservableObject {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
+         onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
+         delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
-         builtInMCPProvider: ((String, ACPSession.ID) -> BuiltInAlasMCP.Injection?)? = nil)
+         builtInMCPProvider: BuiltInMCPProvider? = nil)
     {
         precondition(store != nil || persistence != nil, "ACPSessionManager requires persistence")
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
@@ -317,9 +326,12 @@ final class ACPSessionManager: ObservableObject {
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onInputAwaiting = onInputAwaiting
+        self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.builtInMCPProvider = builtInMCPProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
+        self.delegatedMessageNotifier = delegatedMessageNotifier
+            ?? DarwinChangeNotifier(worktreeId: worktreeId, channel: "delegated-inbox")
         _ = hydratorPath
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
@@ -401,6 +413,11 @@ final class ACPSessionManager: ObservableObject {
 
     func createSession(agentId: String, autoRunDefault: Bool = false) -> ACPSession {
         let id = UUID().uuidString
+        return createSession(id: id, agentId: agentId, autoRunDefault: autoRunDefault)
+    }
+
+    func createSession(id: String, agentId: String, autoRunDefault: Bool = false) -> ACPSession {
+        precondition(sessions[id] == nil && persistedRows[id] == nil, "ACP session id already exists")
         let now = Int64(Date().timeIntervalSince1970)
         let row = ACPSessionRow(
             id: id, agentId: agentId, title: "New session",
@@ -651,7 +668,7 @@ final class ACPSessionManager: ObservableObject {
     private static func wireMessagesHaveConversation(_ wires: [ACPMessageWire]) -> Bool {
         wires.contains { wire in
             switch wire {
-            case let .user(_, text, _):
+            case let .user(_, text, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case let .agent(_, text):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1704,6 +1721,13 @@ extension ACPSessionManager {
             }
         }
         writerWatchTokens[sessionId] = token
+        let delegatedMessageToken = delegatedMessageNotifier.subscribe { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self._ownedLeases.contains(sessionId) else { return }
+                self.onDelegatedMessageAvailable?(sessionId)
+            }
+        }
+        delegatedMessageWatchTokens[sessionId] = delegatedMessageToken
     }
 
     private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID) {
@@ -1721,7 +1745,17 @@ extension ACPSessionManager {
 
     private func stopWriterWatch(sessionId: ACPSession.ID) {
         if let t = writerWatchTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
+        if let t = delegatedMessageWatchTokens.removeValue(forKey: sessionId) {
+            delegatedMessageNotifier.unsubscribe(t)
+        }
         writerWatchDebounce.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    /// Wake the active owner of this worktree to drain delegated messages.
+    /// This uses a dedicated channel so normal transcript persistence does not
+    /// trigger inbox scans.
+    func notifyDelegatedMessagesAvailable() {
+        delegatedMessageNotifier.post()
     }
 
     // MARK: - Test accessors for writer watch
@@ -2252,7 +2286,7 @@ extension ACPSessionManager {
             // skip it entirely instead of reporting it unavailable on every
             // connect.
             let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let builtInMCP = remoteHost == nil ? builtInMCPProvider?(worktreePath, sessionId) : nil
+            let builtInMCP = remoteHost == nil ? await builtInMCPProvider?(worktreePath, sessionId) : nil
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {
@@ -2703,6 +2737,37 @@ extension ACPSessionManager {
                 fence: fence
             )
         }
+    }
+
+    @discardableResult
+    func enqueueDelegatedPrompt(
+        text: String,
+        source: ACPDelegatedPromptSource,
+        into sessionId: ACPSession.ID
+    ) async -> Bool {
+        guard let session = sessions[sessionId] else { return false }
+        guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
+            return true
+        }
+        guard !session.transcript.messages.contains(where: { message in
+            guard case .user(_, _, _, _, let recordedSource) = message else { return false }
+            return recordedSource == source
+        }) else {
+            return true
+        }
+        let blocks = ACPSessionRunner.blocks(text: text, attachments: [])
+        session.enqueue(blocks: blocks, delegatedSource: source)
+        let fence = leaseFence(sessionId: sessionId)
+        let items = session.queue
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }
+        guard await task.value == true else {
+            session.queue.removeAll { $0.delegatedSource == source }
+            return false
+        }
+        runners[sessionId]?.flushQueueIfIdle()
+        return true
     }
 
     /// Composer submit. Returns `true` if the prompt was accepted (either

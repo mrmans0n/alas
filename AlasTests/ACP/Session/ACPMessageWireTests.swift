@@ -13,12 +13,28 @@ struct ACPMessageWireTests {
             attachments: [.init(uri: "file:///x.txt", name: "x.txt")])
         let payload = try ACPMessageCodec.encode(original)
         let wire = try ACPMessageWire.decode(kind: "user", payload: payload)
-        guard case let .user(_, text, attachments) = wire else {
+        guard case let .user(_, text, attachments, source) = wire else {
             #expect(Bool(false), "expected .user, got \(wire)")
             return
         }
         #expect(text == "hello")
         #expect(attachments == [.init(uri: "file:///x.txt", name: "x.txt")])
+        #expect(source == nil)
+    }
+
+    @Test("delegated user provenance round-trips through the wire payload")
+    func delegatedUserRoundTrip() throws {
+        let source = ACPDelegatedPromptSource(sessionId: "parent", messageId: "message-1")
+        let original: ACPMessage = .user(
+            id: UUID(), messageId: "message-1", text: "delegate", attachments: [], delegatedSource: source)
+        let wire = try ACPMessageWire.decode(kind: "user", payload: try ACPMessageCodec.encode(original))
+        guard case let .user(messageId, text, _, decodedSource) = wire else {
+            Issue.record("expected user wire payload")
+            return
+        }
+        #expect(messageId == "message-1")
+        #expect(text == "delegate")
+        #expect(decodedSource == source)
     }
 
     @Test("decode round-trips agent text")

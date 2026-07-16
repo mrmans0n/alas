@@ -57,7 +57,7 @@ struct ACPMessageStableIdTests {
         s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(" world"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1", "acp-agent:agent-1"])
-        if case .user(_, _, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(text == "hello world")
             #expect(attachments.isEmpty)
         } else {
@@ -73,7 +73,7 @@ struct ACPMessageStableIdTests {
         s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("a"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, _, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(text == "aaa")
             #expect(attachments.isEmpty)
         } else {
@@ -90,7 +90,7 @@ struct ACPMessageStableIdTests {
 
         #expect(changed == [0])
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "hello world")
             #expect(attachments.isEmpty)
@@ -108,7 +108,7 @@ struct ACPMessageStableIdTests {
             content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "")
             #expect(attachments == [
@@ -140,7 +140,7 @@ struct ACPMessageStableIdTests {
         s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("please"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "see please")
             #expect(attachments == [
@@ -163,7 +163,7 @@ struct ACPMessageStableIdTests {
             content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "see this")
             #expect(attachments == [attachment])
@@ -187,7 +187,7 @@ struct ACPMessageStableIdTests {
 
         #expect(changed == [0])
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "")
             #expect(attachments == [attachment])
@@ -215,7 +215,7 @@ struct ACPMessageStableIdTests {
         #expect(attachmentChanged == [0])
         #expect(textChanged == [0])
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "see this")
             #expect(attachments == [attachment])
@@ -245,7 +245,7 @@ struct ACPMessageStableIdTests {
         #expect(changed == [0])
         #expect(s.transcript.messages.count == 1)
         #expect(s.transcript.messages[0].stableId == "acp-user:user-1")
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "hello")
             #expect(attachments.isEmpty)
@@ -266,7 +266,7 @@ struct ACPMessageStableIdTests {
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
         #expect(s.transcript.messages[0].stableId == "acp-user:user-1")
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "hello world")
             #expect(attachments.isEmpty)
@@ -284,7 +284,7 @@ struct ACPMessageStableIdTests {
 
         #expect(changed == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, _, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "hello")
         } else {
@@ -303,7 +303,7 @@ struct ACPMessageStableIdTests {
         #expect(firstChanged == [0])
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, _, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "hello world")
         } else {
@@ -324,7 +324,7 @@ struct ACPMessageStableIdTests {
         #expect(firstChanged == [0])
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "see ")
             #expect(attachments == [attachment])
@@ -343,7 +343,7 @@ struct ACPMessageStableIdTests {
         #expect(firstChanged == [0])
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "haha")
             #expect(attachments.isEmpty)

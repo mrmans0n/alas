@@ -72,6 +72,18 @@ struct QueuedPromptTests {
         #expect(decoded.draft == nil)
     }
 
+    @Test("delegated provenance round-trips while legacy JSON remains valid")
+    func delegatedProvenanceRoundTrip() throws {
+        let source = ACPDelegatedPromptSource(sessionId: "parent", messageId: "message-1")
+        let prompt = QueuedPrompt(
+            id: UUID(), blocks: [.text("delegate")], enqueuedAt: .init(), delegatedSource: source)
+        let data = try JSONEncoder().encode(prompt)
+        #expect(try JSONDecoder().decode(QueuedPrompt.self, from: data).delegatedSource == source)
+
+        let legacy = #"{"id":"00000000-0000-0000-0000-000000000001","blocks":[{"type":"text","text":"legacy"}],"enqueuedAt":0,"status":"pending"}"#
+        #expect(try JSONDecoder().decode(QueuedPrompt.self, from: Data(legacy.utf8)).delegatedSource == nil)
+    }
+
     @Test("restorableDraft prefers the stored draft, else falls back to the blocks heuristic")
     func restorableDraftFallback() {
         let draft = ACPComposerDraft(segments: [.text("kept")])

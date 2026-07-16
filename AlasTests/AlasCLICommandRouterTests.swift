@@ -1487,6 +1487,96 @@ struct AlasCLICommandRouterTests {
         #expect(message.contains("unknown review comment id"))
     }
 
+    @Test func sessionCommandsForwardTheirResolvedACPOrigin() async throws {
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let origin = ACPOrchestrationSessionOrigin(
+            sessionId: "acp-1",
+            projectId: "p1",
+            worktreeId: worktree.id
+        )
+        var listedOrigin: ACPOrchestrationSessionOrigin?
+        var created: (origin: ACPOrchestrationSessionOrigin, request: ACPDelegatedSessionNewRequest)?
+        var sent: (origin: ACPOrchestrationSessionOrigin, request: ACPDelegatedSessionMessageRequest)?
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in worktree.id },
+            resolveACPSessionOrigin: { $0 == "acp-1" ? origin : nil },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            listDelegatedSessions: { resolvedOrigin in
+                listedOrigin = resolvedOrigin
+                return .text([#"{"sessions":[]}"#])
+            },
+            createDelegatedSession: { resolvedOrigin, request in
+                created = (resolvedOrigin, request)
+                return .text([#"{"session_id":"child"}"#])
+            },
+            sendDelegatedSessionMessage: { resolvedOrigin, request in
+                sent = (resolvedOrigin, request)
+                return .text([#"{"queued":true}"#])
+            },
+            activateApp: {}
+        )
+
+        let list = await router.handle(.init(version: 1, sessionId: "acp-1", cwd: nil, command: .sessionList))
+        let create = await router.handle(.init(
+            version: 1,
+            sessionId: "acp-1",
+            cwd: nil,
+            command: .sessionNew(
+                prompt: "Implement this",
+                agentID: "codex",
+                worktree: .new(branch: "child", base: "origin/main")
+            )
+        ))
+        let send = await router.handle(.init(
+            version: 1,
+            sessionId: "acp-1",
+            cwd: nil,
+            command: .sessionSend(sessionID: "child", prompt: "Please continue")
+        ))
+
+        #expect(listedOrigin == origin)
+        #expect(created?.origin == origin)
+        #expect(created?.request == ACPDelegatedSessionNewRequest(
+            prompt: "Implement this",
+            agentId: "codex",
+            worktree: .new(branch: "child", base: "origin/main")
+        ))
+        #expect(sent?.origin == origin)
+        #expect(sent?.request == ACPDelegatedSessionMessageRequest(
+            targetSessionId: "child",
+            prompt: "Please continue"
+        ))
+        #expect(list == .text([#"{"sessions":[]}"#]))
+        #expect(create == .text([#"{"session_id":"child"}"#]))
+        #expect(send == .text([#"{"queued":true}"#]))
+    }
+
+    @Test func sessionCommandsRequireAnOriginatingACPSession() async throws {
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { $0 == "terminal-1" ? worktree.id : nil },
+            resolveACPSessionOrigin: { _ in nil },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+
+        let terminal = await router.handle(.init(
+            version: 1, sessionId: "terminal-1", cwd: nil, command: .sessionList
+        ))
+        let directory = await router.handle(.init(
+            version: 1, sessionId: nil, cwd: worktree.path.path, command: .sessionList
+        ))
+
+        #expect(terminal == .error("session commands require an originating ACP session"))
+        #expect(directory == .error("session commands require an originating ACP session"))
+    }
+
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],

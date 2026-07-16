@@ -371,7 +371,7 @@ struct ACPSessionTests {
         let texts: [String] = session.transcript.messages.compactMap { message in
             switch message {
             case .agent(_, _, let t): return "agent:\(t.value)"
-            case .user(_, _, let t, _): return "user:\(t)"
+            case .user(_, _, let t, _, _): return "user:\(t)"
             default: return nil
             }
         }
@@ -437,7 +437,7 @@ struct ACPSessionTests {
         let texts: [String] = session.transcript.messages.compactMap { message in
             switch message {
             case .agent(_, _, let t): return "agent:\(t.value)"
-            case .user(_, _, let t, _): return "user:\(t)"
+            case .user(_, _, let t, _, _): return "user:\(t)"
             default: return nil
             }
         }
@@ -939,7 +939,7 @@ struct ACPSessionTests {
 
         #expect(changed.isEmpty)
         #expect(session.transcript.messages.count == 2)
-        if case .user(_, _, let text, let attachments) = session.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _) = session.transcript.messages[0] {
             #expect(text == "earlier prompt")
             #expect(attachments.isEmpty)
         } else {
@@ -1027,7 +1027,7 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.recordUserPrompt(text: "hi", attachments: [])
         #expect(session.transcript.messages.count == 1)
-        if case .user(_, _, let text, _) = session.transcript.messages[0] { #expect(text == "hi") }
+        if case .user(_, _, let text, _, _) = session.transcript.messages[0] { #expect(text == "hi") }
         else { Issue.record("expected user message") }
     }
 

@@ -17,6 +17,9 @@ usage: alas wt list
 usage: alas wt switch <name-or-branch>
 usage: alas wt new <branch> [--base <ref>]
 usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
+usage: alas session list
+usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
+usage: alas session send <session-id> <prompt>
 usage: alas review [pr-number-or-url]
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
 usage: alas review reply <comment-id> <body>
@@ -35,12 +38,79 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         }
         Some("notify") => parse_notify(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("session") => parse_session(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
             let rest: Vec<&str> = it.map(String::as_str).collect();
             parse_review(&rest, base)
         }
         _ => Err(USAGE_ALL.into()),
     }
+}
+
+fn parse_session(args: &[&str]) -> Result<Command, String> {
+    match args.first().copied() {
+        Some("list") if args.len() == 1 => Ok(Command::SessionList),
+        Some("new") => parse_session_new(&args[1..]),
+        Some("send") => {
+            const USAGE: &str = "usage: alas session send <session-id> <prompt>";
+            if args.len() != 3 || args[1].trim().is_empty() || args[2].trim().is_empty() {
+                return Err(USAGE.into());
+            }
+            Ok(Command::SessionSend {
+                session_id: args[1].to_string(),
+                prompt: args[2].to_string(),
+            })
+        }
+        _ => Err(USAGE_ALL.into()),
+    }
+}
+
+fn parse_session_new(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
+    let mut prompt = None;
+    let mut agent = None;
+    let mut existing_worktree = None;
+    let mut new_worktree = None;
+    let mut base = None;
+    let mut i = 0;
+    while i < args.len() {
+        let value = match args[i] {
+            "--prompt" => &mut prompt,
+            "--agent" => &mut agent,
+            "--worktree" => &mut existing_worktree,
+            "--new-worktree" => &mut new_worktree,
+            "--base" => &mut base,
+            _ => return Err(USAGE.into()),
+        };
+        if value.is_some() {
+            return Err(USAGE.into());
+        }
+        i += 1;
+        let Some(argument) = flag_value(args, i).filter(|argument| !argument.trim().is_empty())
+        else {
+            return Err(USAGE.into());
+        };
+        *value = Some(argument.to_string());
+        i += 1;
+    }
+    let prompt = prompt.ok_or(USAGE)?;
+    if existing_worktree.is_some() && new_worktree.is_some() {
+        return Err(USAGE.into());
+    }
+    if base.is_some() && new_worktree.is_none() {
+        return Err(USAGE.into());
+    }
+    let worktree = match (existing_worktree, new_worktree) {
+        (Some(worktree), None) => alas_client::SessionWorktreeTarget::Existing { worktree },
+        (None, Some(branch)) => alas_client::SessionWorktreeTarget::New { branch, base },
+        (None, None) => alas_client::SessionWorktreeTarget::Current,
+        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+    };
+    Ok(Command::SessionNew {
+        prompt,
+        agent,
+        worktree,
+    })
 }
 
 fn parse_notify(args: &[&str]) -> Result<Command, String> {
@@ -90,8 +160,14 @@ usage: alas open <path> --line <n> [--end-line <n>]";
         return Ok(Command::Open { paths });
     }
     let (first, rest) = args.split_first().ok_or(USAGE)?;
-    if rest.iter().all(|arg| !matches!(*arg, "--line" | "--end-line")) {
-        let paths = args.iter().map(|path| alas_client::absolutize(base, path)).collect();
+    if rest
+        .iter()
+        .all(|arg| !matches!(*arg, "--line" | "--end-line"))
+    {
+        let paths = args
+            .iter()
+            .map(|path| alas_client::absolutize(base, path))
+            .collect();
         return Ok(Command::Open { paths });
     }
 
@@ -105,14 +181,24 @@ usage: alas open <path> --line <n> [--end-line <n>]";
                     return Err(USAGE.into());
                 }
                 i += 1;
-                line = Some(flag_value(rest, i).ok_or(USAGE)?.parse::<u64>().map_err(|_| USAGE)?);
+                line = Some(
+                    flag_value(rest, i)
+                        .ok_or(USAGE)?
+                        .parse::<u64>()
+                        .map_err(|_| USAGE)?,
+                );
             }
             "--end-line" => {
                 if end_line.is_some() {
                     return Err(USAGE.into());
                 }
                 i += 1;
-                end_line = Some(flag_value(rest, i).ok_or(USAGE)?.parse::<u64>().map_err(|_| USAGE)?);
+                end_line = Some(
+                    flag_value(rest, i)
+                        .ok_or(USAGE)?
+                        .parse::<u64>()
+                        .map_err(|_| USAGE)?,
+                );
             }
             _ => return Err(USAGE.into()),
         }
@@ -440,15 +526,27 @@ mod tests {
     #[test]
     fn open_preserves_flag_shaped_legacy_paths() {
         let cmd = parse(&s(&["open", "--notes"]), Path::new("/b")).unwrap();
-        assert_eq!(cmd, Command::Open { paths: vec!["/b/--notes".into()] });
+        assert_eq!(
+            cmd,
+            Command::Open {
+                paths: vec!["/b/--notes".into()]
+            }
+        );
 
         let cmd = parse(&s(&["open", "--"]), Path::new("/b")).unwrap();
-        assert_eq!(cmd, Command::Open { paths: vec!["/b/--".into()] });
+        assert_eq!(
+            cmd,
+            Command::Open {
+                paths: vec!["/b/--".into()]
+            }
+        );
 
         let cmd = parse(&s(&["open", "a.txt", "--", "--line"]), Path::new("/b")).unwrap();
         assert_eq!(
             cmd,
-            Command::Open { paths: vec!["/b/a.txt".into(), "/b/--line".into()] }
+            Command::Open {
+                paths: vec!["/b/a.txt".into(), "/b/--line".into()]
+            }
         );
     }
 
@@ -473,21 +571,27 @@ mod tests {
     fn open_rejects_invalid_line_targets() {
         assert!(parse(&s(&["open", "a.txt", "--line", "0"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["open", "a.txt", "--end-line", "12"]), Path::new("/b")).is_err());
-        assert!(parse(
-            &s(&["open", "a.txt", "--line", "15", "--end-line", "12"]),
-            Path::new("/b")
-        )
-        .is_err());
-        assert!(parse(
-            &s(&["open", "a.txt", "b.txt", "--line", "12"]),
-            Path::new("/b")
-        )
-        .is_err());
-        assert!(parse(
-            &s(&["open", "a.txt", "--line", "12", "--line", "13"]),
-            Path::new("/b")
-        )
-        .is_err());
+        assert!(
+            parse(
+                &s(&["open", "a.txt", "--line", "15", "--end-line", "12"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["open", "a.txt", "b.txt", "--line", "12"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["open", "a.txt", "--line", "12", "--line", "13"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -855,6 +959,98 @@ mod tests {
                 target: Some("123".into())
             }
         );
+    }
+
+    #[test]
+    fn session_commands_parse_and_validate() {
+        assert_eq!(
+            parse(&s(&["session", "list"]), Path::new("/b")).unwrap(),
+            Command::SessionList
+        );
+        assert_eq!(
+            parse(
+                &s(&[
+                    "session",
+                    "new",
+                    "--prompt",
+                    "Task",
+                    "--agent",
+                    "codex",
+                    "--worktree",
+                    "feature",
+                ]),
+                Path::new("/b"),
+            )
+            .unwrap(),
+            Command::SessionNew {
+                prompt: "Task".into(),
+                agent: Some("codex".into()),
+                worktree: alas_client::SessionWorktreeTarget::Existing {
+                    worktree: "feature".into()
+                }
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&[
+                    "session",
+                    "new",
+                    "--prompt",
+                    "Task",
+                    "--new-worktree",
+                    "child",
+                    "--base",
+                    "origin/main",
+                ]),
+                Path::new("/b"),
+            )
+            .unwrap(),
+            Command::SessionNew {
+                prompt: "Task".into(),
+                agent: None,
+                worktree: alas_client::SessionWorktreeTarget::New {
+                    branch: "child".into(),
+                    base: Some("origin/main".into())
+                }
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["session", "send", "child", "Follow-up"]),
+                Path::new("/b"),
+            )
+            .unwrap(),
+            Command::SessionSend {
+                session_id: "child".into(),
+                prompt: "Follow-up".into()
+            }
+        );
+        for invalid in [
+            ["session", "new", "--prompt", "Task", "--prompt", "Again"].as_slice(),
+            [
+                "session",
+                "new",
+                "--prompt",
+                "Task",
+                "--worktree",
+                "main",
+                "--new-worktree",
+                "child",
+            ]
+            .as_slice(),
+            [
+                "session",
+                "new",
+                "--prompt",
+                "Task",
+                "--base",
+                "origin/main",
+            ]
+            .as_slice(),
+            ["session", "send", "child"].as_slice(),
+        ] {
+            assert!(parse(&s(invalid), Path::new("/b")).is_err());
+        }
     }
 
     #[test]

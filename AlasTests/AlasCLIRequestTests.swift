@@ -130,6 +130,47 @@ struct AlasCLIRequestTests {
         #expect(request.command == .notify(body: "Background task finished", title: "Done", level: .info))
     }
 
+    @Test func decodesSessionOrchestrationRequests() throws {
+        let list = #"{"v":1,"kind":"cli","command":"session_list","session_id":"s1","future_transport_field":true,"params":{"future_param":true}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(list.utf8)).command == .sessionList)
+
+        let current = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(current.utf8)).command == .sessionNew(
+            prompt: "Task", agentID: nil, worktree: .current
+        ))
+
+        let existing = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"codex","worktree":"feature"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(existing.utf8)).command == .sessionNew(
+            prompt: "Task", agentID: "codex", worktree: .existing(worktreeID: "feature")
+        ))
+
+        let fresh = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"child","base":"origin/main"}}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(fresh.utf8)).command == .sessionNew(
+            prompt: "Task", agentID: nil, worktree: .new(branch: "child", base: "origin/main")
+        ))
+
+        let send = #"{"v":1,"kind":"cli","command":"session_send","session_id":"s1","params":{"session_id":"child","prompt":"Follow up"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(send.utf8)).command == .sessionSend(
+            sessionID: "child", prompt: "Follow up"
+        ))
+    }
+
+    @Test func rejectsInvalidSessionOrchestrationRequests() throws {
+        for invalid in [
+            #"{"v":1,"kind":"cli","command":"session_list","session_id":"s1"}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"   "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"  "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"  "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"feature","new_worktree":{"branch":"child"}}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"  "}}}"#,
+            #"{"v":1,"kind":"cli","command":"session_send","session_id":"s1","params":{"session_id":"child","prompt":3}}"#,
+        ] {
+            #expect(throws: AlasCLIRequestError.malformed, "should reject: \(invalid)") {
+                try AlasCLIRequest.decode(from: Data(invalid.utf8))
+            }
+        }
+    }
+
     @Test func rejectsInvalidNotifyRequests() throws {
         for bad in [
             #"{"v":1,"kind":"cli","command":"notify","session_id":"s1"}"#,

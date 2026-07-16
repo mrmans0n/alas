@@ -1308,7 +1308,7 @@ extension ACPSessionRunner {
         if case .needsAuth = session.setupState { return }
         session.markQueueHeadSending()
         persistQueue()
-        sendNow(blocks: head.blocks, queuedItemId: head.id)
+        sendNow(blocks: head.blocks, queuedItemId: head.id, delegatedSource: head.delegatedSource)
     }
 
     /// User clicked the row-local "send now" affordance for a queued item.
@@ -1339,7 +1339,11 @@ extension ACPSessionRunner {
 
         let item = session.queue.remove(at: idx)
         persistQueue()
-        steer(blocks: item.blocks, recordUserPrompt: !item.transcriptRecorded)
+        steer(
+            blocks: item.blocks,
+            delegatedSource: item.delegatedSource,
+            recordUserPrompt: !item.transcriptRecorded
+        )
     }
 
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue
@@ -1353,6 +1357,7 @@ extension ACPSessionRunner {
     /// resolves to a no-op.
     func steer(
         blocks: [ACPContentBlock],
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -1403,6 +1408,7 @@ extension ACPSessionRunner {
                 self.sendNow(
                     blocks: blocks,
                     queuedItemId: nil,
+                    delegatedSource: delegatedSource,
                     recordUserPrompt: recordUserPrompt,
                     draft: draft,
                     onPromptFinished: onPromptFinished
@@ -1447,6 +1453,7 @@ extension ACPSessionRunner {
     func sendNow(
         blocks: [ACPContentBlock],
         queuedItemId: UUID?,
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -1516,7 +1523,8 @@ extension ACPSessionRunner {
                         self.onResumeTranscriptTail?()
                     }
                     self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
-                                                  attachments: Self.attachments(of: blocks))
+                                                  attachments: Self.attachments(of: blocks),
+                                                  delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
                     if self.session.title != titleBefore {
                         self.persistGeneratedTitleIfStoredPlaceholder()

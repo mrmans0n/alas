@@ -21,6 +21,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// rolled-back direct sends) — those fall back to the heuristic via
     /// `restorableDraft`. Not sent to the agent; `blocks` remains the wire form.
     var draft: ACPComposerDraft?
+    /// Present only for prompts delivered by a direct delegated-session edge.
+    /// It is intentionally omitted from ordinary prompt JSON for compatibility.
+    let delegatedSource: ACPDelegatedPromptSource?
 
     init(id: UUID = UUID(),
          blocks: [ACPContentBlock],
@@ -28,6 +31,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          status: Status = .pending,
          lastError: String? = nil,
          draft: ACPComposerDraft? = nil,
+         delegatedSource: ACPDelegatedPromptSource? = nil,
          transcriptRecorded: Bool = false)
     {
         self.id = id
@@ -36,11 +40,12 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.status = status
         self.lastError = lastError
         self.draft = draft
+        self.delegatedSource = delegatedSource
         self.transcriptRecorded = transcriptRecorded
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, blocks, enqueuedAt, status, lastError, draft, transcriptRecorded
+        case id, blocks, enqueuedAt, status, lastError, draft, delegatedSource, transcriptRecorded
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +56,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         status = try c.decode(Status.self, forKey: .status)
         lastError = try? c.decode(String.self, forKey: .lastError)
         draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
+        delegatedSource = try? c.decode(ACPDelegatedPromptSource.self, forKey: .delegatedSource)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
     }
 

@@ -176,7 +176,29 @@ pub enum Command {
         verdict: Option<String>,
         summary: Option<String>,
     },
+    SessionList,
+    SessionNew {
+        prompt: String,
+        agent: Option<String>,
+        worktree: SessionWorktreeTarget,
+    },
+    SessionSend {
+        session_id: String,
+        prompt: String,
+    },
     Resolve,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionWorktreeTarget {
+    Current,
+    Existing {
+        worktree: String,
+    },
+    New {
+        branch: String,
+        base: Option<String>,
+    },
 }
 
 /// Build the wire request for a command, attaching whichever addressing the
@@ -192,7 +214,11 @@ pub fn build_request(
             r.paths = Some(paths.clone());
             r
         }
-        Command::OpenAt { path, line, end_line } => {
+        Command::OpenAt {
+            path,
+            line,
+            end_line,
+        } => {
             let mut r = Request::new("open");
             r.paths = Some(vec![path.clone()]);
             let mut params = serde_json::Map::new();
@@ -339,6 +365,47 @@ pub fn build_request(
                 params.insert("summary".into(), serde_json::Value::String(summary.clone()));
             }
             r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::SessionList => {
+            let mut r = Request::new("session_list");
+            r.params = Some(serde_json::json!({}));
+            r
+        }
+        Command::SessionNew {
+            prompt,
+            agent,
+            worktree,
+        } => {
+            let mut r = Request::new("session_new");
+            let mut params = serde_json::Map::new();
+            params.insert("prompt".into(), serde_json::Value::String(prompt.clone()));
+            if let Some(agent) = agent {
+                params.insert("agent".into(), serde_json::Value::String(agent.clone()));
+            }
+            match worktree {
+                SessionWorktreeTarget::Current => {}
+                SessionWorktreeTarget::Existing { worktree } => {
+                    params.insert(
+                        "worktree".into(),
+                        serde_json::Value::String(worktree.clone()),
+                    );
+                }
+                SessionWorktreeTarget::New { branch, base } => {
+                    let mut target = serde_json::Map::new();
+                    target.insert("branch".into(), serde_json::Value::String(branch.clone()));
+                    if let Some(base) = base {
+                        target.insert("base".into(), serde_json::Value::String(base.clone()));
+                    }
+                    params.insert("new_worktree".into(), serde_json::Value::Object(target));
+                }
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::SessionSend { session_id, prompt } => {
+            let mut r = Request::new("session_send");
+            r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
             r
         }
         Command::Resolve => Request::new("resolve"),
@@ -650,6 +717,43 @@ mod tests {
 
         let bare = serde_json::to_string(&Request::new("resolve")).unwrap();
         assert!(!bare.contains("params"), "absent params must not serialize");
+    }
+
+    #[test]
+    fn session_commands_use_params_and_preserve_the_injected_session_id() {
+        let new = Command::SessionNew {
+            prompt: "Task".into(),
+            agent: Some("codex".into()),
+            worktree: SessionWorktreeTarget::New {
+                branch: "child".into(),
+                base: Some("origin/main".into()),
+            },
+        };
+        let request = build_request(&new, Some("acp-1".into()), None);
+        assert_eq!(request.session_id.as_deref(), Some("acp-1"));
+        assert_eq!(
+            request.params,
+            Some(serde_json::json!({
+                "prompt": "Task",
+                "agent": "codex",
+                "new_worktree": { "branch": "child", "base": "origin/main" }
+            }))
+        );
+
+        let send = build_request(
+            &Command::SessionSend {
+                session_id: "child".into(),
+                prompt: "Follow up".into(),
+            },
+            Some("acp-1".into()),
+            None,
+        );
+        assert_eq!(send.command, "session_send");
+        assert_eq!(send.session_id.as_deref(), Some("acp-1"));
+        assert_eq!(
+            send.params,
+            Some(serde_json::json!({ "session_id": "child", "prompt": "Follow up" }))
+        );
     }
 
     #[test]

@@ -17,20 +17,21 @@ final class DarwinChangeNotifier: ACPChangeNotifier {
     // off the main thread — callers must hop to MainActor as needed.
     private let deliveryQueue = DispatchQueue(label: "io.alas.acp.notify")
 
-    init(worktreeId: String) {
-        self.name = Self.channelName(worktreeId: worktreeId)
+    init(worktreeId: String, channel: String? = nil) {
+        self.name = Self.channelName(worktreeId: worktreeId, channel: channel)
     }
 
     /// notify(3) names must be short, ASCII, and reverse-DNS-ish. Hash
     /// the (possibly long, space-containing) worktree id into a stable
     /// 64-bit suffix so any worktree maps to one safe channel.
-    static func channelName(worktreeId: String) -> String {
+    static func channelName(worktreeId: String, channel: String? = nil) -> String {
         var hash: UInt64 = 1469598103934665603   // FNV-1a offset basis
         for byte in worktreeId.utf8 {
             hash ^= UInt64(byte)
             hash = hash &* 1099511628211
         }
-        return "io.alas.acp." + String(hash, radix: 16)
+        let name = "io.alas.acp." + String(hash, radix: 16)
+        return channel.map { name + "." + $0 } ?? name
     }
 
     func post() {

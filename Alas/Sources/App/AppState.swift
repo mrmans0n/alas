@@ -530,6 +530,166 @@ final class AppState {
         })
     }
 
+    private func reconcileInterruptedDelegations() async {
+        guard let records = try? await acpOrchestrationPersistence.incompleteDelegations() else { return }
+        for record in records {
+            let worktree = record.childWorktreeId.flatMap(worktree(withId:))
+                ?? worktree(atPersistedDestinationPath: record.worktreeRequest.destinationPath)
+            guard let worktree,
+                  let manager = acpManager(for: worktree)
+            else {
+                try? await acpOrchestrationPersistence.updatePhase(
+                    childSessionId: record.childSessionId,
+                    phase: .failed,
+                    failureMessage: "Alas stopped before delegated session setup completed.",
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+                continue
+            }
+            if record.childWorktreeId != worktree.id {
+                try? await acpOrchestrationPersistence.updateChildWorktree(
+                    childSessionId: record.childSessionId,
+                    worktreeId: worktree.id,
+                    phase: .starting,
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+            }
+            delegatedSessionParents[record.childSessionId] = record.parentSessionId
+            let sessionAlreadyPersisted = await manager.persistedSessionRow(id: record.childSessionId) != nil
+            if sessionAlreadyPersisted {
+                _ = manager.placeholderSession(id: record.childSessionId)
+                await manager.hydrateIfNeeded(id: record.childSessionId)
+            } else {
+                _ = manager.createSession(
+                    id: record.childSessionId,
+                    agentId: record.agentId,
+                    autoRunDefault: config.harness.acpAutoRunByDefault
+                )
+            }
+            let restoredPendingPrompt = record.pendingInitialPrompt != nil
+            if let prompt = record.pendingInitialPrompt {
+                let accepted = await manager.enqueueDelegatedPrompt(
+                    text: prompt,
+                    source: ACPDelegatedPromptSource(
+                        sessionId: record.parentSessionId,
+                        messageId: "initial-\(record.childSessionId)"
+                    ),
+                    into: record.childSessionId
+                )
+                guard accepted else {
+                    try? await acpOrchestrationPersistence.updatePhase(
+                        childSessionId: record.childSessionId,
+                        phase: .failed,
+                        failureMessage: "Could not restore delegated session prompt.",
+                        updatedAt: Int64(Date().timeIntervalSince1970)
+                    )
+                    continue
+                }
+            } else if !sessionAlreadyPersisted {
+                try? await acpOrchestrationPersistence.updatePhase(
+                    childSessionId: record.childSessionId,
+                    phase: .failed,
+                    failureMessage: "Could not restore delegated session prompt.",
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+                continue
+            }
+            await manager.attach(to: record.childSessionId, freshlyCreated: !sessionAlreadyPersisted)
+            guard let session = manager.liveSession(for: record.childSessionId),
+                  session.agentState == .ready
+            else {
+                try? await acpOrchestrationPersistence.updatePhase(
+                    childSessionId: record.childSessionId,
+                    phase: .failed,
+                    failureMessage: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId)),
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+                continue
+            }
+            if restoredPendingPrompt {
+                try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
+                    childSessionId: record.childSessionId,
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+            }
+            try? await acpOrchestrationPersistence.updatePhase(
+                childSessionId: record.childSessionId,
+                phase: .ready,
+                failureMessage: nil,
+                updatedAt: Int64(Date().timeIntervalSince1970)
+            )
+            await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
+        }
+        await drainRecoveredDelegatedMessageTargets()
+    }
+
+    private func recoveredDelegatedSessionFailureMessage(_ session: ACPSession?) -> String {
+        guard let session else { return "Could not restore delegated ACP session." }
+        switch session.setupState {
+        case .needsSetup(let reason), .setupError(let reason):
+            return reason
+        case .needsAuth(_, let reason):
+            return reason ?? "ACP session needs authentication."
+        case .checking, .ready:
+            break
+        }
+        if case .failed(let reason) = session.agentState {
+            return reason
+        }
+        return "Could not restore delegated ACP session."
+    }
+
+    private func drainRecoveredDelegatedMessageTargets() async {
+        guard let targetSessionIds = try? await acpOrchestrationPersistence.pendingMessageTargetSessionIds() else {
+            return
+        }
+        for sessionId in targetSessionIds {
+            let childRecord = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
+            if let childRecord {
+                delegatedSessionParents[childRecord.childSessionId] = childRecord.parentSessionId
+            }
+            guard let manager = await acpManagerForPersistedSession(
+                sessionId: sessionId,
+                preferredWorktreeId: childRecord?.childWorktreeId ?? childRecord?.worktreeRequest.worktreeId
+            ) else { continue }
+            await deliverPendingDelegatedMessages(to: sessionId, manager: manager)
+            await scheduleRecoveredDelegatedMessageRetry(to: sessionId, manager: manager)
+        }
+    }
+
+    private func scheduleRecoveredDelegatedMessageRetry(to sessionId: String, manager: ACPSessionManager) async {
+        guard let remaining = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId),
+              !remaining.isEmpty
+        else { return }
+        Task { @MainActor [weak self, weak manager] in
+            try? await Task.sleep(nanoseconds: 61_000_000_000)
+            guard let self, let manager else { return }
+            await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
+        }
+    }
+
+    private func acpManagerForPersistedSession(
+        sessionId: String,
+        preferredWorktreeId: String?
+    ) async -> ACPSessionManager? {
+        var worktreeIds: [String] = []
+        if let preferredWorktreeId {
+            worktreeIds.append(preferredWorktreeId)
+        }
+        worktreeIds.append(contentsOf: allWorktreeIds().filter { $0 != preferredWorktreeId }.sorted())
+        for worktreeId in worktreeIds {
+            guard let worktree = worktree(withId: worktreeId),
+                  let manager = acpManager(for: worktree),
+                  let row = await manager.persistedSessionRow(id: sessionId),
+                  !row.archived
+            else { continue }
+            _ = manager.placeholderSession(id: sessionId)
+            await manager.hydrateIfNeeded(id: sessionId)
+            return manager
+        }
+        return nil
+    }
+
     func toggleRightPaneVisibility() {
         config.rightPaneVisible.toggle()
         _ = saveConfig()
@@ -586,6 +746,9 @@ final class AppState {
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
+        Task { [weak self] in
+            await self?.reconcileInterruptedDelegations()
+        }
     }
 
     /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
@@ -932,13 +1095,16 @@ final class AppState {
             status: .clean,
             lastActivity: Date()
         )
-        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+        if launchSurface != .delegated,
+           let containing = spacesManager.containingSpaceId(forProjectId: projectId),
            containing != spacesManager.activeSpaceId {
             _ = switchToSpace(id: containing)
         }
         projectsManager.insertOptimisticWorktree(optimistic)
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
-        selectWorktree(id: optimistic.id)
+        if launchSurface != .delegated {
+            selectWorktree(id: optimistic.id)
+        }
 
         let startupScript = StartupScriptResolver.worktreeCreateScript(
             global: config.terminal,
@@ -996,7 +1162,9 @@ final class AppState {
                         saveProjects()
                     }
 
-                    selectWorktree(id: newWorktree.id)
+                    if launchSurface != .delegated {
+                        selectWorktree(id: newWorktree.id)
+                    }
 
                     switch launchSurface {
                     case .none:
@@ -1014,6 +1182,8 @@ final class AppState {
                         )
                     case .acp(let agentId):
                         openNewACPSession(agentID: agentId)
+                    case .delegated:
+                        break
                     }
                 } catch {
                     projectsManager.setOperationState(
@@ -1073,6 +1243,69 @@ final class AppState {
             return .error("A worktree already exists at this path.")
         }
         return .text(["creating \(branch) at \(destination.path)"])
+    }
+
+    /// Creates a worktree for delegated ACP work without changing the visible
+    /// project/worktree selection. The existing creation path remains the
+    /// single owner of validation, startup, refresh, and failure handling.
+    private func createDelegatedWorktree(
+        projectId: String,
+        branch: String,
+        base: String?
+    ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            return .failure(.init(message: "The project is no longer available."))
+        }
+        switch GitNameValidator.validateBranchName(branch) {
+        case .valid:
+            break
+        case .invalid(let message):
+            return .failure(.init(message: "invalid branch name: \(message)"))
+        }
+        let destination = WorktreePathTemplateRenderer.render(
+            template: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            return .failure(.init(message: "A worktree already exists at this path."))
+        }
+        let selectedBase: String
+        if let base {
+            selectedBase = base
+        } else {
+            let branches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
+            selectedBase = NewWorktreeDialog.preferredBaseBranch(
+                availableBranches: branches,
+                configuredDefault: config.worktrees.baseBranch
+            )
+        }
+        let id = await createWorktree(
+            projectId: projectId,
+            base: selectedBase,
+            branch: branch,
+            destination: destination,
+            runStartup: true,
+            launchSurface: .delegated
+        )
+        guard !id.isEmpty else { return .failure(.init(message: "Could not start worktree creation.")) }
+        for _ in 0..<1_200 {
+            switch projectsManager.operationState(for: id) {
+            case .createFailed(let message, _):
+                return .failure(.init(message: message))
+            case .creating:
+                try? await Task.sleep(for: .milliseconds(250))
+            case .deleting, .deleteFailed:
+                return .failure(.init(message: "Worktree creation was interrupted."))
+            case nil:
+                if let worktree = worktree(withId: id) {
+                    return .success(worktree)
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        return .failure(.init(message: "Timed out waiting for worktree creation."))
     }
 
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
@@ -1839,8 +2072,97 @@ final class AppState {
     func makeCLICommandRouter(
         sessionWorktreeLookup: @escaping (String) -> String?
     ) -> AlasCLICommandRouter {
-        AlasCLICommandRouter(
+        let orchestration = ACPSessionOrchestrationCoordinator(
+            environment: .init(
+                persistence: acpOrchestrationPersistence,
+                instanceId: instanceId,
+                now: { Int64(Date().timeIntervalSince1970) },
+                makeID: { UUID().uuidString },
+                worktree: { [weak self] id in self?.worktree(withId: id) },
+                existingWorktree: { [weak self] projectId, worktreeId in
+                    guard let self else { return nil }
+                    let worktrees = self.projectsManager.visibleWorktrees(projectId: projectId)
+                    if let exactID = worktrees.first(where: { $0.id == worktreeId }) {
+                        return exactID
+                    }
+                    if case .matched(let worktree) = AlasCLIWorktreeResolver.resolve(
+                        target: worktreeId,
+                        worktrees: worktrees
+                    ) {
+                        return worktree
+                    }
+                    return nil
+                },
+                availableAgents: { [weak self] in
+                    guard let self else { return [] }
+                    let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
+                    return self.agentRegistry.enabled().map {
+                        ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
+                    }
+                },
+                sessionLocation: { [weak self] sessionId in
+                    guard let self,
+                          let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                              manager.liveSession(for: sessionId) != nil
+                          }),
+                          let worktree = self.worktree(withId: worktreeId)
+                    else { return nil }
+                    return .init(
+                        origin: ACPOrchestrationSessionOrigin(
+                            sessionId: sessionId,
+                            projectId: worktree.projectId,
+                            worktreeId: worktree.id
+                        ),
+                        manager: manager
+                    )
+                },
+                manager: { [weak self] worktree in self?.acpManager(for: worktree) },
+                newWorktreeDestination: { [weak self] projectId, branch in
+                    guard let self,
+                          let project = self.projects.first(where: { $0.id == projectId })
+                    else { return nil }
+                    let destination = WorktreePathTemplateRenderer.render(
+                        template: self.config.worktrees.pathTemplate,
+                        worktreeRoot: self.config.worktrees.rootPath,
+                        repoName: project.name,
+                        branch: branch
+                    )
+                    guard !URL(fileURLWithPath: project.path).isRemoteAlasPath else { return destination }
+                    return destination
+                        .deletingLastPathComponent()
+                        .resolvingSymlinksInPath()
+                        .appendingPathComponent(destination.lastPathComponent)
+                },
+                createWorktree: { [weak self] projectId, branch, base in
+                    guard let self else {
+                        return .failure(.init(message: "Alas is not available."))
+                    }
+                    return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
+                },
+                rememberParent: { [weak self] childID, parentID in
+                    self?.delegatedSessionParents[childID] = parentID
+                },
+                autoRunDefault: { [weak self] in
+                    self?.config.harness.acpAutoRunByDefault ?? false
+                },
+                notifyChanged: { }
+            )
+        )
+        return AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
+            resolveACPSessionOrigin: { [weak self] sessionId in
+                guard let self,
+                      let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                          manager.liveSession(for: sessionId) != nil
+                      }),
+                      let worktree = self.worktree(withId: worktreeId)
+                else { return nil }
+                return ACPOrchestrationSessionOrigin(
+                    sessionId: sessionId,
+                    projectId: worktree.projectId,
+                    worktreeId: worktree.id
+                )
+            },
             originatingWorktree: { [weak self] worktreeId in
                 self?.worktree(withId: worktreeId)
             },
@@ -1922,6 +2244,15 @@ final class AppState {
                     title: title,
                     level: level
                 )
+            },
+            listDelegatedSessions: { origin in
+                await orchestration.list(origin: origin)
+            },
+            createDelegatedSession: { origin, request in
+                await orchestration.create(origin: origin, request: request)
+            },
+            sendDelegatedSessionMessage: { origin, request in
+                await orchestration.send(origin: origin, request: request)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
@@ -3058,6 +3389,19 @@ final class AppState {
         return nil
     }
 
+    private func worktree(atPersistedDestinationPath path: String?) -> Worktree? {
+        guard let path, !path.isEmpty else { return nil }
+        let targetPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        for project in projects {
+            if let worktree = projectsManager.worktrees(projectId: project.id).first(where: {
+                $0.path.standardizedFileURL.path == targetPath
+            }) {
+                return worktree
+            }
+        }
+        return nil
+    }
+
     private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
@@ -4152,6 +4496,12 @@ final class AppState {
     @ObservationIgnored
     private var acpManagers: [String: ACPSessionManager] = [:]
 
+    @ObservationIgnored
+    private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
+
+    @ObservationIgnored
+    private var delegatedSessionParents: [String: String] = [:]
+
     /// Force-flush every per-session debounced composer-draft write across
     /// all live managers. Called from app-will-terminate so an in-flight
     /// typing burst doesn't lose its last ~300ms of input to the
@@ -4251,6 +4601,12 @@ final class AppState {
                     requestId: self.notificationRequestId(for: request)
                 )
             },
+            onDelegatedMessageAvailable: { [weak self] sessionId in
+                Task { @MainActor [weak self] in
+                    guard let self, let manager = self.acpManagers[worktree.id] else { return }
+                    await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
+                }
+            },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
                     return nil
@@ -4267,13 +4623,22 @@ final class AppState {
                 // no injection rather than a dead command for the agent.
                 let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                     .appendingPathComponent(TerminalCLIInjection.executableName).path
+                let persistedParent = try? await self.acpOrchestrationPersistence.parent(
+                    childSessionId: sessionId
+                )
+                let parentSessionId = self.delegatedSessionParents[sessionId]
+                    ?? persistedParent?.parentSessionId
+                if let parentSessionId {
+                    self.delegatedSessionParents[sessionId] = parentSessionId
+                }
                 return BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
                     binaryPath: binaryPath,
                     socketPath: self.harness.socketServer.socketPath,
                     worktreePath: worktreePath,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    parentSessionId: parentSessionId
                 )
             }
         )
@@ -4446,8 +4811,108 @@ final class AppState {
             title = "ACP session"
         }
         _ = mgr.placeholderSession(id: sessionId)
+        await mgr.hydrateIfNeeded(id: sessionId)
+        await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        guard let messages = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) else {
+            return
+        }
+        await manager.attach(to: sessionId, freshlyCreated: false)
+        guard manager.isWriter(for: sessionId) else {
+            manager.notifyDelegatedMessagesAvailable()
+            return
+        }
+        for message in messages {
+            guard let claimed = try? await acpOrchestrationPersistence.claimMessage(
+                id: message.id,
+                instanceId: instanceId,
+                token: UUID().uuidString,
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: 60
+            ) else { continue }
+            let accepted = await manager.enqueueDelegatedPrompt(
+                text: claimed.message.prompt,
+                source: ACPDelegatedPromptSource(
+                    sessionId: claimed.message.sourceSessionId,
+                    messageId: claimed.message.id
+                ),
+                into: sessionId
+            )
+            if accepted {
+                try? await acpOrchestrationPersistence.removeDeliveredMessage(
+                    id: claimed.message.id,
+                    claim: claimed.claim
+                )
+            } else {
+                try? await acpOrchestrationPersistence.releaseMessageClaim(
+                    id: claimed.message.id,
+                    claim: claimed.claim
+                )
+                manager.notifyDelegatedMessagesAvailable()
+            }
+        }
+    }
+
+    func delegatedSessionSummaries(for sessionId: String) async -> [ACPOrchestrationSessionSummary] {
+        let parent = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
+        let children = (try? await acpOrchestrationPersistence.children(parentSessionId: sessionId)) ?? []
+        var summaries: [ACPOrchestrationSessionSummary] = []
+        for record in children {
+            let manager = record.childWorktreeId
+                .flatMap { worktree(withId: $0) }
+                .flatMap { acpManager(for: $0) }
+            let runtime = manager?.liveSession(for: record.childSessionId)
+                .map { session -> ACPOrchestrationRuntimeState in
+                    switch session.transcript.streamingState {
+                    case .idle: return .idle
+                    case .sending, .streaming: return .running
+                    case .awaitingPermission, .awaitingInput: return .awaitingInput
+                    }
+                }
+            let archived: Bool
+            if let manager, let row = await manager.persistedSessionRow(id: record.childSessionId) {
+                archived = row.archived
+            } else if record.childWorktreeId != nil {
+                archived = true
+            } else {
+                archived = false
+            }
+            summaries.append(ACPOrchestrationSessionSummary(
+                sessionId: record.childSessionId,
+                relationship: "child",
+                agentId: record.agentId,
+                worktreeId: record.childWorktreeId ?? "",
+                state: ACPSessionOrchestrationPolicy.publicState(
+                    phase: record.phase,
+                    runtime: runtime,
+                    archived: archived
+                ).rawValue,
+                failure: record.failureMessage,
+                createdAt: record.createdAt
+            ))
+        }
+        if let parent {
+            summaries.append(.init(
+                sessionId: parent.parentSessionId,
+                relationship: "parent",
+                agentId: "",
+                worktreeId: parent.parentWorktreeId,
+                state: "idle",
+                failure: nil,
+                createdAt: parent.createdAt
+            ))
+        }
+        return ACPDelegatedSessionsPolicy.ordered(summaries)
+    }
+
+    func openDelegatedACPSession(_ summary: ACPOrchestrationSessionSummary) async {
+        guard let worktree = worktree(withId: summary.worktreeId) else { return }
+        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        await openExistingACPSession(sessionId: summary.sessionId)
     }
 
     @discardableResult

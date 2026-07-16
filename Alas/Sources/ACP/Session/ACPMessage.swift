@@ -1,7 +1,7 @@
 import Foundation
 
 enum ACPMessage: Equatable {
-    case user(id: UUID, messageId: String?, text: String, attachments: [Attachment])
+    case user(id: UUID, messageId: String?, text: String, attachments: [Attachment], delegatedSource: ACPDelegatedPromptSource? = nil)
     case agent(id: UUID, messageId: String?, StreamingText)
     case thought(id: UUID, messageId: String?, StreamingText)
     case toolCall(ToolCall)
@@ -36,7 +36,7 @@ enum ACPMessage: Equatable {
 
     var stableIdentityKey: StableIdentityKey {
         switch self {
-        case .user(let id, let messageId, _, _):
+        case .user(let id, let messageId, _, _, _):
             messageId.map(StableIdentityKey.userMessageId) ?? .userUUID(id)
         case .agent(let id, let messageId, _):
             messageId.map(StableIdentityKey.agentMessageId) ?? .agentUUID(id)
@@ -76,7 +76,7 @@ enum ACPMessage: Equatable {
     @MainActor
     var contentUTF8Length: Int {
         switch self {
-        case .user(_, _, let text, _):
+        case .user(_, _, let text, _, _):
             text.utf8.count
         case .agent(_, _, let text), .thought(_, _, let text):
             text.utf8Length
@@ -372,7 +372,7 @@ enum ACPMessageCodec {
     @MainActor
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
-        case .user(_, let messageId, let text, let atts): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts))
+        case .user(_, let messageId, let text, let atts, let delegatedSource): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts, delegatedSource: delegatedSource))
         case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
         case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
         case .toolCall(let tc):             return try encoder.encode(tc)
@@ -387,7 +387,7 @@ enum ACPMessageCodec {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments)
+            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource)
         case "agent":
             let p = try JSONDecoder().decode(TextPayload.self, from: payload)
             return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text))
@@ -420,11 +420,13 @@ enum ACPMessageCodec {
         let messageId: String?
         let text: String
         let attachments: [ACPMessage.Attachment]
+        let delegatedSource: ACPDelegatedPromptSource?
 
-        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment]) {
+        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource? = nil) {
             self.messageId = messageId
             self.text = text
             self.attachments = attachments
+            self.delegatedSource = delegatedSource
         }
     }
     private struct PlanPayload: Codable { let items: [ACPMessage.PlanItem] }
