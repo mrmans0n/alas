@@ -75,6 +75,11 @@ enum ACPSessionOrchestrationPolicy {
         return .failure(.targetIsNotDirectRelative)
     }
 
+    static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
+        guard let target else { return true }
+        return target.phase != .failed && target.phase != .closed
+    }
+
     static func visibleSessions(
         callerSessionId: String,
         parent: ACPDelegationRecord?,

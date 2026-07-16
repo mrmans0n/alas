@@ -151,6 +151,27 @@ struct ACPOrchestrationStoreTests {
         #expect(try b.claimedMessage(id: "message")?.instanceId == "instance-a")
     }
 
+    @Test("messages with the same timestamp preserve insertion order")
+    func messagesWithSameTimestampPreserveInsertionOrder() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.enqueue(.init(
+            id: "z-message",
+            sourceSessionId: "parent",
+            targetSessionId: "child",
+            prompt: "first",
+            createdAt: 100
+        ))
+        try store.enqueue(.init(
+            id: "a-message",
+            sourceSessionId: "parent",
+            targetSessionId: "child",
+            prompt: "second",
+            createdAt: 100
+        ))
+
+        #expect(try store.pendingMessages(targetSessionId: "child").map(\.id) == ["z-message", "a-message"])
+    }
+
     @Test("released inbox claim can be immediately reclaimed")
     func releasesMessageClaim() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())

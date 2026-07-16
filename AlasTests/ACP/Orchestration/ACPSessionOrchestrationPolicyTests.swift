@@ -91,6 +91,19 @@ struct ACPSessionOrchestrationPolicyTests {
         )
     }
 
+    @Test("failed and closed delegated targets reject messages")
+    func failedAndClosedTargetsRejectMessages() {
+        var failedChild = child
+        failedChild.phase = .failed
+        var closedChild = child
+        closedChild.phase = .closed
+
+        #expect(!ACPSessionOrchestrationPolicy.acceptsMessages(target: failedChild))
+        #expect(!ACPSessionOrchestrationPolicy.acceptsMessages(target: closedChild))
+        #expect(ACPSessionOrchestrationPolicy.acceptsMessages(target: child))
+        #expect(ACPSessionOrchestrationPolicy.acceptsMessages(target: nil))
+    }
+
     @Test("list visibility contains only self and direct relatives")
     func visibility() {
         let sibling = ACPDelegationRecord(

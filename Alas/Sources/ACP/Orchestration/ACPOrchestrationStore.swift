@@ -143,7 +143,7 @@ final class ACPOrchestrationStore {
             """
             SELECT * FROM delegated_messages
             WHERE target_session_id = ?
-            ORDER BY created_at ASC, id ASC
+            ORDER BY created_at ASC, rowid ASC
             """,
             bindings: [targetSessionId]
         ).map(decodeMessage)

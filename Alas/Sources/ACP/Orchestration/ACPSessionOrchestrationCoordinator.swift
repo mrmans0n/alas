@@ -228,6 +228,9 @@ final class ACPSessionOrchestrationCoordinator {
             ) else {
                 return .error("Messages may only be sent to a direct parent or child session.")
             }
+            guard ACPSessionOrchestrationPolicy.acceptsMessages(target: targetParent) else {
+                return .error("The target delegated session is not available.")
+            }
         } catch {
             return .error("Could not verify session delegation.")
         }
