@@ -228,11 +228,12 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "review",
-            "description": "Open Alas's review pane for the user: on the current local changes when target is omitted, or on a provider pull/merge request when target (a PR/MR number or URL) is given. Returns the review session id for use with review_comment_add.",
+            "description": "Open Alas's review pane for the user: on the current local changes when target is omitted, or on the given target — a provider pull/merge request (number or URL), a commit SHA or revision, a commit range (base..head, or base...head for a merge-base diff), or a local branch (reviewed against the repository's base branch). Returns the review session id for use with review_comment_add.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "target": { "type": "string", "description": "PR/MR number or URL. Omit to review local changes." }
+                    "target": { "type": "string", "description": "PR/MR number or URL, commit SHA/revision, commit range (base..head or base...head), or branch name. Omit to review local changes." },
+                    "worktree": { "type": "string", "description": "Worktree to review in: name, branch, or absolute path. Defaults to the current worktree." }
                 }
             }
         }),
@@ -434,7 +435,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }),
         "review" => Ok(Command::Review {
             target: review_target(args)?,
-            worktree: None,
+            worktree: optional_string(args, "worktree"),
         }),
         "review_comments" => {
             let state = optional_string(args, "state");
@@ -1063,6 +1064,32 @@ mod tests {
             alas_client::Command::Review {
                 target: Some("123".into()),
                 worktree: None
+            }
+        );
+    }
+
+    #[test]
+    fn review_tool_maps_worktree_argument() {
+        let cmd = command_for_tool(
+            "review",
+            &serde_json::json!({ "target": "main..HEAD", "worktree": "feature-x" }),
+            "/wt",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            alas_client::Command::Review {
+                target: Some("main..HEAD".into()),
+                worktree: Some("feature-x".into()),
+            }
+        );
+
+        let bare = command_for_tool("review", &serde_json::json!({}), "/wt").unwrap();
+        assert_eq!(
+            bare,
+            alas_client::Command::Review {
+                target: None,
+                worktree: None,
             }
         );
     }
