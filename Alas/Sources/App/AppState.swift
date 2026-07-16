@@ -625,6 +625,18 @@ final class AppState {
                 preferredWorktreeId: childRecord?.childWorktreeId ?? childRecord?.worktreeRequest.worktreeId
             ) else { continue }
             await deliverPendingDelegatedMessages(to: sessionId, manager: manager)
+            await scheduleRecoveredDelegatedMessageRetry(to: sessionId, manager: manager)
+        }
+    }
+
+    private func scheduleRecoveredDelegatedMessageRetry(to sessionId: String, manager: ACPSessionManager) async {
+        guard let remaining = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId),
+              !remaining.isEmpty
+        else { return }
+        Task { @MainActor [weak self, weak manager] in
+            try? await Task.sleep(nanoseconds: 61_000_000_000)
+            guard let self, let manager else { return }
+            await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
         }
     }
 
