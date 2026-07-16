@@ -107,9 +107,9 @@ struct ACPSessionRunnerTests {
 
         try await waitUntil {
             session.transcript.messages.contains {
-                    if case .user(_, _, "hello", _, _, _) = -e { return true }
-                    return false
-                }
+                if case .user(_, _, "hello", _, _, _) = $0 { return true }
+                return false
+            }
         }
         #expect(try store.loadComposerDraft(sessionId: "s") == submitted)
         #expect(completion == nil)

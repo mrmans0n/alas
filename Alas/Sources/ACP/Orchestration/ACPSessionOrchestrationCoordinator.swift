@@ -201,9 +201,11 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("prompt must not be blank")
         }
+        let callerParent: ACPDelegationRecord?
+        let targetParent: ACPDelegationRecord?
         do {
-            let callerParent = try await environment.persistence.parent(childSessionId: origin.sessionId)
-            let targetParent = try await environment.persistence.parent(childSessionId: request.targetSessionId)
+            callerParent = try await environment.persistence.parent(childSessionId: origin.sessionId)
+            targetParent = try await environment.persistence.parent(childSessionId: request.targetSessionId)
             let target = environment.sessionLocation(request.targetSessionId)
             guard let targetProjectId = target?.origin.projectId ?? targetParent?.projectId ?? callerParent?.projectId else {
                 return .error("The target ACP session is not available.")
@@ -235,10 +237,12 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not queue delegated message.")
         }
         environment.notifyChanged()
-        if let target = environment.sessionLocation(request.targetSessionId) {
-            Task { @MainActor [weak self] in
-                await self?.deliver(message.id, to: target)
-            }
+        Task { @MainActor [weak self] in
+            await self?.deliverPendingMessages(
+                to: request.targetSessionId,
+                callerParent: callerParent,
+                targetParent: targetParent
+            )
         }
         return json(ACPOrchestrationSendResponse(messageId: message.id, state: "queued"))
     }
@@ -322,9 +326,56 @@ final class ACPSessionOrchestrationCoordinator {
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
         )
         environment.notifyChanged()
+        await deliverPendingMessages(
+            to: childID,
+            callerParent: record,
+            targetParent: record
+        )
         Task { @MainActor [weak manager] in
             await manager?.attach(to: childID, freshlyCreated: true)
         }
+    }
+
+    private func deliverPendingMessages(
+        to sessionID: String,
+        callerParent: ACPDelegationRecord?,
+        targetParent: ACPDelegationRecord?
+    ) async {
+        guard let target = await resolveDeliveryTarget(
+            sessionID: sessionID,
+            callerParent: callerParent,
+            targetParent: targetParent
+        ), let messages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID)
+        else { return }
+        for message in messages {
+            await deliver(message.id, to: target)
+        }
+    }
+
+    private func resolveDeliveryTarget(
+        sessionID: String,
+        callerParent: ACPDelegationRecord?,
+        targetParent: ACPDelegationRecord?
+    ) async -> SessionLocation? {
+        if let target = environment.sessionLocation(sessionID) {
+            return target
+        }
+        let worktreeID = targetParent?.childWorktreeId ?? callerParent?.parentWorktreeId
+        guard let worktreeID,
+              let worktree = environment.worktree(worktreeID),
+              let manager = environment.manager(worktree),
+              await manager.persistedSessionRow(id: sessionID) != nil
+        else { return nil }
+        _ = manager.placeholderSession(id: sessionID)
+        await manager.hydrateIfNeeded(id: sessionID)
+        return .init(
+            origin: ACPOrchestrationSessionOrigin(
+                sessionId: sessionID,
+                projectId: worktree.projectId,
+                worktreeId: worktree.id
+            ),
+            manager: manager
+        )
     }
 
     private func deliver(_ messageID: String, to target: SessionLocation) async {

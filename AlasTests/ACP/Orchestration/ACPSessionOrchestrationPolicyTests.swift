@@ -165,6 +165,8 @@ struct ACPSessionOrchestrationPolicyTests {
 
     @Test("projects persisted and runtime state into the public states")
     func publicStateProjection() {
+        #expect(ACPOrchestrationPublicState.creatingWorktree.rawValue == "creating_worktree")
+        #expect(ACPOrchestrationPublicState.awaitingInput.rawValue == "awaiting_input")
         #expect(ACPSessionOrchestrationPolicy.publicState(
             phase: .creatingWorktree,
             runtime: nil,
