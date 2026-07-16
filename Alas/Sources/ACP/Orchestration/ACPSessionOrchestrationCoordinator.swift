@@ -183,8 +183,7 @@ final class ACPSessionOrchestrationCoordinator {
                 return .error("Could not persist delegated session.")
             }
             environment.notifyChanged()
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+            Task { @MainActor in
                 let result = await self.environment.createWorktree(origin.projectId, branch, base)
                 switch result {
                 case .success(let worktree):
@@ -246,8 +245,8 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not queue delegated message.")
         }
         environment.notifyChanged()
-        Task { @MainActor [weak self] in
-            await self?.deliverPendingMessages(
+        Task { @MainActor in
+            await self.deliverPendingMessages(
                 to: request.targetSessionId,
                 callerParent: callerParent,
                 targetParent: targetParent
@@ -288,8 +287,8 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not persist delegated session.")
         }
         environment.notifyChanged()
-        Task { @MainActor [weak self] in
-            await self?.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
+        Task { @MainActor in
+            await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
         }
         return json(ACPOrchestrationNewResponse(sessionId: childID, state: "starting", worktreeId: worktree.id))
     }
@@ -399,9 +398,9 @@ final class ACPSessionOrchestrationCoordinator {
         await target.manager.attach(to: claimed.message.targetSessionId, freshlyCreated: false)
         guard target.manager.isWriter(for: claimed.message.targetSessionId) else {
             try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
-            Task { @MainActor [weak self] in
+            Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                await self?.deliver(messageID, to: target)
+                await self.deliver(messageID, to: target)
             }
             return
         }
