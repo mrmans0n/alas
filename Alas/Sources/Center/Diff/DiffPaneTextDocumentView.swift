@@ -3,6 +3,8 @@ import SwiftUI
 
 private let diffContextExpansionChunkSize = 10
 
+typealias DiffContextExpansionHandler = (DiffContextExpansionKey, DiffContextExpansionMode, DiffContextExpansionEdge?) -> Void
+
 struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
     struct SelectedLine: Equatable, Hashable, Sendable {
         let side: DiffReviewInlineFeedbackSide
@@ -115,7 +117,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let activeCommentHighlight: DiffReviewCommentHighlight?
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
-    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
 
     init(
         group: DiffDisplayGroup,
@@ -131,7 +133,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
         self.group = group
         self.expandedCollapsedRowIDs = expandedCollapsedRowIDs
@@ -191,7 +193,7 @@ struct DiffPaneSegmentView: NSViewRepresentable {
     var activeCommentHighlight: DiffReviewCommentHighlight? = nil
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
-    let onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
+    let onContextExpansion: DiffContextExpansionHandler
 
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
         DiffPaneTextDocumentContainerView()
@@ -261,7 +263,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
         activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
         oldPane.allowsReviewLineSelection = allowsReviewLineSelection
         newPane.allowsReviewLineSelection = allowsReviewLineSelection
@@ -462,7 +464,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
         activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
         oldPane.allowsReviewLineSelection = allowsReviewLineSelection
         newPane.allowsReviewLineSelection = allowsReviewLineSelection
@@ -605,7 +607,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var lineLabels: [String] = []
     private var rowKinds: [DiffDisplayRow.Kind] = []
     private var lineTones: [DiffPaneLineTone] = []
-    private var expansionKeys: [DiffContextExpansionKey?] = []
+    private var expansionRequests: [(key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?)?] = []
     private var baseDocument: DiffPaneTextDocumentBuilder.CodeDocument?
     private var synchronizedRowHeights: [CGFloat] = []
     private var synchronizedRowLineHeights: [CGFloat?] = []
@@ -630,7 +632,7 @@ final class DiffPaneTextScrollView: NSScrollView {
             textView.onReviewLineSelected = onReviewLineSelected
         }
     }
-    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in } {
+    var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in } {
         didSet {
             textView.contextExpansionHandler = onContextExpansion
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.onContextExpansion = onContextExpansion
@@ -709,7 +711,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
         allowedLSPSide: DiffLineSide,
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
         self.lineLabels = lineLabels
         self.rowKinds = document.lines.map(\.kind)
@@ -719,7 +721,9 @@ final class DiffPaneTextScrollView: NSScrollView {
                 rowKind: line.kind
             )
         }
-        self.expansionKeys = document.lines.map(\.expansionKey)
+        self.expansionRequests = document.lines.map { metadata in
+            metadata.expansionKey.map { (key: $0, edge: metadata.expansionEdge) }
+        }
         self.baseDocument = document
         self.synchronizedRowHeights = []
         self.synchronizedRowLineHeights = []
@@ -749,7 +753,7 @@ final class DiffPaneTextScrollView: NSScrollView {
                 rowHeight: lineHeight(),
                 contentTopInset: textView.textContainerInset.height,
                 theme: theme,
-                expansionKeys: expansionKeys,
+                expansionRequests: expansionRequests,
                 activeCommentHighlight: activeCommentHighlight,
                 onContextExpansion: onContextExpansion
             )
@@ -1100,7 +1104,7 @@ final class DiffPaneCodeTextView: NSTextView {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
-    var contextExpansionHandler: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var contextExpansionHandler: DiffContextExpansionHandler = { _, _, _ in }
     var allowsReviewLineSelection = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var lspContext: DiffPaneLSPContext?
@@ -1243,8 +1247,8 @@ final class DiffPaneCodeTextView: NSTextView {
         let optionKey = armedExpansionOptionKey
         pressedExpansionRow = nil
         armedExpansionRow = nil
-        if releasedInside, let key = expansionKey(atRow: armed) {
-            invokeExpansion(key: key, optionKey: optionKey)
+        if releasedInside, let request = expansionRequest(atRow: armed) {
+            invokeExpansion(request: request, optionKey: optionKey)
         }
     }
 
@@ -1555,27 +1559,29 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {
-        guard let key = expansionKey(atRow: row) else { return }
-        invokeExpansion(key: key, optionKey: optionKey)
+        guard let request = expansionRequest(atRow: row) else { return }
+        invokeExpansion(request: request, optionKey: optionKey)
     }
 
     /// Row index of the expandable-context button under `point`, if any.
     private func expansionRow(at point: NSPoint) -> Int? {
         let rowRects = diffRowRects()
         guard let row = rowRects.binarySearchRow(containing: point),
-              expansionKey(atRow: row) != nil
+              expansionRequest(atRow: row) != nil
         else { return nil }
         return row
     }
 
-    private func expansionKey(atRow row: Int) -> DiffContextExpansionKey? {
-        guard lineMetadata.indices.contains(row) else { return nil }
-        return lineMetadata[row].expansionKey
+    private func expansionRequest(atRow row: Int) -> (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?)? {
+        guard lineMetadata.indices.contains(row),
+              let key = lineMetadata[row].expansionKey
+        else { return nil }
+        return (key, lineMetadata[row].expansionEdge)
     }
 
-    private func invokeExpansion(key: DiffContextExpansionKey, optionKey: Bool) {
+    private func invokeExpansion(request: (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?), optionKey: Bool) {
         let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
-        contextExpansionHandler(key, mode)
+        contextExpansionHandler(request.key, mode, request.edge)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
@@ -1838,7 +1844,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
     private var labels: [String] = []
     private var lineTones: [DiffPaneLineTone] = []
-    private var expansionKeys: [DiffContextExpansionKey?] = []
+    private var expansionRequests: [(key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?)?] = []
     private var theme: Theme?
     private var hoverRowIndex: Int? {
         didSet {
@@ -1851,7 +1857,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     var rowHeight: CGFloat = 16
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
-    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
     var activeCommentHighlight: DiffReviewCommentHighlight? {
         didSet { needsDisplay = true }
     }
@@ -1886,16 +1892,16 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         rowHeight: CGFloat,
         contentTopInset: CGFloat,
         theme: Theme,
-        expansionKeys: [DiffContextExpansionKey?],
+        expansionRequests: [(key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?)?],
         activeCommentHighlight: DiffReviewCommentHighlight?,
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
+        onContextExpansion: @escaping DiffContextExpansionHandler
     ) {
         self.labels = labels
         self.lineTones = lineTones
         self.rowHeight = rowHeight
         self.contentTopInset = contentTopInset
         self.theme = theme
-        self.expansionKeys = expansionKeys
+        self.expansionRequests = expansionRequests
         self.activeCommentHighlight = activeCommentHighlight
         self.onContextExpansion = onContextExpansion
         updateThickness()
@@ -2176,14 +2182,14 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     private func invokeExpansion(row: Int, optionKey: Bool) -> Bool {
-        guard expansionKeys.indices.contains(row),
-              let key = expansionKeys[row]
+        guard expansionRequests.indices.contains(row),
+              let request = expansionRequests[row]
         else {
             return false
         }
 
         let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
-        onContextExpansion(key, mode)
+        onContextExpansion(request.key, mode, request.edge)
         return true
     }
 

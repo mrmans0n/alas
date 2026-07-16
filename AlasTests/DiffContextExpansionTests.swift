@@ -25,6 +25,15 @@ struct DiffContextExpansionTests {
         )
     }
 
+    private func twoSeparatedGroups() -> [DiffDisplayGroup] {
+        let first = group()
+        let secondHunk = ParsedDiff.Hunk(header: "@@ -9,1 +9,1 @@", oldStart: 9, newStart: 9, lines: [
+            .init(kind: .context, text: "line 9", oldNumber: 9, newNumber: 9),
+        ])
+        let second = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [secondHunk]), filePath: "a.swift").groups[0]
+        return [first, second]
+    }
+
     @Test func sharedBoundaryTracksExpansionFromBothSides() {
         let key = DiffContextExpansionKey.shared(upperGroupID: "hunk-0", lowerGroupID: "hunk-1")
         var state = DiffContextExpansionState()
@@ -96,6 +105,61 @@ struct DiffContextExpansionTests {
         #expect(row.edge == .bottom)
     }
 
+    @Test func derivesSharedBridgeBetweenNeighboringHunks() throws {
+        let groups = twoSeparatedGroups()
+
+        let expanded = DiffContextExpandedDisplayBuilder.derive(
+            groups: groups,
+            snapshot: snapshot(),
+            providerAvailable: true,
+            expansion: DiffContextExpansionState(),
+            filePath: "a.swift",
+            chunkSize: 2
+        )
+
+        let firstBridge = try #require(expanded[0].rows.last?.contextExpansion)
+        let secondBridge = expanded[1].rows.first?.contextExpansion
+        #expect(firstBridge.key == .shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id))
+        #expect(firstBridge.edge == .top)
+        #expect(secondBridge?.key == firstBridge.key)
+        #expect(secondBridge?.edge == .bottom)
+    }
+
+    @Test func sharedBridgeAvailableLineCountUsesInterHunkGap() {
+        let groups = twoSeparatedGroups()
+        let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
+
+        let available = DiffContextExpandedDisplayBuilder.availableLineCount(
+            key: key,
+            groups: groups,
+            snapshot: snapshot()
+        )
+
+        #expect(available == 2)
+    }
+
+    @Test func sharedBridgeRevealsFromBothSidesWithoutDuplicatingLines() {
+        let groups = twoSeparatedGroups()
+        let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
+        var state = DiffContextExpansionState()
+        state.expand(key, available: 2, mode: .chunk(size: 1), edge: .top)
+        state.expand(key, available: 2, mode: .chunk(size: 1), edge: .bottom)
+
+        let expanded = DiffContextExpandedDisplayBuilder.derive(
+            groups: groups,
+            snapshot: snapshot(),
+            providerAvailable: true,
+            expansion: state,
+            filePath: "a.swift",
+            chunkSize: 2
+        )
+
+        let numbers = expanded.flatMap(\.rows).compactMap { $0.old?.lineNumber }
+        #expect(numbers.filter { $0 == 7 }.count == 1)
+        #expect(numbers.filter { $0 == 8 }.count == 1)
+        #expect(expanded.flatMap(\.rows).contains { $0.contextExpansion?.key == key } == false)
+    }
+
     @Test func derivesAboveBoundaryAndChunkedRows() throws {
         let base = group()
         let snapshot = snapshot()
@@ -157,8 +221,8 @@ struct DiffContextExpansionTests {
         ])
         let second = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [secondHunk]), filePath: "a.swift").groups[0]
         var state = DiffContextExpansionState()
-        state.expand(.init(groupID: first.id, boundary: .below), available: 10, mode: .all)
-        state.expand(.init(groupID: second.id, boundary: .above), available: 10, mode: .all)
+        let key = DiffContextExpansionKey.shared(upperGroupID: first.id, lowerGroupID: second.id)
+        state.expand(key, available: 1, mode: .all, edge: .top)
 
         let expanded = DiffContextExpandedDisplayBuilder.derive(
             groups: [first, second],
@@ -187,7 +251,12 @@ struct DiffContextExpansionTests {
         ])
         let model = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [insertHunk, adjacentHunk]), filePath: "a.swift")
         var state = DiffContextExpansionState()
-        state.expand(.init(groupID: model.groups[0].id, boundary: .below), available: 2, mode: .all)
+        state.expand(
+            .shared(upperGroupID: model.groups[0].id, lowerGroupID: model.groups[1].id),
+            available: 2,
+            mode: .all,
+            edge: .top
+        )
 
         let expanded = DiffContextExpandedDisplayBuilder.derive(
             groups: model.groups,

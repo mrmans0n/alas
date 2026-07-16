@@ -11,6 +11,7 @@ struct DiffPaneTextDocumentBuilder {
         var syntaxGroup: Int? = nil
         var expansionKey: DiffContextExpansionKey? = nil
         var expansionBoundary: DiffContextBoundary? = nil
+        var expansionEdge: DiffContextExpansionEdge? = nil
     }
 
     struct CodeDocument {
@@ -301,7 +302,8 @@ struct DiffPaneTextDocumentBuilder {
                 kind: row.kind,
                 range: NSRange(location: start, length: output.length - start),
                 expansionKey: row.contextExpansion?.key,
-                expansionBoundary: row.contextExpansion?.boundary
+                expansionBoundary: row.contextExpansion?.boundary,
+                expansionEdge: row.contextExpansion?.edge
             ))
         }
 
@@ -336,7 +338,8 @@ struct DiffPaneTextDocumentBuilder {
                     kind: row.kind,
                     range: NSRange(location: start, length: output.length - start),
                     expansionKey: row.contextExpansion?.key,
-                    expansionBoundary: row.contextExpansion?.boundary
+                    expansionBoundary: row.contextExpansion?.boundary,
+                    expansionEdge: row.contextExpansion?.edge
                 ))
                 index += 1
                 continue
@@ -390,7 +393,8 @@ struct DiffPaneTextDocumentBuilder {
                 sourceLine: line,
                 sourceRange: NSRange(location: start + prefixLength, length: (line.text as NSString).length),
                 expansionKey: row.contextExpansion?.key,
-                expansionBoundary: row.contextExpansion?.boundary
+                expansionBoundary: row.contextExpansion?.boundary,
+                expansionEdge: row.contextExpansion?.edge
             ))
         }
     }
@@ -963,7 +967,8 @@ private struct ColumnAccumulator {
             sourceRange: sourceLine.map { _ in NSRange(location: start, length: line.length) },
             syntaxGroup: lineSyntaxGroup,
             expansionKey: expansion?.key,
-            expansionBoundary: expansion?.boundary
+            expansionBoundary: expansion?.boundary,
+            expansionEdge: expansion?.edge
         ))
     }
 

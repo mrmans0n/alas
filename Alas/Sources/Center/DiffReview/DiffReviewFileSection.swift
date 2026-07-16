@@ -4,6 +4,7 @@ import SwiftUI
 private struct PendingContextExpansion {
     let key: DiffContextExpansionKey
     let mode: DiffContextExpansionMode
+    let edge: DiffContextExpansionEdge?
 }
 
 /// O(1) signal that clears a pending draft when the file's structural layout
@@ -998,14 +999,18 @@ struct DiffReviewFileSection: View {
         )
     }
 
-    private func loadContextAndExpand(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {
+    private func loadContextAndExpand(
+        _ key: DiffContextExpansionKey,
+        mode: DiffContextExpansionMode,
+        edge: DiffContextExpansionEdge?
+    ) {
         guard let provider = file.contextProvider else { return }
         onContextExpansionActivated()
         if contextSnapshot != nil {
-            applyContextExpansion(key, mode: mode)
+            applyContextExpansion(key, mode: mode, edge: edge)
             return
         }
-        pendingContextExpansions.append(PendingContextExpansion(key: key, mode: mode))
+        pendingContextExpansions.append(PendingContextExpansion(key: key, mode: mode, edge: edge))
         guard contextLoadTask == nil else { return }
         let fileID = file.id
         let loadSignature = contextStateSignature
@@ -1030,7 +1035,7 @@ struct DiffReviewFileSection: View {
                     let pendingExpansions = pendingContextExpansions
                     pendingContextExpansions = []
                     for expansion in pendingExpansions {
-                        applyContextExpansion(expansion.key, mode: expansion.mode)
+                        applyContextExpansion(expansion.key, mode: expansion.mode, edge: expansion.edge)
                     }
                 }
             } catch {
@@ -1049,14 +1054,22 @@ struct DiffReviewFileSection: View {
         }
     }
 
-    private func applyContextExpansion(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {
+    private func applyContextExpansion(
+        _ key: DiffContextExpansionKey,
+        mode: DiffContextExpansionMode,
+        edge: DiffContextExpansionEdge?
+    ) {
         guard let displayModel = file.displayModel else { return }
         let available = DiffContextExpandedDisplayBuilder.availableLineCount(
             key: key,
             groups: displayModel.groups,
             snapshot: contextSnapshot
         )
-        contextExpansion.expand(key, available: available, mode: mode)
+        if let edge {
+            contextExpansion.expand(key, available: available, mode: mode, edge: edge)
+        } else {
+            contextExpansion.expand(key, available: available, mode: mode)
+        }
     }
 
     private func resetContextState() {

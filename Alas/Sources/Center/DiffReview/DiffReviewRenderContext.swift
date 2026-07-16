@@ -230,44 +230,140 @@ private struct ContextExpansionStateSignature: Hashable {
             return
         }
 
+        var signatures: [BoundarySignature] = []
         var expandedLines: [ExpandedSnapshotLineSignature] = []
-        boundaries = groups.enumerated().flatMap { groupIndex, group in
-            [DiffContextBoundary.above, .below].map { boundary in
-                let key = DiffContextExpansionKey(groupID: group.id, boundary: boundary)
-                let range = BoundaryRange(
+
+        for groupIndex in groups.indices {
+            let group = groups[groupIndex]
+            if groupIndex == groups.startIndex {
+                signatures.append(Self.externalSignature(
                     group: group,
                     groupIndex: groupIndex,
-                    boundary: boundary,
+                    boundary: .above,
                     groups: groups,
-                    snapshot: snapshot
-                )
-                let available = range.lineCount
-                let expanded = min(expansion.expandedLineCount(for: key), available)
-                if expanded > 0 {
-                    expandedLines.append(contentsOf: range.expandedLineSignatures(
-                        groupID: group.id,
-                        boundary: boundary,
-                        expandedCount: expanded,
-                        snapshot: snapshot
-                    ))
-                }
-                return BoundarySignature(
-                    groupID: group.id,
-                    boundary: boundary.rawValue,
-                    availableLineCount: available,
-                    expandedLineCount: expanded
-                )
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    expandedLines: &expandedLines
+                ))
+            }
+
+            if groupIndex + 1 < groups.endIndex {
+                signatures.append(Self.sharedSignature(
+                    upperGroup: group,
+                    lowerGroup: groups[groupIndex + 1],
+                    upperGroupIndex: groupIndex,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    expandedLines: &expandedLines
+                ))
+            } else {
+                signatures.append(Self.externalSignature(
+                    group: group,
+                    groupIndex: groupIndex,
+                    boundary: .below,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    expandedLines: &expandedLines
+                ))
             }
         }
+        boundaries = signatures
         expandedSnapshotContent = expandedLines
+    }
+
+    private static func externalSignature(
+        group: DiffDisplayGroup,
+        groupIndex: Int,
+        boundary: DiffContextBoundary,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        expandedLines: inout [ExpandedSnapshotLineSignature]
+    ) -> BoundarySignature {
+        let key = DiffContextExpansionKey(groupID: group.id, boundary: boundary)
+        let range = BoundaryRange(
+            group: group,
+            groupIndex: groupIndex,
+            boundary: boundary,
+            groups: groups,
+            snapshot: snapshot
+        )
+        let available = range.lineCount
+        let expanded = min(expansion.expandedLineCount(for: key), available)
+        if expanded > 0 {
+            expandedLines.append(contentsOf: range.expandedLineSignatures(
+                groupID: group.id,
+                boundary: boundary,
+                expandedCount: expanded,
+                snapshot: snapshot
+            ))
+        }
+        return BoundarySignature(
+            key: key,
+            boundary: boundary.rawValue,
+            availableLineCount: available,
+            topExpandedLineCount: expanded,
+            bottomExpandedLineCount: 0
+        )
+    }
+
+    private static func sharedSignature(
+        upperGroup: DiffDisplayGroup,
+        lowerGroup: DiffDisplayGroup,
+        upperGroupIndex: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        expandedLines: inout [ExpandedSnapshotLineSignature]
+    ) -> BoundarySignature {
+        let key = DiffContextExpansionKey.shared(upperGroupID: upperGroup.id, lowerGroupID: lowerGroup.id)
+        let range = BoundaryRange(
+            group: upperGroup,
+            groupIndex: upperGroupIndex,
+            boundary: .below,
+            groups: groups,
+            snapshot: snapshot
+        )
+        let available = range.lineCount
+        let topExpanded = min(expansion.expandedLineCount(for: key, edge: .top), available)
+        let bottomExpanded = min(
+            expansion.expandedLineCount(for: key, edge: .bottom),
+            max(0, available - topExpanded)
+        )
+        if topExpanded > 0 {
+            expandedLines.append(contentsOf: range.expandedLineSignatures(
+                groupID: key.groupID,
+                boundary: .below,
+                expandedCount: topExpanded,
+                snapshot: snapshot
+            ))
+        }
+        if bottomExpanded > 0 {
+            expandedLines.append(contentsOf: range.expandedLineSignatures(
+                groupID: key.groupID,
+                boundary: .above,
+                expandedCount: bottomExpanded,
+                snapshot: snapshot
+            ))
+        }
+        return BoundarySignature(
+            key: key,
+            boundary: DiffContextBoundary.below.rawValue,
+            availableLineCount: available,
+            topExpandedLineCount: topExpanded,
+            bottomExpandedLineCount: bottomExpanded
+        )
     }
 }
 
 private struct BoundarySignature: Hashable {
-    let groupID: String
+    let key: DiffContextExpansionKey
     let boundary: String
     let availableLineCount: Int
-    let expandedLineCount: Int
+    let topExpandedLineCount: Int
+    let bottomExpandedLineCount: Int
 }
 
 private struct SnapshotSignature: Hashable {

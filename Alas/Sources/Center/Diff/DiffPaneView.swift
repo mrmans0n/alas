@@ -118,7 +118,7 @@ struct DiffPaneView: View {
     var activeCommentHighlight: DiffReviewCommentHighlight? = nil
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
-    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
     var threads: [DiffInlineCommentThread] = []
     var annotations: [DiffInlineAnnotation] = []
     var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
@@ -150,7 +150,7 @@ struct DiffPaneView: View {
         activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in },
         threads: [DiffInlineCommentThread] = [],
         annotations: [DiffInlineAnnotation] = [],
         onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },

@@ -152,7 +152,7 @@ enum DiffContextExpandedDisplayBuilder {
         groups.enumerated().map { index, group in
             var rows: [DiffDisplayRow] = []
 
-            if providerAvailable {
+            if providerAvailable, index == 0 {
                 rows.append(contentsOf: expansionRows(
                     for: group,
                     groupIndex: index,
@@ -165,9 +165,35 @@ enum DiffContextExpandedDisplayBuilder {
                 ))
             }
 
+            if providerAvailable, index > 0 {
+                rows.append(contentsOf: sharedExpansionRows(
+                    upperGroup: groups[index - 1],
+                    lowerGroup: group,
+                    upperGroupIndex: index - 1,
+                    lowerGroupIndex: index,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    filePath: filePath,
+                    edge: .bottom
+                ))
+            }
+
             rows.append(contentsOf: group.rows)
 
-            if providerAvailable {
+            if providerAvailable, index + 1 < groups.count {
+                rows.append(contentsOf: sharedExpansionRows(
+                    upperGroup: group,
+                    lowerGroup: groups[index + 1],
+                    upperGroupIndex: index,
+                    lowerGroupIndex: index + 1,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    filePath: filePath,
+                    edge: .top
+                ))
+            } else if providerAvailable {
                 rows.append(contentsOf: expansionRows(
                     for: group,
                     groupIndex: index,
@@ -194,22 +220,135 @@ enum DiffContextExpandedDisplayBuilder {
         groups: [DiffDisplayGroup],
         snapshot: DiffReviewFileContextSnapshot?
     ) -> Int {
-        guard
-            let snapshot,
-            let groupIndex = groups.firstIndex(where: { $0.id == key.groupID })
-        else {
+        guard let snapshot else {
             return 0
         }
-        guard ownsBoundary(groupIndex: groupIndex, boundary: key.boundary) else {
-            return 0
+
+        switch key.kind {
+        case let .external(groupID, boundary):
+            guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+                return 0
+            }
+            guard ownsBoundary(groupIndex: groupIndex, boundary: boundary) else {
+                return 0
+            }
+            return boundaryRange(
+                for: groups[groupIndex],
+                groupIndex: groupIndex,
+                boundary: boundary,
+                groups: groups,
+                snapshot: snapshot
+            ).lineCount
+        case let .shared(upperGroupID, lowerGroupID):
+            guard
+                let upperIndex = groups.firstIndex(where: { $0.id == upperGroupID }),
+                upperIndex + 1 < groups.count,
+                groups[upperIndex + 1].id == lowerGroupID
+            else {
+                return 0
+            }
+            return boundaryRange(
+                for: groups[upperIndex],
+                groupIndex: upperIndex,
+                boundary: .below,
+                groups: groups,
+                snapshot: snapshot
+            ).lineCount
         }
-        return boundaryRange(
-            for: groups[groupIndex],
-            groupIndex: groupIndex,
-            boundary: key.boundary,
+    }
+
+    private static func sharedExpansionRows(
+        upperGroup: DiffDisplayGroup,
+        lowerGroup: DiffDisplayGroup,
+        upperGroupIndex: Int,
+        lowerGroupIndex: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        filePath: String,
+        edge: DiffContextExpansionEdge
+    ) -> [DiffDisplayRow] {
+        let key = DiffContextExpansionKey.shared(upperGroupID: upperGroup.id, lowerGroupID: lowerGroup.id)
+        let attachedGroup = edge == .top ? upperGroup : lowerGroup
+        let attachedGroupIndex = edge == .top ? upperGroupIndex : lowerGroupIndex
+        let attachedBoundary: DiffContextBoundary = edge == .top ? .below : .above
+
+        guard let snapshot else {
+            guard optimisticBoundaryAvailable(
+                for: upperGroup,
+                groupIndex: upperGroupIndex,
+                boundary: .below,
+                groups: groups
+            ) else {
+                return []
+            }
+            return [expandableRow(
+                group: attachedGroup,
+                boundary: attachedBoundary,
+                remaining: 0,
+                key: key,
+                edge: edge
+            )]
+        }
+
+        let range = boundaryRange(
+            for: upperGroup,
+            groupIndex: upperGroupIndex,
+            boundary: .below,
             groups: groups,
             snapshot: snapshot
-        ).lineCount
+        )
+        let available = range.lineCount
+        guard available > 0 else {
+            return []
+        }
+
+        let topExpanded = min(expansion.expandedLineCount(for: key, edge: .top), available)
+        let bottomExpanded = min(
+            expansion.expandedLineCount(for: key, edge: .bottom),
+            max(0, available - topExpanded)
+        )
+        let expandedCount = edge == .top ? topExpanded : bottomExpanded
+        let remaining = expansion.remainingLineCount(for: key, available: available)
+        let offsets: Range<Int>
+        switch edge {
+        case .top:
+            offsets = 0..<expandedCount
+        case .bottom:
+            offsets = (available - expandedCount)..<available
+        }
+
+        var rows = offsets.map {
+            expandedContextRow(
+                group: attachedGroup,
+                groupIndex: attachedGroupIndex,
+                boundary: attachedBoundary,
+                range: range,
+                offset: $0,
+                totalCount: available,
+                snapshot: snapshot,
+                filePath: filePath
+            )
+        }
+
+        guard remaining > 0 else {
+            return rows
+        }
+
+        let expandable = expandableRow(
+            group: attachedGroup,
+            boundary: attachedBoundary,
+            remaining: remaining,
+            key: key,
+            edge: edge
+        )
+        switch edge {
+        case .top:
+            rows.insert(expandable, at: rows.endIndex)
+        case .bottom:
+            rows.insert(expandable, at: rows.startIndex)
+        }
+        return rows
     }
 
     private static func expansionRows(
@@ -469,10 +608,12 @@ enum DiffContextExpandedDisplayBuilder {
         group: DiffDisplayGroup,
         boundary: DiffContextBoundary,
         remaining: Int,
-        key: DiffContextExpansionKey
+        key: DiffContextExpansionKey,
+        edge: DiffContextExpansionEdge? = nil
     ) -> DiffDisplayRow {
-        DiffDisplayRow(
-            id: "\(group.id)-expand-\(boundary.rawValue)",
+        let edgeID = edge.map { "-\($0.rawValue)" } ?? ""
+        return DiffDisplayRow(
+            id: "\(group.id)-expand-\(boundary.rawValue)\(edgeID)",
             kind: .expandableContext,
             old: nil,
             new: nil,
@@ -480,7 +621,8 @@ enum DiffContextExpandedDisplayBuilder {
             contextExpansion: DiffContextExpansionRow(
                 key: key,
                 boundary: boundary,
-                remainingLineCount: remaining
+                remainingLineCount: remaining,
+                edge: edge
             )
         )
     }

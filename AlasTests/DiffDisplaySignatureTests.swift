@@ -24,6 +24,30 @@ struct DiffDisplaySignatureTests {
         DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [hunk(lines: lines)]), filePath: "a.swift")
     }
 
+    private func twoSeparatedHunkModel() -> DiffDisplayModel {
+        DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                hunk(lines: sampleLines()),
+                hunk(
+                    header: "@@ -9,1 +9,1 @@",
+                    oldStart: 9,
+                    newStart: 9,
+                    lines: [
+                        .init(kind: .context, text: "old/new 9", oldNumber: 9, newNumber: 9),
+                    ]
+                ),
+            ]),
+            filePath: "a.swift"
+        )
+    }
+
+    private func snapshot() -> DiffReviewFileContextSnapshot {
+        DiffReviewFileContextSnapshot(
+            old: .available((1...10).map { "old \($0)" }),
+            new: .available((1...10).map { "new \($0)" })
+        )
+    }
+
     // MARK: - contentHash
 
     @Test func contentHashEqualForIdenticalModels() {
@@ -133,6 +157,37 @@ struct DiffDisplaySignatureTests {
             )
         }
         #expect(key(a) != key(b))
+    }
+
+    @Test func renderContextKeyDiffersWhenSharedExpansionEdgeChanges() {
+        let model = twoSeparatedHunkModel()
+        let key = DiffContextExpansionKey.shared(
+            upperGroupID: model.groups[0].id,
+            lowerGroupID: model.groups[1].id
+        )
+        var topExpansion = DiffContextExpansionState()
+        topExpansion.expand(key, available: 2, mode: .chunk(size: 1), edge: .top)
+        var bottomExpansion = DiffContextExpansionState()
+        bottomExpansion.expand(key, available: 2, mode: .chunk(size: 1), edge: .bottom)
+        let fileID = DiffReviewFileID(namespace: "commit", path: "a.swift")
+
+        func renderKey(_ expansion: DiffContextExpansionState) -> DiffReviewRenderContextKey {
+            DiffReviewRenderContextKey(
+                fileID: fileID,
+                displayModel: model,
+                contextSnapshot: snapshot(),
+                contextProviderAvailable: true,
+                contextExpansion: expansion,
+                inlineFeedback: [],
+                draftComments: [],
+                pendingDraftAnchor: nil,
+                canCreateDraftComment: true,
+                threads: [],
+                annotations: []
+            )
+        }
+
+        #expect(renderKey(topExpansion) != renderKey(bottomExpansion))
     }
 
     @Test func diffTabRenderContextKeyDiffersWhenModelTextChanges() {
