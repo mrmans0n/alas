@@ -4742,6 +4742,15 @@ final class AppState {
         let parent = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
         let children = (try? await acpOrchestrationPersistence.children(parentSessionId: sessionId)) ?? []
         var summaries = children.map { record in
+            let runtime = record.childWorktreeId
+                .flatMap { acpManagers[$0]?.liveSession(for: record.childSessionId) }
+                .map { session -> ACPOrchestrationRuntimeState in
+                    switch session.transcript.streamingState {
+                    case .idle: return .idle
+                    case .sending, .streaming: return .running
+                    case .awaitingPermission, .awaitingInput: return .awaitingInput
+                    }
+                }
             ACPOrchestrationSessionSummary(
                 sessionId: record.childSessionId,
                 relationship: "child",
@@ -4749,7 +4758,7 @@ final class AppState {
                 worktreeId: record.childWorktreeId ?? "",
                 state: ACPSessionOrchestrationPolicy.publicState(
                     phase: record.phase,
-                    runtime: nil,
+                    runtime: runtime,
                     archived: false
                 ).rawValue,
                 failure: record.failureMessage,
