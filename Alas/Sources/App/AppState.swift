@@ -4111,7 +4111,7 @@ final class AppState {
     @MainActor
     private func cliOpenRevisionReview(worktree: Worktree, ref: String) async -> AlasCLIResponse {
         let git = GitService()
-        let localBranches = (try? await git.branches(at: worktree.path)) ?? []
+        let localBranches = (try? await git.localBranches(at: worktree.path)) ?? []
         if localBranches.contains(ref) {
             // A branch reviews against the repository's base branch, pinned
             // to SHAs so the stored session survives branch movement.

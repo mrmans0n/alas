@@ -592,6 +592,163 @@ struct AppStateCLIRoutingTests {
         #expect(response == .error("review URL does not match this worktree's remote"))
     }
 
+    @Test func cliReviewTwoDotRangeResolvesToCommitRangeWithResolvedSHAs() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-two-dot-range")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("a.txt")
+        try "second\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "second"], cwd: worktree.path)
+        let baseSHA = try await revParse("HEAD~1", at: worktree.path)
+        let headSHA = try await revParse("HEAD", at: worktree.path)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("HEAD~1..HEAD", worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected text response, got \(response)")
+            return
+        }
+        let expectedTarget = ReviewSessionTarget.commitRange(
+            worktreeID: worktree.id, repositoryPath: worktree.path, base: baseSHA, head: headSHA
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.kind == .commitRange)
+        #expect(record.target.payload == .commitRange(base: baseSHA, head: headSHA))
+        // Pinned to resolved SHAs, not the floating ref strings.
+        #expect(baseSHA != "HEAD~1")
+        #expect(headSHA != "HEAD")
+    }
+
+    @Test func cliReviewThreeDotRangeResolvesToBranchTarget() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-three-dot-range")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("a.txt")
+        try "second\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "second"], cwd: worktree.path)
+        let baseSHA = try await revParse("HEAD~1", at: worktree.path)
+        let headSHA = try await revParse("HEAD", at: worktree.path)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("HEAD~1...HEAD", worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected text response, got \(response)")
+            return
+        }
+        let expectedTarget = ReviewSessionTarget.branch(
+            worktreeID: worktree.id, repositoryPath: worktree.path, base: baseSHA, head: headSHA
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.kind == .branch)
+        #expect(record.target.payload == .branch(base: baseSHA, head: headSHA))
+    }
+
+    @Test func cliReviewBareLocalBranchIsReviewedAgainstBaseWithPinnedSHAs() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-local-branch")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let mainSHA = try await revParse("main", at: worktree.path)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature-local"], cwd: worktree.path)
+        let file = worktree.path.appendingPathComponent("feature.txt")
+        try "feature\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "feature.txt"], cwd: worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "feature commit"], cwd: worktree.path)
+        let featureSHA = try await revParse("feature-local", at: worktree.path)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("feature-local", worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected text response, got \(response)")
+            return
+        }
+        let expectedTarget = ReviewSessionTarget.branch(
+            worktreeID: worktree.id, repositoryPath: worktree.path, base: mainSHA, head: featureSHA
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.kind == .branch)
+        #expect(record.target.payload == .branch(base: mainSHA, head: featureSHA))
+        // Pinned to resolved SHAs, not the floating branch names.
+        #expect(mainSHA != "main")
+        #expect(featureSHA != "feature-local")
+    }
+
+    // Regression test for a bug where a bare revision matching a
+    // remote-tracking branch name (which used to be classified as "a local
+    // branch" because the old check used `GitService.branches(at:)`, the
+    // union of local + remote-tracking branches) was misrouted into the
+    // branch-vs-base flow. It must be treated as a single-commit revision.
+    @Test func cliReviewBareRemoteTrackingBranchIsNotTreatedAsLocalBranch() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-remote-branch")
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cli-appstate-review-remote-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: worktree.path)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        _ = try await Process.git(["checkout", "-q", "-b", "develop"], cwd: worktree.path)
+        let file = worktree.path.appendingPathComponent("develop.txt")
+        try "develop\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "develop.txt"], cwd: worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "develop commit"], cwd: worktree.path)
+        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
+        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: worktree.path)
+        _ = try await Process.git(["push", "-q", "origin", "main:main"], cwd: worktree.path)
+        _ = try await Process.git(["push", "-q", "origin", "develop:review/remote-only"], cwd: worktree.path)
+        _ = try await Process.git(["fetch", "-q", "origin"], cwd: worktree.path)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: worktree.path)
+        let remoteRef = "origin/review/remote-only"
+        let remoteSHA = try await revParse(remoteRef, at: worktree.path)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target(remoteRef, worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected text response, got \(response)")
+            return
+        }
+        let expectedTarget = ReviewSessionTarget.commit(
+            worktreeID: worktree.id, repositoryPath: worktree.path, sha: remoteSHA, title: "irrelevant"
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.kind == .commit)
+        #expect(record.target.payload == .commit(sha: remoteSHA))
+    }
+
+    @Test func cliReviewUnresolvableBareRevisionProducesDescriptiveError() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-unresolvable")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("totally-not-a-real-ref-xyz", worktree: nil))
+        ))
+
+        #expect(response == .error(
+            "could not resolve review target 'totally-not-a-real-ref-xyz' in worktree '\(worktree.branch)' "
+                + "(not a PR number/URL, local branch, or revision)"
+        ))
+    }
+
+    private func revParse(_ ref: String, at path: URL) async throws -> String {
+        let result = try await Process.git(["rev-parse", ref], cwd: path)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     @Test func cliWorktreeNewStartsCreation() async throws {
         let (state, project, main) = try await makeStateWithWorktree(name: "new")
         let destinationRoot = main.path.deletingLastPathComponent()
