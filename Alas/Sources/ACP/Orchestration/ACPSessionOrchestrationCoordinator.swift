@@ -54,12 +54,12 @@ final class ACPSessionOrchestrationCoordinator {
                     )
                 }
                 if visible.relationship == .parent {
-                    guard let location = environment.sessionLocation(visible.sessionId) else { return nil }
+                    let location = environment.sessionLocation(visible.sessionId)
                     return sessionSummary(
                         sessionId: visible.sessionId,
                         relationship: "parent",
-                        agentId: location.manager.liveSession(for: visible.sessionId)?.agentId ?? "unknown",
-                        worktreeId: location.origin.worktreeId,
+                        agentId: location?.manager.liveSession(for: visible.sessionId)?.agentId ?? "unknown",
+                        worktreeId: location?.origin.worktreeId ?? parent?.parentWorktreeId ?? "",
                         phase: .ready,
                         failure: nil,
                         createdAt: 0

@@ -6,11 +6,11 @@ enum ACPOrchestrationRelationship: String, Equatable, Sendable {
 }
 
 enum ACPOrchestrationPublicState: String, Equatable, Sendable {
-    case creatingWorktree
+    case creatingWorktree = "creating_worktree"
     case starting
     case idle
     case running
-    case awaitingInput
+    case awaitingInput = "awaiting_input"
     case failed
     case closed
 }

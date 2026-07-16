@@ -1166,7 +1166,16 @@ final class AppState {
         if FileManager.default.fileExists(atPath: destination.path) {
             return .failure(.init(message: "A worktree already exists at this path."))
         }
-        let selectedBase = base ?? config.worktrees.baseBranch
+        let selectedBase: String
+        if let base {
+            selectedBase = base
+        } else {
+            let branches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
+            selectedBase = NewWorktreeDialog.preferredBaseBranch(
+                availableBranches: branches,
+                configuredDefault: config.worktrees.baseBranch
+            )
+        }
         let id = await createWorktree(
             projectId: projectId,
             base: selectedBase,
