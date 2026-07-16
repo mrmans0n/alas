@@ -177,18 +177,19 @@ struct DiffContextExpansionRow: Codable, Equatable, Hashable, Sendable {
     let key: DiffContextExpansionKey
     let boundary: DiffContextBoundary
     let remainingLineCount: Int
-    let edge: DiffContextExpansionEdge
+    let edge: DiffContextExpansionEdge?
 
     init(
         key: DiffContextExpansionKey,
         boundary: DiffContextBoundary,
         remainingLineCount: Int,
-        edge: DiffContextExpansionEdge? = nil
+        edge: DiffContextExpansionEdge? = nil,
+        defaultsEdgeFromBoundary: Bool = true
     ) {
         self.key = key
         self.boundary = boundary
         self.remainingLineCount = remainingLineCount
-        self.edge = edge ?? (boundary == .above ? .bottom : .top)
+        self.edge = edge ?? (defaultsEdgeFromBoundary ? (boundary == .above ? .bottom : .top) : nil)
     }
 
     init(from decoder: Decoder) throws {
@@ -208,7 +209,7 @@ struct DiffContextExpansionRow: Codable, Equatable, Hashable, Sendable {
         try container.encode(key, forKey: .key)
         try container.encode(boundary, forKey: .boundary)
         try container.encode(remainingLineCount, forKey: .remainingLineCount)
-        try container.encode(edge, forKey: .edge)
+        try container.encodeIfPresent(edge, forKey: .edge)
     }
 }
 
@@ -255,6 +256,8 @@ struct DiffDisplayGroup: Identifiable, Equatable {
     let header: String
     let sourceHunk: ParsedDiff.Hunk
     let rows: [DiffDisplayRow]
+    let sharedContextBefore: DiffContextExpansionKey?
+    let sharedContextAfter: DiffContextExpansionKey?
 
     /// Full-fidelity content fingerprint (row/line identity, text, kinds,
     /// inline spans, collapse structure). Precomputed once at build time and
@@ -270,15 +273,26 @@ struct DiffDisplayGroup: Identifiable, Equatable {
     let oldSideExtent: DiffHunkSideExtent
     let newSideExtent: DiffHunkSideExtent
 
-    init(id: String, header: String, sourceHunk: ParsedDiff.Hunk, rows: [DiffDisplayRow]) {
+    init(
+        id: String,
+        header: String,
+        sourceHunk: ParsedDiff.Hunk,
+        rows: [DiffDisplayRow],
+        sharedContextBefore: DiffContextExpansionKey? = nil,
+        sharedContextAfter: DiffContextExpansionKey? = nil
+    ) {
         self.id = id
         self.header = header
         self.sourceHunk = sourceHunk
         self.rows = rows
+        self.sharedContextBefore = sharedContextBefore
+        self.sharedContextAfter = sharedContextAfter
 
         var content = Hasher()
         content.combine(id)
         content.combine(header)
+        content.combine(sharedContextBefore)
+        content.combine(sharedContextAfter)
         for row in rows {
             DiffDisplaySignatureBuilder.combineContent(row, into: &content)
         }
@@ -286,6 +300,8 @@ struct DiffDisplayGroup: Identifiable, Equatable {
 
         var structural = Hasher()
         structural.combine(id)
+        structural.combine(sharedContextBefore)
+        structural.combine(sharedContextAfter)
         for row in rows {
             structural.combine(row.id)
             structural.combine(row.old?.lineNumber)

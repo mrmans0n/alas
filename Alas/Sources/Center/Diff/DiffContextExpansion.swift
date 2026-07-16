@@ -210,9 +210,88 @@ enum DiffContextExpandedDisplayBuilder {
                 id: group.id,
                 header: group.header,
                 sourceHunk: group.sourceHunk,
-                rows: rows
+                rows: rows,
+                sharedContextBefore: sharedContextBefore(
+                    forGroupAt: index,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    providerAvailable: providerAvailable
+                ),
+                sharedContextAfter: sharedContextAfter(
+                    forGroupAt: index,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    providerAvailable: providerAvailable
+                )
             )
         }
+    }
+
+    private static func sharedContextBefore(
+        forGroupAt index: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        providerAvailable: Bool
+    ) -> DiffContextExpansionKey? {
+        guard providerAvailable, index > 0 else { return nil }
+        return exhaustedSharedContextKey(
+            upperGroupIndex: index - 1,
+            groups: groups,
+            snapshot: snapshot,
+            expansion: expansion
+        )
+    }
+
+    private static func sharedContextAfter(
+        forGroupAt index: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        providerAvailable: Bool
+    ) -> DiffContextExpansionKey? {
+        guard providerAvailable, index + 1 < groups.count else { return nil }
+        return exhaustedSharedContextKey(
+            upperGroupIndex: index,
+            groups: groups,
+            snapshot: snapshot,
+            expansion: expansion
+        )
+    }
+
+    private static func exhaustedSharedContextKey(
+        upperGroupIndex: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState
+    ) -> DiffContextExpansionKey? {
+        guard upperGroupIndex + 1 < groups.count else { return nil }
+
+        let upperGroup = groups[upperGroupIndex]
+        let lowerGroup = groups[upperGroupIndex + 1]
+        let key = DiffContextExpansionKey.shared(upperGroupID: upperGroup.id, lowerGroupID: lowerGroup.id)
+        guard let snapshot else {
+            return optimisticBoundaryAvailable(
+                for: upperGroup,
+                groupIndex: upperGroupIndex,
+                boundary: .below,
+                groups: groups
+            ) ? nil : key
+        }
+        guard boundaryContextIsAvailable(for: upperGroup, boundary: .below, snapshot: snapshot) else {
+            return nil
+        }
+
+        let available = boundaryRange(
+            for: upperGroup,
+            groupIndex: upperGroupIndex,
+            boundary: .below,
+            groups: groups,
+            snapshot: snapshot
+        ).lineCount
+        return expansion.remainingLineCount(for: key, available: available) == 0 ? key : nil
     }
 
     static func availableLineCount(
@@ -318,6 +397,30 @@ enum DiffContextExpandedDisplayBuilder {
             offsets = (available - expandedCount)..<available
         }
 
+        let excludedOldLineNumbers: Set<Int>
+        let excludedNewLineNumbers: Set<Int>
+        switch edge {
+        case .top:
+            excludedOldLineNumbers = []
+            excludedNewLineNumbers = []
+        case .bottom:
+            let topOffsets = 0..<topExpanded
+            excludedOldLineNumbers = lineNumbers(
+                start: range.oldStart,
+                count: range.oldCount,
+                offsets: topOffsets,
+                totalCount: available,
+                boundary: .below
+            )
+            excludedNewLineNumbers = lineNumbers(
+                start: range.newStart,
+                count: range.newCount,
+                offsets: topOffsets,
+                totalCount: available,
+                boundary: .below
+            )
+        }
+
         var rows = offsets.map {
             expandedContextRow(
                 group: attachedGroup,
@@ -327,7 +430,9 @@ enum DiffContextExpandedDisplayBuilder {
                 offset: $0,
                 totalCount: available,
                 snapshot: snapshot,
-                filePath: filePath
+                filePath: filePath,
+                excludedOldLineNumbers: excludedOldLineNumbers,
+                excludedNewLineNumbers: excludedNewLineNumbers
             )
         }
 
@@ -345,6 +450,17 @@ enum DiffContextExpandedDisplayBuilder {
         switch edge {
         case .top:
             rows.insert(expandable, at: rows.endIndex)
+            rows.insert(
+                expandableRow(
+                    group: attachedGroup,
+                    boundary: attachedBoundary,
+                    remaining: remaining,
+                    key: key,
+                    edge: nil,
+                    defaultsEdgeFromBoundary: false
+                ),
+                at: rows.endIndex
+            )
         case .bottom:
             rows.insert(expandable, at: rows.startIndex)
         }
@@ -527,12 +643,48 @@ enum DiffContextExpandedDisplayBuilder {
         }
     }
 
+    private static func boundaryContextIsAvailable(
+        for group: DiffDisplayGroup,
+        boundary: DiffContextBoundary,
+        snapshot: DiffReviewFileContextSnapshot
+    ) -> Bool {
+        let currentOld = hunkSideExtent(in: group, side: .old)
+        let currentNew = hunkSideExtent(in: group, side: .new)
+
+        switch boundary {
+        case .above:
+            return snapshot.old.hasLine(currentOld.lineBefore)
+                || snapshot.new.hasLine(currentNew.lineBefore)
+        case .below:
+            return snapshot.old.hasLine(currentOld.lineAfter)
+                || snapshot.new.hasLine(currentNew.lineAfter)
+        }
+    }
+
     private static func lineCount(start: Int, end: Int?, snapshotLines: Int?) -> Int {
         guard let snapshotLines, let end else { return 0 }
         let clampedStart = max(1, start)
         let clampedEnd = min(end, snapshotLines)
         guard clampedStart <= clampedEnd else { return 0 }
         return clampedEnd - clampedStart + 1
+    }
+
+    private static func lineNumbers(
+        start: Int?,
+        count: Int,
+        offsets: Range<Int>,
+        totalCount: Int,
+        boundary: DiffContextBoundary
+    ) -> Set<Int> {
+        Set(offsets.compactMap {
+            lineNumber(
+                start: start,
+                count: count,
+                offset: $0,
+                totalCount: totalCount,
+                boundary: boundary
+            )
+        })
     }
 
     private static func hunkSideExtent(in group: DiffDisplayGroup, side: DiffLineSide) -> HunkSideExtent {
@@ -560,22 +712,26 @@ enum DiffContextExpandedDisplayBuilder {
         offset: Int,
         totalCount: Int,
         snapshot: DiffReviewFileContextSnapshot,
-        filePath: String
+        filePath: String,
+        excludedOldLineNumbers: Set<Int> = [],
+        excludedNewLineNumbers: Set<Int> = []
     ) -> DiffDisplayRow {
-        let oldNumber = lineNumber(
+        let candidateOldNumber = lineNumber(
             start: range.oldStart,
             count: range.oldCount,
             offset: offset,
             totalCount: totalCount,
             boundary: boundary
         )
-        let newNumber = lineNumber(
+        let candidateNewNumber = lineNumber(
             start: range.newStart,
             count: range.newCount,
             offset: offset,
             totalCount: totalCount,
             boundary: boundary
         )
+        let oldNumber = candidateOldNumber.flatMap { excludedOldLineNumbers.contains($0) ? nil : $0 }
+        let newNumber = candidateNewNumber.flatMap { excludedNewLineNumbers.contains($0) ? nil : $0 }
         let rowIndex = syntheticRowIndex(boundary: boundary, offset: offset)
         let anchorSide = anchorSide(oldNumber: oldNumber, newNumber: newNumber)
         let anchor = DiffLineAnchor(
@@ -609,7 +765,8 @@ enum DiffContextExpandedDisplayBuilder {
         boundary: DiffContextBoundary,
         remaining: Int,
         key: DiffContextExpansionKey,
-        edge: DiffContextExpansionEdge? = nil
+        edge: DiffContextExpansionEdge? = nil,
+        defaultsEdgeFromBoundary: Bool = true
     ) -> DiffDisplayRow {
         let edgeID = edge.map { "-\($0.rawValue)" } ?? ""
         return DiffDisplayRow(
@@ -622,7 +779,8 @@ enum DiffContextExpandedDisplayBuilder {
                 key: key,
                 boundary: boundary,
                 remainingLineCount: remaining,
-                edge: edge
+                edge: edge,
+                defaultsEdgeFromBoundary: defaultsEdgeFromBoundary
             )
         )
     }
@@ -684,6 +842,11 @@ private extension DiffReviewFileContextLines {
         case let .available(lines):
             return lines.count
         }
+    }
+
+    func hasLine(_ number: Int) -> Bool {
+        guard let lineCount else { return false }
+        return number >= 1 && number <= lineCount
     }
 
     func line(at number: Int) -> String? {

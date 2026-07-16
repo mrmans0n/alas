@@ -551,6 +551,12 @@ struct DiffPaneTextDocumentBuilder {
     }
 
     static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
+        if row.contextExpansion?.key.isShared == true, row.contextExpansion?.edge == nil {
+            guard row.collapsedLineCount > 0 else {
+                return "Expand all context"
+            }
+            return "Expand all \(row.collapsedLineCount) unchanged lines"
+        }
         let boundaryText = row.contextExpansion?.boundary == .below ? "below" : "above"
         guard row.collapsedLineCount > 0 else {
             return "Expand context \(boundaryText)"

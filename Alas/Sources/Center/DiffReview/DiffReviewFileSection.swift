@@ -29,6 +29,34 @@ enum DiffReviewActiveCommentCandidate: Equatable {
     case thread(String)
 }
 
+enum DiffReviewHunkFusionResolver {
+    static func states(for groups: [DiffReviewRenderContext.Group]) -> [DiffPaneHunkFusionState] {
+        var states = DiffPaneHunkFusionResolver.states(for: groups.map(\.displayGroup))
+        guard states.count == groups.count else { return states }
+
+        for index in groups.indices.dropLast()
+            where states[index].fusedWithNext && !groups[index + 1].inlineFeedback.isEmpty {
+            states[index] = DiffPaneHunkFusionState(
+                fusedWithPrevious: states[index].fusedWithPrevious,
+                fusedWithNext: false
+            )
+            states[index + 1] = DiffPaneHunkFusionState(
+                fusedWithPrevious: false,
+                fusedWithNext: states[index + 1].fusedWithNext
+            )
+        }
+
+        return states
+    }
+}
+
+private struct DiffReviewRenderableGroup: Identifiable {
+    let group: DiffReviewRenderContext.Group
+    let fusion: DiffPaneHunkFusionState
+
+    var id: String { group.id }
+}
+
 struct DiffReviewActiveCommentIDs {
     var hoveredDraftCommentID: String?
     var focusedDraftCommentID: String?
@@ -566,6 +594,11 @@ struct DiffReviewFileSection: View {
     private func content(renderContext: DiffReviewRenderContext?) -> some View {
         if let displayModel = file.displayModel, let renderContext {
             let groups = renderContext.groups
+            let fusionStates = DiffReviewHunkFusionResolver.states(for: groups)
+            let renderableGroups = zip(groups, fusionStates).map { pair in
+                DiffReviewRenderableGroup(group: pair.0, fusion: pair.1)
+            }
+            let renderableGroupsByID = Dictionary(uniqueKeysWithValues: renderableGroups.map { ($0.id, $0) })
             let requiredGroupIDs = DiffReviewRequiredGroupResolver.groupIDs(
                 in: groups,
                 inlineFeedbackIDs: commandedInlineFeedbackIDs,
@@ -576,15 +609,20 @@ struct DiffReviewFileSection: View {
                     ForEach(DiffReviewGroupRenderRun.runs(in: groups, requiredGroupIDs: requiredGroupIDs)) { run in
                         switch run.content {
                         case .lazy(let groups):
-                            lazyGroupStack(groups, displayModel: displayModel)
+                            lazyGroupStack(
+                                groups.compactMap { renderableGroupsByID[$0.id] },
+                                displayModel: displayModel
+                            )
                         case .required(let group):
                             // Keep commanded card IDs available without eagerly rendering unrelated hunks.
-                            groupContent(group, displayModel: displayModel)
+                            if let renderableGroup = renderableGroupsByID[group.id] {
+                                groupContent(renderableGroup, displayModel: displayModel)
+                            }
                         }
                     }
                 }
             } else {
-                lazyGroupStack(groups, displayModel: displayModel)
+                lazyGroupStack(renderableGroups, displayModel: displayModel)
             }
         } else {
             let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
@@ -605,7 +643,7 @@ struct DiffReviewFileSection: View {
     }
 
     private func lazyGroupStack(
-        _ groups: [DiffReviewRenderContext.Group],
+        _ groups: [DiffReviewRenderableGroup],
         displayModel: DiffDisplayModel
     ) -> some View {
         LazyVStack(spacing: 0) {
@@ -616,10 +654,11 @@ struct DiffReviewFileSection: View {
     }
 
     private func groupContent(
-        _ group: DiffReviewRenderContext.Group,
+        _ renderableGroup: DiffReviewRenderableGroup,
         displayModel: DiffDisplayModel
     ) -> some View {
-        VStack(spacing: 0) {
+        let group = renderableGroup.group
+        return VStack(spacing: 0) {
             if !group.inlineFeedback.isEmpty {
                 inlineFeedbackStack(
                     group.inlineFeedback,
@@ -627,14 +666,15 @@ struct DiffReviewFileSection: View {
                     rows: group.displayGroup.rows
                 )
             }
-            reviewGroup(group, displayModel: displayModel)
+            reviewGroup(group, displayModel: displayModel, fusion: renderableGroup.fusion)
         }
     }
 
     @ViewBuilder
     private func reviewGroup(
         _ group: DiffReviewRenderContext.Group,
-        displayModel: DiffDisplayModel
+        displayModel: DiffDisplayModel,
+        fusion: DiffPaneHunkFusionState
     ) -> some View {
         let displayGroup = group.displayGroup
         if group.containsLocalAccessories {
@@ -714,12 +754,12 @@ struct DiffReviewFileSection: View {
                 }
             }
             .background(theme.color("bg-1"))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(DiffPaneHunkCardShape(fusion: fusion))
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
+                DiffPaneHunkCardShape(fusion: fusion)
                     .stroke(theme.color("line"), lineWidth: 0.75)
             )
-            .padding(.bottom, 10)
+            .padding(.bottom, fusion.bottomPadding)
         } else {
             DiffPaneView(
                 model: DiffDisplayModel(filePath: displayModel.filePath, groups: [displayGroup]),
@@ -750,6 +790,7 @@ struct DiffReviewFileSection: View {
                 canResolve: canResolve,
                 onStageReply: onStageReply,
                 canAddToReview: canAddToReview,
+                hunkFusionStates: [fusion],
                 hunkActions: { hunk in
                     let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
                     return DiffPaneHunkActions(

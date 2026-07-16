@@ -1580,8 +1580,18 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     private func invokeExpansion(request: (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?), optionKey: Bool) {
-        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
+        let mode = expansionMode(for: request, optionKey: optionKey)
         contextExpansionHandler(request.key, mode, request.edge)
+    }
+
+    private func expansionMode(
+        for request: (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?),
+        optionKey: Bool
+    ) -> DiffContextExpansionMode {
+        if optionKey || (request.key.isShared && request.edge == nil) {
+            return .all
+        }
+        return .chunk(size: diffContextExpansionChunkSize)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
@@ -2188,9 +2198,19 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             return false
         }
 
-        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
+        let mode = expansionMode(for: request, optionKey: optionKey)
         onContextExpansion(request.key, mode, request.edge)
         return true
+    }
+
+    private func expansionMode(
+        for request: (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?),
+        optionKey: Bool
+    ) -> DiffContextExpansionMode {
+        if optionKey || (request.key.isShared && request.edge == nil) {
+            return .all
+        }
+        return .chunk(size: diffContextExpansionChunkSize)
     }
 
     static func selectionOutlineRect(

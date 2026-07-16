@@ -117,12 +117,18 @@ struct DiffContextExpansionTests {
             chunkSize: 2
         )
 
-        let firstBridge = try #require(expanded[0].rows.last?.contextExpansion)
+        let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
+        let firstBridge = try #require(expanded[0].rows.compactMap(\.contextExpansion).first { $0.key == key && $0.edge == .top })
+        let allBridge = try #require(expanded[0].rows.compactMap(\.contextExpansion).first { $0.key == key && $0.edge == nil })
         let secondBridge = expanded[1].rows.first?.contextExpansion
-        #expect(firstBridge.key == .shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id))
+        #expect(firstBridge.key == key)
         #expect(firstBridge.edge == .top)
-        #expect(secondBridge?.key == firstBridge.key)
+        #expect(allBridge.key == key)
+        #expect(allBridge.edge == nil)
+        #expect(secondBridge?.key == key)
         #expect(secondBridge?.edge == .bottom)
+        #expect(expanded[0].sharedContextAfter == nil)
+        #expect(expanded[1].sharedContextBefore == nil)
     }
 
     @Test func sharedBridgeAvailableLineCountUsesInterHunkGap() {
@@ -158,6 +164,67 @@ struct DiffContextExpansionTests {
         #expect(numbers.filter { $0 == 7 }.count == 1)
         #expect(numbers.filter { $0 == 8 }.count == 1)
         #expect(expanded.flatMap(\.rows).contains { $0.contextExpansion?.key == key } == false)
+        #expect(expanded[0].sharedContextAfter == key)
+        #expect(expanded[1].sharedContextBefore == key)
+    }
+
+    @Test func unavailableSharedBridgeContextDoesNotMarkGapExhausted() {
+        let groups = twoSeparatedGroups()
+        let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
+        var state = DiffContextExpansionState()
+        state.expand(key, available: 0, mode: .all, edge: .top)
+        state.expand(key, available: 0, mode: .all, edge: .bottom)
+
+        let expanded = DiffContextExpandedDisplayBuilder.derive(
+            groups: groups,
+            snapshot: DiffReviewFileContextSnapshot(old: .unavailable, new: .unavailable),
+            providerAvailable: true,
+            expansion: state,
+            filePath: "a.swift",
+            chunkSize: 2
+        )
+
+        #expect(expanded[0].rows.last?.contextExpansion == nil)
+        #expect(expanded[1].rows.first?.contextExpansion == nil)
+        #expect(expanded[0].sharedContextAfter == nil)
+        #expect(expanded[1].sharedContextBefore == nil)
+    }
+
+    @Test func sharedBridgeDoesNotDuplicateShortSideLineWhenGapLengthsDiffer() {
+        let firstHunk = ParsedDiff.Hunk(header: "@@ -1,1 +1,1 @@", oldStart: 1, newStart: 1, lines: [
+            .init(kind: .context, text: "line 1", oldNumber: 1, newNumber: 1),
+        ])
+        let secondHunk = ParsedDiff.Hunk(header: "@@ -12,1 +3,1 @@", oldStart: 12, newStart: 3, lines: [
+            .init(kind: .context, text: "line end", oldNumber: 12, newNumber: 3),
+        ])
+        let groups = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [firstHunk, secondHunk]),
+            filePath: "a.swift"
+        ).groups
+        let snapshot = DiffReviewFileContextSnapshot(
+            old: .available((1...12).map { "old \($0)" }),
+            new: .available((1...3).map { "new \($0)" })
+        )
+        let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
+        var state = DiffContextExpansionState()
+        state.expand(key, available: 10, mode: .chunk(size: 1), edge: .top)
+        state.expand(key, available: 10, mode: .chunk(size: 9), edge: .bottom)
+
+        let expanded = DiffContextExpandedDisplayBuilder.derive(
+            groups: groups,
+            snapshot: snapshot,
+            providerAvailable: true,
+            expansion: state,
+            filePath: "a.swift",
+            chunkSize: 2
+        )
+
+        let newNumbers = expanded.flatMap(\.rows).compactMap { $0.new?.lineNumber }
+        #expect(newNumbers.filter { $0 == 2 }.count == 1)
+        let oldNumbers = expanded.flatMap(\.rows).compactMap { $0.old?.lineNumber }
+        for number in 2...11 {
+            #expect(oldNumbers.filter { $0 == number }.count == 1)
+        }
     }
 
     @Test func derivesAboveBoundaryAndChunkedRows() throws {
