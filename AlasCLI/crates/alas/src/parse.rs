@@ -269,7 +269,11 @@ fn parse_review_open(args: &[&str], base: &std::path::Path) -> Result<Command, S
                 i += 1;
                 let value = flag_value(args, i).ok_or(USAGE)?;
                 worktree = Some(
-                    if value.starts_with('/') || value.starts_with("./") || value.starts_with("../")
+                    if value == "."
+                        || value == ".."
+                        || value.starts_with('/')
+                        || value.starts_with("./")
+                        || value.starts_with("../")
                     {
                         alas_client::absolutize(base, value)
                     } else {
@@ -1168,6 +1172,46 @@ mod tests {
             Command::Review {
                 target: None,
                 worktree: Some("sub/dir".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_absolutizes_bare_dot_and_dotdot_worktree_values() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "."]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo/current".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", ".."]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo".into())
+            }
+        );
+
+        // Regression guard: `.`/`..` handling must not broaden the check
+        // back toward matching other bare, slash-containing branch names.
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "feature/foo"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("feature/foo".into())
             }
         );
     }
