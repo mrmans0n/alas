@@ -435,7 +435,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }),
         "review" => Ok(Command::Review {
             target: review_target(args)?,
-            worktree: optional_string(args, "worktree"),
+            worktree: optional_non_blank_string(args, "worktree")?,
         }),
         "review_comments" => {
             let state = optional_string(args, "state");
@@ -1090,6 +1090,30 @@ mod tests {
             alas_client::Command::Review {
                 target: None,
                 worktree: None,
+            }
+        );
+    }
+
+    #[test]
+    fn review_rejects_non_string_worktree_argument() {
+        assert!(command_for_tool("review", &json!({"worktree": 123}), "/wt").is_err());
+        assert!(command_for_tool("review", &json!({"worktree": true}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_accepts_valid_or_omitted_worktree_argument() {
+        assert_eq!(
+            command_for_tool("review", &json!({"worktree": "feature-x"}), "/wt").unwrap(),
+            alas_client::Command::Review {
+                target: None,
+                worktree: Some("feature-x".into())
+            }
+        );
+        assert_eq!(
+            command_for_tool("review", &json!({}), "/wt").unwrap(),
+            alas_client::Command::Review {
+                target: None,
+                worktree: None
             }
         );
     }
