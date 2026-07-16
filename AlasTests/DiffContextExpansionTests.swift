@@ -131,6 +131,27 @@ struct DiffContextExpansionTests {
         #expect(expanded[1].sharedContextBefore == nil)
     }
 
+    @Test func derivesSharedExpandAllBridgeBeforeSnapshotLoads() throws {
+        let groups = twoSeparatedGroups()
+
+        let expanded = DiffContextExpandedDisplayBuilder.derive(
+            groups: groups,
+            snapshot: nil,
+            providerAvailable: true,
+            expansion: DiffContextExpansionState(),
+            filePath: "a.swift",
+            chunkSize: 2
+        )
+
+        let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
+        let upperExpansionRows = expanded[0].rows.compactMap(\.contextExpansion).filter { $0.key == key }
+        let lowerExpansionRows = expanded[1].rows.compactMap(\.contextExpansion).filter { $0.key == key }
+
+        #expect(upperExpansionRows.map(\.edge) == [.top, nil])
+        #expect(upperExpansionRows.map(\.remainingLineCount) == [0, 0])
+        #expect(lowerExpansionRows.map(\.edge) == [.bottom])
+    }
+
     @Test func sharedBridgeAvailableLineCountUsesInterHunkGap() {
         let groups = twoSeparatedGroups()
         let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
