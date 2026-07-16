@@ -22,6 +22,7 @@ final class ACPSessionOrchestrationCoordinator {
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let createWorktree: (String, String, String?) async -> Result<Worktree, WorktreeCreationError>
+        let rememberParent: (String, String) -> Void
         let notifyChanged: () -> Void
     }
 
@@ -249,6 +250,7 @@ final class ACPSessionOrchestrationCoordinator {
         phase: ACPDelegationPhase,
         now: Int64
     ) async -> AlasCLIResponse {
+        environment.rememberParent(childID, origin.sessionId)
         let record = ACPDelegationRecord(
             childSessionId: childID,
             parentSessionId: origin.sessionId,
@@ -263,8 +265,9 @@ final class ACPSessionOrchestrationCoordinator {
             createdAt: now,
             updatedAt: now
         )
-        do {
-            try await environment.persistence.insert(record)
+            do {
+                self.environment.rememberParent(childID, origin.sessionId)
+                try await environment.persistence.insert(record)
         } catch {
             return .error("Could not persist delegated session.")
         }

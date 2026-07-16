@@ -4,7 +4,7 @@
 //! be the largest dependency in the workspace.
 
 use alas_client::{Command, Response, TransportError};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -16,6 +16,7 @@ pub struct McpEnv {
     pub socket: PathBuf,
     pub worktree_dir: String,
     pub session_id: String,
+    pub parent_session_id: Option<String>,
 }
 
 /// Build the env from a lookup function (`std::env::var` in production,
@@ -37,6 +38,7 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         socket: PathBuf::from(socket),
         worktree_dir,
         session_id,
+        parent_session_id: get("ALAS_PARENT_SESSION_ID").filter(|s| !s.is_empty()),
     })
 }
 
@@ -46,6 +48,15 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
 pub fn handle_line(
     line: &str,
     worktree_dir: &str,
+    mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
+) -> Option<Value> {
+    handle_line_with_parent(line, worktree_dir, None, dispatch)
+}
+
+fn handle_line_with_parent(
+    line: &str,
+    worktree_dir: &str,
+    parent_session_id: Option<&str>,
     mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
     let msg: Value = match serde_json::from_str(line) {
@@ -62,7 +73,7 @@ pub fn handle_line(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let reply = match method {
-        "initialize" => Ok(initialize_result()),
+        "initialize" => Ok(initialize_result(parent_session_id)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
         "tools/call" => {
@@ -77,12 +88,16 @@ pub fn handle_line(
     })
 }
 
-fn initialize_result() -> Value {
+fn initialize_result(parent_session_id: Option<&str>) -> Value {
+    let instructions = match parent_session_id {
+        Some(_) => "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants; return results or questions through session_send.",
+        None => "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions.",
+    };
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "alas", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews."
+        "instructions": instructions
     })
 }
 
@@ -677,7 +692,12 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handle_line(&line, &env.worktree_dir, |cmd| dispatch(env, cmd)) {
+        if let Some(reply) = handle_line_with_parent(
+            &line,
+            &env.worktree_dir,
+            env.parent_session_id.as_deref(),
+            |cmd| dispatch(env, cmd),
+        ) {
             let mut out = stdout.lock();
             out.write_all(reply.to_string().as_bytes())?;
             out.write_all(b"\n")?;
@@ -689,9 +709,9 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpEnv, PROTOCOL_VERSION, command_for_tool, dispatch, env_from, handle_line};
+    use super::{command_for_tool, dispatch, env_from, handle_line, McpEnv, PROTOCOL_VERSION};
     use alas_client::Response;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     fn ok_dispatch(_: &alas_client::Command) -> Result<Response, alas_client::TransportError> {
         Ok(Response {
@@ -711,35 +731,27 @@ mod tests {
 
     #[test]
     fn env_from_requires_both_vars() {
-        assert!(
-            env_from(env(&[
-                ("ALAS_WORKTREE_DIR", "/wt"),
-                ("ALAS_SESSION_ID", "s1")
-            ]))
-            .is_err()
-        );
-        assert!(
-            env_from(env(&[
-                ("ALAS_SOCKET_PATH", "/tmp/s"),
-                ("ALAS_SESSION_ID", "s1")
-            ]))
-            .is_err()
-        );
-        assert!(
-            env_from(env(&[
-                ("ALAS_SOCKET_PATH", "/tmp/s"),
-                ("ALAS_WORKTREE_DIR", "/wt")
-            ]))
-            .is_err()
-        );
-        assert!(
-            env_from(env(&[
-                ("ALAS_SOCKET_PATH", ""),
-                ("ALAS_WORKTREE_DIR", "/wt"),
-                ("ALAS_SESSION_ID", "s1")
-            ]))
-            .is_err()
-        );
+        assert!(env_from(env(&[
+            ("ALAS_WORKTREE_DIR", "/wt"),
+            ("ALAS_SESSION_ID", "s1")
+        ]))
+        .is_err());
+        assert!(env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/tmp/s"),
+            ("ALAS_SESSION_ID", "s1")
+        ]))
+        .is_err());
+        assert!(env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/tmp/s"),
+            ("ALAS_WORKTREE_DIR", "/wt")
+        ]))
+        .is_err());
+        assert!(env_from(env(&[
+            ("ALAS_SOCKET_PATH", ""),
+            ("ALAS_WORKTREE_DIR", "/wt"),
+            ("ALAS_SESSION_ID", "s1")
+        ]))
+        .is_err());
         let ok = env_from(env(&[
             ("ALAS_SOCKET_PATH", "/tmp/s"),
             ("ALAS_WORKTREE_DIR", "/wt"),
@@ -753,14 +765,12 @@ mod tests {
 
     #[test]
     fn env_from_rejects_relative_worktree_dir() {
-        assert!(
-            env_from(env(&[
-                ("ALAS_SOCKET_PATH", "/tmp/s"),
-                ("ALAS_WORKTREE_DIR", "wt"),
-                ("ALAS_SESSION_ID", "s1")
-            ]))
-            .is_err()
-        );
+        assert!(env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/tmp/s"),
+            ("ALAS_WORKTREE_DIR", "wt"),
+            ("ALAS_SESSION_ID", "s1")
+        ]))
+        .is_err());
     }
 
     #[test]
@@ -805,14 +815,12 @@ mod tests {
             }
         );
 
-        assert!(
-            command_for_tool(
-                "notify",
-                &json!({ "body": "Done", "level": "urgent" }),
-                "/wt"
-            )
-            .is_err()
-        );
+        assert!(command_for_tool(
+            "notify",
+            &json!({ "body": "Done", "level": "urgent" }),
+            "/wt"
+        )
+        .is_err());
         assert!(command_for_tool("notify", &json!({ "title": "Missing body" }), "/wt").is_err());
     }
 
@@ -930,14 +938,12 @@ mod tests {
             "/wt"
         )
         .is_err());
-        assert!(
-            command_for_tool(
-                "session_send",
-                &json!({ "session_id": "child", "prompt": "  " }),
-                "/wt"
-            )
-            .is_err()
-        );
+        assert!(command_for_tool(
+            "session_send",
+            &json!({ "session_id": "child", "prompt": "  " }),
+            "/wt"
+        )
+        .is_err());
     }
 
     #[test]
@@ -973,14 +979,12 @@ mod tests {
     fn open_rejects_invalid_line_targets() {
         assert!(command_for_tool("open", &json!({"path": "a", "line": 0}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"path": "a", "end_line": 2}), "/wt").is_err());
-        assert!(
-            command_for_tool(
-                "open",
-                &json!({"path": "a", "line": 3, "end_line": 2}),
-                "/wt"
-            )
-            .is_err()
-        );
+        assert!(command_for_tool(
+            "open",
+            &json!({"path": "a", "line": 3, "end_line": 2}),
+            "/wt"
+        )
+        .is_err());
         assert!(command_for_tool("open", &json!({"paths": ["a", "b"], "line": 2}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"path": "a", "paths": ["a"]}), "/wt").is_err());
     }
@@ -1137,14 +1141,12 @@ mod tests {
                 reopen: true
             }
         );
-        assert!(
-            command_for_tool(
-                "review_resolve",
-                &json!({"comment_id": "c1", "state": "bogus"}),
-                "/wt"
-            )
-            .is_err()
-        );
+        assert!(command_for_tool(
+            "review_resolve",
+            &json!({"comment_id": "c1", "state": "bogus"}),
+            "/wt"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1165,30 +1167,24 @@ mod tests {
                 session_id: None,
             }
         );
-        assert!(
-            command_for_tool(
-                "review_comment_add",
-                &json!({"path": "a.swift", "body": "hm"}),
-                "/wt"
-            )
-            .is_err()
-        );
-        assert!(
-            command_for_tool(
-                "review_comment_add",
-                &json!({"path": "a.swift", "start_line": 0, "body": "hm"}),
-                "/wt"
-            )
-            .is_err()
-        );
-        assert!(
-            command_for_tool(
-                "review_comment_add",
-                &json!({"path": "a.swift", "start_line": 3, "body": "hm", "side": "sideways"}),
-                "/wt"
-            )
-            .is_err()
-        );
+        assert!(command_for_tool(
+            "review_comment_add",
+            &json!({"path": "a.swift", "body": "hm"}),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "review_comment_add",
+            &json!({"path": "a.swift", "start_line": 0, "body": "hm"}),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "review_comment_add",
+            &json!({"path": "a.swift", "start_line": 3, "body": "hm", "side": "sideways"}),
+            "/wt"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1367,6 +1363,7 @@ mod tests {
             socket: path.clone(),
             worktree_dir: "/wt".into(),
             session_id: "acp-1".into(),
+            parent_session_id: None,
         };
         let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();
         assert!(resp.ok);

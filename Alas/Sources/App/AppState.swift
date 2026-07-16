@@ -1941,6 +1941,9 @@ final class AppState {
                     }
                     return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
                 },
+                rememberParent: { [weak self] childID, parentID in
+                    self?.delegatedSessionParents[childID] = parentID
+                },
                 notifyChanged: { }
             )
         )
@@ -4282,6 +4285,9 @@ final class AppState {
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
 
+    @ObservationIgnored
+    private var delegatedSessionParents: [String: String] = [:]
+
     /// Force-flush every per-session debounced composer-draft write across
     /// all live managers. Called from app-will-terminate so an in-flight
     /// typing burst doesn't lose its last ~300ms of input to the
@@ -4403,7 +4409,8 @@ final class AppState {
                     binaryPath: binaryPath,
                     socketPath: self.harness.socketServer.socketPath,
                     worktreePath: worktreePath,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    parentSessionId: self.delegatedSessionParents[sessionId]
                 )
             }
         )

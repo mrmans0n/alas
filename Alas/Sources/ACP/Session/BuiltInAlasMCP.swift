@@ -24,7 +24,8 @@ enum BuiltInAlasMCP {
         binaryPath: String?,
         socketPath: String?,
         worktreePath: String,
-        sessionId: String
+        sessionId: String,
+        parentSessionId: String? = nil
     ) -> Injection? {
         guard enabled, let binaryPath, let socketPath else { return nil }
         let userOverride = configuredServers.contains {
@@ -40,7 +41,7 @@ enum BuiltInAlasMCP {
                     .init(name: "ALAS_SOCKET_PATH", value: socketPath),
                     .init(name: "ALAS_WORKTREE_DIR", value: worktreePath),
                     .init(name: "ALAS_SESSION_ID", value: sessionId),
-                ]
+                ] + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
             ),
             status: .init(
                 id: statusId,
