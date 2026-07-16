@@ -55,6 +55,20 @@ actor ACPOrchestrationPersistence {
         )
     }
 
+    func updateChildWorktree(
+        childSessionId: String,
+        worktreeId: String,
+        phase: ACPDelegationPhase,
+        updatedAt: Int64
+    ) throws {
+        try openedStore().updateChildWorktree(
+            childSessionId: childSessionId,
+            worktreeId: worktreeId,
+            phase: phase,
+            updatedAt: updatedAt
+        )
+    }
+
     func clearPendingInitialPrompt(childSessionId: String, updatedAt: Int64) throws {
         try openedStore().clearPendingInitialPrompt(childSessionId: childSessionId, updatedAt: updatedAt)
     }

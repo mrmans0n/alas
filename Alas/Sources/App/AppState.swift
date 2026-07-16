@@ -1908,8 +1908,17 @@ final class AppState {
                 worktree: { [weak self] id in self?.worktree(withId: id) },
                 existingWorktree: { [weak self] projectId, worktreeId in
                     guard let self else { return nil }
-                    return self.projectsManager.visibleWorktrees(projectId: projectId)
-                        .first(where: { $0.id == worktreeId })
+                    let worktrees = self.projectsManager.visibleWorktrees(projectId: projectId)
+                    if let exactID = worktrees.first(where: { $0.id == worktreeId }) {
+                        return exactID
+                    }
+                    if case .matched(let worktree) = AlasCLIWorktreeResolver.resolve(
+                        target: worktreeId,
+                        worktrees: worktrees
+                    ) {
+                        return worktree
+                    }
+                    return nil
                 },
                 availableAgents: { [weak self] in
                     guard let self else { return [] }

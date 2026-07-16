@@ -293,6 +293,12 @@ final class ACPSessionOrchestrationCoordinator {
             return
         }
         guard let record else { return }
+        try? await environment.persistence.updateChildWorktree(
+            childSessionId: childID,
+            worktreeId: worktree.id,
+            phase: .starting,
+            updatedAt: environment.now()
+        )
         if manager.liveSession(for: childID) == nil {
             _ = manager.createSession(id: childID, agentId: record.agentId)
         }

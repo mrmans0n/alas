@@ -285,7 +285,7 @@ final class ACPSession: ObservableObject, Identifiable {
         _ = flushPendingReplayCandidates()
         transcript.messages.append(.user(
             id: UUID(),
-            messageId: delegatedSource?.messageId,
+            messageId: nil,
             text: text,
             attachments: attachments,
             delegatedSource: delegatedSource
