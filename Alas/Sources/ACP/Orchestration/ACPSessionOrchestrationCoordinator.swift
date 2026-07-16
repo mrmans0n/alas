@@ -354,6 +354,19 @@ final class ACPSessionOrchestrationCoordinator {
             environment.notifyChanged()
             return
         }
+        await manager.attach(to: childID, freshlyCreated: true)
+        guard let session = manager.liveSession(for: childID),
+              session.agentState == .ready
+        else {
+            try? await environment.persistence.updatePhase(
+                childSessionId: childID,
+                phase: .failed,
+                failureMessage: delegatedChildStartFailureMessage(manager.liveSession(for: childID)),
+                updatedAt: environment.now()
+            )
+            environment.notifyChanged()
+            return
+        }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
         try? await environment.persistence.updatePhase(
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
@@ -364,9 +377,22 @@ final class ACPSessionOrchestrationCoordinator {
             callerParent: record,
             targetParent: record
         )
-        Task { @MainActor [weak manager] in
-            await manager?.attach(to: childID, freshlyCreated: true)
+    }
+
+    private func delegatedChildStartFailureMessage(_ session: ACPSession?) -> String {
+        guard let session else { return "Could not start delegated ACP session." }
+        switch session.setupState {
+        case .needsSetup(let reason), .setupError(let reason):
+            return reason
+        case .needsAuth(_, let reason):
+            return reason ?? "ACP session needs authentication."
+        case .checking, .ready:
+            break
         }
+        if case .failed(let reason) = session.agentState {
+            return reason
+        }
+        return "Could not start delegated ACP session."
     }
 
     private func deliverPendingMessages(
