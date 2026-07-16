@@ -152,6 +152,19 @@ struct ReviewReadinessModelTests {
         #expect(model.actions.contains(Action(kind: .createReviewRequest, title: "Create MR", isEnabled: true)))
     }
 
+    @Test func openGitLabRequestExposesInspectEvenWithoutAttentionState() {
+        let remote = Self.makeRemote(kind: .gitlab)
+        let request = Self.makeReviewRequest(remote: remote)
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(remote: remote, reviewRequest: request, providerCapabilities: .gitlabCLI),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.actions.contains(Action(kind: .openReviewRequest, title: "Open MR", isEnabled: true)))
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+    }
+
     @Test func failedChecksExposeRerunAndInspectWhenSupported() {
         let request = Self.makeReviewRequest(checks: [Self.makeCheck(bucket: .fail)])
         let model = ReviewReadinessModel(
