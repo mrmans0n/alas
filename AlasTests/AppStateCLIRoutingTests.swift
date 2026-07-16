@@ -623,6 +623,34 @@ struct AppStateCLIRoutingTests {
         #expect(headSHA != "HEAD")
     }
 
+    @Test func cliReviewTwoDotRangeOnRootCommitResolvesToEmptyTreeBase() async throws {
+        // A repo with exactly one commit (the root commit) has no parent, so
+        // `HEAD^` genuinely does not exist. The two-dot range base must fall
+        // back to the canonical empty-tree SHA instead of failing to resolve
+        // — see `GitService.resolveTwoDotLeftTree`.
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-root-commit-range")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let headSHA = try await revParse("HEAD", at: worktree.path)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("HEAD^..HEAD", worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected text response, got \(response)")
+            return
+        }
+        let emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        let expectedTarget = ReviewSessionTarget.commitRange(
+            worktreeID: worktree.id, repositoryPath: worktree.path, base: emptyTreeSHA, head: headSHA
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.kind == .commitRange)
+        #expect(record.target.payload == .commitRange(base: emptyTreeSHA, head: headSHA))
+    }
+
     @Test func cliReviewThreeDotRangeResolvesToBranchTarget() async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "review-three-dot-range")
         defer { try? FileManager.default.removeItem(at: worktree.path) }

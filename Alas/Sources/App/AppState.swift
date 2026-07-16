@@ -4097,7 +4097,14 @@ final class AppState {
         let baseSHA: String
         let headSHA: String
         do {
-            baseSHA = try await git.resolveRevision(at: worktree.path, ref: base)
+            // Three-dot ranges compute a real merge base downstream and have
+            // no root-commit special case; two-dot ranges reuse the same
+            // empty-tree fallback the range diff loaders already rely on
+            // (`resolveTwoDotLeftTree`), so a root commit's "HEAD^..HEAD"
+            // resolves instead of failing before the review ever opens.
+            baseSHA = threeDot
+                ? try await git.resolveRevision(at: worktree.path, ref: base)
+                : try await git.resolveTwoDotLeftTree(worktreePath: worktree.path, base: base)
         } catch {
             return .error("could not resolve '\(base)' in worktree '\(worktree.branch)'")
         }

@@ -303,7 +303,7 @@ extension GitService {
     /// commit itself must resolve and have no parents. Any other resolution
     /// failure (a stale or invalid base) is thrown, so we never silently diff
     /// against the empty tree and report every file in `head` as newly added.
-    private func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
+    func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
         let result = try await Process.git(["rev-parse", "--verify", "--quiet", base], cwd: worktreePath)
         let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.exitCode == 0, !resolved.isEmpty { return resolved }
