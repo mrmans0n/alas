@@ -70,13 +70,25 @@ struct AlasCLIRequestTests {
     @Test func decodesLocalReviewRequest() throws {
         let json = #"{"v":1,"kind":"cli","command":"review","session_id":"s1"}"#
         let request = try AlasCLIRequest.decode(from: Data(json.utf8))
-        #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
+        #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))))
     }
 
     @Test func decodesProviderReviewRequest() throws {
         let json = #"{"v":1,"kind":"cli","command":"review","session_id":"s1","target":"123"}"#
         let request = try AlasCLIRequest.decode(from: Data(json.utf8))
-        #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "123"))))
+        #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("123", worktree: nil))))
+    }
+
+    @Test func reviewDecodesWorktreeParam() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review","session_id":"s1","target":"main..HEAD","params":{"worktree":"feature-x"}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.command == .review(.target("main..HEAD", worktree: "feature-x")))
+    }
+
+    @Test func reviewLocalChangesDecodesWorktreeParam() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review","session_id":"s1","params":{"worktree":"feature-x"}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.command == .review(.localChanges(worktree: "feature-x")))
     }
 
     @Test func rejectsMissingWorktreeTarget() throws {

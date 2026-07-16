@@ -548,7 +548,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))))
 
         guard case .text(let lines) = response, lines.count == 2 else {
             Issue.record("expected two-line text response, got \(response)")
@@ -575,7 +575,7 @@ struct AlasCLICommandRouterTests {
             }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "123"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("123", worktree: nil))))
 
         #expect(response == .ok)
         #expect(opened?.origin == current)
@@ -1219,7 +1219,7 @@ struct AlasCLICommandRouterTests {
         router.openReviewChanges = { _ in openedReview = true }
 
         let response = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)
+            version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))
         ))
 
         #expect(openedReview)

@@ -159,7 +159,7 @@ struct AlasCLICommandRouter {
             return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch)
         case .review(.localChanges):
             return service.reviewLocal(origin: origin)
-        case .review(.provider(let target)):
+        case .review(.target(let target, _)):
             return await service.reviewProvider(origin: origin, target: target)
         case .review(.comments(let sessionID, let state)):
             return service.reviewComments(origin: origin, sessionID: sessionID, filter: state)

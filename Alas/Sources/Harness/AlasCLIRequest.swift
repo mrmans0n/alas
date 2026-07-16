@@ -56,8 +56,8 @@ struct AlasCLIRequest: Equatable {
     }
 
     enum ReviewCommand: Equatable {
-        case localChanges
-        case provider(target: String)
+        case localChanges(worktree: String?)
+        case target(String, worktree: String?)
         case comments(sessionID: String?, state: ReviewCommentWireFilter)
         case reply(commentID: String, body: String)
         case resolve(commentID: String, reply: String?, reopen: Bool)
@@ -109,6 +109,10 @@ struct AlasCLIRequest: Equatable {
     private struct OpenParams: Decodable {
         var line: Int?
         var end_line: Int?
+    }
+
+    private struct ReviewParams: Decodable {
+        var worktree: String?
     }
 
     private struct ReviewCommentsParams: Decodable {
@@ -283,10 +287,12 @@ struct AlasCLIRequest: Equatable {
                 throw AlasCLIRequestError.unsupportedCommand
             }
         case "review":
+            let params = try Self.decodeParamsIfPresent(ReviewParams.self, from: data)
+            let worktree = params?.worktree?.nilIfBlank
             if let target = raw.target?.nilIfBlank {
-                command = .review(.provider(target: target))
+                command = .review(.target(target, worktree: worktree))
             } else {
-                command = .review(.localChanges)
+                command = .review(.localChanges(worktree: worktree))
             }
         case "review_comments":
             let params = try Self.decodeParamsIfPresent(ReviewCommentsParams.self, from: data)

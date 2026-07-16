@@ -502,7 +502,7 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))))
 
         guard case .text(let lines) = response, lines.count == 2 else {
             Issue.record("expected two-line text response, got \(response)")
@@ -532,7 +532,7 @@ struct AppStateCLIRoutingTests {
         state.selectedWorktreeId = other.id
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))))
 
         guard case .text(let lines) = response, lines.count == 2 else {
             Issue.record("expected two-line text response, got \(response)")
@@ -555,7 +555,7 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "not-a-review"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("not-a-review", worktree: nil))))
 
         #expect(response == .error("unsupported review URL"))
     }
@@ -565,7 +565,7 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "123"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("123", worktree: nil))))
 
         #expect(response == .error("no code host remote found for this worktree"))
     }
@@ -580,7 +580,7 @@ struct AppStateCLIRoutingTests {
             version: 1,
             sessionId: "s1",
             cwd: nil,
-            command: .review(.provider(target: "https://github.com/mrmans0n/alas/pull/580"))
+            command: .review(.target("https://github.com/mrmans0n/alas/pull/580", worktree: nil))
         ))
 
         #expect(response == .error("review URL does not match this worktree's remote"))
