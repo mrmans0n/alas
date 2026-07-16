@@ -61,6 +61,44 @@ struct AlasCLIWorktreeResolverTests {
             == .missing("/repo/nope"))
     }
 
+    @Test func resolvesSymlinkedTargetAgainstRealWorktreeRoot() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-symlink-target-\(UUID().uuidString)")
+        let realRoot = base.appendingPathComponent("real")
+        let linkRoot = base.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: realRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createSymbolicLink(at: linkRoot, withDestinationURL: realRoot)
+
+        let worktree = Self.worktree(branch: "main", path: realRoot.path)
+        let result = AlasCLIWorktreeResolver.resolve(target: linkRoot.path, worktrees: [worktree])
+        #expect(result == .matched(worktree))
+    }
+
+    @Test func resolvesRealPathTargetAgainstSymlinkedWorktreeRoot() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-symlink-worktree-\(UUID().uuidString)")
+        let realRoot = base.appendingPathComponent("real")
+        let linkRoot = base.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: realRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createSymbolicLink(at: linkRoot, withDestinationURL: realRoot)
+
+        let worktree = Self.worktree(branch: "main", path: linkRoot.path)
+        let result = AlasCLIWorktreeResolver.resolve(
+            target: realRoot.resolvingSymlinksInPath().path,
+            worktrees: [worktree]
+        )
+        #expect(result == .matched(worktree))
+    }
+
+    @Test func nonexistentAbsolutePathWithNoSymlinkStillMissesWithoutCrashing() {
+        let worktrees = [Self.worktree(branch: "main", path: "/repo/main")]
+        let target = "/tmp/alas-resolver-does-not-exist-\(UUID().uuidString)/nested/nope"
+        let result = AlasCLIWorktreeResolver.resolve(target: target, worktrees: worktrees)
+        #expect(result == .missing(target))
+    }
+
     private static func worktree(name: String? = nil, branch: String, path: String) -> Worktree {
         Worktree(
             id: Worktree.makeId(path: URL(fileURLWithPath: path)),

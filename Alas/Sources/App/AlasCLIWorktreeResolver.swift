@@ -24,8 +24,20 @@ enum AlasCLIWorktreeResolver {
         // Absolute paths match a worktree root exactly, and never fall
         // through to branch/prefix matching.
         if trimmed.hasPrefix("/") {
-            let standardized = URL(fileURLWithPath: trimmed).standardizedFileURL.path
-            let byPath = worktrees.filter { $0.path.standardizedFileURL.path == standardized }
+            let requested = URL(fileURLWithPath: trimmed)
+            let standardized = requested.standardizedFileURL.path
+            var byPath = worktrees.filter { $0.path.standardizedFileURL.path == standardized }
+            if byPath.isEmpty {
+                // The target may reach a worktree root through a symlink (or the
+                // worktree itself was registered via one) — resolve symlinks on
+                // both sides and compare file identity before giving up, mirroring
+                // `AlasActionService.resolveWorktree(forDirectory:)`.
+                if let requestedIdentity = AlasActionService.fileIdentity(at: requested.resolvingSymlinksInPath().path) {
+                    byPath = worktrees.filter {
+                        AlasActionService.fileIdentity(at: $0.path.resolvingSymlinksInPath().path) == requestedIdentity
+                    }
+                }
+            }
             if byPath.count == 1 { return .matched(byPath[0]) }
             if byPath.count > 1 { return .ambiguous(labels(for: byPath)) }
             return .missing(trimmed)

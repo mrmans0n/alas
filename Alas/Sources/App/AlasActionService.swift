@@ -5,7 +5,7 @@ import Foundation
 /// wire types, so multiple front ends can reuse it.
 @MainActor
 struct AlasActionService {
-    private struct FileIdentity: Equatable {
+    struct FileIdentity: Equatable {
         let systemNumber: UInt64
         let fileNumber: UInt64
     }
@@ -720,7 +720,7 @@ struct AlasActionService {
         return nil
     }
 
-    private static func fileIdentity(at path: String) -> FileIdentity? {
+    nonisolated static func fileIdentity(at path: String) -> FileIdentity? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let systemNumber = attributes[.systemNumber] as? NSNumber,
               let fileNumber = attributes[.systemFileNumber] as? NSNumber else { return nil }
