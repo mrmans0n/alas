@@ -104,6 +104,79 @@ enum DiffPaneVerticalScrollMode {
     case staticHeight
 }
 
+struct DiffPaneHunkFusionState: Equatable {
+    static let none = DiffPaneHunkFusionState(fusedWithPrevious: false, fusedWithNext: false)
+
+    let fusedWithPrevious: Bool
+    let fusedWithNext: Bool
+
+    var bottomPadding: CGFloat {
+        fusedWithNext ? 0 : 10
+    }
+
+    var outerTopPadding: CGFloat {
+        fusedWithPrevious ? 0 : 10
+    }
+
+    var outerBottomPadding: CGFloat {
+        fusedWithNext ? 0 : 10
+    }
+}
+
+enum DiffPaneHunkFusionResolver {
+    static func states(for groups: [DiffDisplayGroup]) -> [DiffPaneHunkFusionState] {
+        guard !groups.isEmpty else { return [] }
+        var states = Array(repeating: DiffPaneHunkFusionState.none, count: groups.count)
+        guard groups.count > 1 else { return states }
+
+        for index in groups.indices.dropLast() {
+            guard
+                let endingKey = sharedBridgeKeyEnding(groups[index]),
+                let startingKey = sharedBridgeKeyStarting(groups[index + 1]),
+                endingKey == startingKey
+            else {
+                continue
+            }
+            states[index] = DiffPaneHunkFusionState(
+                fusedWithPrevious: states[index].fusedWithPrevious,
+                fusedWithNext: true
+            )
+            states[index + 1] = DiffPaneHunkFusionState(
+                fusedWithPrevious: true,
+                fusedWithNext: states[index + 1].fusedWithNext
+            )
+        }
+        return states
+    }
+
+    private static func sharedBridgeKeyEnding(_ group: DiffDisplayGroup) -> DiffContextExpansionKey? {
+        group.sharedContextAfter
+    }
+
+    private static func sharedBridgeKeyStarting(_ group: DiffDisplayGroup) -> DiffContextExpansionKey? {
+        group.sharedContextBefore
+    }
+}
+
+struct DiffPaneHunkCardShape: Shape {
+    let fusion: DiffPaneHunkFusionState
+
+    func path(in rect: CGRect) -> Path {
+        let topRadius: CGFloat = fusion.fusedWithPrevious ? 0 : 7
+        let bottomRadius: CGFloat = fusion.fusedWithNext ? 0 : 7
+        return UnevenRoundedRectangle(
+            cornerRadii: RectangleCornerRadii(
+                topLeading: topRadius,
+                bottomLeading: bottomRadius,
+                bottomTrailing: bottomRadius,
+                topTrailing: topRadius
+            ),
+            style: .continuous
+        )
+        .path(in: rect)
+    }
+}
+
 struct DiffPaneView: View {
     let model: DiffDisplayModel
     let fileExtension: String
@@ -118,7 +191,7 @@ struct DiffPaneView: View {
     var activeCommentHighlight: DiffReviewCommentHighlight? = nil
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
-    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
     var threads: [DiffInlineCommentThread] = []
     var annotations: [DiffInlineAnnotation] = []
     var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
@@ -130,6 +203,7 @@ struct DiffPaneView: View {
     var canResolve: Bool = false
     var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var canAddToReview: Bool = false
+    var hunkFusionStates: [DiffPaneHunkFusionState]? = nil
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -150,7 +224,7 @@ struct DiffPaneView: View {
         activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
-        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in },
         threads: [DiffInlineCommentThread] = [],
         annotations: [DiffInlineAnnotation] = [],
         onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
@@ -162,6 +236,7 @@ struct DiffPaneView: View {
         canResolve: Bool = false,
         onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
         canAddToReview: Bool = false,
+        hunkFusionStates: [DiffPaneHunkFusionState]? = nil,
         hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
     ) {
         self.model = model
@@ -189,6 +264,7 @@ struct DiffPaneView: View {
         self.canResolve = canResolve
         self.onStageReply = onStageReply
         self.canAddToReview = canAddToReview
+        self.hunkFusionStates = hunkFusionStates
         self.hunkActions = hunkActions
     }
 
@@ -224,23 +300,44 @@ struct DiffPaneView: View {
     }
 
     private var lazyRowsStack: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(model.groups) { group in
-                hunk(group)
+        let indexedGroups = Array(model.groups.enumerated())
+        let fusionStates = resolvedHunkFusionStates
+        return LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(indexedGroups, id: \.element.id) { index, group in
+                hunk(group, fusion: fusionStates[index])
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .padding(.top, outerTopPadding(for: fusionStates))
+        .padding(.bottom, outerBottomPadding(for: fusionStates))
     }
 
     private var staticRowsStack: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(model.groups) { group in
-                hunk(group)
+        let indexedGroups = Array(model.groups.enumerated())
+        let fusionStates = resolvedHunkFusionStates
+        return LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(indexedGroups, id: \.element.id) { index, group in
+                hunk(group, fusion: fusionStates[index])
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .padding(.top, outerTopPadding(for: fusionStates))
+        .padding(.bottom, outerBottomPadding(for: fusionStates))
+    }
+
+    private var resolvedHunkFusionStates: [DiffPaneHunkFusionState] {
+        if let hunkFusionStates, hunkFusionStates.count == model.groups.count {
+            return hunkFusionStates
+        }
+        return DiffPaneHunkFusionResolver.states(for: model.groups)
+    }
+
+    private func outerTopPadding(for fusionStates: [DiffPaneHunkFusionState]) -> CGFloat {
+        fusionStates.first?.outerTopPadding ?? 10
+    }
+
+    private func outerBottomPadding(for fusionStates: [DiffPaneHunkFusionState]) -> CGFloat {
+        fusionStates.last?.outerBottomPadding ?? 10
     }
 
     private var toolbar: some View {
@@ -323,7 +420,7 @@ struct DiffPaneView: View {
         .help(tooltip)
     }
 
-    private func hunk(_ group: DiffDisplayGroup) -> some View {
+    private func hunk(_ group: DiffDisplayGroup, fusion: DiffPaneHunkFusionState) -> some View {
         let visibleRows = DiffPaneRowProjection.visibleRows(
             in: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
@@ -393,12 +490,12 @@ struct DiffPaneView: View {
             }
         }
         .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .clipShape(DiffPaneHunkCardShape(fusion: fusion))
         .overlay(
-            RoundedRectangle(cornerRadius: 7)
+            DiffPaneHunkCardShape(fusion: fusion)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
-        .padding(.bottom, 10)
+        .padding(.bottom, fusion.bottomPadding)
     }
 
     private func threadsForVisibleRows(_ visibleRows: [DiffDisplayRow]) -> [DiffInlineCommentThread] {

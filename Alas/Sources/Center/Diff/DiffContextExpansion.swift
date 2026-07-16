@@ -16,13 +16,51 @@ enum DiffContextExpansionMode: Equatable {
 }
 
 struct DiffContextExpansionState: Equatable {
+    private struct SharedExpansion: Equatable {
+        var top: Int = 0
+        var bottom: Int = 0
+    }
+
     private var expandedLineCounts: [DiffContextExpansionKey: Int] = [:]
+    private var sharedExpandedLineCounts: [DiffContextExpansionKey: SharedExpansion] = [:]
 
     func expandedLineCount(for key: DiffContextExpansionKey) -> Int {
-        expandedLineCounts[key, default: 0]
+        if key.isShared {
+            return expandedLineCount(for: key, edge: .top)
+        }
+        return expandedLineCounts[key, default: 0]
+    }
+
+    func expandedLineCount(for key: DiffContextExpansionKey, edge: DiffContextExpansionEdge) -> Int {
+        guard key.isShared else {
+            return expandedLineCount(for: key)
+        }
+
+        let shared = sharedExpandedLineCounts[key, default: SharedExpansion()]
+        switch edge {
+        case .top:
+            return shared.top
+        case .bottom:
+            return shared.bottom
+        }
+    }
+
+    func remainingLineCount(for key: DiffContextExpansionKey, available: Int) -> Int {
+        let available = max(0, available)
+        guard key.isShared else {
+            return max(0, available - expandedLineCount(for: key))
+        }
+
+        let shared = sharedExpandedLineCounts[key, default: SharedExpansion()]
+        return max(0, available - shared.top - shared.bottom)
     }
 
     mutating func expand(_ key: DiffContextExpansionKey, available: Int, mode: DiffContextExpansionMode) {
+        if key.isShared {
+            expand(key, available: available, mode: mode, edge: .top)
+            return
+        }
+
         let available = max(0, available)
         let current = expandedLineCounts[key, default: 0]
         let next: Int
@@ -33,6 +71,48 @@ struct DiffContextExpansionState: Equatable {
             next = available
         }
         expandedLineCounts[key] = min(next, available)
+    }
+
+    mutating func expand(
+        _ key: DiffContextExpansionKey,
+        available: Int,
+        mode: DiffContextExpansionMode,
+        edge: DiffContextExpansionEdge
+    ) {
+        guard key.isShared else {
+            expand(key, available: available, mode: mode)
+            return
+        }
+
+        let available = max(0, available)
+        var shared = sharedExpandedLineCounts[key, default: SharedExpansion()]
+        let current: Int
+        let other: Int
+        switch edge {
+        case .top:
+            current = shared.top
+            other = shared.bottom
+        case .bottom:
+            current = shared.bottom
+            other = shared.top
+        }
+
+        let requested: Int
+        switch mode {
+        case let .chunk(size):
+            requested = current + max(0, size)
+        case .all:
+            requested = available - other
+        }
+
+        let clamped = min(max(0, requested), max(0, available - other))
+        switch edge {
+        case .top:
+            shared.top = clamped
+        case .bottom:
+            shared.bottom = clamped
+        }
+        sharedExpandedLineCounts[key] = shared
     }
 }
 
@@ -72,7 +152,7 @@ enum DiffContextExpandedDisplayBuilder {
         groups.enumerated().map { index, group in
             var rows: [DiffDisplayRow] = []
 
-            if providerAvailable {
+            if providerAvailable, index == 0 {
                 rows.append(contentsOf: expansionRows(
                     for: group,
                     groupIndex: index,
@@ -85,9 +165,35 @@ enum DiffContextExpandedDisplayBuilder {
                 ))
             }
 
+            if providerAvailable, index > 0 {
+                rows.append(contentsOf: sharedExpansionRows(
+                    upperGroup: groups[index - 1],
+                    lowerGroup: group,
+                    upperGroupIndex: index - 1,
+                    lowerGroupIndex: index,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    filePath: filePath,
+                    edge: .bottom
+                ))
+            }
+
             rows.append(contentsOf: group.rows)
 
-            if providerAvailable {
+            if providerAvailable, index + 1 < groups.count {
+                rows.append(contentsOf: sharedExpansionRows(
+                    upperGroup: group,
+                    lowerGroup: groups[index + 1],
+                    upperGroupIndex: index,
+                    lowerGroupIndex: index + 1,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    filePath: filePath,
+                    edge: .top
+                ))
+            } else if providerAvailable {
                 rows.append(contentsOf: expansionRows(
                     for: group,
                     groupIndex: index,
@@ -104,9 +210,88 @@ enum DiffContextExpandedDisplayBuilder {
                 id: group.id,
                 header: group.header,
                 sourceHunk: group.sourceHunk,
-                rows: rows
+                rows: rows,
+                sharedContextBefore: sharedContextBefore(
+                    forGroupAt: index,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    providerAvailable: providerAvailable
+                ),
+                sharedContextAfter: sharedContextAfter(
+                    forGroupAt: index,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    providerAvailable: providerAvailable
+                )
             )
         }
+    }
+
+    private static func sharedContextBefore(
+        forGroupAt index: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        providerAvailable: Bool
+    ) -> DiffContextExpansionKey? {
+        guard providerAvailable, index > 0 else { return nil }
+        return exhaustedSharedContextKey(
+            upperGroupIndex: index - 1,
+            groups: groups,
+            snapshot: snapshot,
+            expansion: expansion
+        )
+    }
+
+    private static func sharedContextAfter(
+        forGroupAt index: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        providerAvailable: Bool
+    ) -> DiffContextExpansionKey? {
+        guard providerAvailable, index + 1 < groups.count else { return nil }
+        return exhaustedSharedContextKey(
+            upperGroupIndex: index,
+            groups: groups,
+            snapshot: snapshot,
+            expansion: expansion
+        )
+    }
+
+    private static func exhaustedSharedContextKey(
+        upperGroupIndex: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState
+    ) -> DiffContextExpansionKey? {
+        guard upperGroupIndex + 1 < groups.count else { return nil }
+
+        let upperGroup = groups[upperGroupIndex]
+        let lowerGroup = groups[upperGroupIndex + 1]
+        let key = DiffContextExpansionKey.shared(upperGroupID: upperGroup.id, lowerGroupID: lowerGroup.id)
+        guard let snapshot else {
+            return optimisticBoundaryAvailable(
+                for: upperGroup,
+                groupIndex: upperGroupIndex,
+                boundary: .below,
+                groups: groups
+            ) ? nil : key
+        }
+        guard boundaryContextIsAvailable(for: upperGroup, boundary: .below, snapshot: snapshot) else {
+            return nil
+        }
+
+        let available = boundaryRange(
+            for: upperGroup,
+            groupIndex: upperGroupIndex,
+            boundary: .below,
+            groups: groups,
+            snapshot: snapshot
+        ).lineCount
+        return expansion.remainingLineCount(for: key, available: available) == 0 ? key : nil
     }
 
     static func availableLineCount(
@@ -114,22 +299,172 @@ enum DiffContextExpandedDisplayBuilder {
         groups: [DiffDisplayGroup],
         snapshot: DiffReviewFileContextSnapshot?
     ) -> Int {
-        guard
-            let snapshot,
-            let groupIndex = groups.firstIndex(where: { $0.id == key.groupID })
-        else {
+        guard let snapshot else {
             return 0
         }
-        guard ownsBoundary(groupIndex: groupIndex, boundary: key.boundary) else {
-            return 0
+
+        switch key.kind {
+        case let .external(groupID, boundary):
+            guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+                return 0
+            }
+            guard ownsBoundary(groupIndex: groupIndex, boundary: boundary) else {
+                return 0
+            }
+            return boundaryRange(
+                for: groups[groupIndex],
+                groupIndex: groupIndex,
+                boundary: boundary,
+                groups: groups,
+                snapshot: snapshot
+            ).lineCount
+        case let .shared(upperGroupID, lowerGroupID):
+            guard
+                let upperIndex = groups.firstIndex(where: { $0.id == upperGroupID }),
+                upperIndex + 1 < groups.count,
+                groups[upperIndex + 1].id == lowerGroupID
+            else {
+                return 0
+            }
+            return boundaryRange(
+                for: groups[upperIndex],
+                groupIndex: upperIndex,
+                boundary: .below,
+                groups: groups,
+                snapshot: snapshot
+            ).lineCount
         }
-        return boundaryRange(
-            for: groups[groupIndex],
-            groupIndex: groupIndex,
-            boundary: key.boundary,
+    }
+
+    private static func sharedExpansionRows(
+        upperGroup: DiffDisplayGroup,
+        lowerGroup: DiffDisplayGroup,
+        upperGroupIndex: Int,
+        lowerGroupIndex: Int,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        filePath: String,
+        edge: DiffContextExpansionEdge
+    ) -> [DiffDisplayRow] {
+        let key = DiffContextExpansionKey.shared(upperGroupID: upperGroup.id, lowerGroupID: lowerGroup.id)
+        let attachedGroup = edge == .top ? upperGroup : lowerGroup
+        let attachedGroupIndex = edge == .top ? upperGroupIndex : lowerGroupIndex
+        let attachedBoundary: DiffContextBoundary = edge == .top ? .below : .above
+
+        guard let snapshot else {
+            guard optimisticBoundaryAvailable(
+                for: upperGroup,
+                groupIndex: upperGroupIndex,
+                boundary: .below,
+                groups: groups
+            ) else {
+                return []
+            }
+            return [expandableRow(
+                group: attachedGroup,
+                boundary: attachedBoundary,
+                remaining: 0,
+                key: key,
+                edge: edge
+            )]
+        }
+
+        let range = boundaryRange(
+            for: upperGroup,
+            groupIndex: upperGroupIndex,
+            boundary: .below,
             groups: groups,
             snapshot: snapshot
-        ).lineCount
+        )
+        let available = range.lineCount
+        guard available > 0 else {
+            return []
+        }
+
+        let topExpanded = min(expansion.expandedLineCount(for: key, edge: .top), available)
+        let bottomExpanded = min(
+            expansion.expandedLineCount(for: key, edge: .bottom),
+            max(0, available - topExpanded)
+        )
+        let expandedCount = edge == .top ? topExpanded : bottomExpanded
+        let remaining = expansion.remainingLineCount(for: key, available: available)
+        let offsets: Range<Int>
+        switch edge {
+        case .top:
+            offsets = 0..<expandedCount
+        case .bottom:
+            offsets = (available - expandedCount)..<available
+        }
+
+        let excludedOldLineNumbers: Set<Int>
+        let excludedNewLineNumbers: Set<Int>
+        switch edge {
+        case .top:
+            excludedOldLineNumbers = []
+            excludedNewLineNumbers = []
+        case .bottom:
+            let topOffsets = 0..<topExpanded
+            excludedOldLineNumbers = lineNumbers(
+                start: range.oldStart,
+                count: range.oldCount,
+                offsets: topOffsets,
+                totalCount: available,
+                boundary: .below
+            )
+            excludedNewLineNumbers = lineNumbers(
+                start: range.newStart,
+                count: range.newCount,
+                offsets: topOffsets,
+                totalCount: available,
+                boundary: .below
+            )
+        }
+
+        var rows = offsets.map {
+            expandedContextRow(
+                group: attachedGroup,
+                groupIndex: attachedGroupIndex,
+                boundary: attachedBoundary,
+                range: range,
+                offset: $0,
+                totalCount: available,
+                snapshot: snapshot,
+                filePath: filePath,
+                excludedOldLineNumbers: excludedOldLineNumbers,
+                excludedNewLineNumbers: excludedNewLineNumbers
+            )
+        }
+
+        guard remaining > 0 else {
+            return rows
+        }
+
+        let expandable = expandableRow(
+            group: attachedGroup,
+            boundary: attachedBoundary,
+            remaining: remaining,
+            key: key,
+            edge: edge
+        )
+        switch edge {
+        case .top:
+            rows.insert(expandable, at: rows.endIndex)
+            rows.insert(
+                expandableRow(
+                    group: attachedGroup,
+                    boundary: attachedBoundary,
+                    remaining: remaining,
+                    key: key,
+                    edge: nil,
+                    defaultsEdgeFromBoundary: false
+                ),
+                at: rows.endIndex
+            )
+        case .bottom:
+            rows.insert(expandable, at: rows.startIndex)
+        }
+        return rows
     }
 
     private static func expansionRows(
@@ -308,12 +643,48 @@ enum DiffContextExpandedDisplayBuilder {
         }
     }
 
+    private static func boundaryContextIsAvailable(
+        for group: DiffDisplayGroup,
+        boundary: DiffContextBoundary,
+        snapshot: DiffReviewFileContextSnapshot
+    ) -> Bool {
+        let currentOld = hunkSideExtent(in: group, side: .old)
+        let currentNew = hunkSideExtent(in: group, side: .new)
+
+        switch boundary {
+        case .above:
+            return snapshot.old.hasLine(currentOld.lineBefore)
+                || snapshot.new.hasLine(currentNew.lineBefore)
+        case .below:
+            return snapshot.old.hasLine(currentOld.lineAfter)
+                || snapshot.new.hasLine(currentNew.lineAfter)
+        }
+    }
+
     private static func lineCount(start: Int, end: Int?, snapshotLines: Int?) -> Int {
         guard let snapshotLines, let end else { return 0 }
         let clampedStart = max(1, start)
         let clampedEnd = min(end, snapshotLines)
         guard clampedStart <= clampedEnd else { return 0 }
         return clampedEnd - clampedStart + 1
+    }
+
+    private static func lineNumbers(
+        start: Int?,
+        count: Int,
+        offsets: Range<Int>,
+        totalCount: Int,
+        boundary: DiffContextBoundary
+    ) -> Set<Int> {
+        Set(offsets.compactMap {
+            lineNumber(
+                start: start,
+                count: count,
+                offset: $0,
+                totalCount: totalCount,
+                boundary: boundary
+            )
+        })
     }
 
     private static func hunkSideExtent(in group: DiffDisplayGroup, side: DiffLineSide) -> HunkSideExtent {
@@ -341,22 +712,26 @@ enum DiffContextExpandedDisplayBuilder {
         offset: Int,
         totalCount: Int,
         snapshot: DiffReviewFileContextSnapshot,
-        filePath: String
+        filePath: String,
+        excludedOldLineNumbers: Set<Int> = [],
+        excludedNewLineNumbers: Set<Int> = []
     ) -> DiffDisplayRow {
-        let oldNumber = lineNumber(
+        let candidateOldNumber = lineNumber(
             start: range.oldStart,
             count: range.oldCount,
             offset: offset,
             totalCount: totalCount,
             boundary: boundary
         )
-        let newNumber = lineNumber(
+        let candidateNewNumber = lineNumber(
             start: range.newStart,
             count: range.newCount,
             offset: offset,
             totalCount: totalCount,
             boundary: boundary
         )
+        let oldNumber = candidateOldNumber.flatMap { excludedOldLineNumbers.contains($0) ? nil : $0 }
+        let newNumber = candidateNewNumber.flatMap { excludedNewLineNumbers.contains($0) ? nil : $0 }
         let rowIndex = syntheticRowIndex(boundary: boundary, offset: offset)
         let anchorSide = anchorSide(oldNumber: oldNumber, newNumber: newNumber)
         let anchor = DiffLineAnchor(
@@ -389,10 +764,13 @@ enum DiffContextExpandedDisplayBuilder {
         group: DiffDisplayGroup,
         boundary: DiffContextBoundary,
         remaining: Int,
-        key: DiffContextExpansionKey
+        key: DiffContextExpansionKey,
+        edge: DiffContextExpansionEdge? = nil,
+        defaultsEdgeFromBoundary: Bool = true
     ) -> DiffDisplayRow {
-        DiffDisplayRow(
-            id: "\(group.id)-expand-\(boundary.rawValue)",
+        let edgeID = edge.map { "-\($0.rawValue)" } ?? ""
+        return DiffDisplayRow(
+            id: "\(group.id)-expand-\(boundary.rawValue)\(edgeID)",
             kind: .expandableContext,
             old: nil,
             new: nil,
@@ -400,7 +778,9 @@ enum DiffContextExpandedDisplayBuilder {
             contextExpansion: DiffContextExpansionRow(
                 key: key,
                 boundary: boundary,
-                remainingLineCount: remaining
+                remainingLineCount: remaining,
+                edge: edge,
+                defaultsEdgeFromBoundary: defaultsEdgeFromBoundary
             )
         )
     }
@@ -462,6 +842,11 @@ private extension DiffReviewFileContextLines {
         case let .available(lines):
             return lines.count
         }
+    }
+
+    func hasLine(_ number: Int) -> Bool {
+        guard let lineCount else { return false }
+        return number >= 1 && number <= lineCount
     }
 
     func line(at number: Int) -> String? {
