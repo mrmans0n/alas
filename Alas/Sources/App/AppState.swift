@@ -4793,7 +4793,10 @@ final class AppState {
             return
         }
         await manager.attach(to: sessionId, freshlyCreated: false)
-        guard manager.isWriter(for: sessionId) else { return }
+        guard manager.isWriter(for: sessionId) else {
+            manager.notifyDelegatedMessagesAvailable()
+            return
+        }
         for message in messages {
             guard let claimed = try? await acpOrchestrationPersistence.claimMessage(
                 id: message.id,
