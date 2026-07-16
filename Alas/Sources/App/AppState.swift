@@ -566,6 +566,7 @@ final class AppState {
                     autoRunDefault: config.harness.acpAutoRunByDefault
                 )
             }
+            let restoredPendingPrompt = record.pendingInitialPrompt != nil
             if let prompt = record.pendingInitialPrompt {
                 let accepted = await manager.enqueueDelegatedPrompt(
                     text: prompt,
@@ -584,10 +585,6 @@ final class AppState {
                     )
                     continue
                 }
-                try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
-                    childSessionId: record.childSessionId,
-                    updatedAt: Int64(Date().timeIntervalSince1970)
-                )
             } else if !sessionAlreadyPersisted {
                 try? await acpOrchestrationPersistence.updatePhase(
                     childSessionId: record.childSessionId,
@@ -597,6 +594,24 @@ final class AppState {
                 )
                 continue
             }
+            await manager.attach(to: record.childSessionId, freshlyCreated: !sessionAlreadyPersisted)
+            guard let session = manager.liveSession(for: record.childSessionId),
+                  session.agentState == .ready
+            else {
+                try? await acpOrchestrationPersistence.updatePhase(
+                    childSessionId: record.childSessionId,
+                    phase: .failed,
+                    failureMessage: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId)),
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+                continue
+            }
+            if restoredPendingPrompt {
+                try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
+                    childSessionId: record.childSessionId,
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+            }
             try? await acpOrchestrationPersistence.updatePhase(
                 childSessionId: record.childSessionId,
                 phase: .ready,
@@ -604,11 +619,24 @@ final class AppState {
                 updatedAt: Int64(Date().timeIntervalSince1970)
             )
             await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
-            Task { @MainActor [weak manager] in
-                await manager?.attach(to: record.childSessionId, freshlyCreated: false)
-            }
         }
         await drainRecoveredDelegatedMessageTargets()
+    }
+
+    private func recoveredDelegatedSessionFailureMessage(_ session: ACPSession?) -> String {
+        guard let session else { return "Could not restore delegated ACP session." }
+        switch session.setupState {
+        case .needsSetup(let reason), .setupError(let reason):
+            return reason
+        case .needsAuth(_, let reason):
+            return reason ?? "ACP session needs authentication."
+        case .checking, .ready:
+            break
+        }
+        if case .failed(let reason) = session.agentState {
+            return reason
+        }
+        return "Could not restore delegated ACP session."
     }
 
     private func drainRecoveredDelegatedMessageTargets() async {
