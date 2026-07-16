@@ -212,13 +212,17 @@ final class AppState {
     var isSearchOpen: Bool = false
     var isRepoSelectorOpen: Bool = false
     var isAgentLauncherOpen: Bool = false
+    var isReviewPaletteOpen: Bool = false
     var isKeyboardOverlayOpen: Bool {
-        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen
+        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen
     }
     let repoSelector = RepoSelectorModel()
     let agentLauncher = AgentLauncherModel()
+    let reviewPalette = ReviewTargetPaletteModel()
 
     func openSearchOverlay() {
+        reviewPalette.close()
+        isReviewPaletteOpen = false
         repoSelector.close()
         isRepoSelectorOpen = false
         agentLauncher.reset()
@@ -228,6 +232,8 @@ final class AppState {
     }
 
     func toggleRepoSelectorOverlay() {
+        reviewPalette.close()
+        isReviewPaletteOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
 
@@ -242,6 +248,8 @@ final class AppState {
     }
 
     func openAgentLauncherOverlay(mode: AppConfig.LauncherMode? = nil) {
+        reviewPalette.close()
+        isReviewPaletteOpen = false
         search.close()
         isSearchOpen = false
         repoSelector.close()
@@ -3380,7 +3388,7 @@ final class AppState {
         return branch.isEmpty ? "Terminal" : branch
     }
 
-    private func worktree(withId id: String) -> Worktree? {
+    func worktree(withId id: String) -> Worktree? {
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return worktree

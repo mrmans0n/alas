@@ -289,6 +289,13 @@ final class ReviewTargetPaletteModel {
         }
     }
 
+    /// Surfaces a launch failure from outside the model (e.g. the live
+    /// environment's `openTarget` failure path), mirroring how the internal
+    /// `launchError` assignments above report resolution failures.
+    func presentLaunchError(_ message: String) {
+        launchError = message
+    }
+
     // MARK: - Range anchor
 
     func toggleAnchor(_ commit: CommitInfo) {

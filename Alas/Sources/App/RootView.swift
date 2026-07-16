@@ -84,6 +84,7 @@ struct RootView: View {
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
             AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
+            ReviewTargetDialog(appState: state)
         }
     }
 
