@@ -2717,6 +2717,9 @@ extension ACPSessionManager {
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard let session = sessions[sessionId] else { return false }
+        guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
+            return true
+        }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: [])
         session.enqueue(blocks: blocks, delegatedSource: source)
         let fence = leaseFence(sessionId: sessionId)
@@ -2725,6 +2728,7 @@ extension ACPSessionManager {
             _ = try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         await task.value
+        runners[sessionId]?.flushQueueIfIdle()
         return true
     }
 

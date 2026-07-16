@@ -999,11 +999,12 @@ struct ACPMessageList: View {
     @ViewBuilder
     private func row(for m: ACPMessage, stableId: String) -> some View {
         switch m {
-        case .user(_, _, let text, let attachments, _):
+        case .user(_, _, let text, let attachments, let delegatedSource):
             ACPMessageGutter(copySource: .text(text)) {
                 UserMessageRow(
                     text: text,
                     attachments: attachments,
+                    isDelegated: delegatedSource != nil,
                     contentMaxWidth: contentMaxWidth,
                     typography: typography
                 )
@@ -1369,6 +1370,7 @@ final class ACPDelayedHoverVisibility: ObservableObject {
 private struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
+    let isDelegated: Bool
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     @Environment(\.theme) private var theme
@@ -1376,6 +1378,11 @@ private struct UserMessageRow: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
+                if isDelegated {
+                    Text("Delegated prompt")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
                 if !attachments.isEmpty {
                     let images = attachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
                     let others = attachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }

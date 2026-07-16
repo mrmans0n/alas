@@ -36,4 +36,50 @@ actor ACPOrchestrationPersistence {
     func children(parentSessionId: String) throws -> [ACPDelegationRecord] {
         try openedStore().children(parentSessionId: parentSessionId)
     }
+
+    func parent(childSessionId: String) throws -> ACPDelegationRecord? {
+        try openedStore().parent(childSessionId: childSessionId)
+    }
+
+    func updatePhase(
+        childSessionId: String,
+        phase: ACPDelegationPhase,
+        failureMessage: String?,
+        updatedAt: Int64
+    ) throws {
+        try openedStore().updatePhase(
+            childSessionId: childSessionId,
+            phase: phase,
+            failureMessage: failureMessage,
+            updatedAt: updatedAt
+        )
+    }
+
+    func clearPendingInitialPrompt(childSessionId: String, updatedAt: Int64) throws {
+        try openedStore().clearPendingInitialPrompt(childSessionId: childSessionId, updatedAt: updatedAt)
+    }
+
+    func enqueue(_ message: ACPDelegatedMessage) throws {
+        try openedStore().enqueue(message)
+    }
+
+    func claimMessage(
+        id: String,
+        instanceId: String,
+        token: String,
+        now: Int64,
+        staleAfter: Int64
+    ) throws -> ACPClaimedDelegatedMessage? {
+        try openedStore().claimMessage(
+            id: id,
+            instanceId: instanceId,
+            token: token,
+            now: now,
+            staleAfter: staleAfter
+        )
+    }
+
+    func removeDeliveredMessage(id: String, claim: ACPDelegatedMessageClaim) throws {
+        try openedStore().removeDeliveredMessage(id: id, claim: claim)
+    }
 }

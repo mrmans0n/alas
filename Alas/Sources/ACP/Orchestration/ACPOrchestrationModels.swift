@@ -127,3 +127,49 @@ struct ACPClaimedDelegatedMessage: Equatable, Sendable {
     let message: ACPDelegatedMessage
     let claim: ACPDelegatedMessageClaim
 }
+
+struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
+    let sessionId: String
+    let relationship: String?
+    let agentId: String
+    let worktreeId: String
+    let state: String
+    let failure: String?
+    let createdAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case relationship
+        case agentId = "agent_id"
+        case worktreeId = "worktree_id"
+        case state
+        case failure
+        case createdAt = "created_at"
+    }
+}
+
+struct ACPOrchestrationListResponse: Codable, Equatable, Sendable {
+    let sessions: [ACPOrchestrationSessionSummary]
+}
+
+struct ACPOrchestrationNewResponse: Codable, Equatable, Sendable {
+    let sessionId: String
+    let state: String
+    let worktreeId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case state
+        case worktreeId = "worktree_id"
+    }
+}
+
+struct ACPOrchestrationSendResponse: Codable, Equatable, Sendable {
+    let messageId: String
+    let state: String
+
+    enum CodingKeys: String, CodingKey {
+        case messageId = "message_id"
+        case state
+    }
+}

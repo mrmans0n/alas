@@ -970,6 +970,7 @@
 		C1D83EEBE3AF4ABC04B3F7EB /* GitHubCLIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D2DA50E978EB0571D6A74C /* GitHubCLIProvider.swift */; };
 		C1EBF68A32C7C1D61ECC89AC /* LSPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A35E05B1FB7CC5229ACCB065 /* LSPClient.swift */; };
 		C1F16BAC9C4B9A0457208816 /* RemoteContentSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C24D126BC74FF514F19E5D /* RemoteContentSearch.swift */; };
+		C1FF6E6CE6AF5ABCF5C62115 /* ACPSessionOrchestrationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728F8E1DBF9DA86092C10AD0 /* ACPSessionOrchestrationCoordinator.swift */; };
 		C245B74D0083CE00B6CD392C /* ACPAdapterVersionChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15630570F849AC577CA0D379 /* ACPAdapterVersionChecker.swift */; };
 		C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2942AD875C0E7AB71E8E3CAD /* VerdictSheet.swift */; };
 		C2CE2E3DE88344FDDE67D66A /* LSPTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08ACB3B79B74153668DA29D8 /* LSPTransportTests.swift */; };
@@ -1252,6 +1253,7 @@
 		FB5FD89FC2800E173FC31E7A /* ACPAuthFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DCB7DA8B6EA8CF8B98EA267 /* ACPAuthFailure.swift */; };
 		FB6FF6C91476DEE43E512E30 /* RemoteServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EACA79C819C9FBE68F9D84 /* RemoteServer.swift */; };
 		FB754FAC723CF480D3BBB101 /* RangeReviewLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADACDD363C5E4637A3113EFB /* RangeReviewLoaderTests.swift */; };
+		FB8B530E472D1C22B78F12EE /* ACPDelegatedSessionsPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53F2697D068C074A82959C9F /* ACPDelegatedSessionsPolicy.swift */; };
 		FB9BAF6C82A1750E41594DB7 /* SelfUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69CF2E2BF116094A9FEE3F8D /* SelfUpdater.swift */; };
 		FBAB18AAEFB289EF765564C5 /* RightPaneSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */; };
 		FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */; };
@@ -1717,6 +1719,7 @@
 		53C0EBA9F81668C89977770E /* ACPLaunchPathResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPLaunchPathResolver.swift; sourceTree = "<group>"; };
 		53C792D59DBFFF6C28F2D426 /* AgentKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentKind.swift; sourceTree = "<group>"; };
 		53EEBEEB1AC6532031BDE17F /* RemoteAccessPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAccessPolicyTests.swift; sourceTree = "<group>"; };
+		53F2697D068C074A82959C9F /* ACPDelegatedSessionsPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPDelegatedSessionsPolicy.swift; sourceTree = "<group>"; };
 		541A75BBAF1CFF3EF89383C7 /* RepoSelectorDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorDialog.swift; sourceTree = "<group>"; };
 		542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeOperationState.swift; sourceTree = "<group>"; };
 		5456C0192DBFA5FB61042F76 /* MemorySnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemorySnapshotTests.swift; sourceTree = "<group>"; };
@@ -1864,6 +1867,7 @@
 		71A90560CED6562BBC313F3C /* ProjectConfigHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfigHostTests.swift; sourceTree = "<group>"; };
 		71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabStateCodableTests.swift; sourceTree = "<group>"; };
 		71F9CE2A0C76E75E95A641AE /* DraftAmendPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftAmendPrefill.swift; sourceTree = "<group>"; };
+		728F8E1DBF9DA86092C10AD0 /* ACPSessionOrchestrationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionOrchestrationCoordinator.swift; sourceTree = "<group>"; };
 		7294C0B27241ADEB9A95347A /* ACPNewChatEmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPNewChatEmptyStateView.swift; sourceTree = "<group>"; };
 		72970A1D2817539DB5243058 /* MergeWordDiffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeWordDiffTests.swift; sourceTree = "<group>"; };
 		729DDA22CA94FA0DC8810057 /* DiffInlineCommentModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineCommentModelTests.swift; sourceTree = "<group>"; };
@@ -2696,6 +2700,7 @@
 				6EC184A7BDBFF2156FD2AD44 /* ACPOrchestrationModels.swift */,
 				8FD014AF7EB850F639BE7FC4 /* ACPOrchestrationPersistence.swift */,
 				28B90F0D59BBDA243D619B16 /* ACPOrchestrationStore.swift */,
+				728F8E1DBF9DA86092C10AD0 /* ACPSessionOrchestrationCoordinator.swift */,
 				AD63F297F7735AD9E1841ACF /* ACPSessionOrchestrationPolicy.swift */,
 			);
 			path = Orchestration;
@@ -3811,6 +3816,7 @@
 				DFBD2A49431277EB68106AAA /* ACPConnectingPlaceholder.swift */,
 				AF522B02666DB6AC4C82339E /* ACPContextRing.swift */,
 				8AD22187C951174C9ECEC4C4 /* ACPContextUsageButton.swift */,
+				53F2697D068C074A82959C9F /* ACPDelegatedSessionsPolicy.swift */,
 				BA6C7434D216D5C43A2FB921 /* ACPFileChip.swift */,
 				29D7631D754795D16E946440 /* ACPFileEditCard.swift */,
 				8B4BB6C10F3718F7D0A50BAE /* ACPFirstRunConnectingPolicy.swift */,
@@ -5042,6 +5048,7 @@
 				9CF654B4AB74CC1A9FBCE55F /* ACPContextRing.swift in Sources */,
 				0DFC9AB26DDCC406CEAA3825 /* ACPContextUsageButton.swift in Sources */,
 				2E77FDE42FBD83BBCBC8DE80 /* ACPDelegatedPromptSource.swift in Sources */,
+				FB8B530E472D1C22B78F12EE /* ACPDelegatedSessionsPolicy.swift in Sources */,
 				2A19A7B4B392979989E25EC0 /* ACPDiffGenerator.swift in Sources */,
 				16EFA072E6C91CF41269482C /* ACPElicitation.swift in Sources */,
 				9ECB0CE387C7078D238B3A15 /* ACPElicitationCoordinator.swift in Sources */,
@@ -5114,6 +5121,7 @@
 				D11DB95BC2F7094756EBCAC3 /* ACPSessionDiscovery.swift in Sources */,
 				61D33019E9AA23F5042C39B2 /* ACPSessionHydrator.swift in Sources */,
 				209FB0AAF20BDE5850A139F4 /* ACPSessionManager.swift in Sources */,
+				C1FF6E6CE6AF5ABCF5C62115 /* ACPSessionOrchestrationCoordinator.swift in Sources */,
 				30604716147E0B9C558244F3 /* ACPSessionOrchestrationPolicy.swift in Sources */,
 				8E988C41547B229AF19CBE31 /* ACPSessionPersistence.swift in Sources */,
 				1F89B774F2DC7DD818AD4E5B /* ACPSessionRunner.swift in Sources */,

@@ -63,6 +63,7 @@ private struct SessionsPopover: View {
     let agentLookup: (String) -> AgentDefinition?
     let onPick: () -> Void
     @Environment(\.theme) private var theme
+    @State private var delegatedSessions: [ACPOrchestrationSessionSummary] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -84,10 +85,20 @@ private struct SessionsPopover: View {
                     .padding(.vertical, 4)
                 }
             }
+            if !delegatedSessions.isEmpty {
+                Divider().background(theme.color("line"))
+                delegatedHeader
+                ForEach(delegatedSessions, id: \.sessionId) { summary in
+                    delegatedRow(summary)
+                }
+            }
         }
         .frame(width: 320)
         .frame(maxHeight: 420)
         .background(theme.color("bg-1"))
+        .task(id: session.id) {
+            delegatedSessions = await state.delegatedSessionSummaries(for: session.id)
+        }
     }
 
     @ViewBuilder
@@ -136,6 +147,49 @@ private struct SessionsPopover: View {
             .foregroundStyle(theme.color("fg-faint"))
             .padding(.horizontal, 12).padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var delegatedHeader: some View {
+        HStack {
+            Text("Delegated sessions")
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(theme.color("fg-faint"))
+            Spacer()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(theme.color("bg-2").opacity(0.4))
+    }
+
+    private func delegatedRow(_ summary: ACPOrchestrationSessionSummary) -> some View {
+        Button {
+            Task {
+                await state.openDelegatedACPSession(summary)
+                onPick()
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: summary.relationship == "parent" ? "arrow.up.left" : "arrow.down.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(summary.relationship == "parent" ? "Delegated by parent" : "Child session")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.color("fg"))
+                    Text(ACPDelegatedSessionsPolicy.statusLabel(for: summary.state))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(summary.state == "failed" ? theme.color("del") : theme.color("fg-faint"))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+        .help(summary.failure ?? ACPDelegatedSessionsPolicy.statusLabel(for: summary.state))
     }
 
     @ViewBuilder
