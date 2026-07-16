@@ -555,7 +555,7 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private func content(renderContext: DiffReviewRenderContext?) -> some View {
         if let displayModel = file.displayModel, let renderContext {
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(renderContext.groups) { group in
                     if !group.inlineFeedback.isEmpty {
                         inlineFeedbackStack(

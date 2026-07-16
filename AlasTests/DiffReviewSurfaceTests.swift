@@ -133,6 +133,66 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func stackedFileSectionBoundsHunkMaterializationToScrollViewport() throws {
+        let baseModel = displayModel()
+        let baseGroup = try #require(baseModel.groups.first)
+        let groups = (0..<80).map { index in
+            DiffDisplayGroup(
+                id: "group-\(index)",
+                header: "@@ -\(index + 1),2 +\(index + 1),2 @@",
+                sourceHunk: baseGroup.sourceHunk,
+                rows: baseGroup.rows
+            )
+        }
+        let file = DiffReviewFileSectionModel(
+            summary: summary(
+                path: "Sources/App/LargeView.swift",
+                additions: groups.count,
+                deletions: groups.count
+            ),
+            parsedDiff: parsedDiff(),
+            displayModel: DiffDisplayModel(filePath: baseModel.filePath, groups: groups),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        var layout = DiffLayoutMode.stacked
+        var wrap = false
+        var whitespace = false
+        let section = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: ScrollView(.vertical) { section })
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        for _ in 0..<5 {
+            controller.view.layoutSubtreeIfNeeded()
+        }
+
+        let materializedSegments = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        let initialIdentities = Set(materializedSegments.map(ObjectIdentifier.init))
+        #expect(!materializedSegments.isEmpty)
+        #expect(materializedSegments.count < groups.count)
+
+        for _ in 0..<10 {
+            controller.view.needsLayout = true
+            controller.view.layoutSubtreeIfNeeded()
+        }
+
+        let settledIdentities = Set(allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+            .map(ObjectIdentifier.init))
+        #expect(settledIdentities == initialIdentities)
+    }
+
     @Test func fileSectionEmbedsDiffPaneWithoutToolbarAndShowsOpenFile() {
         let file = DiffReviewFileSectionModel(
             summary: summary(

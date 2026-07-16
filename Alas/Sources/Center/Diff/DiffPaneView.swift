@@ -234,7 +234,7 @@ struct DiffPaneView: View {
     }
 
     private var staticRowsStack: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(model.groups) { group in
                 hunk(group)
             }
