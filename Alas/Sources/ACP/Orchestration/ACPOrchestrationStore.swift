@@ -220,6 +220,14 @@ final class ACPOrchestrationStore {
         """, bindings: [id, claim.instanceId, claim.token])
     }
 
+    func releaseMessageClaim(id: String, claim: ACPDelegatedMessageClaim) throws {
+        _ = try db.execChanges("""
+        UPDATE delegated_messages
+        SET claim_instance_id = NULL, claim_token = NULL, claim_expires_at = NULL
+        WHERE id = ? AND claim_instance_id = ? AND claim_token = ?
+        """, bindings: [id, claim.instanceId, claim.token])
+    }
+
     private func migrate() throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS schema_version (

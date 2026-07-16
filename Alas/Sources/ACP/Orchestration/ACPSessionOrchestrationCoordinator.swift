@@ -21,6 +21,7 @@ final class ACPSessionOrchestrationCoordinator {
         let availableAgents: () -> [ACPOrchestrationAgent]
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
+        let newWorktreeDestination: (String, String) -> URL?
         let createWorktree: (String, String, String?) async -> Result<Worktree, WorktreeCreationError>
         let rememberParent: (String, String) -> Void
         let notifyChanged: () -> Void
@@ -153,6 +154,9 @@ final class ACPSessionOrchestrationCoordinator {
             guard !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return .error("new_worktree branch must not be blank")
             }
+            guard let destination = environment.newWorktreeDestination(origin.projectId, branch) else {
+                return .error("The project is no longer available.")
+            }
             let optimisticID = "pending-\(childID)"
             let record = ACPDelegationRecord(
                 childSessionId: childID,
@@ -161,7 +165,12 @@ final class ACPSessionOrchestrationCoordinator {
                 parentWorktreeId: origin.worktreeId,
                 childWorktreeId: nil,
                 agentId: agentID,
-                worktreeRequest: .new(branch: branch, base: base, destinationPath: "", optimisticId: optimisticID),
+                worktreeRequest: .new(
+                    branch: branch,
+                    base: base,
+                    destinationPath: destination.path,
+                    optimisticId: optimisticID
+                ),
                 pendingInitialPrompt: prompt,
                 phase: .creatingWorktree,
                 failureMessage: nil,
@@ -388,7 +397,14 @@ final class ACPSessionOrchestrationCoordinator {
             staleAfter: 60
         ) else { return }
         await target.manager.attach(to: claimed.message.targetSessionId, freshlyCreated: false)
-        guard target.manager.isWriter(for: claimed.message.targetSessionId) else { return }
+        guard target.manager.isWriter(for: claimed.message.targetSessionId) else {
+            try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await self?.deliver(messageID, to: target)
+            }
+            return
+        }
         let accepted = await target.manager.enqueueDelegatedPrompt(
             text: claimed.message.prompt,
             source: ACPDelegatedPromptSource(
@@ -397,7 +413,10 @@ final class ACPSessionOrchestrationCoordinator {
             ),
             into: claimed.message.targetSessionId
         )
-        guard accepted else { return }
+        guard accepted else {
+            try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
+            return
+        }
         try? await environment.persistence.removeDeliveredMessage(id: claimed.message.id, claim: claimed.claim)
         environment.notifyChanged()
     }

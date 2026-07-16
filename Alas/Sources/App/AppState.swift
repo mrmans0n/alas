@@ -533,8 +533,9 @@ final class AppState {
     private func reconcileInterruptedDelegations() async {
         guard let records = try? await acpOrchestrationPersistence.incompleteDelegations() else { return }
         for record in records {
-            guard let worktreeId = record.childWorktreeId,
-                  let worktree = worktree(withId: worktreeId),
+            let worktree = record.childWorktreeId.flatMap(worktree(withId:))
+                ?? worktree(atPersistedDestinationPath: record.worktreeRequest.destinationPath)
+            guard let worktree,
                   let prompt = record.pendingInitialPrompt,
                   let manager = acpManager(for: worktree)
             else {
@@ -545,6 +546,14 @@ final class AppState {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
                 continue
+            }
+            if record.childWorktreeId != worktree.id {
+                try? await acpOrchestrationPersistence.updateChildWorktree(
+                    childSessionId: record.childSessionId,
+                    worktreeId: worktree.id,
+                    phase: .starting,
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
             }
             delegatedSessionParents[record.childSessionId] = record.parentSessionId
             if await manager.persistedSessionRow(id: record.childSessionId) != nil {
@@ -2012,6 +2021,17 @@ final class AppState {
                     )
                 },
                 manager: { [weak self] worktree in self?.acpManager(for: worktree) },
+                newWorktreeDestination: { [weak self] projectId, branch in
+                    guard let self,
+                          let project = self.projects.first(where: { $0.id == projectId })
+                    else { return nil }
+                    return WorktreePathTemplateRenderer.render(
+                        template: self.config.worktrees.pathTemplate,
+                        worktreeRoot: self.config.worktrees.rootPath,
+                        repoName: project.name,
+                        branch: branch
+                    )
+                },
                 createWorktree: { [weak self] projectId, branch, base in
                     guard let self else {
                         return .failure(.init(message: "Alas is not available."))
@@ -3259,6 +3279,19 @@ final class AppState {
     private func worktree(withId id: String) -> Worktree? {
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
+                return worktree
+            }
+        }
+        return nil
+    }
+
+    private func worktree(atPersistedDestinationPath path: String?) -> Worktree? {
+        guard let path, !path.isEmpty else { return nil }
+        let targetPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        for project in projects {
+            if let worktree = projectsManager.worktrees(projectId: project.id).first(where: {
+                $0.path.standardizedFileURL.path == targetPath
+            }) {
                 return worktree
             }
         }

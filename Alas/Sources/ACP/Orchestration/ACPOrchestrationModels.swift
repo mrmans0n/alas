@@ -50,6 +50,11 @@ enum ACPDelegatedWorktreeRequest: Codable, Equatable, Sendable {
         }
     }
 
+    var destinationPath: String? {
+        guard case .new(_, _, let path, _) = self else { return nil }
+        return path
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {

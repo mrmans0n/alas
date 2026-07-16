@@ -104,4 +104,8 @@ actor ACPOrchestrationPersistence {
     func removeDeliveredMessage(id: String, claim: ACPDelegatedMessageClaim) throws {
         try openedStore().removeDeliveredMessage(id: id, claim: claim)
     }
+
+    func releaseMessageClaim(id: String, claim: ACPDelegatedMessageClaim) throws {
+        try openedStore().releaseMessageClaim(id: id, claim: claim)
+    }
 }

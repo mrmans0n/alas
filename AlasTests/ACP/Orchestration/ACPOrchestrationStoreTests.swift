@@ -151,6 +151,36 @@ struct ACPOrchestrationStoreTests {
         #expect(try b.claimedMessage(id: "message")?.instanceId == "instance-a")
     }
 
+    @Test("released inbox claim can be immediately reclaimed")
+    func releasesMessageClaim() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        let message = ACPDelegatedMessage(
+            id: "message",
+            sourceSessionId: "parent",
+            targetSessionId: "child",
+            prompt: "Please retry delivery.",
+            createdAt: 100
+        )
+        try store.enqueue(message)
+        let claim = try #require(try store.claimMessage(
+            id: "message",
+            instanceId: "mirror-instance",
+            token: "mirror-token",
+            now: 110,
+            staleAfter: 60
+        ))
+
+        try store.releaseMessageClaim(id: message.id, claim: claim.claim)
+
+        #expect(try store.claimMessage(
+            id: "message",
+            instanceId: "writer-instance",
+            token: "writer-token",
+            now: 110,
+            staleAfter: 60
+        )?.message == message)
+    }
+
     @Test("expired inbox claim can be reclaimed and delivery removes message")
     func reclaimsExpiredMessageAndRemovesItAfterDelivery() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())
