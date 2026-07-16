@@ -600,18 +600,18 @@ private struct RootBaseHandlers: ViewModifier {
                 // continuing in the background under the new overlay.
                 state.toggleRepoSelectorOverlay()
             }
-        let p_review = p
+        let q = p
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenReviewPalette)) { _ in
                 guard !state.projects.isEmpty else { return }
                 state.openReviewPaletteOverlay()
             }
-        let q = p_review
+        let r = q
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { notification in
                 guard selectedWorktree() != nil else { return }
                 let mode = notification.object as? AppConfig.LauncherMode
                 state.openAgentLauncherOverlay(mode: mode)
             }
-        let r = q
+        let s = r
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
@@ -625,7 +625,7 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasTerminateAllTerminals)) { _ in
                 state.terminateAllTerminalSessions()
             }
-        return r
+        return s
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.flushScheduledSpacesSave()
                 state.stopAllProjectGitWatchers()
