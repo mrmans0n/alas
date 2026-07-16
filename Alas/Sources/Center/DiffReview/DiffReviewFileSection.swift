@@ -53,6 +53,7 @@ struct DiffReviewFileSection: View {
     var inlineFeedbackScrollTargetID: String? = nil
     var draftComments: [ReviewDraftComment] = []
     var focusedDraftCommentID: String? = nil
+    var draftCommentScrollTargetID: String? = nil
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -431,6 +432,14 @@ struct DiffReviewFileSection: View {
         Set([focusedFeedbackID, inlineFeedbackScrollTargetID].compactMap(\.self))
     }
 
+    private var commandedInlineFeedbackIDs: Set<String> {
+        Set([inlineFeedbackScrollTargetID].compactMap(\.self))
+    }
+
+    private var commandedDraftCommentIDs: Set<String> {
+        Set([draftCommentScrollTargetID].compactMap(\.self))
+    }
+
     private func fileLevelInlineFeedback(renderContext: DiffReviewRenderContext?) -> [DiffReviewInlineFeedback] {
         guard let renderContext else { return inlineFeedback }
         return renderContext.fileLevelInlineFeedback
@@ -555,17 +564,26 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private func content(renderContext: DiffReviewRenderContext?) -> some View {
         if let displayModel = file.displayModel, let renderContext {
-            VStack(spacing: 0) {
-                ForEach(renderContext.groups) { group in
-                    if !group.inlineFeedback.isEmpty {
-                        inlineFeedbackStack(
-                            group.inlineFeedback,
-                            file: file.summary,
-                            rows: group.displayGroup.rows
-                        )
+            let groups = renderContext.groups
+            let requiredGroupIDs = DiffReviewRequiredGroupResolver.groupIDs(
+                in: groups,
+                inlineFeedbackIDs: commandedInlineFeedbackIDs,
+                draftCommentIDs: commandedDraftCommentIDs
+            )
+            if !requiredGroupIDs.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(DiffReviewGroupRenderRun.runs(in: groups, requiredGroupIDs: requiredGroupIDs)) { run in
+                        switch run.content {
+                        case .lazy(let groups):
+                            lazyGroupStack(groups, displayModel: displayModel)
+                        case .required(let group):
+                            // Keep commanded card IDs available without eagerly rendering unrelated hunks.
+                            groupContent(group, displayModel: displayModel)
+                        }
                     }
-                    reviewGroup(group, displayModel: displayModel)
                 }
+            } else {
+                lazyGroupStack(groups, displayModel: displayModel)
             }
         } else {
             let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
@@ -582,6 +600,33 @@ struct DiffReviewFileSection: View {
                         label: message
                     )
                 )
+        }
+    }
+
+    private func lazyGroupStack(
+        _ groups: [DiffReviewRenderContext.Group],
+        displayModel: DiffDisplayModel
+    ) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(groups) { group in
+                groupContent(group, displayModel: displayModel)
+            }
+        }
+    }
+
+    private func groupContent(
+        _ group: DiffReviewRenderContext.Group,
+        displayModel: DiffDisplayModel
+    ) -> some View {
+        VStack(spacing: 0) {
+            if !group.inlineFeedback.isEmpty {
+                inlineFeedbackStack(
+                    group.inlineFeedback,
+                    file: file.summary,
+                    rows: group.displayGroup.rows
+                )
+            }
+            reviewGroup(group, displayModel: displayModel)
         }
     }
 
@@ -1072,6 +1117,60 @@ struct DiffReviewFileSection: View {
     }
 }
 
+enum DiffReviewRequiredGroupResolver {
+    static func groupIDs(
+        in groups: [DiffReviewRenderContext.Group],
+        inlineFeedbackIDs: Set<String>,
+        draftCommentIDs: Set<String>
+    ) -> Set<String> {
+        Set(groups.compactMap { group in
+            let isRequired = group.inlineFeedback.contains { inlineFeedbackIDs.contains($0.id) }
+                || group.segments.contains { segment in
+                    segment.draftComments.contains { draftCommentIDs.contains($0.id) }
+                }
+            return isRequired ? group.id : nil
+        })
+    }
+}
+
+private struct DiffReviewGroupRenderRun: Identifiable {
+    enum Content {
+        case lazy([DiffReviewRenderContext.Group])
+        case required(DiffReviewRenderContext.Group)
+    }
+
+    let id: String
+    let content: Content
+
+    static func runs(
+        in groups: [DiffReviewRenderContext.Group],
+        requiredGroupIDs: Set<String>
+    ) -> [DiffReviewGroupRenderRun] {
+        var runs: [DiffReviewGroupRenderRun] = []
+        var lazyGroups: [DiffReviewRenderContext.Group] = []
+
+        func appendLazyRun() {
+            guard let first = lazyGroups.first, let last = lazyGroups.last else { return }
+            runs.append(DiffReviewGroupRenderRun(
+                id: "lazy:\(first.id):\(last.id)",
+                content: .lazy(lazyGroups)
+            ))
+            lazyGroups.removeAll(keepingCapacity: true)
+        }
+
+        for group in groups {
+            if requiredGroupIDs.contains(group.id) {
+                appendLazyRun()
+                runs.append(DiffReviewGroupRenderRun(id: "required:\(group.id)", content: .required(group)))
+            } else {
+                lazyGroups.append(group)
+            }
+        }
+        appendLazyRun()
+        return runs
+    }
+}
+
 /// Wraps `DiffReviewFileSection` for `.equatable()`, with `layoutMode`,
 /// `wrapLines`, and `showWhitespace` captured as plain values rather than
 /// compared as live `@Binding`s, plus per-item action-availability
@@ -1137,6 +1236,7 @@ struct EquatableDiffReviewFileSection: View, Equatable {
             && lhs.section.inlineFeedbackScrollTargetID == rhs.section.inlineFeedbackScrollTargetID
             && lhs.section.draftComments == rhs.section.draftComments
             && lhs.section.focusedDraftCommentID == rhs.section.focusedDraftCommentID
+            && lhs.section.draftCommentScrollTargetID == rhs.section.draftCommentScrollTargetID
             && lhs.section.codeFontFamily == rhs.section.codeFontFamily
             && lhs.section.codeFontSize == rhs.section.codeFontSize
             && lhs.section.showsSourceBadge == rhs.section.showsSourceBadge

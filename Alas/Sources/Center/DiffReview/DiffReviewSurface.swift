@@ -311,6 +311,7 @@ struct DiffReviewSurface: View {
                 inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
                 draftComments: draftComments,
                 focusedDraftCommentID: focusedDraftCommentID,
+                draftCommentScrollTargetID: draftCommentScrollTargetID(for: file.id),
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
                 showWhitespace: $showWhitespace,
@@ -405,9 +406,10 @@ struct DiffReviewSurface: View {
     /// `scrollTo(cardID)` silently no-ops because the card view isn't in the
     /// tree yet. Mirror the file-rail scroll for that case: first land on the
     /// file section (a direct lazy child SwiftUI reliably realizes), let
-    /// layout settle, then scroll to the nested card. When the file is
-    /// already in view the section is realized, so a single direct scroll
-    /// reaches the card without a detour through the file header.
+    /// layout settle, then scroll to the nested card. `DiffReviewFileSection`
+    /// keeps a commanded card's hunk realized when its normal hunk stack is
+    /// lazy. When the file is already in view, a direct scroll reaches the card
+    /// without a detour through the file header.
     ///
     /// A programmatic-scroll token suppresses the scrollspy during the move so
     /// it doesn't snap the selection back to whichever file ends up at the top
@@ -439,8 +441,6 @@ struct DiffReviewSurface: View {
         }
 
         if fileAlreadyVisible {
-            // The file section (and every nested card within it) is already
-            // realized — scroll straight to the card in one motion.
             scrollToCard()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 300_000_000)
@@ -449,8 +449,6 @@ struct DiffReviewSurface: View {
             return
         }
 
-        // Cross-file: realize the file section first, then scroll to the card
-        // once layout has settled.
         let sectionID = DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: fileID)
         scrollProxy.scrollTo(sectionID, anchor: .top)
         Task { @MainActor in

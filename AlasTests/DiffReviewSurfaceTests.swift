@@ -133,6 +133,171 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func stackedFileSectionBoundsHunkMaterializationToScrollViewport() throws {
+        let baseModel = largeDisplayModel(groupCount: 80, filePath: "Sources/App/LargeView.swift")
+        let groups = baseModel.groups
+        let file = DiffReviewFileSectionModel(
+            summary: summary(
+                path: "Sources/App/LargeView.swift",
+                additions: groups.count,
+                deletions: groups.count
+            ),
+            parsedDiff: parsedDiff(),
+            displayModel: DiffDisplayModel(filePath: baseModel.filePath, groups: groups),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        var layout = DiffLayoutMode.stacked
+        var wrap = false
+        var whitespace = false
+        let section = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: ScrollView(.vertical) { section })
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        for _ in 0..<5 {
+            controller.view.layoutSubtreeIfNeeded()
+        }
+
+        let materializedSegments = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        let initialIdentities = Set(materializedSegments.map(ObjectIdentifier.init))
+        #expect(!materializedSegments.isEmpty)
+        #expect(materializedSegments.count < groups.count)
+
+        for _ in 0..<10 {
+            controller.view.needsLayout = true
+            controller.view.layoutSubtreeIfNeeded()
+        }
+
+        let settledIdentities = Set(allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+            .map(ObjectIdentifier.init))
+        #expect(settledIdentities == initialIdentities)
+    }
+
+    @Test func inlineFeedbackScrollRealizesTargetHunkWithoutEagerlyRenderingAllHunks() {
+        let path = "Sources/App/LargeView.swift"
+        let displayModel = largeDisplayModel(groupCount: 80, filePath: path)
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: path, additions: 80),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "deep-feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please update the final hunk.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: path, line: 80, side: .new),
+            evidenceItemID: "deep-feedback"
+        )
+        let staleDraft = draftComment(
+            id: "stale-draft",
+            fileID: file.id,
+            path: path,
+            startLine: 1
+        )
+        let session = DiffReviewLoadedSession(
+            files: [file],
+            summary: DiffReviewSessionModel(files: [file.summary], groupsEnabled: false)
+        )
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = true
+        var layout = DiffLayoutMode.stacked
+        var wrap = false
+        var whitespace = false
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            inlineFeedbackByFileID: [file.id: [feedback]],
+            inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand(
+                feedbackID: feedback.id,
+                fileID: file.id,
+                generation: 1
+            ),
+            draftCommentsByFileID: [file.id: [staleDraft]],
+            focusedDraftCommentID: staleDraft.id
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1_200, height: 500)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-deep-feedback", in: controller.view) != nil)
+        let materializedSegments = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        #expect(materializedSegments.count < displayModel.groups.count / 2)
+    }
+
+    @Test func requiredGroupResolverFindsInlineFeedbackAndDraftCommentHunks() {
+        let path = "Sources/App/LargeView.swift"
+        let displayModel = largeDisplayModel(groupCount: 80, filePath: path)
+        let fileID = DiffReviewFileID(namespace: "commit", path: path)
+        let feedback = DiffReviewInlineFeedback(
+            id: "deep-feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please update the final hunk.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: path, line: 80, side: .new),
+            evidenceItemID: "deep-feedback"
+        )
+        let comment = draftComment(
+            id: "deep-draft",
+            fileID: fileID,
+            path: path,
+            startLine: 1
+        )
+
+        let renderContext = DiffReviewRenderContextBuilder.build(
+            fileID: fileID,
+            displayModel: displayModel,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [feedback],
+            draftComments: [comment],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: false,
+            threads: [],
+            annotations: []
+        )
+
+        #expect(DiffReviewRequiredGroupResolver.groupIDs(
+            in: renderContext.groups,
+            inlineFeedbackIDs: [feedback.id],
+            draftCommentIDs: []
+        ) == ["group-79"])
+        #expect(DiffReviewRequiredGroupResolver.groupIDs(
+            in: renderContext.groups,
+            inlineFeedbackIDs: [feedback.id],
+            draftCommentIDs: [comment.id]
+        ) == ["group-0", "group-79"])
+    }
+
     @Test func fileSectionEmbedsDiffPaneWithoutToolbarAndShowsOpenFile() {
         let file = DiffReviewFileSectionModel(
             summary: summary(
@@ -3313,6 +3478,35 @@ struct DiffReviewSurfaceTests {
 
     private func displayModel() -> DiffDisplayModel {
         DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App/AlphaView.swift")
+    }
+
+    private func largeDisplayModel(groupCount: Int, filePath: String) -> DiffDisplayModel {
+        let sourceHunk = parsedDiff().hunks[0]
+        let groups = (0..<groupCount).map { index in
+            let line = index + 1
+            let displayLine = diffLine(
+                id: "line-\(line)",
+                side: .new,
+                newLine: line,
+                text: "let value\(line) = \(line)",
+                rowIndex: index
+            )
+            return DiffDisplayGroup(
+                id: "group-\(index)",
+                header: "@@ -\(line),1 +\(line),1 @@",
+                sourceHunk: sourceHunk,
+                rows: [
+                    DiffDisplayRow(
+                        id: "row-\(line)",
+                        kind: .add,
+                        old: nil,
+                        new: displayLine,
+                        collapsedLineCount: 0
+                    ),
+                ]
+            )
+        }
+        return DiffDisplayModel(filePath: filePath, groups: groups)
     }
 
     private func loadedSession(summaries: [DiffReviewFileSummary]) -> DiffReviewLoadedSession {

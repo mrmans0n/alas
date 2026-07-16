@@ -576,6 +576,56 @@ struct DiffPaneViewTests {
         #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
     }
 
+    @Test func stackedStaticModeBoundsSegmentMaterializationToScrollViewport() throws {
+        let baseGroup = try #require(model().groups.first)
+        let groups = (0..<80).map { index in
+            DiffDisplayGroup(
+                id: "group-\(index)",
+                header: "@@ -\(index + 1),2 +\(index + 1),2 @@",
+                sourceHunk: baseGroup.sourceHunk,
+                rows: baseGroup.rows
+            )
+        }
+        var layout = DiffLayoutMode.stacked
+        var wrap = false
+        var whitespace = false
+        let pane = DiffPaneView(
+            model: DiffDisplayModel(filePath: "large.swift", groups: groups),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: ScrollView(.vertical) { pane })
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        for _ in 0..<5 {
+            controller.view.layoutSubtreeIfNeeded()
+        }
+
+        let materializedSegments = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        let initialIdentities = Set(materializedSegments.map(ObjectIdentifier.init))
+        #expect(!materializedSegments.isEmpty)
+        #expect(materializedSegments.count < groups.count)
+
+        for _ in 0..<10 {
+            controller.view.needsLayout = true
+            controller.view.layoutSubtreeIfNeeded()
+        }
+
+        let settledIdentities = Set(allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+            .map(ObjectIdentifier.init))
+        #expect(settledIdentities == initialIdentities)
+    }
+
     @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
         var layout = DiffLayoutMode.split
         var wrap = false
