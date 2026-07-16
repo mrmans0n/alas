@@ -39,12 +39,37 @@ extension AppState {
     /// captures the already-resolved values, never `self.config`.
     @MainActor
     func reviewTargetPaletteEnvironment() -> ReviewTargetPaletteEnvironment {
-        let baseBranch = config.worktrees.baseBranch
-        let comparisonMode = config.changes.comparisonMode
-        let commitsAheadResolution = GitService.BaseResolution.forCommits(
-            mode: comparisonMode,
+        let defaultBaseBranch = config.worktrees.baseBranch
+        let defaultComparisonMode = config.changes.comparisonMode
+        let defaultResolution = GitService.BaseResolution.forCommits(
+            mode: defaultComparisonMode,
             userOverrodeBaseBranch: false
         )
+
+        // Per-worktree base-branch override snapshotted from any
+        // already-loaded `RightPaneState` (e.g. the user picked a
+        // non-default base for that worktree in the right pane) — read now,
+        // on MainActor, since `loadCommitsAhead` below runs concurrently
+        // off-MainActor and must never touch `self.rightPaneStore` from its
+        // body. A worktree with no loaded right pane (never activated)
+        // falls back to the global default above.
+        let projectId = selectedWorktreeId
+            .flatMap { self.worktree(withId: $0)?.projectId }
+            ?? projects.first?.id
+        var perWorktreeResolution: [String: (baseBranch: String, resolution: GitService.BaseResolution)] = [:]
+        if let projectId {
+            for worktree in projectsManager.visibleWorktrees(projectId: projectId) {
+                guard let state = rightPaneStore.activeState(worktreeId: worktree.id) else { continue }
+                perWorktreeResolution[worktree.id] = (
+                    state.baseBranch,
+                    GitService.BaseResolution.forCommits(
+                        mode: state.comparisonMode,
+                        userOverrodeBaseBranch: state.userOverrodeBaseBranch
+                    )
+                )
+            }
+        }
+
         return ReviewTargetPaletteEnvironment(
             worktrees: { [weak self] in
                 guard let self else { return [] }
@@ -58,10 +83,11 @@ extension AppState {
                 self?.selectedWorktreeId
             },
             loadCommitsAhead: { worktree in
-                try await GitService().commitsAhead(
+                let override = perWorktreeResolution[worktree.id]
+                return try await GitService().commitsAhead(
                     at: worktree.path,
-                    baseBranch: baseBranch,
-                    resolution: commitsAheadResolution
+                    baseBranch: override?.baseBranch ?? defaultBaseBranch,
+                    resolution: override?.resolution ?? defaultResolution
                 )
             },
             loadBranches: { worktree in

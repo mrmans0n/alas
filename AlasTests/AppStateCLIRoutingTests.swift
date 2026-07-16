@@ -910,4 +910,58 @@ struct AppStateCLIRoutingTests {
         #expect(state.pendingForceDeleteWorktree == nil)
         #expect(state.projectsManager.operationState(for: target.id) == .deleting)
     }
+
+    /// Regression test for the review palette ignoring a per-worktree
+    /// base-branch override: a worktree whose right pane is already loaded
+    /// (e.g. because the ReviewChanges tab that's opening the palette is
+    /// rendering it) can have picked a base branch other than the global
+    /// `config.worktrees.baseBranch` default. `reviewTargetPaletteEnvironment
+    /// ().loadCommitsAhead` must honor that already-loaded override instead
+    /// of always comparing against the global default.
+    @Test func reviewPaletteLoadCommitsAheadRespectsAnAlreadyLoadedBaseBranchOverride() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "palette-base-override")
+        defer { try? FileManager.default.removeItem(at: main.path) }
+
+        // `main` already has one commit from `makeRepo`. Build:
+        //   shared  = main + one commit (the override base)
+        //   feature = shared + two more commits, checked out in the worktree
+        // Ahead of `main` (the global default) is 3 commits; ahead of
+        // `shared` (the per-worktree override) is only 2.
+        _ = try await Process.git(["checkout", "-b", "shared"], cwd: main.path)
+        try "b\n".write(to: main.path.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: main.path)
+        _ = try await Process.git(["commit", "-q", "-m", "shared commit"], cwd: main.path)
+
+        _ = try await Process.git(["checkout", "-b", "feature"], cwd: main.path)
+        try "c\n".write(to: main.path.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: main.path)
+        _ = try await Process.git(["commit", "-q", "-m", "feature commit 1"], cwd: main.path)
+        try "d\n".write(to: main.path.appendingPathComponent("d.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: main.path)
+        _ = try await Process.git(["commit", "-q", "-m", "feature commit 2"], cwd: main.path)
+
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "feature" }
+        )
+        state.selectedWorktreeId = worktree.id
+
+        #expect(state.config.worktrees.baseBranch == "main")
+
+        // Simulate the worktree's right pane already having been activated
+        // with the user having manually picked "shared" as its base branch.
+        let rightPaneState = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: state.config.worktrees.baseBranch,
+            comparisonMode: state.config.changes.comparisonMode
+        )
+        rightPaneState.selectBaseBranch("shared")
+        #expect(rightPaneState.userOverrodeBaseBranch)
+
+        let environment = state.reviewTargetPaletteEnvironment()
+        let result = try await environment.loadCommitsAhead(worktree)
+
+        #expect(result.comparisonRef == "shared")
+        #expect(result.commits.count == 2)
+    }
 }
