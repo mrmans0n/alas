@@ -560,7 +560,11 @@ final class AppState {
                 _ = manager.placeholderSession(id: record.childSessionId)
                 await manager.hydrateIfNeeded(id: record.childSessionId)
             } else {
-                _ = manager.createSession(id: record.childSessionId, agentId: record.agentId)
+                _ = manager.createSession(
+                    id: record.childSessionId,
+                    agentId: record.agentId,
+                    autoRunDefault: config.harness.acpAutoRunByDefault
+                )
             }
             if let prompt = record.pendingInitialPrompt {
                 let accepted = await manager.enqueueDelegatedPrompt(
@@ -2050,6 +2054,9 @@ final class AppState {
                 },
                 rememberParent: { [weak self] childID, parentID in
                     self?.delegatedSessionParents[childID] = parentID
+                },
+                autoRunDefault: { [weak self] in
+                    self?.config.harness.acpAutoRunByDefault ?? false
                 },
                 notifyChanged: { }
             )

@@ -24,6 +24,7 @@ final class ACPSessionOrchestrationCoordinator {
         let newWorktreeDestination: (String, String) -> URL?
         let createWorktree: (String, String, String?) async -> Result<Worktree, WorktreeCreationError>
         let rememberParent: (String, String) -> Void
+        let autoRunDefault: () -> Bool
         let notifyChanged: () -> Void
     }
 
@@ -42,9 +43,10 @@ final class ACPSessionOrchestrationCoordinator {
                 parent: parent,
                 children: children
             )
-            let summaries = visible.compactMap { visible -> ACPOrchestrationSessionSummary? in
+            var summaries: [ACPOrchestrationSessionSummary] = []
+            for visible in visible {
                 if visible.sessionId == origin.sessionId {
-                    return sessionSummary(
+                    summaries.append(await sessionSummary(
                         sessionId: origin.sessionId,
                         relationship: nil,
                         agentId: environment.sessionLocation(origin.sessionId)?.manager.liveSession(for: origin.sessionId)?.agentId ?? parent?.agentId ?? "unknown",
@@ -52,11 +54,12 @@ final class ACPSessionOrchestrationCoordinator {
                         phase: .ready,
                         failure: nil,
                         createdAt: 0
-                    )
+                    ))
+                    continue
                 }
                 if visible.relationship == .parent {
                     let location = environment.sessionLocation(visible.sessionId)
-                    return sessionSummary(
+                    summaries.append(await sessionSummary(
                         sessionId: visible.sessionId,
                         relationship: "parent",
                         agentId: location?.manager.liveSession(for: visible.sessionId)?.agentId ?? "unknown",
@@ -64,10 +67,11 @@ final class ACPSessionOrchestrationCoordinator {
                         phase: .ready,
                         failure: nil,
                         createdAt: 0
-                    )
+                    ))
+                    continue
                 }
-                guard let record = children.first(where: { $0.childSessionId == visible.sessionId }) else { return nil }
-                return sessionSummary(
+                guard let record = children.first(where: { $0.childSessionId == visible.sessionId }) else { continue }
+                summaries.append(await sessionSummary(
                     sessionId: record.childSessionId,
                     relationship: "child",
                     agentId: record.agentId,
@@ -75,7 +79,7 @@ final class ACPSessionOrchestrationCoordinator {
                     phase: record.phase,
                     failure: record.failureMessage,
                     createdAt: record.createdAt
-                )
+                ))
             }
             return json(ACPOrchestrationListResponse(sessions: summaries))
         } catch {
@@ -151,8 +155,11 @@ final class ACPSessionOrchestrationCoordinator {
                 now: now
             )
         case .new(let branch, let base):
-            guard !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return .error("new_worktree branch must not be blank")
+            switch GitNameValidator.validateBranchName(branch) {
+            case .valid:
+                break
+            case .invalid(let message):
+                return .error("invalid branch name: \(message)")
             }
             guard let destination = environment.newWorktreeDestination(origin.projectId, branch) else {
                 return .error("The project is no longer available.")
@@ -326,7 +333,11 @@ final class ACPSessionOrchestrationCoordinator {
             updatedAt: environment.now()
         )
         if manager.liveSession(for: childID) == nil {
-            _ = manager.createSession(id: childID, agentId: record.agentId)
+            _ = manager.createSession(
+                id: childID,
+                agentId: record.agentId,
+                autoRunDefault: environment.autoRunDefault()
+            )
         }
         let accepted = await manager.enqueueDelegatedPrompt(
             text: prompt,
@@ -435,8 +446,9 @@ final class ACPSessionOrchestrationCoordinator {
         phase: ACPDelegationPhase,
         failure: String?,
         createdAt: Int64
-    ) -> ACPOrchestrationSessionSummary {
-        let runtime = environment.sessionLocation(sessionId).flatMap { location -> ACPOrchestrationRuntimeState? in
+    ) async -> ACPOrchestrationSessionSummary {
+        let location = environment.sessionLocation(sessionId)
+        let runtime = location.flatMap { location -> ACPOrchestrationRuntimeState? in
             guard let session = location.manager.liveSession(for: sessionId) else { return nil }
             switch session.transcript.streamingState {
             case .idle: return .idle
@@ -444,7 +456,17 @@ final class ACPSessionOrchestrationCoordinator {
             case .awaitingPermission, .awaitingInput: return .awaitingInput
             }
         }
-        let state = ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: false)
+        let archived: Bool
+        if location != nil {
+            archived = false
+        } else if let worktree = environment.worktree(worktreeId),
+                  let manager = environment.manager(worktree),
+                  let row = await manager.persistedSessionRow(id: sessionId) {
+            archived = row.archived
+        } else {
+            archived = true
+        }
+        let state = ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived)
         return .init(
             sessionId: sessionId,
             relationship: relationship,
