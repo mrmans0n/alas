@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-07-16
+
+### ✨ Features
+
+- Add MCP delegated ACP sessions (#810).
+
+### 🐛 Fixes
+
+- Keep new worktrees creating until they are ready (#811).
+- Show the GitLab inspect action in Changes (#812).
+
+### 🏗️ Internal
+
+- Update Rust to v1.97.1 (#813).
+
 ## [0.11.1] - 2026-07-15
 
 ### ✨ Features
