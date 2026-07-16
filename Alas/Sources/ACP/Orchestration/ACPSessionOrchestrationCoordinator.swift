@@ -238,11 +238,14 @@ final class ACPSessionOrchestrationCoordinator {
             guard ACPSessionOrchestrationPolicy.acceptsMessages(target: targetParent) else {
                 return .error("The target delegated session is not available.")
             }
-            guard await resolveDeliveryTarget(
-                sessionID: request.targetSessionId,
-                callerParent: callerParent,
-                targetParent: targetParent
-            ) != nil else {
+            let targetIsStillStarting = targetParent?.phase == .creatingWorktree
+                || targetParent?.phase == .starting
+            if !targetIsStillStarting,
+               await resolveDeliveryTarget(
+                   sessionID: request.targetSessionId,
+                   callerParent: callerParent,
+                   targetParent: targetParent
+               ) == nil {
                 return .error("The target ACP session is not available.")
             }
         } catch {
