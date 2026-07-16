@@ -21,6 +21,7 @@ usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
 usage: alas review [target] [--worktree <name-or-path>]
+usage: alas review -- <target> [--worktree <name-or-path>]  (escapes a target named like a review subcommand)
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
 usage: alas review reply <comment-id> <body>
 usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
@@ -218,6 +219,16 @@ usage: alas open <path> --line <n> [--end-line <n>]";
 pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
 
 fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    if let Some(separator) = args.iter().position(|arg| *arg == "--") {
+        // Force review-open interpretation regardless of what the target
+        // looks like — lets a branch/tag literally named `finish`,
+        // `comments`, etc. be reviewed instead of misfiring into the
+        // matching subcommand below (e.g. `alas review finish` would
+        // otherwise silently finish the current review).
+        let mut without_separator: Vec<&str> = args[..separator].to_vec();
+        without_separator.extend_from_slice(&args[separator + 1..]);
+        return parse_review_open(&without_separator);
+    }
     match args.first().copied() {
         None => Ok(Command::Review {
             target: None,
@@ -1043,6 +1054,46 @@ mod tests {
             .is_err()
         );
         assert!(parse(&s(&["review", "x", "--unknown", "v"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_double_dash_escapes_subcommand_like_targets() {
+        for name in ["finish", "comments", "comment", "reply", "resolve"] {
+            assert_eq!(
+                parse(&s(&["review", "--", name]), Path::new("/b")).unwrap(),
+                Command::Review {
+                    target: Some(name.into()),
+                    worktree: None
+                },
+                "target {name:?} should escape to a plain review target"
+            );
+        }
+    }
+
+    #[test]
+    fn review_double_dash_composes_with_worktree_flag_on_either_side() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "feature", "--", "finish"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("finish".into()),
+                worktree: Some("feature".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "--", "finish", "--worktree", "feature"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("finish".into()),
+                worktree: Some("feature".into())
+            }
+        );
     }
 
     #[test]
