@@ -4762,6 +4762,12 @@ final class AppState {
                     id: claimed.message.id,
                     claim: claimed.claim
                 )
+            } else {
+                try? await acpOrchestrationPersistence.releaseMessageClaim(
+                    id: claimed.message.id,
+                    claim: claimed.claim
+                )
+                manager.notifyDelegatedMessagesAvailable()
             }
         }
     }
@@ -4769,9 +4775,10 @@ final class AppState {
     func delegatedSessionSummaries(for sessionId: String) async -> [ACPOrchestrationSessionSummary] {
         let parent = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
         let children = (try? await acpOrchestrationPersistence.children(parentSessionId: sessionId)) ?? []
-        var summaries: [ACPOrchestrationSessionSummary] = children.map { record in
-            let runtime = record.childWorktreeId
-                .flatMap { acpManagers[$0]?.liveSession(for: record.childSessionId) }
+        var summaries: [ACPOrchestrationSessionSummary] = []
+        for record in children {
+            let manager = record.childWorktreeId.flatMap { acpManagers[$0] }
+            let runtime = manager?.liveSession(for: record.childSessionId)
                 .map { session -> ACPOrchestrationRuntimeState in
                     switch session.transcript.streamingState {
                     case .idle: return .idle
@@ -4779,7 +4786,15 @@ final class AppState {
                     case .awaitingPermission, .awaitingInput: return .awaitingInput
                     }
                 }
-            return ACPOrchestrationSessionSummary(
+            let archived: Bool
+            if let manager, let row = await manager.persistedSessionRow(id: record.childSessionId) {
+                archived = row.archived
+            } else if record.childWorktreeId != nil {
+                archived = true
+            } else {
+                archived = false
+            }
+            summaries.append(ACPOrchestrationSessionSummary(
                 sessionId: record.childSessionId,
                 relationship: "child",
                 agentId: record.agentId,
@@ -4787,11 +4802,11 @@ final class AppState {
                 state: ACPSessionOrchestrationPolicy.publicState(
                     phase: record.phase,
                     runtime: runtime,
-                    archived: false
+                    archived: archived
                 ).rawValue,
                 failure: record.failureMessage,
                 createdAt: record.createdAt
-            )
+            ))
         }
         if let parent {
             summaries.append(.init(
