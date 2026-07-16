@@ -362,7 +362,8 @@ struct ACPSessionRunnerQueueTests {
         session.agentState = .ready
         session.transcript.streamingState = .streaming
         session.enqueue(blocks: [.text("first")])
-        session.enqueue(blocks: [.text("selected")])
+        let source = ACPDelegatedPromptSource(sessionId: "parent", messageId: "delegated-message")
+        session.enqueue(blocks: [.text("selected")], delegatedSource: source)
         session.enqueue(blocks: [.text("third")])
         let selectedId = session.queue[1].id
         runner.persistQueue()
@@ -374,10 +375,15 @@ struct ACPSessionRunnerQueueTests {
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 1)
         var userTexts: [String] = []
+        var delegatedSources: [ACPDelegatedPromptSource?] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
+            if case .user(_, _, let text, _, let delegatedSource) = msg {
+                userTexts.append(text)
+                delegatedSources.append(delegatedSource)
+            }
         }
         #expect(userTexts == ["selected"])
+        #expect(delegatedSources == [source])
         #expect(session.queue.isEmpty)
         #expect(runner.steerUndoSnapshot()?.map { $0.blocks } == [[.text("first")], [.text("third")]])
         #expect(try store.loadQueue(sessionId: "s").isEmpty)

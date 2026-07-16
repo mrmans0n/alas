@@ -4480,6 +4480,14 @@ final class AppState {
                 // no injection rather than a dead command for the agent.
                 let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                     .appendingPathComponent(TerminalCLIInjection.executableName).path
+                let persistedParent = try? await self.acpOrchestrationPersistence.parent(
+                    childSessionId: sessionId
+                )
+                let parentSessionId = self.delegatedSessionParents[sessionId]
+                    ?? persistedParent?.parentSessionId
+                if let parentSessionId {
+                    self.delegatedSessionParents[sessionId] = parentSessionId
+                }
                 return BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
@@ -4487,7 +4495,7 @@ final class AppState {
                     socketPath: self.harness.socketServer.socketPath,
                     worktreePath: worktreePath,
                     sessionId: sessionId,
-                    parentSessionId: self.delegatedSessionParents[sessionId]
+                    parentSessionId: parentSessionId
                 )
             }
         )
@@ -4706,7 +4714,11 @@ final class AppState {
                 relationship: "child",
                 agentId: record.agentId,
                 worktreeId: record.childWorktreeId ?? "",
-                state: record.phase.rawValue,
+                state: ACPSessionOrchestrationPolicy.publicState(
+                    phase: record.phase,
+                    runtime: nil,
+                    archived: false
+                ).rawValue,
                 failure: record.failureMessage,
                 createdAt: record.createdAt
             )

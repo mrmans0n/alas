@@ -300,6 +300,7 @@ final class ACPSessionOrchestrationCoordinator {
             return
         }
         guard let record else { return }
+        environment.rememberParent(childID, record.parentSessionId)
         try? await environment.persistence.updateChildWorktree(
             childSessionId: childID,
             worktreeId: worktree.id,

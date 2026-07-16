@@ -1339,7 +1339,11 @@ extension ACPSessionRunner {
 
         let item = session.queue.remove(at: idx)
         persistQueue()
-        steer(blocks: item.blocks, recordUserPrompt: !item.transcriptRecorded)
+        steer(
+            blocks: item.blocks,
+            delegatedSource: item.delegatedSource,
+            recordUserPrompt: !item.transcriptRecorded
+        )
     }
 
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue
@@ -1353,6 +1357,7 @@ extension ACPSessionRunner {
     /// resolves to a no-op.
     func steer(
         blocks: [ACPContentBlock],
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -1403,6 +1408,7 @@ extension ACPSessionRunner {
                 self.sendNow(
                     blocks: blocks,
                     queuedItemId: nil,
+                    delegatedSource: delegatedSource,
                     recordUserPrompt: recordUserPrompt,
                     draft: draft,
                     onPromptFinished: onPromptFinished
