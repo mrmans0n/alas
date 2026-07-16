@@ -228,16 +228,24 @@ struct AlasActionService {
         }
     }
 
-    /// The worktree a review session id actually targets, searched across the
-    /// caller's whole project (not just `origin`) — a `--worktree` override
-    /// can open a review session scoped to a sibling worktree. Returns nil
-    /// when no worktree in the project matches, which callers treat the same
-    /// as an unknown/foreign session.
+    /// The worktree a review session id actually targets: `origin` itself
+    /// when the session is scoped to it, else searched across the caller's
+    /// whole project (not just `origin`) — a `--worktree` override can open
+    /// a review session scoped to a sibling worktree. `origin` is checked
+    /// directly first because it can be a worktree the user has hidden,
+    /// which `projectWorktrees` (built from `visibleWorktrees()`) excludes;
+    /// without this, a plain, no-override review session opened and used
+    /// from a hidden worktree would fail to resolve even though no sibling
+    /// worktree is involved at all. Returns nil when neither `origin` nor
+    /// any worktree in the project matches, which callers treat the same as
+    /// an unknown/foreign session.
     private static func resolveSessionWorktree(
         for sessionID: ReviewDraftSessionID,
+        origin: Worktree,
         projectWorktrees: [Worktree]
     ) -> Worktree? {
-        projectWorktrees.first { sessionID.isFor(worktreeID: $0.id) }
+        if sessionID.isFor(worktreeID: origin.id) { return origin }
+        return projectWorktrees.first { sessionID.isFor(worktreeID: $0.id) }
     }
 
     func reviewComments(
@@ -260,7 +268,7 @@ struct AlasActionService {
             // foreign and falls back to the origin-only scoping below, which
             // naturally yields nothing for it.
             if let parsed = ReviewDraftSessionID(rawValue: sessionID),
-               Self.resolveSessionWorktree(for: parsed, projectWorktrees: projectWorktrees) != nil {
+               Self.resolveSessionWorktree(for: parsed, origin: origin, projectWorktrees: projectWorktrees) != nil {
                 scoped = all.filter { $0.sessionID.rawValue == sessionID }
             } else {
                 scoped = all.filter { $0.sessionID.isFor(worktreeID: origin.id) && $0.sessionID.rawValue == sessionID }
@@ -306,7 +314,7 @@ struct AlasActionService {
         let worktreeForPath: Worktree
         if let sessionID {
             guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
-                  let resolved = Self.resolveSessionWorktree(for: parsed, projectWorktrees: projectWorktrees) else {
+                  let resolved = Self.resolveSessionWorktree(for: parsed, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review session id")
             }
             targetSessionID = parsed
@@ -382,7 +390,7 @@ struct AlasActionService {
         let draftSessionID: ReviewDraftSessionID
         if let sessionID {
             guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
-                  let resolved = Self.resolveSessionWorktree(for: parsed, projectWorktrees: projectWorktrees) else {
+                  let resolved = Self.resolveSessionWorktree(for: parsed, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review session id")
             }
             draftSessionID = parsed
@@ -589,7 +597,7 @@ struct AlasActionService {
         let store = draftCommentStore()
         do {
             guard var comment = try store.find(commentID: commentID),
-                  Self.resolveSessionWorktree(for: comment.sessionID, projectWorktrees: projectWorktrees) != nil else {
+                  Self.resolveSessionWorktree(for: comment.sessionID, origin: origin, projectWorktrees: projectWorktrees) != nil else {
                 return .error("unknown review comment id \"\(commentID)\"")
             }
             let timestamp = now()
@@ -620,7 +628,7 @@ struct AlasActionService {
         let store = draftCommentStore()
         do {
             guard var comment = try store.find(commentID: commentID),
-                  let commentWorktree = Self.resolveSessionWorktree(for: comment.sessionID, projectWorktrees: projectWorktrees) else {
+                  let commentWorktree = Self.resolveSessionWorktree(for: comment.sessionID, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review comment id \"\(commentID)\"")
             }
             let timestamp = now()

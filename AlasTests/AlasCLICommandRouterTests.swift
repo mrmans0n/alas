@@ -925,6 +925,47 @@ struct AlasCLICommandRouterTests {
         #expect(afterResolve.resolvedBy?.isAgent == true)
     }
 
+    /// Regression test: `origin` can be a worktree the user has hidden for
+    /// this project, which `visibleWorktrees()` (and thus `projectWorktrees`)
+    /// excludes — but the CLI still resolves `origin` itself directly via
+    /// `sessionId`/`cwd`, independent of visibility. A plain review session
+    /// with no `--worktree` override, opened and used from that same hidden
+    /// worktree, must keep resolving even though `origin` is absent from
+    /// `projectWorktrees`.
+    @Test func reviewFinishSucceedsForASessionOwnedByAHiddenOriginWorktree() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var changed = 0
+
+        // `origin` ("wt1") is deliberately absent from `visibleWorktrees`,
+        // simulating a worktree hidden for this project — `projectWorktrees`
+        // built from it is empty.
+        let router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(url: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent("drafts.json")),
+            onChange: { changed += 1 },
+            visibleWorktrees: []
+        )
+
+        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.finish(
+                sessionID: sessionID.rawValue,
+                verdict: .approve,
+                summary: ""
+            ))
+        ))
+
+        #expect(response == .ok)
+        #expect(changed == 1)
+    }
+
     @Test func commentAddFilesAgentCommentIntoLocalChangesSession() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(
