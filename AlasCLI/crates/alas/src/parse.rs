@@ -268,11 +268,14 @@ fn parse_review_open(args: &[&str], base: &std::path::Path) -> Result<Command, S
                 }
                 i += 1;
                 let value = flag_value(args, i).ok_or(USAGE)?;
-                worktree = Some(if value.contains('/') {
-                    alas_client::absolutize(base, value)
-                } else {
-                    value.to_string()
-                });
+                worktree = Some(
+                    if value.starts_with('/') || value.starts_with("./") || value.starts_with("../")
+                    {
+                        alas_client::absolutize(base, value)
+                    } else {
+                        value.to_string()
+                    },
+                );
             }
             value if !value.starts_with("--") && target.is_none() => {
                 target = Some(value.to_string());
@@ -1127,6 +1130,44 @@ mod tests {
             Command::Review {
                 target: None,
                 worktree: Some("/already/absolute/path".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_leaves_slash_named_worktree_branches_untouched() {
+        // Branch names containing `/` are an extremely common convention
+        // (`feature/foo`, `release/1.0`, `bugfix/login-crash`). They must
+        // not be mistaken for paths just because they contain a slash —
+        // only an `/`, `./`, or `../` prefix makes a value path-shaped.
+        for name in ["feature/foo", "release/1.0", "bugfix/login-crash"] {
+            assert_eq!(
+                parse(
+                    &s(&["review", "--worktree", name]),
+                    Path::new("/repo/current")
+                )
+                .unwrap(),
+                Command::Review {
+                    target: None,
+                    worktree: Some(name.into())
+                },
+                "worktree {name:?} should pass through unmodified"
+            );
+        }
+
+        // A bare value like `sub/dir` could theoretically be a genuine
+        // relative subdirectory, but without an explicit `./` prefix it is
+        // treated as a name, not a path. This is an intentional tradeoff:
+        // a user who means a relative subdirectory can type `./sub/dir`.
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "sub/dir"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("sub/dir".into())
             }
         );
     }
