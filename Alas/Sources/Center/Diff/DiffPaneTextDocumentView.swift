@@ -1043,6 +1043,40 @@ final class DiffPaneCodeTextView: NSTextView {
         return 0.18
     }
 
+    nonisolated static func expandPillRect(
+        textRect: NSRect,
+        firstLineRect: NSRect,
+        rowRect: NSRect,
+        chevronSize: NSSize,
+        chevronGap: CGFloat = 5,
+        horizontalPadding: CGFloat = 12,
+        verticalInset: CGFloat = 2
+    ) -> NSRect {
+        let anchorRect = textRect.isEmpty ? (firstLineRect.isEmpty ? rowRect : firstLineRect) : textRect
+        let pillHeight = max(anchorRect.height + verticalInset * 2, 1)
+        let chevronLeftX = textRect.minX - chevronGap - chevronSize.width
+        let pillLeft = (chevronSize == .zero ? textRect.minX : chevronLeftX) - horizontalPadding
+        return NSRect(
+            x: pillLeft,
+            y: anchorRect.midY - pillHeight / 2,
+            width: textRect.maxX + horizontalPadding - pillLeft,
+            height: pillHeight
+        )
+    }
+
+    nonisolated static func expandChevronRect(
+        chevronLeftX: CGFloat,
+        chevronSize: NSSize,
+        pillRect: NSRect
+    ) -> NSRect {
+        NSRect(
+            x: chevronLeftX,
+            y: pillRect.midY - chevronSize.height / 2,
+            width: chevronSize.width,
+            height: chevronSize.height
+        )
+    }
+
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
     }
@@ -1728,9 +1762,9 @@ final class DiffPaneCodeTextView: NSTextView {
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
         guard !textRect.isEmpty else { return }
 
-        // The expandable row uses a taller fixed line height and the label is
-        // baseline-shifted to the row's vertical center (see the builder), so the
-        // pill can simply center on the row and inset a little to fit within it.
+        // Split panes can synchronize a row to be taller than its first text
+        // fragment. Keep the pill attached to the fragment where the label is
+        // drawn instead of centering it in the full synchronized row.
         // The chevron is drawn here (not baked into the text) so the backing
         // string stays a plain label for selection/copy.
         let chevronGap: CGFloat = 5
@@ -1743,15 +1777,17 @@ final class DiffPaneCodeTextView: NSTextView {
         let chevronSize = chevronImage?.size ?? .zero
         let chevronLeftX = textRect.minX - chevronGap - chevronSize.width
 
-        let horizontalPadding: CGFloat = 12
-        let verticalInset: CGFloat = 2
-        let pillHeight = max(rowRect.height - verticalInset * 2, 1)
-        let pillLeft = (chevronImage == nil ? textRect.minX : chevronLeftX) - horizontalPadding
-        let pillRect = NSRect(
-            x: pillLeft,
-            y: rowRect.midY - pillHeight / 2,
-            width: textRect.maxX + horizontalPadding - pillLeft,
-            height: pillHeight
+        let firstLineRect = firstLineFragmentRect(
+            for: range,
+            layoutManager: layoutManager,
+            origin: textContainerOrigin
+        )
+        let pillRect = Self.expandPillRect(
+            textRect: textRect,
+            firstLineRect: firstLineRect,
+            rowRect: rowRect,
+            chevronSize: chevronSize,
+            chevronGap: chevronGap
         )
         let alpha = Self.expandPillFillAlpha(
             hovered: hoverExpansionRow == row,
@@ -1762,11 +1798,10 @@ final class DiffPaneCodeTextView: NSTextView {
         path.fill()
 
         if let chevronImage {
-            let chevronRect = NSRect(
-                x: chevronLeftX,
-                y: rowRect.midY - chevronSize.height / 2,
-                width: chevronSize.width,
-                height: chevronSize.height
+            let chevronRect = Self.expandChevronRect(
+                chevronLeftX: chevronLeftX,
+                chevronSize: chevronSize,
+                pillRect: pillRect
             )
             chevronImage.draw(in: chevronRect)
         }
