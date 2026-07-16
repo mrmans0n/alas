@@ -520,9 +520,6 @@ final class AppState {
         // hasn't finished by the first git command, gitEnv() falls back to the
         // process PATH (same behaviour as before).
         ShellEnvResolver.shared.resolve()
-        Task { [weak self] in
-            await self?.reconcileInterruptedDelegations()
-        }
     }
 
     /// All worktree IDs currently known to the projects manager (including
@@ -535,14 +532,57 @@ final class AppState {
 
     private func reconcileInterruptedDelegations() async {
         guard let records = try? await acpOrchestrationPersistence.incompleteDelegations() else { return }
-        let now = Int64(Date().timeIntervalSince1970)
         for record in records {
+            guard let worktreeId = record.childWorktreeId,
+                  let worktree = worktree(withId: worktreeId),
+                  let prompt = record.pendingInitialPrompt,
+                  let manager = acpManager(for: worktree)
+            else {
+                try? await acpOrchestrationPersistence.updatePhase(
+                    childSessionId: record.childSessionId,
+                    phase: .failed,
+                    failureMessage: "Alas stopped before delegated session setup completed.",
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+                continue
+            }
+            delegatedSessionParents[record.childSessionId] = record.parentSessionId
+            if await manager.persistedSessionRow(id: record.childSessionId) != nil {
+                _ = manager.placeholderSession(id: record.childSessionId)
+                await manager.hydrateIfNeeded(id: record.childSessionId)
+            } else {
+                _ = manager.createSession(id: record.childSessionId, agentId: record.agentId)
+            }
+            let accepted = await manager.enqueueDelegatedPrompt(
+                text: prompt,
+                source: ACPDelegatedPromptSource(
+                    sessionId: record.parentSessionId,
+                    messageId: "initial-\(record.childSessionId)"
+                ),
+                into: record.childSessionId
+            )
+            guard accepted else {
+                try? await acpOrchestrationPersistence.updatePhase(
+                    childSessionId: record.childSessionId,
+                    phase: .failed,
+                    failureMessage: "Could not restore delegated session prompt.",
+                    updatedAt: Int64(Date().timeIntervalSince1970)
+                )
+                continue
+            }
+            try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
+                childSessionId: record.childSessionId,
+                updatedAt: Int64(Date().timeIntervalSince1970)
+            )
             try? await acpOrchestrationPersistence.updatePhase(
                 childSessionId: record.childSessionId,
-                phase: .failed,
-                failureMessage: "Alas stopped before delegated session setup completed. Retry from the session menu.",
-                updatedAt: now
+                phase: .ready,
+                failureMessage: nil,
+                updatedAt: Int64(Date().timeIntervalSince1970)
             )
+            Task { @MainActor [weak manager] in
+                await manager?.attach(to: record.childSessionId, freshlyCreated: false)
+            }
         }
     }
 
@@ -602,6 +642,9 @@ final class AppState {
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
+        Task { [weak self] in
+            await self?.reconcileInterruptedDelegations()
+        }
     }
 
     /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
