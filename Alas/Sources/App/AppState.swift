@@ -991,6 +991,7 @@ final class AppState {
                     )
                     let gcDropped = try await projectsManager.refreshWorktrees(projectId: project.id)
                     guard projects.contains(where: { $0.id == projectId }) else { return }
+                    projectsManager.setOperationState(id: optimistic.id, state: nil)
                     if wasHidden || gcDropped {
                         saveProjects()
                     }

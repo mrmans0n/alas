@@ -356,7 +356,7 @@ extension ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: project.id).filter { $0.id == optimistic.id }.count == 1)
     }
 
-    @Test func refreshReconcilesCreatingWorktree() async throws {
+    @Test func refreshReconcilesCreatingWorktreeWithoutCompletingIt() async throws {
         let repo = try await makeRepo(name: "reconcile")
         defer { try? FileManager.default.removeItem(at: repo) }
         let mgr = ProjectsManager(persistedProjects: [])
@@ -365,24 +365,37 @@ extension ProjectsManagerTests {
 
         let svc = WorktreeService()
         let dest = repo.appendingPathComponent("wt-reconcile")
-        _ = try await svc.add(repoPath: repo, base: "main", branch: "reconcile-b", destination: dest, projectId: project.id)
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "reconcile-b",
+            destination: dest,
+            projectId: project.id
+        )
+        let live = try #require(
+            try await svc.list(repoPath: repo, projectId: project.id)
+                .first { $0.id == Worktree.makeId(path: dest) }
+        )
 
         let optimistic = Worktree(
             id: Worktree.makeId(path: dest),
             projectId: project.id,
-            name: "reconcile-b",
+            name: "optimistic-name",
             branch: "reconcile-b",
             path: dest,
             status: .clean,
-            lastActivity: Date()
+            lastActivity: Date(timeIntervalSince1970: 0)
         )
         mgr.insertOptimisticWorktree(optimistic)
         mgr.setOperationState(id: optimistic.id, state: .creating)
 
         try await mgr.refreshWorktrees(projectId: project.id)
+
         let trees = mgr.worktrees(projectId: project.id)
-        #expect(trees.contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == nil)
+        let reconciled = try #require(trees.first { $0.id == optimistic.id })
+        #expect(reconciled.name == live.name)
+        #expect(reconciled.lastActivity == live.lastActivity)
+        #expect(mgr.operationState(for: optimistic.id) == .creating)
     }
 
     @Test func refreshKeepsCreatingWorktreeUntilGitSeesIt() async throws {

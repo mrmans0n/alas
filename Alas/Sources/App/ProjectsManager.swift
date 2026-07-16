@@ -323,8 +323,9 @@ final class ProjectsManager {
         let url = URL(fileURLWithPath: project.path)
         let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
 
-        // Reconcile optimistic rows: preserve creating rows that still aren't in git,
-        // replace them with real rows when they appear, and clear operation state.
+        // Reconcile optimistic rows: preserve creating rows until the owner
+        // task completes, while still replacing them with real rows when
+        // they appear in git.
         let previous = worktreesByProject[projectId, default: []]
         let previousById = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         let liveIds = Set(trees.map(\.id))
@@ -339,9 +340,6 @@ final class ProjectsManager {
                     if let optimistic = previousById[id] {
                         reconciled.append(optimistic)
                     }
-                } else {
-                    // Creation succeeded; clear the pending state.
-                    clearOperationIds.append(id)
                 }
             case .deleting:
                 // If the row is gone from git, the deletion succeeded.
