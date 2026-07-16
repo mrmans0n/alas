@@ -681,7 +681,7 @@ struct AlasActionService {
         var bestMatch: (worktree: Worktree, relativePath: String, rootComponentCount: Int)?
         for worktree in visibleWorktrees() {
             let rootURL = worktree.path.standardizedFileURL
-            guard let match = relativePathAndDepth(for: url, in: rootURL) else { continue }
+            guard let match = Self.relativePathAndDepth(for: url, in: rootURL) else { continue }
             if let currentBest = bestMatch,
                match.rootComponentCount <= currentBest.rootComponentCount {
                 continue
@@ -692,7 +692,11 @@ struct AlasActionService {
         return (bestMatch.worktree, bestMatch.relativePath)
     }
 
-    private func relativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
+    /// Widened from `private` to `nonisolated static` so `AlasCLIWorktreeResolver`
+    /// (a stateless enum with no `AlasActionService` instance to call
+    /// `visibleWorktrees()` on) can reuse the same containing-worktree lookup
+    /// logic against its own `worktrees: [Worktree]` parameter.
+    nonisolated static func relativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
         if let match = relativePathAndDepth(
             targetComponents: url.standardizedFileURL.pathComponents,
             rootComponents: rootURL.pathComponents
@@ -706,7 +710,7 @@ struct AlasActionService {
         ) ?? fileSystemRelativePathAndDepth(for: url, in: rootURL)
     }
 
-    private func relativePathAndDepth(
+    nonisolated static func relativePathAndDepth(
         targetComponents: [String],
         rootComponents: [String]
     ) -> (relativePath: String, rootComponentCount: Int)? {
@@ -717,7 +721,7 @@ struct AlasActionService {
         return (relative, rootComponents.count)
     }
 
-    private func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
+    private nonisolated static func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
         guard let rootIdentity = Self.fileIdentity(at: rootURL.path) else { return nil }
         var ancestor = url.deletingLastPathComponent()
         var relativeComponents = [url.lastPathComponent]

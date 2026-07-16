@@ -99,6 +99,61 @@ struct AlasCLIWorktreeResolverTests {
         #expect(result == .missing(target))
     }
 
+    @Test func resolvesNestedSubdirectoryToContainingWorktree() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-containing-\(UUID().uuidString)")
+        let nested = root.appendingPathComponent("Sources")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let worktree = Self.worktree(branch: "main", path: root.path)
+        let result = AlasCLIWorktreeResolver.resolve(target: nested.path, worktrees: [worktree])
+        #expect(result == .matched(worktree))
+    }
+
+    @Test func resolvesDeeplyNestedSubdirectoryToContainingWorktree() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-containing-deep-\(UUID().uuidString)")
+        let nested = root.appendingPathComponent("Sources/Deep/Nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let worktree = Self.worktree(branch: "main", path: root.path)
+        let result = AlasCLIWorktreeResolver.resolve(target: nested.path, worktrees: [worktree])
+        #expect(result == .matched(worktree))
+    }
+
+    @Test func nestedWorktreePrefersDeepestContainingRoot() throws {
+        let outerRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-nested-outer-\(UUID().uuidString)")
+        let innerRoot = outerRoot.appendingPathComponent("nested-worktree")
+        let target = innerRoot.appendingPathComponent("Sources")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outerRoot) }
+
+        let outer = Self.worktree(branch: "outer", path: outerRoot.path)
+        let inner = Self.worktree(branch: "inner", path: innerRoot.path)
+        let result = AlasCLIWorktreeResolver.resolve(target: target.path, worktrees: [outer, inner])
+        #expect(result == .matched(inner))
+    }
+
+    @Test func pathOutsideAllWorktreesStillMisses() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-worktree-root-\(UUID().uuidString)")
+        let unrelated = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-resolver-unrelated-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: unrelated)
+        }
+
+        let worktree = Self.worktree(branch: "main", path: root.path)
+        let result = AlasCLIWorktreeResolver.resolve(target: unrelated.path, worktrees: [worktree])
+        #expect(result == .missing(unrelated.path))
+    }
+
     private static func worktree(name: String? = nil, branch: String, path: String) -> Worktree {
         Worktree(
             id: Worktree.makeId(path: URL(fileURLWithPath: path)),

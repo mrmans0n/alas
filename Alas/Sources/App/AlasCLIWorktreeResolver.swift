@@ -40,6 +40,14 @@ enum AlasCLIWorktreeResolver {
             }
             if byPath.count == 1 { return .matched(byPath[0]) }
             if byPath.count > 1 { return .ambiguous(labels(for: byPath)) }
+
+            // The target may be a subdirectory of a worktree rather than its
+            // exact root (e.g. a bare `.` absolutized against a nested cwd).
+            // Walk up to find the deepest worktree root that is an ancestor of
+            // the target, mirroring `AlasActionService.containingWorktree(for:)`.
+            if let containing = containingWorktree(for: requested, in: worktrees) {
+                return .matched(containing)
+            }
             return .missing(trimmed)
         }
 
@@ -60,6 +68,23 @@ enum AlasCLIWorktreeResolver {
         if prefixMatches.count > 1 { return .ambiguous(labels(for: prefixMatches)) }
 
         return .missing(trimmed)
+    }
+
+    /// Deepest worktree root that is an ancestor of `url`, mirroring
+    /// `AlasActionService.containingWorktree(for:)` — reused here (rather than
+    /// duplicated) via `AlasActionService.relativePathAndDepth(for:in:)`, which
+    /// doesn't depend on any `AlasActionService` instance state.
+    private static func containingWorktree(for url: URL, in worktrees: [Worktree]) -> Worktree? {
+        var bestMatch: (worktree: Worktree, rootComponentCount: Int)?
+        for worktree in worktrees {
+            let rootURL = worktree.path.standardizedFileURL
+            guard let match = AlasActionService.relativePathAndDepth(for: url, in: rootURL) else { continue }
+            if let currentBest = bestMatch, match.rootComponentCount <= currentBest.rootComponentCount {
+                continue
+            }
+            bestMatch = (worktree, match.rootComponentCount)
+        }
+        return bestMatch?.worktree
     }
 
     private static func labels(for worktrees: [Worktree]) -> [String] {
