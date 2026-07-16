@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -22,6 +23,77 @@ struct DiffContextExpansionTests {
             old: .available((1...10).map { "old \($0)" }),
             new: .available((1...12).map { "new \($0)" })
         )
+    }
+
+    @Test func sharedBoundaryTracksExpansionFromBothSides() {
+        let key = DiffContextExpansionKey.shared(upperGroupID: "hunk-0", lowerGroupID: "hunk-1")
+        var state = DiffContextExpansionState()
+
+        state.expand(key, available: 5, mode: .chunk(size: 2), edge: .top)
+        state.expand(key, available: 5, mode: .chunk(size: 2), edge: .bottom)
+
+        #expect(state.expandedLineCount(for: key, edge: .top) == 2)
+        #expect(state.expandedLineCount(for: key, edge: .bottom) == 2)
+        #expect(state.remainingLineCount(for: key, available: 5) == 1)
+    }
+
+    @Test func sharedBoundaryExpansionClampsWhenEdgesMeet() {
+        let key = DiffContextExpansionKey.shared(upperGroupID: "hunk-0", lowerGroupID: "hunk-1")
+        var state = DiffContextExpansionState()
+
+        state.expand(key, available: 3, mode: .chunk(size: 2), edge: .top)
+        state.expand(key, available: 3, mode: .chunk(size: 2), edge: .bottom)
+
+        #expect(state.expandedLineCount(for: key, edge: .top) == 2)
+        #expect(state.expandedLineCount(for: key, edge: .bottom) == 1)
+        #expect(state.remainingLineCount(for: key, available: 3) == 0)
+    }
+
+    @Test func sharedBoundaryLegacyExpansionAccessReadsTopEdge() {
+        let key = DiffContextExpansionKey.shared(upperGroupID: "hunk-0", lowerGroupID: "hunk-1")
+        var state = DiffContextExpansionState()
+
+        state.expand(key, available: 5, mode: .chunk(size: 2))
+
+        #expect(state.expandedLineCount(for: key) == 2)
+        #expect(state.expandedLineCount(for: key, edge: .top) == 2)
+        #expect(state.expandedLineCount(for: key, edge: .bottom) == 0)
+    }
+
+    @Test func edgeAwareExpansionDelegatesExternalKeysToBoundaryState() {
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .below)
+        var state = DiffContextExpansionState()
+
+        state.expand(key, available: 5, mode: .chunk(size: 2), edge: .top)
+
+        #expect(state.expandedLineCount(for: key) == 2)
+        #expect(state.expandedLineCount(for: key, edge: .top) == 2)
+        #expect(state.remainingLineCount(for: key, available: 5) == 3)
+    }
+
+    @Test func decodesLegacyExternalExpansionKeyShape() throws {
+        let data = try #require("""
+        {"groupID":"hunk-0","boundary":"above"}
+        """.data(using: .utf8))
+
+        let key = try JSONDecoder().decode(DiffContextExpansionKey.self, from: data)
+
+        #expect(key == DiffContextExpansionKey(groupID: "hunk-0", boundary: .above))
+    }
+
+    @Test func decodesExpansionRowWithoutEdgeUsingBoundaryDefault() throws {
+        let data = try #require("""
+        {
+          "key": {"groupID":"hunk-0","boundary":"above"},
+          "boundary": "above",
+          "remainingLineCount": 4
+        }
+        """.data(using: .utf8))
+
+        let row = try JSONDecoder().decode(DiffContextExpansionRow.self, from: data)
+
+        #expect(row.key == DiffContextExpansionKey(groupID: "hunk-0", boundary: .above))
+        #expect(row.edge == .bottom)
     }
 
     @Test func derivesAboveBoundaryAndChunkedRows() throws {

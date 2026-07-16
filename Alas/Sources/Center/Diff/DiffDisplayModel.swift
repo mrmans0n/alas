@@ -80,20 +80,136 @@ struct DiffDisplayLine: Identifiable, Equatable {
     let noTrailingNewline: Bool
 }
 
-struct DiffContextExpansionKey: Codable, Equatable, Hashable, Sendable {
-    let groupID: String
-    let boundary: DiffContextBoundary
-}
-
 enum DiffContextBoundary: String, Codable, Equatable, Hashable, Sendable {
     case above
     case below
 }
 
+enum DiffContextExpansionEdge: String, Codable, Equatable, Hashable, Sendable {
+    case top
+    case bottom
+}
+
+struct DiffContextExpansionKey: Codable, Equatable, Hashable, Sendable {
+    enum Kind: Codable, Equatable, Hashable, Sendable {
+        case external(groupID: String, boundary: DiffContextBoundary)
+        case shared(upperGroupID: String, lowerGroupID: String)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case groupID
+        case boundary
+    }
+
+    let kind: Kind
+
+    init(groupID: String, boundary: DiffContextBoundary) {
+        kind = .external(groupID: groupID, boundary: boundary)
+    }
+
+    static func shared(upperGroupID: String, lowerGroupID: String) -> DiffContextExpansionKey {
+        DiffContextExpansionKey(kind: .shared(upperGroupID: upperGroupID, lowerGroupID: lowerGroupID))
+    }
+
+    private init(kind: Kind) {
+        self.kind = kind
+    }
+
+    var groupID: String {
+        switch kind {
+        case let .external(groupID, _):
+            return groupID
+        case let .shared(upperGroupID, lowerGroupID):
+            return "\(upperGroupID)..\(lowerGroupID)"
+        }
+    }
+
+    var boundary: DiffContextBoundary {
+        switch kind {
+        case let .external(_, boundary):
+            return boundary
+        case .shared:
+            return .below
+        }
+    }
+
+    var isShared: Bool {
+        if case .shared = kind {
+            return true
+        }
+        return false
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let kind = try container.decodeIfPresent(Kind.self, forKey: .kind) {
+            self.kind = kind
+            return
+        }
+
+        kind = .external(
+            groupID: try container.decode(String.self, forKey: .groupID),
+            boundary: try container.decode(DiffContextBoundary.self, forKey: .boundary)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch kind {
+        case let .external(groupID, boundary):
+            try container.encode(groupID, forKey: .groupID)
+            try container.encode(boundary, forKey: .boundary)
+        case .shared:
+            try container.encode(kind, forKey: .kind)
+        }
+    }
+}
+
 struct DiffContextExpansionRow: Codable, Equatable, Hashable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case boundary
+        case remainingLineCount
+        case edge
+    }
+
     let key: DiffContextExpansionKey
     let boundary: DiffContextBoundary
     let remainingLineCount: Int
+    let edge: DiffContextExpansionEdge
+
+    init(
+        key: DiffContextExpansionKey,
+        boundary: DiffContextBoundary,
+        remainingLineCount: Int,
+        edge: DiffContextExpansionEdge? = nil
+    ) {
+        self.key = key
+        self.boundary = boundary
+        self.remainingLineCount = remainingLineCount
+        self.edge = edge ?? (boundary == .above ? .bottom : .top)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let key = try container.decode(DiffContextExpansionKey.self, forKey: .key)
+        let boundary = try container.decode(DiffContextBoundary.self, forKey: .boundary)
+        self.init(
+            key: key,
+            boundary: boundary,
+            remainingLineCount: try container.decode(Int.self, forKey: .remainingLineCount),
+            edge: try container.decodeIfPresent(DiffContextExpansionEdge.self, forKey: .edge)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(key, forKey: .key)
+        try container.encode(boundary, forKey: .boundary)
+        try container.encode(remainingLineCount, forKey: .remainingLineCount)
+        try container.encode(edge, forKey: .edge)
+    }
 }
 
 struct DiffDisplayRow: Identifiable, Equatable {
@@ -242,9 +358,10 @@ enum DiffDisplaySignatureBuilder {
         }
         if let expansion = row.contextExpansion {
             hasher.combine(true)
-            hasher.combine(expansion.key.groupID)
+            hasher.combine(expansion.key.kind)
             hasher.combine(expansion.boundary)
             hasher.combine(expansion.remainingLineCount)
+            hasher.combine(expansion.edge)
         } else {
             hasher.combine(false)
         }

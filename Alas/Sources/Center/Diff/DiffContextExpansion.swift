@@ -16,13 +16,51 @@ enum DiffContextExpansionMode: Equatable {
 }
 
 struct DiffContextExpansionState: Equatable {
+    private struct SharedExpansion: Equatable {
+        var top: Int = 0
+        var bottom: Int = 0
+    }
+
     private var expandedLineCounts: [DiffContextExpansionKey: Int] = [:]
+    private var sharedExpandedLineCounts: [DiffContextExpansionKey: SharedExpansion] = [:]
 
     func expandedLineCount(for key: DiffContextExpansionKey) -> Int {
-        expandedLineCounts[key, default: 0]
+        if key.isShared {
+            return expandedLineCount(for: key, edge: .top)
+        }
+        return expandedLineCounts[key, default: 0]
+    }
+
+    func expandedLineCount(for key: DiffContextExpansionKey, edge: DiffContextExpansionEdge) -> Int {
+        guard key.isShared else {
+            return expandedLineCount(for: key)
+        }
+
+        let shared = sharedExpandedLineCounts[key, default: SharedExpansion()]
+        switch edge {
+        case .top:
+            return shared.top
+        case .bottom:
+            return shared.bottom
+        }
+    }
+
+    func remainingLineCount(for key: DiffContextExpansionKey, available: Int) -> Int {
+        let available = max(0, available)
+        guard key.isShared else {
+            return max(0, available - expandedLineCount(for: key))
+        }
+
+        let shared = sharedExpandedLineCounts[key, default: SharedExpansion()]
+        return max(0, available - shared.top - shared.bottom)
     }
 
     mutating func expand(_ key: DiffContextExpansionKey, available: Int, mode: DiffContextExpansionMode) {
+        if key.isShared {
+            expand(key, available: available, mode: mode, edge: .top)
+            return
+        }
+
         let available = max(0, available)
         let current = expandedLineCounts[key, default: 0]
         let next: Int
@@ -33,6 +71,48 @@ struct DiffContextExpansionState: Equatable {
             next = available
         }
         expandedLineCounts[key] = min(next, available)
+    }
+
+    mutating func expand(
+        _ key: DiffContextExpansionKey,
+        available: Int,
+        mode: DiffContextExpansionMode,
+        edge: DiffContextExpansionEdge
+    ) {
+        guard key.isShared else {
+            expand(key, available: available, mode: mode)
+            return
+        }
+
+        let available = max(0, available)
+        var shared = sharedExpandedLineCounts[key, default: SharedExpansion()]
+        let current: Int
+        let other: Int
+        switch edge {
+        case .top:
+            current = shared.top
+            other = shared.bottom
+        case .bottom:
+            current = shared.bottom
+            other = shared.top
+        }
+
+        let requested: Int
+        switch mode {
+        case let .chunk(size):
+            requested = current + max(0, size)
+        case .all:
+            requested = available - other
+        }
+
+        let clamped = min(max(0, requested), max(0, available - other))
+        switch edge {
+        case .top:
+            shared.top = clamped
+        case .bottom:
+            shared.bottom = clamped
+        }
+        sharedExpandedLineCounts[key] = shared
     }
 }
 
