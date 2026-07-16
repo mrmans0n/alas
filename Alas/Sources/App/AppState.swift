@@ -4121,8 +4121,16 @@ final class AppState {
         let git = GitService()
         let localBranches = (try? await git.localBranches(at: worktree.path)) ?? []
         if localBranches.contains(ref) {
-            // A branch reviews against the repository's base branch, pinned
-            // to SHAs so the stored session survives branch movement.
+            // The named branch is the HEAD; the repository's configured base
+            // branch is the BASE — this reviews "`ref`'s changes vs the
+            // base". The palette's branch picker (ReviewScopeSelection
+            // .target(for: .branch)) reviews the opposite direction ("my
+            // current HEAD vs the picked branch"). Both are intentional for
+            // their own entry point; do not "fix" one to match the other
+            // without an explicit design decision — see
+            // docs/superpowers/specs/2026-07-16-review-target-palette-design.md.
+            //
+            // Pinned to SHAs so the stored session survives branch movement.
             let baseName = config.worktrees.baseBranch
             do {
                 let headSHA = try await git.resolveRevision(at: worktree.path, ref: ref)

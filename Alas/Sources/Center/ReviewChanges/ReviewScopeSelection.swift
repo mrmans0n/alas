@@ -34,6 +34,14 @@ enum ReviewScopeSelection {
                 title: "Review \(older.shortSha)…\(newer.shortSha)"
             )
         case .branch(let name):
+            // The picked branch is the BASE; the current worktree HEAD is the
+            // head — this reviews "my work on top of `name`". The CLI's
+            // `alas review <branch>` (AppState.cliOpenRevisionReview) reviews
+            // the opposite direction ("`name`'s changes vs the configured
+            // base branch"). Both are intentional for their own entry point;
+            // do not "fix" one to match the other without an explicit design
+            // decision — see docs/superpowers/specs/2026-07-16-review-target-palette-design.md.
+            //
             // Pin both endpoints to immutable SHAs when resolved, so a stored
             // review keeps the same merge base even if the branch advances.
             // The branch name is retained only for the display title.
