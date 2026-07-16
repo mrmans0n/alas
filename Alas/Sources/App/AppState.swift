@@ -4660,6 +4660,7 @@ final class AppState {
             title = "ACP session"
         }
         _ = mgr.placeholderSession(id: sessionId)
+        await mgr.hydrateIfNeeded(id: sessionId)
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
