@@ -361,13 +361,27 @@ enum DiffContextExpandedDisplayBuilder {
             ) else {
                 return []
             }
-            return [expandableRow(
+            let expandable = expandableRow(
                 group: attachedGroup,
                 boundary: attachedBoundary,
                 remaining: 0,
                 key: key,
                 edge: edge
-            )]
+            )
+            guard edge == .top else {
+                return [expandable]
+            }
+            return [
+                expandable,
+                expandableRow(
+                    group: attachedGroup,
+                    boundary: attachedBoundary,
+                    remaining: 0,
+                    key: key,
+                    edge: nil,
+                    defaultsEdgeFromBoundary: false
+                ),
+            ]
         }
 
         let range = boundaryRange(
