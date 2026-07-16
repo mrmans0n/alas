@@ -388,13 +388,17 @@ final class ACPSessionOrchestrationCoordinator {
         targetParent: ACPDelegationRecord?
     ) async -> SessionLocation? {
         if let target = environment.sessionLocation(sessionID) {
+            guard let row = await target.manager.persistedSessionRow(id: sessionID), !row.archived else {
+                return nil
+            }
             return target
         }
         let worktreeID = targetParent?.childWorktreeId ?? callerParent?.parentWorktreeId
         guard let worktreeID,
               let worktree = environment.worktree(worktreeID),
               let manager = environment.manager(worktree),
-              await manager.persistedSessionRow(id: sessionID) != nil
+              let row = await manager.persistedSessionRow(id: sessionID),
+              !row.archived
         else { return nil }
         _ = manager.placeholderSession(id: sessionID)
         await manager.hydrateIfNeeded(id: sessionID)
