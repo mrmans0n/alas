@@ -4777,7 +4777,9 @@ final class AppState {
         let children = (try? await acpOrchestrationPersistence.children(parentSessionId: sessionId)) ?? []
         var summaries: [ACPOrchestrationSessionSummary] = []
         for record in children {
-            let manager = record.childWorktreeId.flatMap { acpManagers[$0] }
+            let manager = record.childWorktreeId
+                .flatMap { worktree(withId: $0) }
+                .flatMap { acpManager(for: $0) }
             let runtime = manager?.liveSession(for: record.childSessionId)
                 .map { session -> ACPOrchestrationRuntimeState in
                     switch session.transcript.streamingState {
