@@ -555,9 +555,15 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("not-a-review", worktree: nil))))
+        // A target with whitespace fails classification entirely (it is not a
+        // number/URL/range/revision candidate), so it is rejected up front —
+        // before any git or code host remote lookup.
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("not a review", worktree: nil))))
 
-        #expect(response == .error("unsupported review URL"))
+        #expect(response == .error(
+            "unsupported review target 'not a review' — expected a PR/MR number or URL, "
+                + "a commit range (base..head or base...head), a branch, or a revision"
+        ))
     }
 
     @Test func cliReviewProviderReturnsErrorWhenNoCodeHostRemoteExists() async throws {
