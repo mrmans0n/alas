@@ -676,12 +676,13 @@ struct AlasCLICommandRouterTests {
         sessionStore: ReviewSessionStore? = nil,
         onChange: @escaping () -> Void = {},
         gitStatus: @escaping (URL) async throws -> [ChangedFile] = { _ in [] },
-        providerReviewOriginalPath: @escaping (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
+        providerReviewOriginalPath: @escaping (ReviewDraftSessionID, String) async -> String? = { _, _ in nil },
+        visibleWorktrees: [Worktree]? = nil
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
             sessionWorktreeId: { $0 == "s1" ? worktree.id : nil },
             originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            visibleWorktrees: { visibleWorktrees ?? [worktree] },
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             draftCommentStore: { store },
@@ -763,6 +764,165 @@ struct AlasCLICommandRouterTests {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(line.utf8))
         #expect(decoded.isEmpty)
+    }
+
+    @Test func reviewCommentsAcceptsAnExplicitSessionIDFromASiblingWorktreeInTheSameProject() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/tmp/sibling-repo"), status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let siblingComment = makeDraftComment(id: "sibling-comment", worktreeID: "wt2")
+        try store.save(siblingComment)
+
+        let router = makeReviewRouter(worktree: worktree, store: store, visibleWorktrees: [worktree, sibling])
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.comments(sessionID: siblingComment.sessionID.rawValue, state: .all))
+        ))
+
+        guard case .text(let lines) = response, let line = lines.first else {
+            Issue.record("expected .text response, got \(response)")
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(line.utf8))
+        #expect(decoded.map(\.id) == ["sibling-comment"])
+    }
+
+    @Test func commentAddResolvesPathAgainstTheSiblingWorktreeForASiblingSession() async throws {
+        let originRoot = try makeFile("origin/a.swift").deletingLastPathComponent()
+        let siblingRoot = try makeFile("sibling/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: originRoot, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: siblingRoot, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: "wt2", worktreePath: siblingRoot, scope: .all)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            },
+            visibleWorktrees: [worktree, sibling]
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: siblingRoot.appendingPathComponent("a.swift").path,
+                startLine: 4, endLine: nil, side: nil,
+                body: "sibling comment", sessionID: session.rawValue
+            ))
+        ))
+
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        #expect(lines[1].contains("comment_id"))
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].path == "a.swift")
+        #expect(saved[0].fileID == DiffReviewFileID(namespace: "unstaged", path: "a.swift"))
+    }
+
+    @Test func reviewFinishSucceedsForASiblingWorktreeSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let siblingRoot = URL(fileURLWithPath: "/tmp/sibling-repo")
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: siblingRoot, status: .clean, lastActivity: Date()
+        )
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sessionStore = ReviewSessionStore(url: directory.appendingPathComponent("sessions.json"))
+        let target = ReviewSessionTarget.localChanges(worktreeID: "wt2", repositoryPath: siblingRoot, scope: .all)
+        try sessionStore.save(ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        ))
+        var changed = 0
+
+        let router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(url: directory.appendingPathComponent("drafts.json")),
+            sessionStore: sessionStore,
+            onChange: { changed += 1 },
+            visibleWorktrees: [worktree, sibling]
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.finish(
+                sessionID: target.draftSessionID.rawValue,
+                verdict: .approve,
+                summary: ""
+            ))
+        ))
+
+        #expect(response == .ok)
+        #expect(changed == 1)
+        let record = try #require(try sessionStore.load(id: target.id))
+        #expect(record.status == .reviewed)
+        #expect(record.verdict?.verdict == .approve)
+    }
+
+    @Test func replyAndResolveSucceedForACommentOwnedBySiblingWorktreeSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/tmp/sibling-repo"), status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        try store.save(makeDraftComment(id: "sibling-c1", worktreeID: "wt2"))
+
+        let router = makeReviewRouter(worktree: worktree, store: store, visibleWorktrees: [worktree, sibling])
+
+        let replyResponse = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.reply(commentID: "sibling-c1", body: "on it"))
+        ))
+        #expect(replyResponse == .ok)
+        let afterReply = try #require(try store.find(commentID: "sibling-c1"))
+        #expect(afterReply.allReplies.map(\.bodyMarkdown) == ["on it"])
+
+        let resolveResponse = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.resolve(commentID: "sibling-c1", reply: nil, reopen: false))
+        ))
+        #expect(resolveResponse == .ok)
+        let afterResolve = try #require(try store.find(commentID: "sibling-c1"))
+        #expect(afterResolve.state == .resolved)
+        #expect(afterResolve.resolvedBy?.isAgent == true)
     }
 
     @Test func commentAddFilesAgentCommentIntoLocalChangesSession() async throws {
