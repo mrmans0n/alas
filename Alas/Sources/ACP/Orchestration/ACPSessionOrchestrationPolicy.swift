@@ -129,10 +129,6 @@ enum ACPSessionOrchestrationPolicy {
         runtime: ACPOrchestrationRuntimeState?,
         archived: Bool
     ) -> ACPOrchestrationPublicState {
-        if archived || phase == .closed || runtime == .closed {
-            return .closed
-        }
-
         switch phase {
         case .creatingWorktree:
             return .creatingWorktree
@@ -141,6 +137,9 @@ enum ACPSessionOrchestrationPolicy {
         case .failed:
             return .failed
         case .ready:
+            if archived || runtime == .closed {
+                return .closed
+            }
             switch runtime {
             case .running:
                 return .running

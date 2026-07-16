@@ -2039,12 +2039,17 @@ final class AppState {
                     guard let self,
                           let project = self.projects.first(where: { $0.id == projectId })
                     else { return nil }
-                    return WorktreePathTemplateRenderer.render(
+                    let destination = WorktreePathTemplateRenderer.render(
                         template: self.config.worktrees.pathTemplate,
                         worktreeRoot: self.config.worktrees.rootPath,
                         repoName: project.name,
                         branch: branch
                     )
+                    guard !URL(fileURLWithPath: project.path).isRemoteAlasPath else { return destination }
+                    return destination
+                        .deletingLastPathComponent()
+                        .resolvingSymlinksInPath()
+                        .appendingPathComponent(destination.lastPathComponent)
                 },
                 createWorktree: { [weak self] projectId, branch, base in
                     guard let self else {
