@@ -569,7 +569,7 @@ struct AlasCLICommandRouterTests {
         let router = Self.router(
             origin: current,
             visibleWorktrees: [current],
-            openProviderReview: { origin, target in
+            openReview: { origin, target in
                 opened = (origin, target)
                 return .ok
             }
@@ -580,6 +580,68 @@ struct AlasCLICommandRouterTests {
         #expect(response == .ok)
         #expect(opened?.origin == current)
         #expect(opened?.target == "123")
+    }
+
+    @Test func reviewLocalHonorsWorktreeOverride() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let sibling = Self.worktree(branch: "feature-x", path: "/tmp/repo-feature-x", projectId: "p1")
+        var reviewedIn: Worktree?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current, sibling],
+            openReviewChanges: { reviewedIn = $0 }
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.localChanges(worktree: "feature-x"))
+        ))
+
+        if case .error(let message) = response { Issue.record("unexpected error: \(message)") }
+        #expect(reviewedIn?.branch == "feature-x")
+    }
+
+    @Test func reviewWithUnknownWorktreeOverrideErrors() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current]
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.localChanges(worktree: "nope"))
+        ))
+
+        guard case .error(let message) = response else {
+            Issue.record("expected error")
+            return
+        }
+        #expect(message.contains("unknown worktree"))
+    }
+
+    @Test func reviewTargetHonorsWorktreeOverride() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let sibling = Self.worktree(branch: "feature-x", path: "/tmp/repo-feature-x", projectId: "p1")
+        var reviewedIn: Worktree?
+        var reviewedTarget: String?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current, sibling],
+            openReview: { worktree, target in
+                reviewedIn = worktree
+                reviewedTarget = target
+                return .ok
+            }
+        )
+
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("main..HEAD", worktree: "feature-x"))
+        ))
+
+        #expect(reviewedIn?.branch == "feature-x")
+        #expect(reviewedTarget == "main..HEAD")
     }
 
     private func makeDraftComment(
@@ -1584,7 +1646,7 @@ struct AlasCLICommandRouterTests {
         createWorktree: @escaping (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in .ok },
         deleteWorktree: @escaping (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in .ok },
         openReviewChanges: @escaping (Worktree) -> Void = { _ in },
-        openProviderReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok },
+        openReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok },
         activateApp: @escaping () -> Void = {}
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
@@ -1597,7 +1659,7 @@ struct AlasCLICommandRouterTests {
             createWorktree: createWorktree,
             deleteWorktree: deleteWorktree,
             openReviewChanges: openReviewChanges,
-            openProviderReview: openProviderReview,
+            openReview: openReview,
             activateApp: activateApp
         )
     }

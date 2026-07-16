@@ -1,5 +1,9 @@
 import Foundation
 
+/// Lets a plain message double as a `Swift.Result` failure (e.g.
+/// `Result<Worktree, String>`) without a dedicated error type per call site.
+extension String: Error {}
+
 /// Entrypoint-neutral facade over the app capabilities the CLI (and, later, an
 /// MCP bridge) drive. It speaks domain terms — worktrees, paths, targets — not
 /// wire types, so multiple front ends can reuse it.
@@ -23,7 +27,7 @@ struct AlasActionService {
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
-    var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+    var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
@@ -195,8 +199,28 @@ struct AlasActionService {
         ])
     }
 
-    func reviewProvider(origin: Worktree, target: String) async -> AlasCLIResponse {
-        await openProviderReview(origin, target)
+    func reviewTarget(origin: Worktree, target: String) async -> AlasCLIResponse {
+        await openReview(origin, target)
+    }
+
+    /// The worktree a review command operates on: the explicit `--worktree`
+    /// override when given (resolved against the origin's project), else the
+    /// origin itself.
+    func reviewOrigin(
+        origin: Worktree,
+        override: String?,
+        projectWorktrees: [Worktree]
+    ) -> Swift.Result<Worktree, String> {
+        guard let override else { return .success(origin) }
+        switch AlasCLIWorktreeResolver.resolve(target: override, worktrees: projectWorktrees) {
+        case .matched(let worktree):
+            return .success(worktree)
+        case .missing(let target):
+            let available = projectWorktrees.map(\.branch).joined(separator: ", ")
+            return .failure("unknown worktree \"\(target)\"; available: \(available)")
+        case .ambiguous(let labels):
+            return .failure("ambiguous worktree \"\(override)\"; matches: \(labels.joined(separator: ", "))")
+        }
     }
 
     func reviewComments(origin: Worktree, sessionID: String?, filter: ReviewCommentWireFilter) -> AlasCLIResponse {

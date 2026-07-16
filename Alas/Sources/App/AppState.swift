@@ -2228,7 +2228,7 @@ final class AppState {
                 self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
                 _ = self.openReviewChangesTab(for: worktree)
             },
-            openProviderReview: { [weak self] worktree, target in
+            openReview: { [weak self] worktree, target in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliOpenProviderReview(worktree: worktree, target: target)
             },
