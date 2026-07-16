@@ -603,10 +603,51 @@ final class AppState {
                 failureMessage: nil,
                 updatedAt: Int64(Date().timeIntervalSince1970)
             )
+            await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
             Task { @MainActor [weak manager] in
                 await manager?.attach(to: record.childSessionId, freshlyCreated: false)
             }
         }
+        await drainRecoveredDelegatedMessageTargets()
+    }
+
+    private func drainRecoveredDelegatedMessageTargets() async {
+        guard let targetSessionIds = try? await acpOrchestrationPersistence.pendingMessageTargetSessionIds() else {
+            return
+        }
+        for sessionId in targetSessionIds {
+            let childRecord = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
+            if let childRecord {
+                delegatedSessionParents[childRecord.childSessionId] = childRecord.parentSessionId
+            }
+            guard let manager = await acpManagerForPersistedSession(
+                sessionId: sessionId,
+                preferredWorktreeId: childRecord?.childWorktreeId ?? childRecord?.worktreeRequest.worktreeId
+            ) else { continue }
+            await deliverPendingDelegatedMessages(to: sessionId, manager: manager)
+        }
+    }
+
+    private func acpManagerForPersistedSession(
+        sessionId: String,
+        preferredWorktreeId: String?
+    ) async -> ACPSessionManager? {
+        var worktreeIds: [String] = []
+        if let preferredWorktreeId {
+            worktreeIds.append(preferredWorktreeId)
+        }
+        worktreeIds.append(contentsOf: allWorktreeIds().filter { $0 != preferredWorktreeId }.sorted())
+        for worktreeId in worktreeIds {
+            guard let worktree = worktree(withId: worktreeId),
+                  let manager = acpManager(for: worktree),
+                  let row = await manager.persistedSessionRow(id: sessionId),
+                  !row.archived
+            else { continue }
+            _ = manager.placeholderSession(id: sessionId)
+            await manager.hydrateIfNeeded(id: sessionId)
+            return manager
+        }
+        return nil
     }
 
     func toggleRightPaneVisibility() {

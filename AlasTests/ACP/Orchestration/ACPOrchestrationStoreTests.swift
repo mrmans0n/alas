@@ -172,6 +172,34 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.pendingMessages(targetSessionId: "child").map(\.id) == ["z-message", "a-message"])
     }
 
+    @Test("pending message targets are returned once in first-message order")
+    func pendingMessageTargetsAreDistinctAndOrdered() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.enqueue(.init(
+            id: "child-2-first",
+            sourceSessionId: "parent",
+            targetSessionId: "child-2",
+            prompt: "second target",
+            createdAt: 110
+        ))
+        try store.enqueue(.init(
+            id: "child-1-first",
+            sourceSessionId: "parent",
+            targetSessionId: "child-1",
+            prompt: "first target",
+            createdAt: 100
+        ))
+        try store.enqueue(.init(
+            id: "child-1-second",
+            sourceSessionId: "parent",
+            targetSessionId: "child-1",
+            prompt: "same target",
+            createdAt: 120
+        ))
+
+        #expect(try store.pendingMessageTargetSessionIds() == ["child-1", "child-2"])
+    }
+
     @Test("released inbox claim can be immediately reclaimed")
     func releasesMessageClaim() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())

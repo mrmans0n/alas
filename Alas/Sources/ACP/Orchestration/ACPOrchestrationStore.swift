@@ -149,6 +149,15 @@ final class ACPOrchestrationStore {
         ).map(decodeMessage)
     }
 
+    func pendingMessageTargetSessionIds() throws -> [String] {
+        try db.query("""
+        SELECT target_session_id
+        FROM delegated_messages
+        GROUP BY target_session_id
+        ORDER BY MIN(created_at) ASC, MIN(rowid) ASC
+        """).compactMap { $0["target_session_id"] as? String }
+    }
+
     func incompleteDelegations() throws -> [ACPDelegationRecord] {
         try db.query(
             "SELECT * FROM delegations WHERE phase IN (?, ?)",
