@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-07-16
+
+### ✨ Features
+
+- Add a review target palette with Shift-Command-R plus CLI and MCP range support (#818).
+- Add diff context expansion controls (#817).
+
+### 🐛 Fixes
+
+- Keep expand pills aligned with diff text (#814).
+- Avoid ACP menu tracking list invalidation (#815).
+- Lazily render stacked diff hunks (#816).
+- Share expand-all state before diff context loads (#819).
+
 ## [0.11.2] - 2026-07-16
 
 ### ✨ Features
