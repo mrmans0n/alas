@@ -1,9 +1,5 @@
 import Foundation
 
-/// Lets a plain message double as a `Swift.Result` failure (e.g.
-/// `Result<Worktree, String>`) without a dedicated error type per call site.
-extension String: Error {}
-
 /// Entrypoint-neutral facade over the app capabilities the CLI (and, later, an
 /// MCP bridge) drive. It speaks domain terms — worktrees, paths, targets — not
 /// wire types, so multiple front ends can reuse it.
@@ -203,6 +199,13 @@ struct AlasActionService {
         await openReview(origin, target)
     }
 
+    /// Failure detail for `reviewOrigin`: a single message describing why the
+    /// `--worktree` override couldn't be resolved.
+    struct ReviewOriginResolutionError: Error, LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     /// The worktree a review command operates on: the explicit `--worktree`
     /// override when given (resolved against the origin's project), else the
     /// origin itself.
@@ -210,16 +213,18 @@ struct AlasActionService {
         origin: Worktree,
         override: String?,
         projectWorktrees: [Worktree]
-    ) -> Swift.Result<Worktree, String> {
+    ) -> Swift.Result<Worktree, ReviewOriginResolutionError> {
         guard let override else { return .success(origin) }
         switch AlasCLIWorktreeResolver.resolve(target: override, worktrees: projectWorktrees) {
         case .matched(let worktree):
             return .success(worktree)
         case .missing(let target):
             let available = projectWorktrees.map(\.branch).joined(separator: ", ")
-            return .failure("unknown worktree \"\(target)\"; available: \(available)")
+            return .failure(ReviewOriginResolutionError(message: "unknown worktree \"\(target)\"; available: \(available)"))
         case .ambiguous(let labels):
-            return .failure("ambiguous worktree \"\(override)\"; matches: \(labels.joined(separator: ", "))")
+            return .failure(ReviewOriginResolutionError(
+                message: "ambiguous worktree \"\(override)\"; matches: \(labels.joined(separator: ", "))"
+            ))
         }
     }
 

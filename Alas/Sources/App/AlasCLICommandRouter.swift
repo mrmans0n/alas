@@ -161,15 +161,15 @@ struct AlasCLICommandRouter {
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
             case .success(let reviewOrigin):
                 return service.reviewLocal(origin: reviewOrigin)
-            case .failure(let message):
-                return .error(message)
+            case .failure(let error):
+                return .error(error.message)
             }
         case .review(.target(let target, let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
             case .success(let reviewOrigin):
                 return await service.reviewTarget(origin: reviewOrigin, target: target)
-            case .failure(let message):
-                return .error(message)
+            case .failure(let error):
+                return .error(error.message)
             }
         case .review(.comments(let sessionID, let state)):
             return service.reviewComments(origin: origin, sessionID: sessionID, filter: state)
