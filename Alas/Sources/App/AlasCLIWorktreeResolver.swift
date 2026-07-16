@@ -21,6 +21,16 @@ enum AlasCLIWorktreeResolver {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing(trimmed) }
 
+        // Absolute paths match a worktree root exactly, and never fall
+        // through to branch/prefix matching.
+        if trimmed.hasPrefix("/") {
+            let standardized = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+            let byPath = worktrees.filter { $0.path.standardizedFileURL.path == standardized }
+            if byPath.count == 1 { return .matched(byPath[0]) }
+            if byPath.count > 1 { return .ambiguous(labels(for: byPath)) }
+            return .missing(trimmed)
+        }
+
         let exactBranch = worktrees.filter { $0.branch == trimmed || $0.name == trimmed }
         if exactBranch.count == 1 { return .matched(exactBranch[0]) }
         if exactBranch.count > 1 { return .ambiguous(labels(for: exactBranch)) }

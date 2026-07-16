@@ -50,6 +50,17 @@ struct AlasCLIWorktreeResolverTests {
         #expect(result == .missing(""))
     }
 
+    @Test func resolvesAbsolutePathTargets() {
+        let worktrees = [
+            Self.worktree(branch: "main", path: "/repo/main"),
+            Self.worktree(branch: "feature-x", path: "/repo/feature-x"),
+        ]
+        #expect(AlasCLIWorktreeResolver.resolve(target: "/repo/feature-x", worktrees: worktrees)
+            == .matched(worktrees[1]))
+        #expect(AlasCLIWorktreeResolver.resolve(target: "/repo/nope", worktrees: worktrees)
+            == .missing("/repo/nope"))
+    }
+
     private static func worktree(name: String? = nil, branch: String, path: String) -> Worktree {
         Worktree(
             id: Worktree.makeId(path: URL(fileURLWithPath: path)),

@@ -4033,6 +4033,10 @@ final class AppState {
                 }
                 remote = matchingRemote
                 number = value
+            case .range, .revision:
+                // Commit ranges and bare revisions are not routed through the
+                // provider path; wiring lands in a follow-up task.
+                return .error("commit ranges and revisions are not supported yet")
             }
 
             guard let provider = providerRegistry.provider(for: remote.kind) else {
