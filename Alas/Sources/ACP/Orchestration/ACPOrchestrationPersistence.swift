@@ -77,6 +77,14 @@ actor ACPOrchestrationPersistence {
         try openedStore().enqueue(message)
     }
 
+    func pendingMessages(targetSessionId: String) throws -> [ACPDelegatedMessage] {
+        try openedStore().pendingMessages(targetSessionId: targetSessionId)
+    }
+
+    func incompleteDelegations() throws -> [ACPDelegationRecord] {
+        try openedStore().incompleteDelegations()
+    }
+
     func claimMessage(
         id: String,
         instanceId: String,

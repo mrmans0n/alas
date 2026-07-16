@@ -520,6 +520,9 @@ final class AppState {
         // hasn't finished by the first git command, gitEnv() falls back to the
         // process PATH (same behaviour as before).
         ShellEnvResolver.shared.resolve()
+        Task { [weak self] in
+            await self?.reconcileInterruptedDelegations()
+        }
     }
 
     /// All worktree IDs currently known to the projects manager (including
@@ -528,6 +531,19 @@ final class AppState {
         Set(projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         })
+    }
+
+    private func reconcileInterruptedDelegations() async {
+        guard let records = try? await acpOrchestrationPersistence.incompleteDelegations() else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        for record in records {
+            try? await acpOrchestrationPersistence.updatePhase(
+                childSessionId: record.childSessionId,
+                phase: .failed,
+                failureMessage: "Alas stopped before delegated session setup completed. Retry from the session menu.",
+                updatedAt: now
+            )
+        }
     }
 
     func toggleRightPaneVisibility() {
@@ -4592,8 +4608,40 @@ final class AppState {
             title = "ACP session"
         }
         _ = mgr.placeholderSession(id: sessionId)
+        await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        guard let messages = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) else {
+            return
+        }
+        await manager.attach(to: sessionId, freshlyCreated: false)
+        guard manager.isWriter(for: sessionId) else { return }
+        for message in messages {
+            guard let claimed = try? await acpOrchestrationPersistence.claimMessage(
+                id: message.id,
+                instanceId: instanceId,
+                token: UUID().uuidString,
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: 60
+            ) else { continue }
+            let accepted = await manager.enqueueDelegatedPrompt(
+                text: claimed.message.prompt,
+                source: ACPDelegatedPromptSource(
+                    sessionId: claimed.message.sourceSessionId,
+                    messageId: claimed.message.id
+                ),
+                into: sessionId
+            )
+            if accepted {
+                try? await acpOrchestrationPersistence.removeDeliveredMessage(
+                    id: claimed.message.id,
+                    claim: claimed.claim
+                )
+            }
+        }
     }
 
     func delegatedSessionSummaries(for sessionId: String) async -> [ACPOrchestrationSessionSummary] {

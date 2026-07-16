@@ -332,6 +332,8 @@ final class ACPSessionOrchestrationCoordinator {
             now: environment.now(),
             staleAfter: 60
         ) else { return }
+        await target.manager.attach(to: claimed.message.targetSessionId, freshlyCreated: false)
+        guard target.manager.isWriter(for: claimed.message.targetSessionId) else { return }
         let accepted = await target.manager.enqueueDelegatedPrompt(
             text: claimed.message.prompt,
             source: ACPDelegatedPromptSource(
@@ -342,9 +344,6 @@ final class ACPSessionOrchestrationCoordinator {
         )
         guard accepted else { return }
         try? await environment.persistence.removeDeliveredMessage(id: claimed.message.id, claim: claimed.claim)
-        Task { @MainActor [weak manager = target.manager] in
-            await manager?.attach(to: claimed.message.targetSessionId, freshlyCreated: false)
-        }
         environment.notifyChanged()
     }
 

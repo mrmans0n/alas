@@ -149,6 +149,13 @@ final class ACPOrchestrationStore {
         ).map(decodeMessage)
     }
 
+    func incompleteDelegations() throws -> [ACPDelegationRecord] {
+        try db.query(
+            "SELECT * FROM delegations WHERE phase IN (?, ?)",
+            bindings: [ACPDelegationPhase.creatingWorktree.rawValue, ACPDelegationPhase.starting.rawValue]
+        ).map(decodeDelegation)
+    }
+
     func claimMessage(
         id: String,
         instanceId: String,
