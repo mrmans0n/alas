@@ -227,7 +227,7 @@ fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String
         // otherwise silently finish the current review).
         let mut without_separator: Vec<&str> = args[..separator].to_vec();
         without_separator.extend_from_slice(&args[separator + 1..]);
-        return parse_review_open(&without_separator);
+        return parse_review_open(&without_separator, base);
     }
     match args.first().copied() {
         None => Ok(Command::Review {
@@ -248,14 +248,14 @@ fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String
         }
         Some("resolve") => parse_review_resolve(&args[1..]),
         Some("finish") => parse_review_finish(&args[1..]),
-        Some(_) => parse_review_open(args),
+        Some(_) => parse_review_open(args, base),
     }
 }
 
 /// `alas review [target] [--worktree <name-or-path>]`. The target is a PR/MR
 /// number or URL, a commit range (`base..head` / `base...head`), a branch, or
 /// a revision — classified by the app, not here.
-fn parse_review_open(args: &[&str]) -> Result<Command, String> {
+fn parse_review_open(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
     const USAGE: &str = "usage: alas review [target] [--worktree <name-or-path>]";
     let mut target: Option<String> = None;
     let mut worktree: Option<String> = None;
@@ -267,7 +267,12 @@ fn parse_review_open(args: &[&str]) -> Result<Command, String> {
                     return Err(USAGE.into());
                 }
                 i += 1;
-                worktree = Some(flag_value(args, i).ok_or(USAGE)?.to_string());
+                let value = flag_value(args, i).ok_or(USAGE)?;
+                worktree = Some(if value.contains('/') {
+                    alas_client::absolutize(base, value)
+                } else {
+                    value.to_string()
+                });
             }
             value if !value.starts_with("--") && target.is_none() => {
                 target = Some(value.to_string());
@@ -1068,6 +1073,77 @@ mod tests {
                 "target {name:?} should escape to a plain review target"
             );
         }
+    }
+
+    #[test]
+    fn review_absolutizes_path_shaped_worktree_values() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "../sibling"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo/sibling".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "./nested"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo/current/nested".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_leaves_bare_worktree_names_untouched() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "feature-x"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("feature-x".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_worktree_already_absolute_path_passes_through() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "/already/absolute/path"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/already/absolute/path".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_double_dash_composes_with_absolutized_worktree() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "../sibling", "--", "finish"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("finish".into()),
+                worktree: Some("/repo/sibling".into())
+            }
+        );
     }
 
     #[test]
