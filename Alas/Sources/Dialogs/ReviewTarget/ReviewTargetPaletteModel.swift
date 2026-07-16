@@ -42,10 +42,18 @@ final class ReviewTargetPaletteModel {
     private(set) var canGoBack = true
     var query: String = "" {
         didSet {
-            if query != oldValue {
+            guard query != oldValue else { return }
+            // Level 2 always has a non-selectable `Commits` header at row 0
+            // (see `targetRows()`); snapping blindly to 0 after a filter
+            // keystroke would land a following Enter on that header instead
+            // of the first matching commit/branch. Level 1 has no header
+            // rows, so 0 is already a real, selectable entry there.
+            if case .targets = level {
+                setSelectedIndex(0, selectable: targetRows().map(\.isSelectable))
+            } else {
                 selectedIndex = 0
-                scrollToSelectionTick &+= 1
             }
+            scrollToSelectionTick &+= 1
         }
     }
     private(set) var selectedIndex = 0

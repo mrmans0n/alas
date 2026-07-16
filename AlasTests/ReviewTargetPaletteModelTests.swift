@@ -131,6 +131,24 @@ struct ReviewTargetPaletteModelTests {
         #expect(rows[1].isSelectable)
     }
 
+    @Test func filteringAtTargetLevelSnapsSelectionPastTheHeaderSoEnterFiresImmediately() async {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        model.open(prefill: w)
+        var opened: ReviewSessionTarget?
+        let env = environment(
+            commits: [commit("a1a1a1a1", "fix login"), commit("b2b2b2b2", "add export")],
+            onOpen: { t, _ in opened = t }
+        )
+        await model.loadTargets(environment: env)
+        model.query = "export"
+        #expect(model.targetRows() == [.header("Commits"), .commit(commit("b2b2b2b2", "add export"))])
+        #expect(model.selectedIndex == 1)
+        await model.activateSelection(environment: env)
+        #expect(opened?.kind == .commit)
+        #expect(opened?.payload == .commit(sha: "b2b2b2b2"))
+    }
+
     @Test func enterOnCommitLaunchesSingleCommitReview() async {
         let model = ReviewTargetPaletteModel()
         let w = worktree("feature")
