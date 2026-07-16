@@ -548,7 +548,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))))
 
         guard case .text(let lines) = response, lines.count == 2 else {
             Issue.record("expected two-line text response, got \(response)")
@@ -569,17 +569,79 @@ struct AlasCLICommandRouterTests {
         let router = Self.router(
             origin: current,
             visibleWorktrees: [current],
-            openProviderReview: { origin, target in
+            openReview: { origin, target in
                 opened = (origin, target)
                 return .ok
             }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "123"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("123", worktree: nil))))
 
         #expect(response == .ok)
         #expect(opened?.origin == current)
         #expect(opened?.target == "123")
+    }
+
+    @Test func reviewLocalHonorsWorktreeOverride() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let sibling = Self.worktree(branch: "feature-x", path: "/tmp/repo-feature-x", projectId: "p1")
+        var reviewedIn: Worktree?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current, sibling],
+            openReviewChanges: { reviewedIn = $0 }
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.localChanges(worktree: "feature-x"))
+        ))
+
+        if case .error(let message) = response { Issue.record("unexpected error: \(message)") }
+        #expect(reviewedIn?.branch == "feature-x")
+    }
+
+    @Test func reviewWithUnknownWorktreeOverrideErrors() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current]
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.localChanges(worktree: "nope"))
+        ))
+
+        guard case .error(let message) = response else {
+            Issue.record("expected error")
+            return
+        }
+        #expect(message.contains("unknown worktree"))
+    }
+
+    @Test func reviewTargetHonorsWorktreeOverride() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let sibling = Self.worktree(branch: "feature-x", path: "/tmp/repo-feature-x", projectId: "p1")
+        var reviewedIn: Worktree?
+        var reviewedTarget: String?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current, sibling],
+            openReview: { worktree, target in
+                reviewedIn = worktree
+                reviewedTarget = target
+                return .ok
+            }
+        )
+
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("main..HEAD", worktree: "feature-x"))
+        ))
+
+        #expect(reviewedIn?.branch == "feature-x")
+        #expect(reviewedTarget == "main..HEAD")
     }
 
     private func makeDraftComment(
@@ -614,12 +676,13 @@ struct AlasCLICommandRouterTests {
         sessionStore: ReviewSessionStore? = nil,
         onChange: @escaping () -> Void = {},
         gitStatus: @escaping (URL) async throws -> [ChangedFile] = { _ in [] },
-        providerReviewOriginalPath: @escaping (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
+        providerReviewOriginalPath: @escaping (ReviewDraftSessionID, String) async -> String? = { _, _ in nil },
+        visibleWorktrees: [Worktree]? = nil
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
             sessionWorktreeId: { $0 == "s1" ? worktree.id : nil },
             originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            visibleWorktrees: { visibleWorktrees ?? [worktree] },
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             draftCommentStore: { store },
@@ -701,6 +764,261 @@ struct AlasCLICommandRouterTests {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(line.utf8))
         #expect(decoded.isEmpty)
+    }
+
+    @Test func reviewCommentsAcceptsAnExplicitSessionIDFromASiblingWorktreeInTheSameProject() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/tmp/sibling-repo"), status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let siblingComment = makeDraftComment(id: "sibling-comment", worktreeID: "wt2")
+        try store.save(siblingComment)
+
+        let router = makeReviewRouter(worktree: worktree, store: store, visibleWorktrees: [worktree, sibling])
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.comments(sessionID: siblingComment.sessionID.rawValue, state: .all))
+        ))
+
+        guard case .text(let lines) = response, let line = lines.first else {
+            Issue.record("expected .text response, got \(response)")
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(line.utf8))
+        #expect(decoded.map(\.id) == ["sibling-comment"])
+    }
+
+    @Test func commentAddResolvesPathAgainstTheSiblingWorktreeForASiblingSession() async throws {
+        let originRoot = try makeFile("origin/a.swift").deletingLastPathComponent()
+        let siblingRoot = try makeFile("sibling/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: originRoot, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: siblingRoot, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: "wt2", worktreePath: siblingRoot, scope: .all)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            },
+            visibleWorktrees: [worktree, sibling]
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: siblingRoot.appendingPathComponent("a.swift").path,
+                startLine: 4, endLine: nil, side: nil,
+                body: "sibling comment", sessionID: session.rawValue
+            ))
+        ))
+
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        #expect(lines[1].contains("comment_id"))
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].path == "a.swift")
+        #expect(saved[0].fileID == DiffReviewFileID(namespace: "unstaged", path: "a.swift"))
+    }
+
+    /// Regression test: the CLI (`alas review comment`) always absolutizes a
+    /// relative `path` against the calling terminal's own cwd, regardless of
+    /// which worktree the review session actually targets. When a session was
+    /// opened against a sibling worktree via `--worktree`, but the comment is
+    /// later filed from a terminal still rooted in `origin`, the path the CLI
+    /// hands Swift is absolute and rooted in `origin`, not the sibling — even
+    /// though the user typed an ordinary relative path. Recovering that
+    /// relative form by relativizing against `origin` instead (once the
+    /// primary attempt against the sibling fails) must still succeed.
+    @Test func commentAddRecoversARelativePathWhenTheAbsolutizedPathIsRootedInTheOriginWorktree() async throws {
+        let originRoot = try makeFile("origin/a.swift").deletingLastPathComponent()
+        let siblingRoot = try makeFile("sibling/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: originRoot, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: siblingRoot, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: "wt2", worktreePath: siblingRoot, scope: .all)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "Sources/Foo.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            },
+            visibleWorktrees: [worktree, sibling]
+        )
+        // Simulates exactly what the CLI parser produces: it absolutizes the
+        // bare relative path "Sources/Foo.swift" against the caller's cwd
+        // (`origin`), even though `sessionID` targets the sibling session.
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: originRoot.appendingPathComponent("Sources/Foo.swift").path,
+                startLine: 10, endLine: nil, side: nil,
+                body: "recovered path comment", sessionID: session.rawValue
+            ))
+        ))
+
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        #expect(lines[1].contains("comment_id"))
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].path == "Sources/Foo.swift")
+    }
+
+    @Test func reviewFinishSucceedsForASiblingWorktreeSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let siblingRoot = URL(fileURLWithPath: "/tmp/sibling-repo")
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: siblingRoot, status: .clean, lastActivity: Date()
+        )
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sessionStore = ReviewSessionStore(url: directory.appendingPathComponent("sessions.json"))
+        let target = ReviewSessionTarget.localChanges(worktreeID: "wt2", repositoryPath: siblingRoot, scope: .all)
+        try sessionStore.save(ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        ))
+        var changed = 0
+
+        let router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(url: directory.appendingPathComponent("drafts.json")),
+            sessionStore: sessionStore,
+            onChange: { changed += 1 },
+            visibleWorktrees: [worktree, sibling]
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.finish(
+                sessionID: target.draftSessionID.rawValue,
+                verdict: .approve,
+                summary: ""
+            ))
+        ))
+
+        #expect(response == .ok)
+        #expect(changed == 1)
+        let record = try #require(try sessionStore.load(id: target.id))
+        #expect(record.status == .reviewed)
+        #expect(record.verdict?.verdict == .approve)
+    }
+
+    @Test func replyAndResolveSucceedForACommentOwnedBySiblingWorktreeSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let sibling = Worktree(
+            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/tmp/sibling-repo"), status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        try store.save(makeDraftComment(id: "sibling-c1", worktreeID: "wt2"))
+
+        let router = makeReviewRouter(worktree: worktree, store: store, visibleWorktrees: [worktree, sibling])
+
+        let replyResponse = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.reply(commentID: "sibling-c1", body: "on it"))
+        ))
+        #expect(replyResponse == .ok)
+        let afterReply = try #require(try store.find(commentID: "sibling-c1"))
+        #expect(afterReply.allReplies.map(\.bodyMarkdown) == ["on it"])
+
+        let resolveResponse = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.resolve(commentID: "sibling-c1", reply: nil, reopen: false))
+        ))
+        #expect(resolveResponse == .ok)
+        let afterResolve = try #require(try store.find(commentID: "sibling-c1"))
+        #expect(afterResolve.state == .resolved)
+        #expect(afterResolve.resolvedBy?.isAgent == true)
+    }
+
+    /// Regression test: `origin` can be a worktree the user has hidden for
+    /// this project, which `visibleWorktrees()` (and thus `projectWorktrees`)
+    /// excludes — but the CLI still resolves `origin` itself directly via
+    /// `sessionId`/`cwd`, independent of visibility. A plain review session
+    /// with no `--worktree` override, opened and used from that same hidden
+    /// worktree, must keep resolving even though `origin` is absent from
+    /// `projectWorktrees`.
+    @Test func reviewFinishSucceedsForASessionOwnedByAHiddenOriginWorktree() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var changed = 0
+
+        // `origin` ("wt1") is deliberately absent from `visibleWorktrees`,
+        // simulating a worktree hidden for this project — `projectWorktrees`
+        // built from it is empty.
+        let router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(url: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent("drafts.json")),
+            onChange: { changed += 1 },
+            visibleWorktrees: []
+        )
+
+        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.finish(
+                sessionID: sessionID.rawValue,
+                verdict: .approve,
+                summary: ""
+            ))
+        ))
+
+        #expect(response == .ok)
+        #expect(changed == 1)
     }
 
     @Test func commentAddFilesAgentCommentIntoLocalChangesSession() async throws {
@@ -1219,7 +1537,7 @@ struct AlasCLICommandRouterTests {
         router.openReviewChanges = { _ in openedReview = true }
 
         let response = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)
+            version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))
         ))
 
         #expect(openedReview)
@@ -1584,7 +1902,7 @@ struct AlasCLICommandRouterTests {
         createWorktree: @escaping (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in .ok },
         deleteWorktree: @escaping (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in .ok },
         openReviewChanges: @escaping (Worktree) -> Void = { _ in },
-        openProviderReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok },
+        openReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok },
         activateApp: @escaping () -> Void = {}
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
@@ -1597,7 +1915,7 @@ struct AlasCLICommandRouterTests {
             createWorktree: createWorktree,
             deleteWorktree: deleteWorktree,
             openReviewChanges: openReviewChanges,
-            openProviderReview: openProviderReview,
+            openReview: openReview,
             activateApp: activateApp
         )
     }

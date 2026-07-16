@@ -16,13 +16,7 @@ struct GitService {
     }
 
     func branches(at repoPath: URL) async throws -> [String] {
-        let local = try await Process.git(
-            ["branch", "--list", "--format=%(refname:short)"],
-            cwd: repoPath
-        )
-        guard local.exitCode == 0 else {
-            throw BranchListError(stderr: local.stderr)
-        }
+        let local = try await localBranches(at: repoPath)
 
         let remote = try await Process.git(
             ["branch", "--remotes", "--format=%(refname:short)"],
@@ -32,7 +26,23 @@ struct GitService {
             throw BranchListError(stderr: remote.stderr)
         }
 
-        return Self.parseBranchList(local.stdout + "\n" + remote.stdout)
+        return Self.parseBranchList(local.joined(separator: "\n") + "\n" + remote.stdout)
+    }
+
+    /// Local branch names only — excludes remote-tracking branches (e.g.
+    /// `origin/main`). Use this instead of `branches(at:)` whenever "is this
+    /// a local branch" is the actual question, since `branches(at:)`
+    /// deliberately returns the union of local and remote-tracking branches
+    /// for callers (branch pickers) that want to display both.
+    func localBranches(at repoPath: URL) async throws -> [String] {
+        let local = try await Process.git(
+            ["branch", "--list", "--format=%(refname:short)"],
+            cwd: repoPath
+        )
+        guard local.exitCode == 0 else {
+            throw BranchListError(stderr: local.stderr)
+        }
+        return Self.parseBranchList(local.stdout)
     }
 
     static func parseBranchList(_ output: String) -> [String] {
@@ -293,7 +303,7 @@ extension GitService {
     /// commit itself must resolve and have no parents. Any other resolution
     /// failure (a stale or invalid base) is thrown, so we never silently diff
     /// against the empty tree and report every file in `head` as newly added.
-    private func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
+    func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
         let result = try await Process.git(["rev-parse", "--verify", "--quiet", base], cwd: worktreePath)
         let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.exitCode == 0, !resolved.isEmpty { return resolved }

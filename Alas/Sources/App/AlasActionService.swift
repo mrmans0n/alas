@@ -5,7 +5,7 @@ import Foundation
 /// wire types, so multiple front ends can reuse it.
 @MainActor
 struct AlasActionService {
-    private struct FileIdentity: Equatable {
+    struct FileIdentity: Equatable {
         let systemNumber: UInt64
         let fileNumber: UInt64
     }
@@ -23,7 +23,7 @@ struct AlasActionService {
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
-    var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+    var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
@@ -195,23 +195,86 @@ struct AlasActionService {
         ])
     }
 
-    func reviewProvider(origin: Worktree, target: String) async -> AlasCLIResponse {
-        await openProviderReview(origin, target)
+    func reviewTarget(origin: Worktree, target: String) async -> AlasCLIResponse {
+        await openReview(origin, target)
     }
 
-    func reviewComments(origin: Worktree, sessionID: String?, filter: ReviewCommentWireFilter) -> AlasCLIResponse {
+    /// Failure detail for `reviewOrigin`: a single message describing why the
+    /// `--worktree` override couldn't be resolved.
+    struct ReviewOriginResolutionError: Error, LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// The worktree a review command operates on: the explicit `--worktree`
+    /// override when given (resolved against the origin's project), else the
+    /// origin itself.
+    func reviewOrigin(
+        origin: Worktree,
+        override: String?,
+        projectWorktrees: [Worktree]
+    ) -> Swift.Result<Worktree, ReviewOriginResolutionError> {
+        guard let override else { return .success(origin) }
+        switch AlasCLIWorktreeResolver.resolve(target: override, worktrees: projectWorktrees) {
+        case .matched(let worktree):
+            return .success(worktree)
+        case .missing(let target):
+            let available = projectWorktrees.map(\.branch).joined(separator: ", ")
+            return .failure(ReviewOriginResolutionError(message: "unknown worktree \"\(target)\"; available: \(available)"))
+        case .ambiguous(let labels):
+            return .failure(ReviewOriginResolutionError(
+                message: "ambiguous worktree \"\(override)\"; matches: \(labels.joined(separator: ", "))"
+            ))
+        }
+    }
+
+    /// The worktree a review session id actually targets: `origin` itself
+    /// when the session is scoped to it, else searched across the caller's
+    /// whole project (not just `origin`) — a `--worktree` override can open
+    /// a review session scoped to a sibling worktree. `origin` is checked
+    /// directly first because it can be a worktree the user has hidden,
+    /// which `projectWorktrees` (built from `visibleWorktrees()`) excludes;
+    /// without this, a plain, no-override review session opened and used
+    /// from a hidden worktree would fail to resolve even though no sibling
+    /// worktree is involved at all. Returns nil when neither `origin` nor
+    /// any worktree in the project matches, which callers treat the same as
+    /// an unknown/foreign session.
+    private static func resolveSessionWorktree(
+        for sessionID: ReviewDraftSessionID,
+        origin: Worktree,
+        projectWorktrees: [Worktree]
+    ) -> Worktree? {
+        if sessionID.isFor(worktreeID: origin.id) { return origin }
+        return projectWorktrees.first { sessionID.isFor(worktreeID: $0.id) }
+    }
+
+    func reviewComments(
+        origin: Worktree,
+        sessionID: String?,
+        filter: ReviewCommentWireFilter,
+        projectWorktrees: [Worktree]
+    ) -> AlasCLIResponse {
         let all: [ReviewDraftComment]
         do {
             all = try draftCommentStore().loadAll()
         } catch {
             return .error("could not read review comments: \(error.localizedDescription)")
         }
-        let scoped = all.filter { comment in
-            guard comment.sessionID.isFor(worktreeID: origin.id) else { return false }
-            if let sessionID {
-                return comment.sessionID.rawValue == sessionID
+        let scoped: [ReviewDraftComment]
+        if let sessionID {
+            // A session id resolving to any worktree in the caller's project
+            // (not just `origin`) is in-project and its comments can be
+            // listed outright; a session that doesn't resolve at all is
+            // foreign and falls back to the origin-only scoping below, which
+            // naturally yields nothing for it.
+            if let parsed = ReviewDraftSessionID(rawValue: sessionID),
+               Self.resolveSessionWorktree(for: parsed, origin: origin, projectWorktrees: projectWorktrees) != nil {
+                scoped = all.filter { $0.sessionID.rawValue == sessionID }
+            } else {
+                scoped = all.filter { $0.sessionID.isFor(worktreeID: origin.id) && $0.sessionID.rawValue == sessionID }
             }
-            return true
+        } else {
+            scoped = all.filter { $0.sessionID.isFor(worktreeID: origin.id) }
         }
         let filtered = scoped.filter { comment in
             switch filter {
@@ -244,24 +307,40 @@ struct AlasActionService {
         endLine: Int?,
         side: String?,
         body: String,
-        sessionID: String?
+        sessionID: String?,
+        projectWorktrees: [Worktree]
     ) async -> AlasCLIResponse {
         let targetSessionID: ReviewDraftSessionID
+        let worktreeForPath: Worktree
         if let sessionID {
             guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
-                  parsed.isFor(worktreeID: origin.id) else {
+                  let resolved = Self.resolveSessionWorktree(for: parsed, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review session id")
             }
             targetSessionID = parsed
+            worktreeForPath = resolved
         } else {
             targetSessionID = .localChanges(worktreeID: origin.id, worktreePath: origin.path, scope: .all)
+            worktreeForPath = origin
         }
-        guard let relativePath = Self.worktreeRelativePath(path, worktreeRoot: origin.path),
+        // The CLI always absolutizes `path` against the calling terminal's
+        // own cwd (`origin`), never against `worktreeForPath` — so when a
+        // `--worktree` override put the session on a sibling worktree, a
+        // perfectly ordinary relative path the user typed arrives here as an
+        // absolute path rooted in `origin`, not the sibling. Falling back to
+        // relativizing against `origin` recovers that original relative form
+        // whenever the primary attempt (against the session's own worktree)
+        // fails and an override is actually in play; the recovered string is
+        // already worktree-agnostic, so no further resolution is needed.
+        guard let relativePath = Self.worktreeRelativePath(path, worktreeRoot: worktreeForPath.path)
+            ?? (worktreeForPath.id != origin.id
+                ? Self.worktreeRelativePath(path, worktreeRoot: origin.path)
+                : nil),
               !relativePath.isEmpty else {
             return .error("review comment path must point at a file inside the worktree")
         }
         let namespace: String
-        switch await fileIDNamespace(for: targetSessionID, path: relativePath, worktreePath: origin.path) {
+        switch await fileIDNamespace(for: targetSessionID, path: relativePath, worktreePath: worktreeForPath.path) {
         case .resolved(let resolved):
             namespace = resolved
         case .failed(let message):
@@ -312,23 +391,35 @@ struct AlasActionService {
         origin: Worktree,
         sessionID: String?,
         verdict: ReviewVerdict,
-        summary: String
+        summary: String,
+        projectWorktrees: [Worktree]
     ) -> AlasCLIResponse {
-        let defaultSessionID = ReviewDraftSessionID.localChanges(
-            worktreeID: origin.id,
-            worktreePath: origin.path,
-            scope: .all
-        )
+        // The worktree the finished session actually lives in — `origin`
+        // when there's no explicit session (or it's the origin's own), else
+        // the sibling worktree a `--worktree` override opened the session
+        // against.
+        let sessionWorktree: Worktree
         let draftSessionID: ReviewDraftSessionID
         if let sessionID {
             guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
-                  parsed.isFor(worktreeID: origin.id) else {
+                  let resolved = Self.resolveSessionWorktree(for: parsed, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review session id")
             }
             draftSessionID = parsed
+            sessionWorktree = resolved
         } else {
-            draftSessionID = defaultSessionID
+            sessionWorktree = origin
+            draftSessionID = ReviewDraftSessionID.localChanges(
+                worktreeID: origin.id,
+                worktreePath: origin.path,
+                scope: .all
+            )
         }
+        let defaultSessionID = ReviewDraftSessionID.localChanges(
+            worktreeID: sessionWorktree.id,
+            worktreePath: sessionWorktree.path,
+            scope: .all
+        )
         guard verdict != .requestChanges
             || !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .error("request_changes requires a non-empty summary")
@@ -337,7 +428,7 @@ struct AlasActionService {
         let sessions = reviewSessionStore()
         do {
             let record: ReviewSessionRecord
-            if let existing = try sessions.list(worktreeID: origin.id).first(where: {
+            if let existing = try sessions.list(worktreeID: sessionWorktree.id).first(where: {
                 $0.target.draftSessionID == draftSessionID
             }) {
                 record = existing
@@ -349,8 +440,8 @@ struct AlasActionService {
                     return .error("unknown review session id")
                 }
                 let target = ReviewSessionTarget.localChanges(
-                    worktreeID: origin.id,
-                    repositoryPath: origin.path,
+                    worktreeID: sessionWorktree.id,
+                    repositoryPath: sessionWorktree.path,
                     scope: .all
                 )
                 let timestamp = now()
@@ -509,11 +600,16 @@ struct AlasActionService {
         }
     }
 
-    func reviewReply(origin: Worktree, commentID: String, body: String) -> AlasCLIResponse {
+    func reviewReply(
+        origin: Worktree,
+        commentID: String,
+        body: String,
+        projectWorktrees: [Worktree]
+    ) -> AlasCLIResponse {
         let store = draftCommentStore()
         do {
             guard var comment = try store.find(commentID: commentID),
-                  comment.sessionID.isFor(worktreeID: origin.id) else {
+                  Self.resolveSessionWorktree(for: comment.sessionID, origin: origin, projectWorktrees: projectWorktrees) != nil else {
                 return .error("unknown review comment id \"\(commentID)\"")
             }
             let timestamp = now()
@@ -534,11 +630,17 @@ struct AlasActionService {
         return .ok
     }
 
-    func reviewResolve(origin: Worktree, commentID: String, reply: String?, reopen: Bool) -> AlasCLIResponse {
+    func reviewResolve(
+        origin: Worktree,
+        commentID: String,
+        reply: String?,
+        reopen: Bool,
+        projectWorktrees: [Worktree]
+    ) -> AlasCLIResponse {
         let store = draftCommentStore()
         do {
             guard var comment = try store.find(commentID: commentID),
-                  comment.sessionID.isFor(worktreeID: origin.id) else {
+                  let commentWorktree = Self.resolveSessionWorktree(for: comment.sessionID, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review comment id \"\(commentID)\"")
             }
             let timestamp = now()
@@ -561,7 +663,7 @@ struct AlasActionService {
             // status (a separate store) is swallowed rather than reported
             // as an overall failure a caller would retry.
             try? ReviewHandoffProgress.recomputeAndPersist(
-                worktreeID: origin.id,
+                worktreeID: commentWorktree.id,
                 sessionStore: reviewSessionStore(),
                 isResolved: { id in (try? store.find(commentID: id))?.state == .resolved },
                 now: timestamp
@@ -579,7 +681,7 @@ struct AlasActionService {
         var bestMatch: (worktree: Worktree, relativePath: String, rootComponentCount: Int)?
         for worktree in visibleWorktrees() {
             let rootURL = worktree.path.standardizedFileURL
-            guard let match = relativePathAndDepth(for: url, in: rootURL) else { continue }
+            guard let match = Self.relativePathAndDepth(for: url, in: rootURL) else { continue }
             if let currentBest = bestMatch,
                match.rootComponentCount <= currentBest.rootComponentCount {
                 continue
@@ -590,7 +692,11 @@ struct AlasActionService {
         return (bestMatch.worktree, bestMatch.relativePath)
     }
 
-    private func relativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
+    /// Widened from `private` to `nonisolated static` so `AlasCLIWorktreeResolver`
+    /// (a stateless enum with no `AlasActionService` instance to call
+    /// `visibleWorktrees()` on) can reuse the same containing-worktree lookup
+    /// logic against its own `worktrees: [Worktree]` parameter.
+    nonisolated static func relativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
         if let match = relativePathAndDepth(
             targetComponents: url.standardizedFileURL.pathComponents,
             rootComponents: rootURL.pathComponents
@@ -604,7 +710,7 @@ struct AlasActionService {
         ) ?? fileSystemRelativePathAndDepth(for: url, in: rootURL)
     }
 
-    private func relativePathAndDepth(
+    nonisolated static func relativePathAndDepth(
         targetComponents: [String],
         rootComponents: [String]
     ) -> (relativePath: String, rootComponentCount: Int)? {
@@ -615,7 +721,7 @@ struct AlasActionService {
         return (relative, rootComponents.count)
     }
 
-    private func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
+    private nonisolated static func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
         guard let rootIdentity = Self.fileIdentity(at: rootURL.path) else { return nil }
         var ancestor = url.deletingLastPathComponent()
         var relativeComponents = [url.lastPathComponent]
@@ -630,7 +736,7 @@ struct AlasActionService {
         return nil
     }
 
-    private static func fileIdentity(at path: String) -> FileIdentity? {
+    nonisolated static func fileIdentity(at path: String) -> FileIdentity? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let systemNumber = attributes[.systemNumber] as? NSNumber,
               let fileNumber = attributes[.systemFileNumber] as? NSNumber else { return nil }

@@ -20,7 +20,8 @@ usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
-usage: alas review [pr-number-or-url]
+usage: alas review [target] [--worktree <name-or-path>]
+usage: alas review -- <target> [--worktree <name-or-path>]  (escapes a target named like a review subcommand)
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
 usage: alas review reply <comment-id> <body>
 usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
@@ -218,8 +219,21 @@ usage: alas open <path> --line <n> [--end-line <n>]";
 pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
 
 fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    if let Some(separator) = args.iter().position(|arg| *arg == "--") {
+        // Force review-open interpretation regardless of what the target
+        // looks like — lets a branch/tag literally named `finish`,
+        // `comments`, etc. be reviewed instead of misfiring into the
+        // matching subcommand below (e.g. `alas review finish` would
+        // otherwise silently finish the current review).
+        let mut without_separator: Vec<&str> = args[..separator].to_vec();
+        without_separator.extend_from_slice(&args[separator + 1..]);
+        return parse_review_open(&without_separator, base);
+    }
     match args.first().copied() {
-        None => Ok(Command::Review { target: None }),
+        None => Ok(Command::Review {
+            target: None,
+            worktree: None,
+        }),
         Some("comments") => parse_review_comments(&args[1..]),
         Some("comment") => parse_review_comment(&args[1..], base),
         Some("reply") => {
@@ -234,11 +248,47 @@ fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String
         }
         Some("resolve") => parse_review_resolve(&args[1..]),
         Some("finish") => parse_review_finish(&args[1..]),
-        Some(target) if args.len() == 1 && !target.starts_with("--") => Ok(Command::Review {
-            target: Some(target.to_string()),
-        }),
-        _ => Err(USAGE_ALL.into()),
+        Some(_) => parse_review_open(args, base),
     }
+}
+
+/// `alas review [target] [--worktree <name-or-path>]`. The target is a PR/MR
+/// number or URL, a commit range (`base..head` / `base...head`), a branch, or
+/// a revision — classified by the app, not here.
+fn parse_review_open(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review [target] [--worktree <name-or-path>]";
+    let mut target: Option<String> = None;
+    let mut worktree: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--worktree" => {
+                if worktree.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                let value = flag_value(args, i).ok_or(USAGE)?;
+                worktree = Some(
+                    if value == "."
+                        || value == ".."
+                        || value.starts_with('/')
+                        || value.starts_with("./")
+                        || value.starts_with("../")
+                    {
+                        alas_client::absolutize(base, value)
+                    } else {
+                        value.to_string()
+                    },
+                );
+            }
+            value if !value.starts_with("--") && target.is_none() => {
+                target = Some(value.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::Review { target, worktree })
 }
 
 fn parse_review_finish(args: &[&str]) -> Result<Command, String> {
@@ -711,7 +761,10 @@ mod tests {
         assert!(parse(&s(&["review", "1", "2"]), Path::new("/b")).is_err());
         assert_eq!(
             parse(&s(&["review"]), Path::new("/b")).unwrap(),
-            Command::Review { target: None }
+            Command::Review {
+                target: None,
+                worktree: None
+            }
         );
     }
 
@@ -956,7 +1009,250 @@ mod tests {
         assert_eq!(
             parse(&s(&["review", "123"]), Path::new("/b")).unwrap(),
             Command::Review {
-                target: Some("123".into())
+                target: Some("123".into()),
+                worktree: None
+            }
+        );
+    }
+
+    #[test]
+    fn review_parses_worktree_flag_with_and_without_target() {
+        assert_eq!(
+            parse(
+                &s(&["review", "abc123", "--worktree", "feature-x"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("abc123".into()),
+                worktree: Some("feature-x".into())
+            }
+        );
+        assert_eq!(
+            parse(&s(&["review", "--worktree", "feature-x"]), Path::new("/b")).unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("feature-x".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "main..HEAD", "--worktree", "feature-x"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("main..HEAD".into()),
+                worktree: Some("feature-x".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_rejects_bad_worktree_flag_usage() {
+        assert!(parse(&s(&["review", "--worktree"]), Path::new("/b")).is_err());
+        assert!(
+            parse(
+                &s(&["review", "x", "--worktree", "--flag"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["review", "x", "--worktree", "a", "--worktree", "b"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(parse(&s(&["review", "x", "--unknown", "v"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_double_dash_escapes_subcommand_like_targets() {
+        for name in ["finish", "comments", "comment", "reply", "resolve"] {
+            assert_eq!(
+                parse(&s(&["review", "--", name]), Path::new("/b")).unwrap(),
+                Command::Review {
+                    target: Some(name.into()),
+                    worktree: None
+                },
+                "target {name:?} should escape to a plain review target"
+            );
+        }
+    }
+
+    #[test]
+    fn review_absolutizes_path_shaped_worktree_values() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "../sibling"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo/sibling".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "./nested"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo/current/nested".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_leaves_bare_worktree_names_untouched() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "feature-x"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("feature-x".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_worktree_already_absolute_path_passes_through() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "/already/absolute/path"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/already/absolute/path".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_leaves_slash_named_worktree_branches_untouched() {
+        // Branch names containing `/` are an extremely common convention
+        // (`feature/foo`, `release/1.0`, `bugfix/login-crash`). They must
+        // not be mistaken for paths just because they contain a slash —
+        // only an `/`, `./`, or `../` prefix makes a value path-shaped.
+        for name in ["feature/foo", "release/1.0", "bugfix/login-crash"] {
+            assert_eq!(
+                parse(
+                    &s(&["review", "--worktree", name]),
+                    Path::new("/repo/current")
+                )
+                .unwrap(),
+                Command::Review {
+                    target: None,
+                    worktree: Some(name.into())
+                },
+                "worktree {name:?} should pass through unmodified"
+            );
+        }
+
+        // A bare value like `sub/dir` could theoretically be a genuine
+        // relative subdirectory, but without an explicit `./` prefix it is
+        // treated as a name, not a path. This is an intentional tradeoff:
+        // a user who means a relative subdirectory can type `./sub/dir`.
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "sub/dir"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("sub/dir".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_absolutizes_bare_dot_and_dotdot_worktree_values() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "."]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo/current".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", ".."]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("/repo".into())
+            }
+        );
+
+        // Regression guard: `.`/`..` handling must not broaden the check
+        // back toward matching other bare, slash-containing branch names.
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "feature/foo"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: None,
+                worktree: Some("feature/foo".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_double_dash_composes_with_absolutized_worktree() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "../sibling", "--", "finish"]),
+                Path::new("/repo/current")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("finish".into()),
+                worktree: Some("/repo/sibling".into())
+            }
+        );
+    }
+
+    #[test]
+    fn review_double_dash_composes_with_worktree_flag_on_either_side() {
+        assert_eq!(
+            parse(
+                &s(&["review", "--worktree", "feature", "--", "finish"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("finish".into()),
+                worktree: Some("feature".into())
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "--", "finish", "--worktree", "feature"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Review {
+                target: Some("finish".into()),
+                worktree: Some("feature".into())
             }
         );
     }

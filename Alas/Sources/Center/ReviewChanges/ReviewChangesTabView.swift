@@ -92,8 +92,6 @@ struct ReviewChangesTabView: View {
     @State private var activeLoadID = UUID()
     @State private var reviewSessionLaunchError: String?
     @State private var showWhitespace = false
-    @State private var showScopePicker = false
-    @State private var scopeBranches: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -111,43 +109,6 @@ struct ReviewChangesTabView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             try? draftCommentController?.load()
-        }
-        .sheet(isPresented: $showScopePicker) {
-            ReviewScopePicker(
-                commits: scopeCommits,
-                branches: scopeBranches,
-                onSelect: { choice in
-                    showScopePicker = false
-                    // Resolve HEAD at selection time so a branch target always
-                    // reflects the current revision (the worktree may have moved
-                    // since the picker opened).
-                    Task { @MainActor in
-                        var headSHA: String?
-                        var branchBaseSHA: String?
-                        if case .branch(let name) = choice {
-                            let git = GitService()
-                            headSHA = try? await git.headSHA(at: worktree.path)
-                            branchBaseSHA = try? await git.resolveRevision(at: worktree.path, ref: name)
-                        }
-                        openReviewSession(
-                            target: ReviewScopeSelection.target(
-                                for: choice,
-                                worktreeID: worktree.id,
-                                repositoryPath: worktree.path,
-                                headSHA: headSHA,
-                                branchBaseSHA: branchBaseSHA
-                            )
-                        )
-                    }
-                },
-                onCancel: { showScopePicker = false }
-            )
-        }
-        .task(id: showScopePicker) {
-            // Refetch every time the picker opens so the branch list reflects
-            // branches created/checked out since the last open.
-            guard showScopePicker else { return }
-            scopeBranches = (try? await GitService().branches(at: worktree.path)) ?? []
         }
     }
 
@@ -181,10 +142,6 @@ struct ReviewChangesTabView: View {
             worktreePath: worktree.path,
             rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
         )
-    }
-
-    private var scopeCommits: [CommitInfo] {
-        appState.rightPaneStore.activeState(worktreeId: worktree.id)?.commits ?? []
     }
 
     @ViewBuilder
@@ -233,9 +190,9 @@ struct ReviewChangesTabView: View {
             toolbarButton(
                 systemName: "scope",
                 tooltip: "Choose review scope",
-                isActive: showScopePicker
+                isActive: appState.isReviewPaletteOpen
             ) {
-                showScopePicker = true
+                appState.openReviewPaletteOverlay(prefill: worktree)
             }
             toolbarButton(
                 systemName: "doc.text.magnifyingglass",

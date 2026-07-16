@@ -134,6 +134,33 @@ struct GitServiceTests {
         #expect(branches.firstIndex(of: "develop")! < branches.firstIndex(of: "origin/main")!)
     }
 
+    @Test func localBranchesExcludesRemoteTrackingBranches() async throws {
+        let repo = try await makeRepo()
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+
+        _ = try await Process.git(["checkout", "-q", "-b", "develop"], cwd: repo)
+        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
+        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
+        _ = try await Process.git(["push", "-q", "origin", "main:main"], cwd: repo)
+        _ = try await Process.git(["push", "-q", "origin", "develop:release/remote-only"], cwd: repo)
+        _ = try await Process.git(["fetch", "-q", "origin"], cwd: repo)
+
+        let branches = try await GitService().localBranches(at: repo)
+
+        #expect(branches.contains("main"))
+        #expect(branches.contains("develop"))
+        #expect(!branches.contains("origin/main"))
+        #expect(!branches.contains("origin/release/remote-only"))
+        // release/remote-only only ever existed as a remote-tracking branch —
+        // it must not leak into the local-only list.
+        #expect(!branches.contains("release/remote-only"))
+    }
+
     @Test func revertCreatesCleanRevertCommit() async throws {
         let repo = try await makeContextSnapshotRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

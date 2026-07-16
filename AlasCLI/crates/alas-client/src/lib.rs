@@ -149,6 +149,7 @@ pub enum Command {
     },
     Review {
         target: Option<String>,
+        worktree: Option<String>,
     },
     ReviewComments {
         session_id: Option<String>,
@@ -272,9 +273,12 @@ pub fn build_request(
             r.keep_branch = Some(*keep_branch);
             r
         }
-        Command::Review { target } => {
+        Command::Review { target, worktree } => {
             let mut r = Request::new("review");
             r.target = target.clone();
+            if let Some(worktree) = worktree {
+                r.params = Some(serde_json::json!({ "worktree": worktree }));
+            }
             r
         }
         Command::ReviewComments { session_id, state } => {
@@ -795,17 +799,46 @@ mod tests {
 
     #[test]
     fn builds_review_local_and_provider() {
-        let local = build_request(&Command::Review { target: None }, Some("s1".into()), None);
+        let local = build_request(&Command::Review { target: None, worktree: None }, Some("s1".into()), None);
         assert_eq!(local.command, "review");
         assert!(local.target.is_none());
         let provider = build_request(
             &Command::Review {
                 target: Some("123".into()),
+                worktree: None,
             },
             Some("s1".into()),
             None,
         );
         assert_eq!(provider.target.as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn review_worktree_travels_in_params() {
+        let req = build_request(
+            &Command::Review {
+                target: Some("abc123".into()),
+                worktree: Some("feature-x".into()),
+            },
+            Some("s1".into()),
+            None,
+        );
+        assert_eq!(req.command, "review");
+        assert_eq!(req.target.as_deref(), Some("abc123"));
+        assert_eq!(
+            req.params,
+            Some(serde_json::json!({ "worktree": "feature-x" }))
+        );
+
+        let bare = build_request(
+            &Command::Review {
+                target: None,
+                worktree: None,
+            },
+            Some("s1".into()),
+            None,
+        );
+        assert_eq!(bare.params, None);
     }
 
     #[test]

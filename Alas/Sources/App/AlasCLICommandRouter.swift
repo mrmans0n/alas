@@ -18,7 +18,7 @@ struct AlasCLICommandRouter {
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
-    var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+    var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
@@ -54,7 +54,7 @@ struct AlasCLICommandRouter {
             createWorktree: createWorktree,
             deleteWorktreeAction: deleteWorktree,
             openReviewChanges: openReviewChanges,
-            openProviderReview: openProviderReview,
+            openReview: openReview,
             draftCommentStore: draftCommentStore,
             reviewSessionStore: reviewSessionStore,
             notifyReviewCommentsChanged: notifyReviewCommentsChanged,
@@ -157,24 +157,41 @@ struct AlasCLICommandRouter {
             return await service.new(origin: origin, branch: branch, base: base)
         case .worktree(.delete(let target, let force, let keepBranch)):
             return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch)
-        case .review(.localChanges):
-            return service.reviewLocal(origin: origin)
-        case .review(.provider(let target)):
-            return await service.reviewProvider(origin: origin, target: target)
+        case .review(.localChanges(let worktreeOverride)):
+            switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
+            case .success(let reviewOrigin):
+                return service.reviewLocal(origin: reviewOrigin)
+            case .failure(let error):
+                return .error(error.message)
+            }
+        case .review(.target(let target, let worktreeOverride)):
+            switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
+            case .success(let reviewOrigin):
+                return await service.reviewTarget(origin: reviewOrigin, target: target)
+            case .failure(let error):
+                return .error(error.message)
+            }
         case .review(.comments(let sessionID, let state)):
-            return service.reviewComments(origin: origin, sessionID: sessionID, filter: state)
+            return service.reviewComments(
+                origin: origin, sessionID: sessionID, filter: state, projectWorktrees: projectWorktrees
+            )
         case .review(.reply(let commentID, let body)):
-            return service.reviewReply(origin: origin, commentID: commentID, body: body)
+            return service.reviewReply(
+                origin: origin, commentID: commentID, body: body, projectWorktrees: projectWorktrees
+            )
         case .review(.resolve(let commentID, let reply, let reopen)):
-            return service.reviewResolve(origin: origin, commentID: commentID, reply: reply, reopen: reopen)
+            return service.reviewResolve(
+                origin: origin, commentID: commentID, reply: reply, reopen: reopen, projectWorktrees: projectWorktrees
+            )
         case .review(.commentAdd(let path, let startLine, let endLine, let side, let body, let sessionID)):
             return await service.reviewCommentAdd(
                 origin: origin, path: path, startLine: startLine, endLine: endLine,
-                side: side, body: body, sessionID: sessionID
+                side: side, body: body, sessionID: sessionID, projectWorktrees: projectWorktrees
             )
         case .review(.finish(let sessionID, let verdict, let summary)):
             return service.reviewFinish(
-                origin: origin, sessionID: sessionID, verdict: verdict, summary: summary
+                origin: origin, sessionID: sessionID, verdict: verdict, summary: summary,
+                projectWorktrees: projectWorktrees
             )
         case .sessionList, .sessionNew, .sessionSend:
             preconditionFailure("Session commands are handled before generic origin resolution")
