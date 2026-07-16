@@ -583,7 +583,7 @@ import Foundation
         await mgrB.refreshMirror(sessionId: "s")
 
         #expect(mirrorSession.transcript.messages.count == ACPTranscript.tailWindow)
-        if case .user(_, _, let text, _) = mirrorSession.transcript.messages.first {
+        if case .user(_, _, let text, _, _) = mirrorSession.transcript.messages.first {
             #expect(text == "m\(total - ACPTranscript.tailWindow)")
         } else {
             Issue.record("expected first tail message")
@@ -591,7 +591,7 @@ import Foundation
 
         await mgrB.awaitBackfill(id: "s")
         #expect(mirrorSession.transcript.messages.count == total)
-        if case .user(_, _, let text, _) = mirrorSession.transcript.messages.first {
+        if case .user(_, _, let text, _, _) = mirrorSession.transcript.messages.first {
             #expect(text == "m0")
         } else {
             Issue.record("expected first backfilled message")

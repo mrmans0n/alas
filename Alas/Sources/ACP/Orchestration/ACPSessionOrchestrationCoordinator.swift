@@ -201,17 +201,18 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("prompt must not be blank")
         }
-        guard let target = environment.sessionLocation(request.targetSessionId) else {
-            return .error("The target ACP session is not available.")
-        }
         do {
             let callerParent = try await environment.persistence.parent(childSessionId: origin.sessionId)
             let targetParent = try await environment.persistence.parent(childSessionId: request.targetSessionId)
+            let target = environment.sessionLocation(request.targetSessionId)
+            guard let targetProjectId = target?.origin.projectId ?? targetParent?.projectId ?? callerParent?.projectId else {
+                return .error("The target ACP session is not available.")
+            }
             guard case .success = ACPSessionOrchestrationPolicy.authorizeSend(
                 callerSessionId: origin.sessionId,
                 callerProjectId: origin.projectId,
                 targetSessionId: request.targetSessionId,
-                targetProjectId: target.origin.projectId,
+                targetProjectId: targetProjectId,
                 callerParent: callerParent,
                 targetParent: targetParent
             ) else {
@@ -234,8 +235,10 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not queue delegated message.")
         }
         environment.notifyChanged()
-        Task { @MainActor [weak self] in
-            await self?.deliver(message.id, to: target)
+        if let target = environment.sessionLocation(request.targetSessionId) {
+            Task { @MainActor [weak self] in
+                await self?.deliver(message.id, to: target)
+            }
         }
         return json(ACPOrchestrationSendResponse(messageId: message.id, state: "queued"))
     }
@@ -360,8 +363,8 @@ final class ACPSessionOrchestrationCoordinator {
             guard let session = location.manager.liveSession(for: sessionId) else { return nil }
             switch session.transcript.streamingState {
             case .idle: return .idle
-            case .sending, .streaming, .awaitingPermission: return .running
-            case .awaitingInput: return .awaitingInput
+            case .sending, .streaming: return .running
+            case .awaitingPermission, .awaitingInput: return .awaitingInput
             }
         }
         let state = ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: false)

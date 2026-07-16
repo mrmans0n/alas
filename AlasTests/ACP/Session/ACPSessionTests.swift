@@ -371,7 +371,7 @@ struct ACPSessionTests {
         let texts: [String] = session.transcript.messages.compactMap { message in
             switch message {
             case .agent(_, _, let t): return "agent:\(t.value)"
-            case .user(_, _, let t, _): return "user:\(t)"
+            case .user(_, _, let t, _, _): return "user:\(t)"
             default: return nil
             }
         }
@@ -437,7 +437,7 @@ struct ACPSessionTests {
         let texts: [String] = session.transcript.messages.compactMap { message in
             switch message {
             case .agent(_, _, let t): return "agent:\(t.value)"
-            case .user(_, _, let t, _): return "user:\(t)"
+            case .user(_, _, let t, _, _): return "user:\(t)"
             default: return nil
             }
         }

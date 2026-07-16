@@ -290,7 +290,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].transcriptRecorded == true)
         var userTexts: [String] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _) = msg { userTexts.append(text) }
+            if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
         }
         #expect(userTexts == ["queued-q"])
     }
@@ -375,7 +375,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.count == 1)
         var userTexts: [String] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _) = msg { userTexts.append(text) }
+            if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
         }
         #expect(userTexts == ["selected"])
         #expect(session.queue.isEmpty)
@@ -404,7 +404,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.count == 1)
         var userTexts: [String] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _) = msg { userTexts.append(text) }
+            if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
         }
         #expect(userTexts == ["selected"])
     }
