@@ -54,7 +54,16 @@ enum PiMCPConfigWriter {
         ]
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .prettyPrinted])
-        try data.write(to: fileURL, options: .atomic)
+        // Create the file with 0600 *before* any token-bearing content is
+        // written, so there is never a window where a world/group-readable
+        // file holds MCP server tokens. A non-atomic write into an
+        // already-created file truncates in place and does not reset the
+        // mode bits picked at creation; the trailing `setAttributes` call
+        // re-asserts 0600 defensively in case that assumption ever changes.
+        guard FileManager.default.createFile(atPath: fileURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try data.write(to: fileURL)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
         return .wrote
     }

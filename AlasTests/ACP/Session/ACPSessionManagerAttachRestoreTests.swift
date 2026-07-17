@@ -216,6 +216,66 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!preamble.contains("MCP server \"alas\""))
     }
 
+    @Test("local pi attach invokes the external MCP status provider")
+    func localPiAttachInvokesExternalMCPStatusProvider() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        var providerCalled = false
+        manager.externalMCPStatusProvider = { _ in
+            providerCalled = true
+            return (adapterState: .installed, configOutcome: .wrote)
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(providerCalled)
+        #expect(session.mcpExternalStatus?.adapterState == .installed)
+        #expect(session.mcpExternalStatus?.configOutcome == .wrote)
+    }
+
+    @Test("remote pi attach skips the external MCP status provider")
+    func remotePiAttachSkipsExternalMCPStatusProvider() async throws {
+        let root = "/srv/task5-remote-external-mcp-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/pi/bin/pi-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        var providerCalled = false
+        manager.externalMCPStatusProvider = { _ in
+            providerCalled = true
+            return (adapterState: .installed, configOutcome: .wrote)
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(!providerCalled)
+        #expect(session.mcpExternalStatus?.adapterState == .unknown)
+        #expect(session.mcpExternalStatus?.cliActive == false)
+        #expect(session.mcpExternalStatus?.configOutcome == nil)
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

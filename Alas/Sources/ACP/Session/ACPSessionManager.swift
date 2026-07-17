@@ -2363,13 +2363,26 @@ extension ACPSessionManager {
             // every attach so a freshly installed adapter or an edited
             // server list is picked up on the next reconnect.
             if case let .external(hint) = spec.mcpInjection {
-                let external = await externalMCPStatusProvider?(worktreePath)
-                session.mcpExternalStatus = ACPMCPExternalStatus(
-                    cliActive: cliEnvActive,
-                    adapterState: external?.adapterState ?? .unknown,
-                    configOutcome: external?.configOutcome,
-                    hint: hint
-                )
+                if remoteHost == nil {
+                    let external = await externalMCPStatusProvider?(worktreePath)
+                    session.mcpExternalStatus = ACPMCPExternalStatus(
+                        cliActive: cliEnvActive,
+                        adapterState: external?.adapterState ?? .unknown,
+                        configOutcome: external?.configOutcome,
+                        hint: hint
+                    )
+                } else {
+                    // Remote pi session: the worktree lives on the remote host, so
+                    // there is no local `.pi/agent` to inspect and no local
+                    // `.pi/mcp.json` to write. Report an honest "unavailable"
+                    // status instead of calling the (local-only) status provider.
+                    session.mcpExternalStatus = ACPMCPExternalStatus(
+                        cliActive: false,
+                        adapterState: .unknown,
+                        configOutcome: nil,
+                        hint: hint
+                    )
+                }
             } else {
                 session.mcpExternalStatus = nil
             }
