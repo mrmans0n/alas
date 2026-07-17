@@ -234,6 +234,49 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.acpBrokerAcknowledgedCursor == 7)
     }
 
+    @Test("session upsert resets broker cursor when generation changes")
+    func sessionUpsertResetsBrokerCursorWhenGenerationChanges() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Recovered",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: true,
+            acpBrokerId: "broker-1",
+            acpBrokerGeneration: 10,
+            acpBrokerAcknowledgedCursor: 12,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Recovered",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: true,
+            acpBrokerId: "broker-1",
+            acpBrokerGeneration: 11,
+            acpBrokerAcknowledgedCursor: 2,
+            createdAt: 1,
+            updatedAt: 4,
+            lastOpenedAt: 5,
+            archived: false
+        ))
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.acpBrokerId == "broker-1")
+        #expect(row.acpBrokerGeneration == 11)
+        #expect(row.acpBrokerAcknowledgedCursor == 2)
+    }
+
     @Test("broker state clears explicitly")
     func brokerStateClearsExplicitly() throws {
         let store = try tmp()

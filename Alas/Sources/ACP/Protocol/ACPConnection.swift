@@ -170,4 +170,6 @@ final class ACPConnection: @unchecked Sendable {
     }
 
     func shutdown() async { await client.shutdown() }
+
+    func detach() async { await client.detach() }
 }

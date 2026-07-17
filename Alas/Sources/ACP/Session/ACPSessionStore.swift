@@ -357,10 +357,12 @@ extension ACPSessionStore {
             helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
             acp_broker_id = COALESCE(excluded.acp_broker_id, sessions.acp_broker_id),
             acp_broker_generation = COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation),
-            acp_broker_acknowledged_cursor = MAX(
-                sessions.acp_broker_acknowledged_cursor,
-                excluded.acp_broker_acknowledged_cursor
-            ),
+            acp_broker_acknowledged_cursor = CASE
+                WHEN COALESCE(excluded.acp_broker_id, sessions.acp_broker_id) IS sessions.acp_broker_id
+                 AND COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation) IS sessions.acp_broker_generation
+                THEN MAX(sessions.acp_broker_acknowledged_cursor, excluded.acp_broker_acknowledged_cursor)
+                ELSE excluded.acp_broker_acknowledged_cursor
+            END,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
             archived = excluded.archived

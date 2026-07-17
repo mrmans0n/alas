@@ -236,6 +236,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         finishStreams()
     }
 
+    func detach() async {
+        cancelActiveTurnPolling()
+        if let generation = try? currentGeneration() {
+            _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
+        }
+        finishStreams()
+    }
+
     private func finishStreams() {
         updatesCont.finish()
         permsCont.finish()

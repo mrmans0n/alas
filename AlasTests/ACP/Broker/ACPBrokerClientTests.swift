@@ -265,6 +265,20 @@ struct ACPBrokerClientTests {
         #expect(await service.detached.isEmpty)
     }
 
+    @Test func detachDoesNotCloseBrokerGeneration() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        let client = makeClient(service: service)
+        try await client.start()
+
+        await client.detach()
+
+        let detach = try await #require(service.detached.first)
+        #expect(detach.brokerId == ACPBrokerID(rawValue: "broker-1"))
+        #expect(detach.generation == ACPBrokerGeneration(rawValue: 7))
+        #expect(await service.closed.isEmpty)
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

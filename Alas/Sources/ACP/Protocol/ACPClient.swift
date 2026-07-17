@@ -93,6 +93,7 @@ protocol ACPClient: AnyObject {
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool
 
+    func detach() async
     func shutdown() async
 }
 
@@ -111,6 +112,10 @@ extension ACPClient {
     ) {}
 
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool { true }
+
+    func detach() async {
+        await shutdown()
+    }
 }
 
 enum ACPFileRequest {

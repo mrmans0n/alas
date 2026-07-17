@@ -2000,7 +2000,7 @@ extension ACPSessionManager {
             runner.invalidateActivePrompt()
             runner.stop()
             await runner.flushPersistence()
-            await runner.connection.shutdown()
+            await runner.connection.detach()
         }
         autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
