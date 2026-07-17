@@ -20,13 +20,14 @@ final class ACPConnection: @unchecked Sendable {
     /// Returns the initialize outcome advertised by the agent, defaulting
     /// missing prompt capability fields to false and missing auth methods to empty.
     @discardableResult
-    func initialize() async throws -> ACPInitializeOutcome {
+    func initialize(brokerOperationKey: String? = nil) async throws -> ACPInitializeOutcome {
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
                                 protocolVersion: ACPProtocolVersion.current,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
-                                    terminal: client.advertisesTerminalCapability)))
+                                    terminal: client.advertisesTerminalCapability)),
+                             brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
@@ -39,9 +40,14 @@ final class ACPConnection: @unchecked Sendable {
         )
     }
 
-    func newSession(cwd: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
+    func newSession(
+        cwd: String,
+        mcpServers: [ACPMCPServer],
+        brokerOperationKey: String? = nil
+    ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/new",
-                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers))
+                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers),
+                             brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
         guard !result.sessionId.isEmpty else {
@@ -62,19 +68,31 @@ final class ACPConnection: @unchecked Sendable {
         resp.acknowledgeDurableConsumption()
     }
 
-    func loadSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
+    func loadSession(
+        cwd: String,
+        sessionId: String,
+        mcpServers: [ACPMCPServer],
+        brokerOperationKey: String? = nil
+    ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/load",
-                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers))
+                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers),
+                             brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
         deferDurableSessionResponse(resp)
         return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
     }
 
-    func resumeSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
+    func resumeSession(
+        cwd: String,
+        sessionId: String,
+        mcpServers: [ACPMCPServer],
+        brokerOperationKey: String? = nil
+    ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/resume",
-            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers)
+            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers),
+            brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)

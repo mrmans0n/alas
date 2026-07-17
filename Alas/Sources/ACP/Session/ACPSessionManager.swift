@@ -1590,6 +1590,17 @@ final class ACPSessionManager: ObservableObject {
         return String(("local-" + String(sanitized)).prefix(160))
     }
 
+    private static func brokerStartupOperationKey(
+        sessionId: ACPSession.ID,
+        method: String,
+        remoteSessionId: String? = nil
+    ) -> String {
+        if let remoteSessionId, !remoteSessionId.isEmpty {
+            return "startup:\(sessionId):\(method):\(remoteSessionId)"
+        }
+        return "startup:\(sessionId):\(method)"
+    }
+
     private static func brokerCursor(from row: ACPSessionRow?) -> ACPBrokerEventCursor {
         let raw = row?.acpBrokerAcknowledgedCursor ?? 0
         guard raw > 0 else { return ACPBrokerEventCursor(rawValue: 0) }
@@ -2440,7 +2451,12 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
             }
-            let initialized = try await connection.initialize()
+            let initialized = try await connection.initialize(
+                brokerOperationKey: Self.brokerStartupOperationKey(
+                    sessionId: sessionId,
+                    method: "initialize"
+                )
+            )
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
             let projectContext = mcpProjectContextProvider?()
@@ -2607,7 +2623,14 @@ extension ACPSessionManager {
                 session.firstRunConnectingPhase = .creatingSession
             }
             if freshlyCreated {
-                result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                result = try await connection.newSession(
+                    cwd: worktreePath,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: sessionId,
+                        method: "session/new"
+                    )
+                )
                 createdFreshRemoteSession = true
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 if session.hasConversationTranscript {
@@ -2617,7 +2640,15 @@ extension ACPSessionManager {
                 case .resume:
                     do {
                         result = try await connection.resumeSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/resume",
+                                remoteSessionId: remoteId
+                            )
+                        )
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2637,7 +2668,14 @@ extension ACPSessionManager {
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
-                        result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                        result = try await connection.newSession(
+                            cwd: worktreePath,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/new"
+                            )
+                        )
                         createdFreshRemoteSession = true
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
@@ -2658,7 +2696,15 @@ extension ACPSessionManager {
                 case .loadStrict:
                     do {
                         result = try await connection.loadSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/load",
+                                remoteSessionId: remoteId
+                            )
+                        )
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2674,7 +2720,15 @@ extension ACPSessionManager {
                 case .loadWithRecovery:
                     do {
                         result = try await connection.loadSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/load",
+                                remoteSessionId: remoteId
+                            )
+                        )
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2688,7 +2742,14 @@ extension ACPSessionManager {
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
-                        result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                        result = try await connection.newSession(
+                            cwd: worktreePath,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/new"
+                            )
+                        )
                         createdFreshRemoteSession = true
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
@@ -2713,7 +2774,14 @@ extension ACPSessionManager {
                     throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
-                result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                result = try await connection.newSession(
+                    cwd: worktreePath,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: sessionId,
+                        method: "session/new"
+                    )
+                )
                 createdFreshRemoteSession = true
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true

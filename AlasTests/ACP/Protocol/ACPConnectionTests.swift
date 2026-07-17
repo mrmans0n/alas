@@ -85,6 +85,71 @@ struct ACPConnectionTests {
         #expect(params.clientCapabilities.terminal == false)
     }
 
+    @Test("startup methods carry broker operation keys")
+    func startupMethodsCarryBrokerOperationKeys() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        mock.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        mock.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-loaded",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        mock.script(method: "session/resume") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-resumed",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+
+        let conn = ACPConnection(client: mock)
+        try await conn.initialize(brokerOperationKey: "startup:init")
+        _ = try await conn.newSession(cwd: "/tmp", mcpServers: [], brokerOperationKey: "startup:new")
+        _ = try await conn.loadSession(
+            cwd: "/tmp",
+            sessionId: "remote-1",
+            mcpServers: [],
+            brokerOperationKey: "startup:load"
+        )
+        _ = try await conn.resumeSession(
+            cwd: "/tmp",
+            sessionId: "remote-1",
+            mcpServers: [],
+            brokerOperationKey: "startup:resume"
+        )
+
+        #expect(mock.sent.map(\.brokerOperationKey) == [
+            "startup:init",
+            "startup:new",
+            "startup:load",
+            "startup:resume"
+        ])
+    }
+
     @Test("loadSession sends session/load with cwd and remote session id")
     func loadSessionRPC() async throws {
         let mock = ACPMockClient()

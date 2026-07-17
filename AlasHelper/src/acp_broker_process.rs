@@ -126,7 +126,7 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
 
     let metadata = ACPBrokerMetadata {
         broker_id: launch.broker_id.clone(),
-        generation: BrokerGeneration::new(current_millis()),
+        generation: BrokerGeneration::new(current_nanos()),
         alas_session_id: launch.session_id.clone(),
         adapter_program: launch.command.clone(),
         adapter_args: launch.args.clone(),
@@ -1210,6 +1210,13 @@ fn current_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn current_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
         .unwrap_or_default()
 }
 
