@@ -24,6 +24,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// Present only for prompts delivered by a direct delegated-session edge.
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
     let delegatedSource: ACPDelegatedPromptSource?
+    var brokerOperationAttempt: Int
 
     init(id: UUID = UUID(),
          blocks: [ACPContentBlock],
@@ -32,7 +33,8 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          lastError: String? = nil,
          draft: ACPComposerDraft? = nil,
          delegatedSource: ACPDelegatedPromptSource? = nil,
-         transcriptRecorded: Bool = false)
+         transcriptRecorded: Bool = false,
+         brokerOperationAttempt: Int = 0)
     {
         self.id = id
         self.blocks = blocks
@@ -42,10 +44,11 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.draft = draft
         self.delegatedSource = delegatedSource
         self.transcriptRecorded = transcriptRecorded
+        self.brokerOperationAttempt = brokerOperationAttempt
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, blocks, enqueuedAt, status, lastError, draft, delegatedSource, transcriptRecorded
+        case id, blocks, enqueuedAt, status, lastError, draft, delegatedSource, transcriptRecorded, brokerOperationAttempt
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +61,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
         delegatedSource = try? c.decode(ACPDelegatedPromptSource.self, forKey: .delegatedSource)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
+        brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
     }
 
     /// Used by the persistence decoder: any item that was mid-send when
@@ -76,5 +80,13 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// of `blocks`. See the `draft` field for why the fallback is lossy.
     var restorableDraft: ACPComposerDraft {
         draft ?? ACPComposerDraft(blocks: blocks)
+    }
+
+    var brokerOperationKey: String {
+        "queued-prompt:\(id.uuidString):\(brokerOperationAttempt):session/prompt"
+    }
+
+    mutating func advanceBrokerOperationAttempt() {
+        brokerOperationAttempt += 1
     }
 }

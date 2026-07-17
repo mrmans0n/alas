@@ -1271,17 +1271,31 @@ extension ACPSessionRunner {
     /// swallowed — the same pattern as transcript persistence; surfacing
     /// would block the UI for a transient SQLite error and we'd rather
     /// lose a queue snapshot than the user's draft.
-    func persistQueue() {
+    func persistQueue(acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
         guard holdsLeaseForWrite() else { return }
         let items = session.queue
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertQueue(
-                sessionId: sessionId,
-                items: items,
-                fence: fence
-            )
+        if let acknowledgement {
+            enqueuePersistence({ persistence in
+                try await persistence.upsertQueue(
+                    sessionId: sessionId,
+                    items: items,
+                    fence: fence
+                )
+            }, completion: { persisted in
+                if persisted == true {
+                    acknowledgement()
+                }
+            })
+        } else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.upsertQueue(
+                    sessionId: sessionId,
+                    items: items,
+                    fence: fence
+                )
+            }
         }
     }
 
@@ -1325,9 +1339,14 @@ extension ACPSessionRunner {
               head.lastError == nil
         else { return }
         if case .needsAuth = session.setupState { return }
-        session.markQueueHeadSending()
+        let brokerOperationKey = session.markQueueHeadSending()
         persistQueue()
-        sendNow(blocks: head.blocks, queuedItemId: head.id, delegatedSource: head.delegatedSource)
+        sendNow(
+            blocks: head.blocks,
+            queuedItemId: head.id,
+            delegatedSource: head.delegatedSource,
+            brokerOperationKey: brokerOperationKey
+        )
     }
 
     /// User clicked the row-local "send now" affordance for a queued item.
@@ -1473,6 +1492,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         queuedItemId: UUID?,
         delegatedSource: ACPDelegatedPromptSource? = nil,
+        brokerOperationKey: String? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -1582,7 +1602,12 @@ extension ACPSessionRunner {
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
-                try await self.connection.prompt(sessionId: remoteId, blocks: wireBlocks)
+                let promptAcknowledgement = try await self.connection.prompt(
+                    sessionId: remoteId,
+                    blocks: wireBlocks,
+                    brokerOperationKey: brokerOperationKey,
+                    acknowledgeDurableConsumption: queuedItemId == nil
+                )
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
@@ -1599,7 +1624,7 @@ extension ACPSessionRunner {
                     if isActivePrompt {
                         if queuedItemId != nil {
                             _ = self.session.popQueueHead()
-                            self.persistQueue()
+                            self.persistQueue(acknowledging: promptAcknowledgement)
                         }
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
@@ -1625,7 +1650,17 @@ extension ACPSessionRunner {
                             // at the head with lastError so the bubble shows
                             // Retry. Cancelled queued sends had the item
                             // discarded elsewhere (steer) and don't surface.
-                            self.session.setQueueHeadError(errorMessage)
+                            let terminalBrokerFailure: Bool = {
+                                guard brokerOperationKey != nil else { return false }
+                                if case ACPClientError.jsonrpc = error {
+                                    return true
+                                }
+                                return false
+                            }()
+                            self.session.setQueueHeadError(
+                                errorMessage,
+                                advancesBrokerOperationAttempt: terminalBrokerFailure
+                            )
                             self.persistQueue()
                         } else if queuedItemId != nil, authReason != nil {
                             self.session.restoreQueue(self.session.queue)

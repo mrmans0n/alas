@@ -26,6 +26,104 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(summary.configurationFingerprint == MCPAttachmentPlanner.configurationFingerprint(for: configuredServers))
     }
 
+    @Test("local attach uses broker client and persists durable broker state")
+    func localAttachUsesBrokerClientAndPersistsDurableState() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let broker = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+        let session = manager.createSession(id: "local-session-1", agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let openParams = try await #require(broker.opened.first)
+        #expect(openParams.brokerId == ACPBrokerID(rawValue: "local-local-session-1"))
+        #expect(openParams.sessionId == "local-session-1")
+        #expect(openParams.command.isEmpty == false)
+        #expect(openParams.cwd == "/tmp/wt")
+        #expect(openParams.env["PATH"] != nil)
+        #expect(await broker.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(session.remoteSessionId == "remote-broker")
+        #expect(session.agentState == .ready)
+
+        let row = try #require(try store.loadSession(id: "local-session-1"))
+        #expect(row.remoteSessionId == "remote-broker")
+        #expect(row.acpBrokerId == "local-local-session-1")
+        #expect(row.acpBrokerGeneration == 7)
+        #expect(row.acpBrokerAcknowledgedCursor == 0)
+    }
+
+    @Test("reopened local broker session attaches from persisted cursor")
+    func reopenedLocalBrokerSessionAttachesFromPersistedCursor() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(.init(
+            id: "local-session-1",
+            agentId: "claude",
+            title: "Stored session",
+            titleSource: .placeholder,
+            remoteSessionId: "remote-old",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            acpBrokerId: "broker-existing",
+            acpBrokerGeneration: 7,
+            acpBrokerAcknowledgedCursor: 4,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        let broker = ManagerBrokerService()
+        await broker.setSnapshotResults(
+            initializeResult: .object([
+                "protocolVersion": .number(1),
+                "agentCapabilities": .object([
+                    "loadSession": .bool(true),
+                    "sessionCapabilities": .object(["resume": .object([:])])
+                ]),
+                "authMethods": .array([])
+            ]),
+            remoteSessionResult: .object([
+                "sessionId": .string("remote-restored"),
+                "availableModels": .array([]),
+                "availableModes": .array([]),
+                "promptSuggestions": .array([]),
+                "configOptions": .array([])
+            ])
+        )
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+
+        let session = try #require(manager.placeholderSession(id: "local-session-1"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        let openParams = try await #require(broker.opened.first)
+        #expect(openParams.brokerId == ACPBrokerID(rawValue: "broker-existing"))
+        let attachParams = try await #require(broker.attached.first)
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 4))
+        #expect(await broker.sent.isEmpty)
+        #expect(session.remoteSessionId == "remote-restored")
+        #expect(session.agentState == .ready)
+
+        let row = try #require(try store.loadSession(id: "local-session-1"))
+        #expect(row.acpBrokerId == "broker-existing")
+        #expect(row.acpBrokerGeneration == 7)
+        #expect(row.acpBrokerAcknowledgedCursor == 4)
+    }
+
     @Test("reopened session uses session/load")
     func reopenedSessionUsesLoad() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1837,5 +1935,139 @@ struct ACPSessionManagerAttachRestoreTests {
             continuation?.resume()
             continuation = nil
         }
+    }
+}
+
+private actor ManagerBrokerService: ACPBrokerServicing {
+    var opened: [ACPBrokerOpenParams] = []
+    var attached: [ACPBrokerAttachParams] = []
+    var sent: [ACPBrokerSendParams] = []
+    var notified: [ACPBrokerNotifyParams] = []
+    var responded: [ACPBrokerRespondParams] = []
+    var acks: [ACPBrokerAckParams] = []
+    var detached: [ACPBrokerDetachParams] = []
+    var closed: [ACPBrokerCloseParams] = []
+    var snapshotInitializeResult: ACPBrokerJSONValue?
+    var snapshotRemoteSessionResult: ACPBrokerJSONValue?
+
+    func setSnapshotResults(
+        initializeResult: ACPBrokerJSONValue?,
+        remoteSessionResult: ACPBrokerJSONValue?
+    ) {
+        snapshotInitializeResult = initializeResult
+        snapshotRemoteSessionResult = remoteSessionResult
+    }
+
+    func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        opened.append(params)
+        return ACPBrokerOpenResult(snapshot: snapshot(params: params), adopted: false)
+    }
+
+    func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        attached.append(params)
+        return ACPBrokerAttachResult(
+            snapshot: snapshot(brokerId: params.brokerId, acknowledgedCursor: params.acknowledgedCursor),
+            events: []
+        )
+    }
+
+    func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        sent.append(params)
+        let result: ACPBrokerJSONValue
+        switch params.method {
+        case "initialize":
+            result = .object([
+                "protocolVersion": .number(1),
+                "authMethods": .array([])
+            ])
+        case "session/new":
+            result = .object([
+                "sessionId": .string("remote-broker"),
+                "availableModels": .array([]),
+                "availableModes": .array([]),
+                "promptSuggestions": .array([]),
+                "configOptions": .array([])
+            ])
+        default:
+            throw ACPClientError.noScript(method: params.method)
+        }
+        return ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: UInt64(sent.count)),
+            replayed: false,
+            result: result,
+            pending: nil
+        )
+    }
+
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        notified.append(params)
+        return ACPBrokerSimpleOK(ok: true)
+    }
+
+    func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        responded.append(params)
+        return ACPBrokerSimpleOK(ok: true)
+    }
+
+    func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        acks.append(params)
+        return ACPBrokerSimpleOK(ok: true)
+    }
+
+    func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        detached.append(params)
+        return ACPBrokerSimpleOK(ok: true)
+    }
+
+    func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        closed.append(params)
+        return ACPBrokerSimpleOK(ok: true)
+    }
+
+    private func snapshot(params: ACPBrokerOpenParams) -> ACPBrokerSnapshot {
+        ACPBrokerSnapshot(
+            metadata: ACPBrokerMetadata(
+                brokerId: params.brokerId,
+                generation: ACPBrokerGeneration(rawValue: 7),
+                alasSessionId: params.sessionId,
+                adapterProgram: params.command,
+                adapterArgs: params.args,
+                cwd: params.cwd,
+                envKeys: params.env.keys.sorted(),
+                createdAtMillis: 10
+            ),
+            initializeResult: snapshotInitializeResult,
+            remoteSessionResult: snapshotRemoteSessionResult,
+            turnState: .idle,
+            acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0),
+            journalTail: ACPBrokerEventCursor(rawValue: 0),
+            pendingRequests: [],
+            operations: []
+        )
+    }
+
+    private func snapshot(
+        brokerId: ACPBrokerID,
+        acknowledgedCursor: ACPBrokerEventCursor
+    ) -> ACPBrokerSnapshot {
+        ACPBrokerSnapshot(
+            metadata: ACPBrokerMetadata(
+                brokerId: brokerId,
+                generation: ACPBrokerGeneration(rawValue: 7),
+                alasSessionId: "local-session-1",
+                adapterProgram: "mock",
+                adapterArgs: [],
+                cwd: "/tmp/wt",
+                envKeys: [],
+                createdAtMillis: 10
+            ),
+            initializeResult: snapshotInitializeResult,
+            remoteSessionResult: snapshotRemoteSessionResult,
+            turnState: .idle,
+            acknowledgedCursor: acknowledgedCursor,
+            journalTail: ACPBrokerEventCursor(rawValue: 0),
+            pendingRequests: [],
+            operations: []
+        )
     }
 }

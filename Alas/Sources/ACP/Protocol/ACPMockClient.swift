@@ -1,9 +1,12 @@
 import Foundation
 
 final class ACPMockClient: ACPClient, @unchecked Sendable {
+    var advertisesTerminalCapability = true
+
     private(set) var sent: [ACPRequest] = []
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
+    private var responseScripts: [String: (ACPRequest) async throws -> ACPResponse] = [:]
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
@@ -56,6 +59,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
         sent.append(request)
+        if let script = responseScripts[request.method] {
+            return try await script(request)
+        }
         if let script = asyncScripts[request.method] {
             return ACPResponse(body: try await script(request))
         }
@@ -116,6 +122,10 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
 
     func script(method: String, _ handler: @escaping (ACPRequest) throws -> Data) {
         scripts[method] = handler
+    }
+
+    func scriptResponse(method: String, _ handler: @escaping (ACPRequest) async throws -> ACPResponse) {
+        responseScripts[method] = handler
     }
 
     func scriptAsync(method: String, _ handler: @escaping (ACPRequest) async throws -> Data) {

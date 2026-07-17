@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 13
+    static let targetSchemaVersion = 14
     let path: String
     let db: SQLiteDatabase
 
@@ -40,6 +40,7 @@ final class ACPSessionStore {
         if current < 11 { try migrate_to_v11() }
         if current < 12 { try migrate_to_v12() }
         if current < 13 { try migrate_to_v13() }
+        if current < 14 { try migrate_to_v14() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -216,6 +217,25 @@ final class ACPSessionStore {
             try db.exec("ALTER TABLE sessions ADD COLUMN mcp_preamble_sent INTEGER NOT NULL DEFAULT 0")
         }
     }
+
+    private func migrate_to_v14() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        let names = Set(columns.compactMap { $0["name"] as? String })
+        if !names.contains("acp_broker_id") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN acp_broker_id TEXT")
+        }
+        if !names.contains("acp_broker_generation") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN acp_broker_generation INTEGER")
+        }
+        if !names.contains("acp_broker_acknowledged_cursor") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN acp_broker_acknowledged_cursor INTEGER NOT NULL DEFAULT 0")
+        }
+        try db.exec("""
+        CREATE INDEX IF NOT EXISTS sessions_acp_broker_idx
+        ON sessions(acp_broker_id)
+        WHERE acp_broker_id IS NOT NULL
+        """)
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -254,6 +274,9 @@ struct ACPSessionRow: Equatable, Sendable {
     var autoRun: Bool
     var helperProcStdoutOffset: Int64? = nil
     var helperProcStderrOffset: Int64? = nil
+    var acpBrokerId: String? = nil
+    var acpBrokerGeneration: Int64? = nil
+    var acpBrokerAcknowledgedCursor: Int64 = 0
     let createdAt: Int64
     var updatedAt: Int64
     var lastOpenedAt: Int64
@@ -316,8 +339,9 @@ extension ACPSessionStore {
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
                               mcp_preamble_pending, mcp_preamble_sent,
                               current_model, current_mode, auto_run, helper_proc_stdout_offset,
-                              helper_proc_stderr_offset, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                              helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
+                              acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -331,6 +355,14 @@ extension ACPSessionStore {
             auto_run = excluded.auto_run,
             helper_proc_stdout_offset = COALESCE(excluded.helper_proc_stdout_offset, sessions.helper_proc_stdout_offset),
             helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
+            acp_broker_id = COALESCE(excluded.acp_broker_id, sessions.acp_broker_id),
+            acp_broker_generation = COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation),
+            acp_broker_acknowledged_cursor = CASE
+                WHEN COALESCE(excluded.acp_broker_id, sessions.acp_broker_id) IS sessions.acp_broker_id
+                 AND COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation) IS sessions.acp_broker_generation
+                THEN MAX(sessions.acp_broker_acknowledged_cursor, excluded.acp_broker_acknowledged_cursor)
+                ELSE excluded.acp_broker_acknowledged_cursor
+            END,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
             archived = excluded.archived
@@ -340,6 +372,7 @@ extension ACPSessionStore {
             s.mcpPreamblePending, s.mcpPreambleSent ? 1 : 0,
             s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
+            s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerAcknowledgedCursor,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
             preserveTitle ? 1 : 0,
             preserveTitle ? 1 : 0
@@ -348,6 +381,16 @@ extension ACPSessionStore {
 
     func loadSession(id: String) throws -> ACPSessionRow? {
         let rows = try db.query("SELECT * FROM sessions WHERE id = ?", bindings: [id])
+        return rows.first.map(Self.rowToSession)
+    }
+
+    func loadSession(acpBrokerId: String) throws -> ACPSessionRow? {
+        let rows = try db.query("""
+        SELECT * FROM sessions
+        WHERE acp_broker_id = ? AND archived = 0
+        ORDER BY last_opened_at DESC
+        LIMIT 1
+        """, bindings: [acpBrokerId])
         return rows.first.map(Self.rowToSession)
     }
 
@@ -412,6 +455,49 @@ extension ACPSessionStore {
         UPDATE sessions
         SET helper_proc_stdout_offset = 0,
             helper_proc_stderr_offset = 0
+        WHERE id = ?
+        """, bindings: [sessionId]) > 0
+    }
+
+    func updateACPBrokerState(
+        sessionId: String,
+        brokerId: String,
+        generation: Int64,
+        acknowledgedCursor: Int64
+    ) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET acp_broker_id = ?,
+            acp_broker_generation = ?,
+            acp_broker_acknowledged_cursor = ?
+        WHERE id = ?
+        """, bindings: [brokerId, generation, acknowledgedCursor, sessionId]) > 0
+    }
+
+    func updateACPBrokerAcknowledgedCursor(
+        sessionId: String,
+        brokerId: String,
+        generation: Int64,
+        cursor: Int64
+    ) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET acp_broker_acknowledged_cursor = CASE
+                WHEN acp_broker_acknowledged_cursor < ? THEN ?
+                ELSE acp_broker_acknowledged_cursor
+            END
+        WHERE id = ?
+          AND acp_broker_id = ?
+          AND acp_broker_generation = ?
+        """, bindings: [cursor, cursor, sessionId, brokerId, generation]) > 0
+    }
+
+    func clearACPBrokerState(sessionId: String) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET acp_broker_id = NULL,
+            acp_broker_generation = NULL,
+            acp_broker_acknowledged_cursor = 0
         WHERE id = ?
         """, bindings: [sessionId]) > 0
     }
@@ -694,6 +780,9 @@ extension ACPSessionStore {
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,
             helperProcStdoutOffset: r["helper_proc_stdout_offset"] as? Int64,
             helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,
+            acpBrokerId: r["acp_broker_id"] as? String,
+            acpBrokerGeneration: r["acp_broker_generation"] as? Int64,
+            acpBrokerAcknowledgedCursor: (r["acp_broker_acknowledged_cursor"] as? Int64) ?? 0,
             createdAt: (r["created_at"] as? Int64) ?? 0,
             updatedAt: (r["updated_at"] as? Int64) ?? 0,
             lastOpenedAt: (r["last_opened_at"] as? Int64) ?? 0,

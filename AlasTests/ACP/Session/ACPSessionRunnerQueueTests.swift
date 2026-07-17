@@ -164,14 +164,58 @@ struct ACPSessionRunnerQueueTests {
             throw ACPClientError.noScript(method: "session/prompt")  // any throw
         }
         session.enqueue(blocks: [.text("will-fail")])
+        let operationKey = session.queue[0].brokerOperationKey
         runner.persistQueue()
         runner.flushQueueIfIdle()
         try await Task.sleep(nanoseconds: 200_000_000)
         #expect(session.queue.count == 1)
         #expect(session.queue[0].status == .pending)
         #expect(session.queue[0].lastError != nil)
+        #expect(session.queue[0].brokerOperationKey == operationKey)
         let persisted = try store.loadQueue(sessionId: "s")
         #expect(persisted == session.queue)
+    }
+
+    @Test("terminal queued failure advances broker operation key before retry")
+    func terminalQueuedFailureAdvancesBrokerOperationKey() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32042, message: "terminal", data: nil))
+        }
+        session.enqueue(blocks: [.text("will-fail-terminally")])
+        let operationKey = session.queue[0].brokerOperationKey
+
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
+        #expect(session.queue[0].lastError != nil)
+        #expect(session.queue[0].brokerOperationKey != operationKey)
+    }
+
+    @Test("queued prompt response ack waits for durable queue pop")
+    func queuedPromptResponseAckWaitsForDurableQueuePop() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }
+            )
+        }
+        session.enqueue(blocks: [.text("ack-after-pop")])
+        runner.persistQueue()
+        await runner.flushPersistence()
+
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        await runner.flushPersistence()
+
+        #expect(session.queue.isEmpty)
+        #expect(try store.loadQueue(sessionId: "s").isEmpty)
+        #expect(acknowledgement.recordedCount == 1)
     }
 
     @Test(".steer while streaming with queue → cancel sent, queue cleared, new prompt sent, snapshot captured")
@@ -617,5 +661,22 @@ struct ACPSessionRunnerQueueTests {
         #expect(session2.queue.isEmpty)
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)
+    }
+}
+
+private final class DurableAcknowledgementRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var recordedCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func record() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

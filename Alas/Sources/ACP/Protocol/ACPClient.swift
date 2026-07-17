@@ -5,8 +5,13 @@ typealias ACPDurableConsumptionAcknowledgement = @Sendable () -> Void
 struct ACPRequest {
     let method: String
     let params: Encodable?
-    init(method: String, params: Encodable? = nil) { self.method = method
-    self.params = params }
+    let brokerOperationKey: String?
+
+    init(method: String, params: Encodable? = nil, brokerOperationKey: String? = nil) {
+        self.method = method
+        self.params = params
+        self.brokerOperationKey = brokerOperationKey
+    }
 }
 
 struct ACPResponse {
@@ -77,6 +82,7 @@ protocol ACPClient: AnyObject {
     /// Terminal requests (`terminal/create`, `terminal/output`,
     /// `terminal/wait_for_exit`, `terminal/kill`, `terminal/release`).
     var terminalRequests: AsyncStream<ACPTerminalRequest> { get }
+    var advertisesTerminalCapability: Bool { get }
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse)
@@ -88,10 +94,13 @@ protocol ACPClient: AnyObject {
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool
 
+    func detach() async
     func shutdown() async
 }
 
 extension ACPClient {
+    var advertisesTerminalCapability: Bool { true }
+
     var elicitationRequests: AsyncStream<ACPElicitationRequest> {
         AsyncStream { $0.finish() }
     }
@@ -106,6 +115,10 @@ extension ACPClient {
     ) {}
 
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool { true }
+
+    func detach() async {
+        await shutdown()
+    }
 }
 
 enum ACPFileRequest {

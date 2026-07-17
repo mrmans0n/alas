@@ -27,6 +27,7 @@ final class ACPSessionManager: ObservableObject {
         _ host: String?,
         _ worktreePath: String
     ) throws -> ACPConnection
+    typealias ACPBrokerServiceFactory = @MainActor () async throws -> ACPBrokerServicing
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
     typealias BuiltInMCPProvider = @MainActor (
         _ worktreePath: String,
@@ -276,6 +277,7 @@ final class ACPSessionManager: ObservableObject {
     private let remoteAdapterResolver: ACPRemoteAdapterResolver
     private let connectionFactory: ACPConnectionFactory
     private let injectedConnectionFactory: ACPConnectionFactory?
+    private let brokerServiceFactory: ACPBrokerServiceFactory?
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session task that prepends pre-tail messages after the initial
@@ -340,6 +342,7 @@ final class ACPSessionManager: ObservableObject {
          setupEvaluator: ACPSetupEvaluator? = nil,
          remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
+         brokerServiceFactory: ACPBrokerServiceFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil)
     {
@@ -374,6 +377,7 @@ final class ACPSessionManager: ObservableObject {
         }
         self.injectedConnectionFactory = connectionFactory
         self.connectionFactory = connectionFactory ?? Self.makeStdioConnection
+        self.brokerServiceFactory = brokerServiceFactory
         let initialRecent = store.flatMap { try? $0.recentSessions() } ?? []
         self.recent = initialRecent
         self.persistedRows = Dictionary(uniqueKeysWithValues: initialRecent.map { ($0.id, $0) })
@@ -1117,6 +1121,11 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private static func sqliteBrokerInt64(_ value: UInt64) -> Int64? {
+        guard value <= UInt64(Int64.max) else { return nil }
+        return Int64(value)
+    }
+
     private func resetHelperProcOffsets(sessionId: ACPSession.ID) async {
         guard !isMirror(sessionId: sessionId) else { return }
         if var row = persistedRows[sessionId] {
@@ -1132,6 +1141,46 @@ final class ACPSessionManager: ObservableObject {
             )
         }
         await task.value
+    }
+
+    private func persistACPBrokerState(sessionId: ACPSession.ID, state: ACPBrokerDurableState) {
+        guard !isMirror(sessionId: sessionId) else { return }
+        guard let generation = Self.sqliteBrokerInt64(state.generation.rawValue),
+              let acknowledgedCursor = Self.sqliteBrokerInt64(state.acknowledgedCursor.rawValue)
+        else {
+            persistenceError = "ACP broker cursor state is out of SQLite Int64 range."
+            return
+        }
+        let matchesCurrentGeneration: Bool
+        if var row = persistedRows[sessionId] {
+            matchesCurrentGeneration = row.acpBrokerId == state.brokerId.rawValue
+                && row.acpBrokerGeneration == generation
+            row.acpBrokerId = state.brokerId.rawValue
+            row.acpBrokerGeneration = generation
+            row.acpBrokerAcknowledgedCursor = matchesCurrentGeneration
+                ? max(row.acpBrokerAcknowledgedCursor, acknowledgedCursor)
+                : acknowledgedCursor
+            persistedRows[sessionId] = row
+            replaceRecentRow(row)
+        } else {
+            matchesCurrentGeneration = false
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            if matchesCurrentGeneration {
+                _ = try await persistence.updateACPBrokerAcknowledgedCursor(
+                    sessionId: sessionId,
+                    state: state,
+                    fence: fence
+                )
+            } else {
+                _ = try await persistence.updateACPBrokerState(
+                    sessionId: sessionId,
+                    state: state,
+                    fence: fence
+                )
+            }
+        }
     }
 
     /// Rename a session with the given title and source. Updates both
@@ -1503,6 +1552,97 @@ final class ACPSessionManager: ObservableObject {
             sessionId: nil,
             useHelperProc: false
         )
+    }
+
+    private func makeBrokerConnection(
+        service: ACPBrokerServicing,
+        launchSpec: ACPLaunchSpec,
+        sessionId: ACPSession.ID,
+        session: ACPSession,
+        environment: [String: String]
+    ) async throws -> ACPConnection {
+        let brokerId = ACPBrokerID(rawValue: persistedRows[sessionId]?.acpBrokerId ?? Self.defaultBrokerId(
+            for: sessionId
+        ))
+        let client = ACPBrokerClient(
+            service: service,
+            brokerId: brokerId,
+            sessionId: sessionId,
+            command: launchSpec.command,
+            args: launchSpec.arguments,
+            cwd: worktreePath,
+            env: environment,
+            operationKeyPrefix: "\(instanceId):\(sessionId):\(UUID().uuidString)",
+            initialBrokerGeneration: Self.brokerGeneration(from: persistedRows[sessionId]),
+            initialAcknowledgedCursor: Self.brokerCursor(from: persistedRows[sessionId]),
+            onDurableStateChanged: { [weak self] state in
+                Task { @MainActor [weak self] in
+                    self?.persistACPBrokerState(sessionId: sessionId, state: state)
+                }
+            },
+            onTurnStateChanged: { [weak self] turnState in
+                Task { @MainActor [weak self] in
+                    guard let self, let session = self.sessions[sessionId] else { return }
+                    Self.applyBrokerTurnState(turnState, to: session)
+                    if Self.brokerTurnStateAllowsQueueFlush(turnState) {
+                        self.runners[sessionId]?.flushQueueIfIdle()
+                    }
+                }
+            }
+        )
+        try await client.start()
+        Self.applyBrokerTurnState(client.currentTurnState, to: session)
+        return ACPConnection(client: client)
+    }
+
+    private static func defaultBrokerId(for sessionId: ACPSession.ID) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+        let sanitized = sessionId.map { allowed.contains($0) ? $0 : "_" }
+        return String(("local-" + String(sanitized)).prefix(160))
+    }
+
+    private static func brokerStartupOperationKey(
+        sessionId: ACPSession.ID,
+        method: String,
+        remoteSessionId: String? = nil
+    ) -> String {
+        if let remoteSessionId, !remoteSessionId.isEmpty {
+            return "startup:\(sessionId):\(method):\(remoteSessionId)"
+        }
+        return "startup:\(sessionId):\(method)"
+    }
+
+    private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
+        switch turnState {
+        case .sending, .cancelling:
+            session.transcript.streamingState = .sending
+        case .streaming:
+            session.transcript.streamingState = .streaming
+        case .awaitingInput:
+            session.transcript.streamingState = .awaitingInput
+        case .idle, .completed, .ambiguous, .unknown:
+            session.transcript.streamingState = .idle
+        }
+    }
+
+    private static func brokerTurnStateAllowsQueueFlush(_ turnState: ACPBrokerTurnState) -> Bool {
+        switch turnState {
+        case .idle, .completed, .ambiguous, .unknown:
+            return true
+        case .sending, .streaming, .awaitingInput, .cancelling:
+            return false
+        }
+    }
+
+    private static func brokerCursor(from row: ACPSessionRow?) -> ACPBrokerEventCursor {
+        let raw = row?.acpBrokerAcknowledgedCursor ?? 0
+        guard raw > 0 else { return ACPBrokerEventCursor(rawValue: 0) }
+        return ACPBrokerEventCursor(rawValue: UInt64(raw))
+    }
+
+    private static func brokerGeneration(from row: ACPSessionRow?) -> ACPBrokerGeneration? {
+        guard let raw = row?.acpBrokerGeneration, raw > 0 else { return nil }
+        return ACPBrokerGeneration(rawValue: UInt64(raw))
     }
 
     private static func makeDefaultConnection(
@@ -1904,7 +2044,7 @@ extension ACPSessionManager {
             runner.invalidateActivePrompt()
             runner.stop()
             await runner.flushPersistence()
-            await runner.connection.shutdown()
+            await runner.connection.detach()
         }
         autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
@@ -2257,7 +2397,7 @@ extension ACPSessionManager {
         // a delegated session (`launchSpec` itself is scoped to this
         // `do` block, so its `extraEnv` is captured here for later use).
         var cliParentSessionId: String?
-        var effectiveLaunchSpec = spec
+        let agentEnvironment: [String: String]
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
             var launchSpec = await resolvedLaunchSpec(for: spec, host: host)
@@ -2266,9 +2406,17 @@ extension ACPSessionManager {
                 cliEnvActive = true
                 cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
             }
-            effectiveLaunchSpec = launchSpec
+            agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
+            } else if host == nil, let brokerServiceFactory {
+                connection = try await makeBrokerConnection(
+                    service: try await brokerServiceFactory(),
+                    launchSpec: launchSpec,
+                    sessionId: sessionId,
+                    session: session,
+                    environment: agentEnvironment
+                )
             } else {
                 let useHelperProc = if let host {
                     await remoteHelperSupportsProc(host: host)
@@ -2335,10 +2483,14 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
             }
-            let initialized = try await connection.initialize()
+            let initialized = try await connection.initialize(
+                brokerOperationKey: Self.brokerStartupOperationKey(
+                    sessionId: sessionId,
+                    method: "initialize"
+                )
+            )
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
-            let agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: effectiveLaunchSpec.extraEnv)
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
             let mcpPlan = MCPAttachmentPlanner.plan(.init(
@@ -2503,7 +2655,14 @@ extension ACPSessionManager {
                 session.firstRunConnectingPhase = .creatingSession
             }
             if freshlyCreated {
-                result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                result = try await connection.newSession(
+                    cwd: worktreePath,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: sessionId,
+                        method: "session/new"
+                    )
+                )
                 createdFreshRemoteSession = true
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 if session.hasConversationTranscript {
@@ -2513,7 +2672,15 @@ extension ACPSessionManager {
                 case .resume:
                     do {
                         result = try await connection.resumeSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/resume",
+                                remoteSessionId: remoteId
+                            )
+                        )
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2533,7 +2700,14 @@ extension ACPSessionManager {
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
-                        result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                        result = try await connection.newSession(
+                            cwd: worktreePath,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/new"
+                            )
+                        )
                         createdFreshRemoteSession = true
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
@@ -2554,7 +2728,15 @@ extension ACPSessionManager {
                 case .loadStrict:
                     do {
                         result = try await connection.loadSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/load",
+                                remoteSessionId: remoteId
+                            )
+                        )
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2570,7 +2752,15 @@ extension ACPSessionManager {
                 case .loadWithRecovery:
                     do {
                         result = try await connection.loadSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/load",
+                                remoteSessionId: remoteId
+                            )
+                        )
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2584,7 +2774,14 @@ extension ACPSessionManager {
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
-                        result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                        result = try await connection.newSession(
+                            cwd: worktreePath,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/new"
+                            )
+                        )
                         createdFreshRemoteSession = true
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
@@ -2609,7 +2806,14 @@ extension ACPSessionManager {
                     throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
-                result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                result = try await connection.newSession(
+                    cwd: worktreePath,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: sessionId,
+                        method: "session/new"
+                    )
+                )
                 createdFreshRemoteSession = true
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
@@ -2684,7 +2888,11 @@ extension ACPSessionManager {
                 shouldAbortAttach = !(await confirmedWriterLease(for: sessionId))
             }
             if shouldAbortAttach {
-                await connection.shutdown()
+                if isDisposed {
+                    await connection.shutdown()
+                } else {
+                    await connection.detach()
+                }
                 startedRunner?.stop()
                 await startedRunner?.flushPersistence()
                 session.agentState = .idle
@@ -2702,7 +2910,11 @@ extension ACPSessionManager {
             session.contextRestoreWarning = restoreWarning
             guard await persistSessionRemoteId(session) else {
                 session.remoteSessionId = persistedRows[sessionId]?.remoteSessionId
-                await connection.shutdown()
+                if isDisposed {
+                    await connection.shutdown()
+                } else {
+                    await connection.detach()
+                }
                 startedRunner?.stop()
                 await startedRunner?.flushPersistence()
                 session.agentState = .idle

@@ -1,5 +1,6 @@
 mod watch;
 
+use alas_helper::acp_broker_process;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -236,6 +237,8 @@ fn capabilities() -> Value {
         "search": true,
         "ping": true,
         "proc": true
+        ,
+        "acp": true
     })
 }
 
@@ -263,6 +266,16 @@ fn main() {
             };
             if let Err(error) = proc_supervise(PathBuf::from(dir)) {
                 eprintln!("alas-helper proc-supervise: {}", error.message);
+                std::process::exit(1);
+            }
+        }
+        Some("acp-broker-supervise") => {
+            let Some(dir) = args.next() else {
+                eprintln!("usage: alas-helper acp-broker-supervise <broker-dir>");
+                std::process::exit(2);
+            };
+            if let Err(error) = acp_broker_process::run_broker_supervisor(PathBuf::from(dir)) {
+                eprintln!("alas-helper acp-broker-supervise: {}", error.message);
                 std::process::exit(1);
             }
         }
@@ -530,6 +543,14 @@ fn handle_request(
         "proc/write" => proc_write(params),
         "proc/kill" => proc_kill(params),
         "proc/list" => proc_list(),
+        method if method.starts_with("acp/") => {
+            acp_broker_process::handle_control_request(method, params).map_err(|error| {
+                HelperError {
+                    code: error.code,
+                    message: error.message,
+                }
+            })
+        }
         _ => Err(jsonrpc_error(-32601, format!("method not found: {method}"))),
     }
 }

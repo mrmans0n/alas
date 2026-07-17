@@ -3,6 +3,12 @@ import Foundation
 /// Installs and verifies the bundled Alas helper in the app's private remote
 /// directory. Consent is owned by AppState so upgrades can reuse it.
 enum RemoteHelperInstaller {
+    #if arch(arm64)
+    static let localArch = "aarch64"
+    #else
+    static let localArch = "x86_64"
+    #endif
+
     static func bundledBinaryPath(
         os: RemoteHostCapabilities.OS,
         arch: String?,

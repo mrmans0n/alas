@@ -4738,6 +4738,10 @@ final class AppState {
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
+            brokerServiceFactory: {
+                let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
+                return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
+            },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
                     return nil
