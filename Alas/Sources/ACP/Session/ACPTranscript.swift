@@ -10,10 +10,15 @@ import Combine
 final class ACPTranscript: ObservableObject {
     @Published var messages: [ACPMessage] = [] {
         didSet {
+            messagesGeneration &+= 1
             refreshPlanCaches()
             recordMessagesDiff(old: oldValue)
         }
     }
+    /// Bumped on every `messages` array mutation. Non-published: consumed by
+    /// value caches (visible-rows lookup) that must invalidate when the array
+    /// changes, without adding another objectWillChange source.
+    private(set) var messagesGeneration: UInt64 = 0
     /// Mutation log consumed by remote-web gateways for incremental deltas.
     /// Recording is enabled only while at least one gateway is subscribed.
     let changeLog = ACPTranscriptChangeLog()

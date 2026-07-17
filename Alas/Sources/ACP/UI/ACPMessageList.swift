@@ -38,6 +38,11 @@ struct ACPMessageList: View {
     // their per-row bookkeeping out of SwiftUI-observed value state: changing
     // a cached frame must not invalidate the entire lazy transcript list.
     @State private var modernRowFrameCache = ACPRowFrameCache()
+    // Rebuilding the window-sliced row list + stable-id lookup is O(rows); it
+    // used to happen from scratch inside every per-row geometry callback,
+    // making a full layout pass O(rows²). Memoized per (messages generation,
+    // window bounds) so a pass rebuilds it once instead of once per row.
+    @State private var visibleRowsCache = ACPVisibleRowsCache()
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -63,6 +68,15 @@ struct ACPMessageList: View {
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
     private var visibleRows: [VisibleRow] {
+        visibleRowsCache.rows(
+            generation: transcript.messagesGeneration,
+            head: transcript.visibleHead,
+            tail: transcript.visibleTailBound,
+            build: buildVisibleRows
+        )
+    }
+
+    private func buildVisibleRows() -> [VisibleRow] {
         Self.visibleRows(
             messages: transcript.messages,
             visibleHead: transcript.visibleHead,
@@ -522,15 +536,11 @@ struct ACPMessageList: View {
         let anchorIndex = lookup.transcriptIndex(for: anchorId)
         scrollBook.isRestoringTail = true
         transcript.stepTailForward(preserving: anchorIndex)
-        let updatedRows = Self.visibleRows(
-            messages: transcript.messages,
-            visibleHead: transcript.visibleHead,
-            visibleTail: transcript.visibleTailBound,
-            stableId: { transcript.stableId(for: $0) }
-        )
-        let updatedLookup = Self.visibleMessageLookup(rows: updatedRows.map { row in
-            (index: row.index, stableId: row.stableId)
-        })
+        // `visibleTailBound` has already advanced (stepTailForward guarantees
+        // newTail > currentTail), so the cache key differs from the
+        // pre-mutation lookup above and this recomputes rather than reusing
+        // the stale entry.
+        let updatedLookup = visibleMessageLookup
         let scrollTargetId = updatedLookup.contains(anchorId) ? anchorId : updatedLookup.firstStableId
         DispatchQueue.main.async {
             if let scrollTargetId {
@@ -593,9 +603,12 @@ struct ACPMessageList: View {
     }
 
     private var visibleMessageLookup: VisibleMessageLookup {
-        Self.visibleMessageLookup(rows: visibleRows.map { row in
-            (index: row.index, stableId: row.stableId)
-        })
+        visibleRowsCache.lookup(
+            generation: transcript.messagesGeneration,
+            head: transcript.visibleHead,
+            tail: transcript.visibleTailBound,
+            build: buildVisibleRows
+        )
     }
 
     private var topPaginationSentinel: some View {
@@ -1086,6 +1099,46 @@ final class ACPRowFrameCache {
             changed = true
         }
         return changed
+    }
+}
+
+/// Non-observed memo for the window-sliced row list + id lookup. Keyed on
+/// (messages generation, window bounds); geometry callbacks hit this once
+/// per layout pass instead of rebuilding an O(rows) dictionary per row.
+/// See docs/plans/2026-07-17-acp-transcript-livelock-fix.md (Task 2).
+@MainActor
+final class ACPVisibleRowsCache {
+    private struct Key: Equatable {
+        let generation: UInt64
+        let head: Int
+        let tail: Int
+    }
+    private var key: Key?
+    private var rows: [ACPMessageList.VisibleRow] = []
+    private var lookup: ACPMessageList.VisibleMessageLookup?
+
+    func rows(
+        generation: UInt64, head: Int, tail: Int,
+        build: () -> [ACPMessageList.VisibleRow]
+    ) -> [ACPMessageList.VisibleRow] {
+        let k = Key(generation: generation, head: head, tail: tail)
+        if key != k {
+            rows = build()
+            lookup = nil
+            key = k
+        }
+        return rows
+    }
+
+    func lookup(
+        generation: UInt64, head: Int, tail: Int,
+        build: () -> [ACPMessageList.VisibleRow]
+    ) -> ACPMessageList.VisibleMessageLookup {
+        let r = rows(generation: generation, head: head, tail: tail, build: build)
+        if let lookup { return lookup }
+        let l = ACPMessageList.visibleMessageLookup(rows: r.map { ($0.index, $0.stableId) })
+        lookup = l
+        return l
     }
 }
 
