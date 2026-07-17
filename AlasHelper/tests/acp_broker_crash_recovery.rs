@@ -1,0 +1,405 @@
+use serde_json::{Value, json};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+struct Helper {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<std::process::ChildStdout>,
+    next_id: u64,
+}
+
+impl Helper {
+    fn start(home: &Path) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_alas-helper"))
+            .arg("serve")
+            .env("HOME", home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("helper serve starts");
+        let stdin = child.stdin.take().expect("helper stdin");
+        let stdout = BufReader::new(child.stdout.take().expect("helper stdout"));
+        Self {
+            child,
+            stdin,
+            stdout,
+            next_id: 1,
+        }
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        writeln!(
+            self.stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params
+            })
+        )
+        .expect("write helper request");
+        self.stdin.flush().expect("flush helper request");
+        let mut line = String::new();
+        self.stdout
+            .read_line(&mut line)
+            .expect("read helper response");
+        let response: Value = serde_json::from_str(&line).expect("helper response JSON");
+        if response.get("error").is_some() {
+            panic!("helper error for {method}: {response}");
+        }
+        response["result"].clone()
+    }
+
+    fn write_request_without_reading(&mut self, method: &str, params: Value) {
+        let id = self.next_id;
+        self.next_id += 1;
+        writeln!(
+            self.stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params
+            })
+        )
+        .expect("write helper request");
+        self.stdin.flush().expect("flush helper request");
+    }
+
+    fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn open_list_and_close_broker_without_persisting_env_values() {
+    let fixture = Fixture::new("open-list-close");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-open", 0));
+
+    assert_eq!(open["adopted"], false);
+    assert_eq!(open["snapshot"]["metadata"]["brokerId"], "broker-open");
+    assert_eq!(
+        open["snapshot"]["metadata"]["envKeys"],
+        json!(["FAKE_ACP_LOG", "FAKE_ACP_PROMPT_DELAY"])
+    );
+
+    let metadata = std::fs::read_to_string(
+        fixture
+            .home
+            .join(".alas/acp-brokers/broker-open/metadata.json"),
+    )
+    .expect("metadata exists");
+    assert!(metadata.contains("FAKE_ACP_LOG"));
+    assert!(!metadata.contains(fixture.log.to_string_lossy().as_ref()));
+
+    let adopted = helper.request("acp/open", fixture.open_params("broker-open", 0));
+    assert_eq!(adopted["adopted"], true);
+
+    let mut helper2 = Helper::start(&fixture.home);
+    let list = helper2.request("acp/list", json!({}));
+    assert_eq!(list["brokers"].as_array().unwrap().len(), 1);
+
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+    let close = helper2.request(
+        "acp/close",
+        json!({ "brokerId": "broker-open", "generation": generation }),
+    );
+    assert_eq!(close["ok"], true);
+}
+
+#[test]
+fn helper_crash_during_prompt_preserves_completion_and_replays_events() {
+    let fixture = Fixture::new("prompt-crash");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-prompt", 1));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-prompt",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-prompt",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    helper.write_request_without_reading(
+        "acp/send",
+        json!({
+            "brokerId": "broker-prompt",
+            "generation": generation,
+            "operationKey": "prompt-1",
+            "method": "session/prompt",
+            "params": { "prompt": "finish after crash" }
+        }),
+    );
+    fixture.wait_for_log("session/prompt\n");
+    helper.kill();
+    std::thread::sleep(Duration::from_millis(1200));
+
+    let mut recovered = Helper::start(&fixture.home);
+    let attached = recovered.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-prompt",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "acknowledgedCursor": 0
+        }),
+    );
+    let events = attached["events"].as_array().expect("events");
+    assert!(
+        events.iter().any(|event| {
+            event["kind"]["type"] == "operationCompleted"
+                && event["kind"]["operationKey"] == "prompt-1"
+        }),
+        "attached payload: {attached}"
+    );
+
+    let retried = recovered.request(
+        "acp/send",
+        json!({
+            "brokerId": "broker-prompt",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "operationKey": "prompt-1",
+            "method": "session/prompt",
+            "params": { "prompt": "finish after crash" }
+        }),
+    );
+    assert_eq!(retried["replayed"], true);
+    assert_eq!(retried["result"]["stopReason"], "end_turn");
+
+    let log = std::fs::read_to_string(&fixture.log).expect("adapter log");
+    assert_eq!(log.matches("initialize\n").count(), 1);
+    assert_eq!(log.matches("session/prompt\n").count(), 1);
+}
+
+#[test]
+fn pending_permission_survives_helper_crash_and_can_be_answered_after_attach() {
+    let fixture = Fixture::new("permission-crash");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-permission", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-permission",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-permission",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    helper.write_request_without_reading(
+        "acp/send",
+        json!({
+            "brokerId": "broker-permission",
+            "generation": generation,
+            "operationKey": "prompt-permission",
+            "method": "session/prompt",
+            "params": { "prompt": "needs permission" }
+        }),
+    );
+    fixture.wait_for_log("session/prompt\n");
+    helper.kill();
+
+    let mut recovered = Helper::start(&fixture.home);
+    let attached = recovered.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-permission",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "acknowledgedCursor": 0
+        }),
+    );
+    assert!(
+        attached["snapshot"]["pendingRequests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["requestId"] == "900")
+    );
+
+    let response = recovered.request(
+        "acp/respond",
+        json!({
+            "brokerId": "broker-permission",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "requestId": 900,
+            "operationKey": "permission-answer",
+            "result": { "outcome": "approved" }
+        }),
+    );
+    assert_eq!(response["ok"], true);
+    std::thread::sleep(Duration::from_millis(250));
+
+    let retried = recovered.request(
+        "acp/send",
+        json!({
+            "brokerId": "broker-permission",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "operationKey": "prompt-permission",
+            "method": "session/prompt",
+            "params": { "prompt": "needs permission" }
+        }),
+    );
+    assert_eq!(retried["replayed"], true);
+    assert_eq!(retried["result"]["stopReason"], "end_turn");
+}
+
+fn send(
+    helper: &mut Helper,
+    broker_id: &str,
+    generation: Value,
+    method: &str,
+    operation_key: &str,
+    params: Value,
+) -> Value {
+    helper.request(
+        "acp/send",
+        json!({
+            "brokerId": broker_id,
+            "generation": generation,
+            "operationKey": operation_key,
+            "method": method,
+            "params": params
+        }),
+    )
+}
+
+struct Fixture {
+    root: PathBuf,
+    home: PathBuf,
+    adapter: PathBuf,
+    log: PathBuf,
+}
+
+impl Fixture {
+    fn new(_name: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = PathBuf::from(format!("/tmp/aab-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("fixture root");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).expect("fixture home");
+        let adapter = root.join("fake-acp.sh");
+        let log = root.join("adapter.log");
+        write_fake_adapter(&adapter);
+        Self {
+            root,
+            home,
+            adapter,
+            log,
+        }
+    }
+
+    fn open_params(&self, broker_id: &str, delay_seconds: u64) -> Value {
+        json!({
+            "brokerId": broker_id,
+            "sessionId": format!("{broker_id}-session"),
+            "command": self.adapter,
+            "args": [],
+            "cwd": self.root,
+            "env": {
+                "FAKE_ACP_LOG": self.log,
+                "FAKE_ACP_PROMPT_DELAY": delay_seconds.to_string()
+            }
+        })
+    }
+
+    fn wait_for_log(&self, needle: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if std::fs::read_to_string(&self.log)
+                .map(|log| log.contains(needle))
+                .unwrap_or(false)
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("timed out waiting for adapter log entry {needle:?}");
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn write_fake_adapter(path: &Path) {
+    std::fs::write(
+        path,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf 'initialize\n' >> "$FAKE_ACP_LOG"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"capabilities":{}}}\n' "$id"
+      ;;
+    *'"method":"session/new"'*)
+      printf 'session/new\n' >> "$FAKE_ACP_LOG"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"remote-1"}}\n' "$id"
+      ;;
+    *'"method":"session/prompt"'*)
+      printf 'session/prompt\n' >> "$FAKE_ACP_LOG"
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"kind":"text","text":"started"}}}\n'
+      if printf '%s\n' "$line" | grep -q permission; then
+        printf '{"jsonrpc":"2.0","id":900,"method":"session/request_permission","params":{"toolCallId":"tool-1"}}\n'
+        IFS= read -r answer
+        printf 'permission-answer:%s\n' "$answer" >> "$FAKE_ACP_LOG"
+      fi
+      sleep "${FAKE_ACP_PROMPT_DELAY:-0}"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id"
+      ;;
+    *)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write fake adapter");
+    let status = Command::new("chmod")
+        .arg("+x")
+        .arg(path)
+        .status()
+        .expect("chmod fake adapter");
+    assert!(status.success());
+}
