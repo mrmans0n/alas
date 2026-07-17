@@ -155,6 +155,8 @@ struct ACPSessionManagerAttachRestoreTests {
         let spec = try #require(capturedSpec)
         #expect(spec.extraEnv["ALAS_SESSION_ID"] == session.id)
         #expect(spec.extraEnv["PATH"] == "/managed/bin:/usr/bin")
+        #expect(session.terminalHost.sessionEnv["ALAS_SESSION_ID"] == session.id)
+        #expect(session.terminalHost.sessionEnv["PATH"] == "/managed/bin:/usr/bin")
     }
 
     @Test("remote attach skips alas CLI env")

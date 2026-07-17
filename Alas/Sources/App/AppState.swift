@@ -4815,7 +4815,7 @@ final class AppState {
             ))
             let userServerNames = plan.wireServers.map(\.name)
             guard adapterState == .installed else { return (adapterState, nil, userServerNames) }
-            let fingerprint = MCPAttachmentPlanner.configurationFingerprint(for: servers)
+            let fingerprint = MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: plan.wireServers)
             let configOutcome: PiMCPConfigWriter.Outcome
             do {
                 configOutcome = try PiMCPConfigWriter.sync(

@@ -46,6 +46,36 @@ struct PiMCPConfigWriterTests {
         #expect(try PiMCPConfigWriter.sync(worktreeURL: wt, servers: servers, fingerprint: "fp2") == .wrote)
     }
 
+    @Test("resolved wire fingerprint changes when interpolated values change")
+    func resolvedWireFingerprintFreshness() throws {
+        let wt = try makeWorktree()
+        let first: [ACPMCPServer] = [.http(
+            name: "docs", url: "https://x/mcp",
+            headers: [ACPMCPKeyValue(name: "Authorization", value: "Bearer one")]
+        )]
+        let second: [ACPMCPServer] = [.http(
+            name: "docs", url: "https://x/mcp",
+            headers: [ACPMCPKeyValue(name: "Authorization", value: "Bearer two")]
+        )]
+
+        _ = try PiMCPConfigWriter.sync(
+            worktreeURL: wt,
+            servers: first,
+            fingerprint: MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: first)
+        )
+        let outcome = try PiMCPConfigWriter.sync(
+            worktreeURL: wt,
+            servers: second,
+            fingerprint: MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: second)
+        )
+
+        #expect(outcome == .wrote)
+        let json = try #require(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: wt.appendingPathComponent(".pi/mcp.json"))) as? [String: Any])
+        let docs = try #require((json["mcpServers"] as? [String: Any])?["docs"] as? [String: Any])
+        #expect((docs["headers"] as? [String: String])?["Authorization"] == "Bearer two")
+    }
+
     @Test("refuses to touch an unmanaged file")
     func refusesUnmanaged() throws {
         let wt = try makeWorktree()

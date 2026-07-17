@@ -2256,6 +2256,7 @@ extension ACPSessionManager {
         // a delegated session (`launchSpec` itself is scoped to this
         // `do` block, so its `extraEnv` is captured here for later use).
         var cliParentSessionId: String?
+        var effectiveLaunchSpec = spec
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
             var launchSpec = await resolvedLaunchSpec(for: spec, host: host)
@@ -2264,6 +2265,7 @@ extension ACPSessionManager {
                 cliEnvActive = true
                 cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
             }
+            effectiveLaunchSpec = launchSpec
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
             } else {
@@ -2335,7 +2337,7 @@ extension ACPSessionManager {
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
-            let agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv)
+            let agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: effectiveLaunchSpec.extraEnv)
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
             let mcpPlan = MCPAttachmentPlanner.plan(.init(
