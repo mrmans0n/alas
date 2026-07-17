@@ -275,6 +275,7 @@ fn acknowledgement_is_monotonic_and_bounded_by_journal_tail() {
 
     broker.ack(EventCursor::new(1)).unwrap();
     assert_eq!(broker.acknowledged_cursor(), EventCursor::new(1));
+    assert_eq!(broker.replay_after(EventCursor::new(0)).unwrap().len(), 1);
     assert_eq!(
         broker.ack(EventCursor::new(0)).unwrap_err().kind(),
         BrokerErrorKind::CursorBehindAcknowledged
@@ -287,6 +288,23 @@ fn acknowledgement_is_monotonic_and_bounded_by_journal_tail() {
         broker.replay_after(EventCursor::new(3)).unwrap_err().kind(),
         BrokerErrorKind::CursorBeyondJournalTail
     );
+}
+
+#[test]
+fn acknowledgement_prunes_events_without_reusing_cursors() {
+    let mut broker = broker();
+    broker.add_adapter_notification("session/update", json!({"kind": "one"}));
+    broker.add_adapter_notification("session/update", json!({"kind": "two"}));
+
+    broker.ack(EventCursor::new(2)).unwrap();
+    assert!(broker.replay_after(EventCursor::new(0)).unwrap().is_empty());
+    assert_eq!(broker.snapshot().journal_tail, EventCursor::new(2));
+
+    let third = broker.add_adapter_notification("session/update", json!({"kind": "three"}));
+    assert_eq!(third, EventCursor::new(3));
+    let replay = broker.replay_after(EventCursor::new(2)).unwrap();
+    assert_eq!(replay.len(), 1);
+    assert_eq!(replay[0].cursor, third);
 }
 
 #[test]

@@ -308,7 +308,7 @@ fn prompt_streaming_update_returns_progress_before_turn_completion() {
 }
 
 #[test]
-fn attach_replays_from_stale_persisted_cursor_without_moving_ack_back() {
+fn attach_with_stale_persisted_cursor_does_not_move_ack_back() {
     let fixture = Fixture::new("stale-attach-cursor");
     let mut helper = Helper::start(&fixture.home);
     let open = helper.request("acp/open", fixture.open_params("broker-stale-attach", 0));
@@ -357,12 +357,7 @@ fn attach_replays_from_stale_persisted_cursor_without_moving_ack_back() {
         stale_attach["snapshot"]["acknowledgedCursor"],
         json!(journal_tail)
     );
-    assert!(
-        stale_attach["events"]
-            .as_array()
-            .is_some_and(|events| !events.is_empty()),
-        "{stale_attach}"
-    );
+    assert_eq!(stale_attach["events"], json!([]), "{stale_attach}");
 }
 
 #[test]

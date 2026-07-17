@@ -326,10 +326,7 @@ impl ACPBrokerState {
     }
 
     pub fn journal_tail(&self) -> EventCursor {
-        self.journal
-            .last()
-            .map(|event| event.cursor)
-            .unwrap_or(EventCursor(0))
+        EventCursor(self.next_event_cursor.0.saturating_sub(1))
     }
 
     pub fn record_initialize_result(&mut self, result: Value) -> Result<EventCursor, BrokerError> {
@@ -518,6 +515,7 @@ impl ACPBrokerState {
             ));
         }
         self.acknowledged_cursor = cursor;
+        self.journal.retain(|event| event.cursor > cursor);
         Ok(())
     }
 
