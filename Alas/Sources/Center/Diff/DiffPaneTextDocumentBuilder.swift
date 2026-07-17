@@ -2,6 +2,19 @@ import AppKit
 import SwiftUI
 
 struct DiffPaneTextDocumentBuilder {
+    enum ContextExpansionActionMode: Equatable {
+        case chunk
+        case all
+    }
+
+    struct ContextExpansionAction: Equatable {
+        let key: DiffContextExpansionKey
+        let boundary: DiffContextBoundary
+        let edge: DiffContextExpansionEdge?
+        let mode: ContextExpansionActionMode
+        let range: NSRange
+    }
+
     struct LineMetadata: Equatable {
         let kind: DiffDisplayRow.Kind
         let range: NSRange
@@ -12,6 +25,7 @@ struct DiffPaneTextDocumentBuilder {
         var expansionKey: DiffContextExpansionKey? = nil
         var expansionBoundary: DiffContextBoundary? = nil
         var expansionEdge: DiffContextExpansionEdge? = nil
+        var expansionActions: [ContextExpansionAction] = []
     }
 
     struct CodeDocument {
@@ -303,7 +317,8 @@ struct DiffPaneTextDocumentBuilder {
                 range: NSRange(location: start, length: output.length - start),
                 expansionKey: row.contextExpansion?.key,
                 expansionBoundary: row.contextExpansion?.boundary,
-                expansionEdge: row.contextExpansion?.edge
+                expansionEdge: row.contextExpansion?.edge,
+                expansionActions: contextExpansionActions(for: row.contextExpansion, lineStart: start)
             ))
         }
 
@@ -339,7 +354,8 @@ struct DiffPaneTextDocumentBuilder {
                     range: NSRange(location: start, length: output.length - start),
                     expansionKey: row.contextExpansion?.key,
                     expansionBoundary: row.contextExpansion?.boundary,
-                    expansionEdge: row.contextExpansion?.edge
+                    expansionEdge: row.contextExpansion?.edge,
+                    expansionActions: contextExpansionActions(for: row.contextExpansion, lineStart: start)
                 ))
                 index += 1
                 continue
@@ -512,7 +528,7 @@ struct DiffPaneTextDocumentBuilder {
         theme: Theme
     ) -> NSAttributedString {
         NSAttributedString(
-            string: expandableContextLabel(row),
+            string: expandableContextText(row.contextExpansion, fallbackBoundary: row.contextExpansion?.boundary),
             attributes: expandableContextAttributes(font: font, theme: theme)
         )
     }
@@ -523,6 +539,7 @@ struct DiffPaneTextDocumentBuilder {
         let headIndent = expandableContextHeadIndent(font: font)
         paragraph.firstLineHeadIndent = headIndent
         paragraph.headIndent = headIndent
+        paragraph.lineBreakMode = .byClipping
         // Size the row from the font (code font is user-configurable up to 64pt),
         // not a fixed height: natural line height plus symmetric vertical padding,
         // so the row rect grows with the glyphs and the pill keeps its breathing
@@ -551,21 +568,88 @@ struct DiffPaneTextDocumentBuilder {
     }
 
     static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
-        if row.contextExpansion?.key.isShared == true, row.contextExpansion?.edge == nil {
-            guard row.collapsedLineCount > 0 else {
+        expandableContextLabel(
+            expansion: row.contextExpansion,
+            remainingLineCount: row.collapsedLineCount
+        )
+    }
+
+    private static func expandableContextLabel(
+        expansion: DiffContextExpansionRow?,
+        remainingLineCount: Int
+    ) -> String {
+        if expansion?.key.isShared == true, expansion?.edge == nil {
+            guard remainingLineCount > 0 else {
                 return "Expand all context"
             }
-            return "Expand all \(row.collapsedLineCount) unchanged lines"
+            return "Expand all \(remainingLineCount) unchanged lines"
         }
-        let boundaryText = row.contextExpansion?.boundary == .below ? "below" : "above"
-        guard row.collapsedLineCount > 0 else {
+        let boundary = expansion?.boundary
+        let boundaryText = boundary == .below ? "below" : "above"
+        guard remainingLineCount > 0 else {
             return "Expand context \(boundaryText)"
         }
-        return "Expand \(row.collapsedLineCount) unchanged lines \(boundaryText)"
+        return "Expand \(remainingLineCount) unchanged lines \(boundaryText)"
     }
 
     static func expandableContextSymbolName(boundary: DiffContextBoundary?) -> String {
         boundary == .above ? "chevron.up" : "chevron.down"
+    }
+
+    private static let expandableContextActionSeparator = "      "
+
+    private static func expandableContextText(
+        _ expansion: DiffContextExpansionRow?,
+        fallbackBoundary: DiffContextBoundary?
+    ) -> String {
+        guard let expansion else {
+            let boundaryText = fallbackBoundary == .below ? "below" : "above"
+            return "Expand context \(boundaryText)"
+        }
+        return contextExpansionActionLabels(for: expansion).map(\.label).joined(separator: expandableContextActionSeparator)
+    }
+
+    fileprivate static func contextExpansionActions(
+        for expansion: DiffContextExpansionRow?,
+        lineStart: Int
+    ) -> [ContextExpansionAction] {
+        guard let expansion else { return [] }
+        let labels = contextExpansionActionLabels(for: expansion)
+
+        var location = lineStart
+        var actions: [ContextExpansionAction] = []
+        actions.reserveCapacity(labels.count)
+        for (index, item) in labels.enumerated() {
+            let labelLength = (item.label as NSString).length
+            actions.append(ContextExpansionAction(
+                key: expansion.key,
+                boundary: expansion.boundary,
+                edge: expansion.edge,
+                mode: item.mode,
+                range: NSRange(location: location, length: labelLength)
+            ))
+            location += labelLength
+            if index < labels.count - 1 {
+                location += (expandableContextActionSeparator as NSString).length
+            }
+        }
+        return actions
+    }
+
+    private static func contextExpansionActionLabels(
+        for expansion: DiffContextExpansionRow
+    ) -> [(label: String, mode: ContextExpansionActionMode)] {
+        let primaryMode: ContextExpansionActionMode = expansion.key.isShared && expansion.edge == nil ? .all : .chunk
+        var labels: [(label: String, mode: ContextExpansionActionMode)] = [
+            (
+                expandableContextLabel(expansion: expansion, remainingLineCount: expansion.remainingLineCount),
+                primaryMode
+            ),
+        ]
+        if primaryMode != .all {
+            labels.append(("Expand all context", .all))
+        }
+        return labels
     }
 
     private static func collapsedTextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
@@ -974,7 +1058,10 @@ private struct ColumnAccumulator {
             syntaxGroup: lineSyntaxGroup,
             expansionKey: expansion?.key,
             expansionBoundary: expansion?.boundary,
-            expansionEdge: expansion?.edge
+            expansionEdge: expansion?.edge,
+            expansionActions: line.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? []
+                : DiffPaneTextDocumentBuilder.contextExpansionActions(for: expansion, lineStart: start)
         ))
     }
 

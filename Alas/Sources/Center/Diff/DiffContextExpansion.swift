@@ -368,20 +368,7 @@ enum DiffContextExpandedDisplayBuilder {
                 key: key,
                 edge: edge
             )
-            guard edge == .top else {
-                return [expandable]
-            }
-            return [
-                expandable,
-                expandableRow(
-                    group: attachedGroup,
-                    boundary: attachedBoundary,
-                    remaining: 0,
-                    key: key,
-                    edge: nil,
-                    defaultsEdgeFromBoundary: false
-                ),
-            ]
+            return [expandable]
         }
 
         let range = boundaryRange(
@@ -464,17 +451,6 @@ enum DiffContextExpandedDisplayBuilder {
         switch edge {
         case .top:
             rows.insert(expandable, at: rows.endIndex)
-            rows.insert(
-                expandableRow(
-                    group: attachedGroup,
-                    boundary: attachedBoundary,
-                    remaining: remaining,
-                    key: key,
-                    edge: nil,
-                    defaultsEdgeFromBoundary: false
-                ),
-                at: rows.endIndex
-            )
         case .bottom:
             rows.insert(expandable, at: rows.startIndex)
         }
