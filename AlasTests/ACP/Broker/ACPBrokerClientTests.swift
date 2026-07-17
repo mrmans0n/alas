@@ -22,7 +22,10 @@ struct ACPBrokerClientTests {
 
     // Guard the fix from over-correcting: genuine JSON booleans must stay bool.
     @Test func encodableBooleansStayBooleans() throws {
-        struct Payload: Encodable { let enabled: Bool; let disabled: Bool }
+        struct Payload: Encodable {
+            let enabled: Bool
+            let disabled: Bool
+        }
 
         #expect(try ACPBrokerJSONValue(encodable: Payload(enabled: true, disabled: false))
             == .object(["enabled": .bool(true), "disabled": .bool(false)]))
