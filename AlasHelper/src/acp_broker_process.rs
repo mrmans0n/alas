@@ -965,16 +965,28 @@ fn spawn_broker_supervisor(dir: &Path) -> Result<(), AcpBrokerProcessError> {
 }
 
 fn broker_is_running(dir: &Path) -> bool {
-    let Some(pid) = read_broker_pid(dir) else {
+    let Some(metadata) = read_broker_pid_metadata(dir) else {
         return false;
     };
-    pid_is_alive(pid)
+    if !pid_is_alive(metadata.pid) {
+        mark_stale_broker_pid(dir);
+        return false;
+    }
+    if let Some(expected_pgid) = metadata.process_group_id {
+        if current_process_group_id(metadata.pid) != Some(expected_pgid) {
+            mark_stale_broker_pid(dir);
+            return false;
+        }
+    }
+    true
 }
 
-fn read_broker_pid(dir: &Path) -> Option<u32> {
-    serde_json::from_slice::<BrokerPidMetadata>(&std::fs::read(dir.join("pid.json")).ok()?)
-        .ok()
-        .map(|metadata| metadata.pid)
+fn read_broker_pid_metadata(dir: &Path) -> Option<BrokerPidMetadata> {
+    serde_json::from_slice::<BrokerPidMetadata>(&std::fs::read(dir.join("pid.json")).ok()?).ok()
+}
+
+fn mark_stale_broker_pid(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join("pid.json"));
 }
 
 fn write_broker_pid(dir: &Path) -> Result<(), AcpBrokerProcessError> {

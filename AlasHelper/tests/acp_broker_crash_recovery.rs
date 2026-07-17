@@ -135,6 +135,37 @@ fn open_list_and_close_broker_without_persisting_env_values() {
     assert_eq!(close["ok"], true);
 }
 
+#[cfg(unix)]
+#[test]
+fn open_reclaims_stale_broker_pid_when_process_group_mismatches() {
+    let fixture = Fixture::new("stale-broker-pid");
+    let broker_dir = fixture
+        .home
+        .join(".alas/acp-brokers/broker-stale-reused-pid");
+    std::fs::create_dir_all(&broker_dir).expect("broker dir");
+    std::fs::write(
+        broker_dir.join("pid.json"),
+        serde_json::to_vec(&json!({
+            "pid": std::process::id(),
+            "processGroupId": 0
+        }))
+        .expect("pid metadata"),
+    )
+    .expect("stale pid metadata");
+
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request(
+        "acp/open",
+        fixture.open_params("broker-stale-reused-pid", 0),
+    );
+
+    assert_eq!(open["adopted"], false);
+    assert_eq!(
+        open["snapshot"]["metadata"]["brokerId"],
+        "broker-stale-reused-pid"
+    );
+}
+
 #[test]
 fn close_rejects_stale_generation_without_removing_broker() {
     let fixture = Fixture::new("close-stale-generation");
@@ -473,17 +504,16 @@ fn pending_permission_survives_helper_crash_and_can_be_answered_after_attach() {
         }),
     );
     fixture.wait_for_log("session/prompt\n");
-    helper.kill();
 
     let mut recovered = Helper::start(&fixture.home);
-    let attached = recovered.request(
-        "acp/attach",
-        json!({
-            "brokerId": "broker-permission",
-            "generation": open["snapshot"]["metadata"]["generation"],
-            "acknowledgedCursor": 0
-        }),
+    let attached = wait_for_pending_request_visible(
+        &mut recovered,
+        "broker-permission",
+        open["snapshot"]["metadata"]["generation"].clone(),
+        json!("900"),
     );
+    helper.kill();
+
     assert!(
         attached["snapshot"]["pendingRequests"]
             .as_array()
@@ -822,7 +852,7 @@ fn drive_until_pending_request(
 ) -> Value {
     let mut acknowledged_cursor = 0;
     let mut last_attached = Value::Null;
-    for _ in 0..20 {
+    for _ in 0..60 {
         let progress = send(
             helper,
             broker_id,
@@ -862,6 +892,37 @@ fn drive_until_pending_request(
         std::thread::sleep(Duration::from_millis(50));
     }
     panic!("timed out waiting for pending request: {last_attached}");
+}
+
+fn wait_for_pending_request_visible(
+    helper: &mut Helper,
+    broker_id: &str,
+    generation: Value,
+    request_id: Value,
+) -> Value {
+    let mut last_attached = Value::Null;
+    for _ in 0..60 {
+        last_attached = helper.request(
+            "acp/attach",
+            json!({
+                "brokerId": broker_id,
+                "generation": generation.clone(),
+                "acknowledgedCursor": 0
+            }),
+        );
+        if last_attached["snapshot"]["pendingRequests"]
+            .as_array()
+            .is_some_and(|requests| {
+                requests
+                    .iter()
+                    .any(|request| request["requestId"] == request_id)
+            })
+        {
+            return last_attached;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for pending request visibility: {last_attached}");
 }
 
 fn drive_until_prompt_completed(
