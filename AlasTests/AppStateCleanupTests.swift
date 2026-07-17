@@ -32,6 +32,7 @@ struct AppStateCleanupTests {
     }
 
     @Test func piMCPExcludeRetriesForUnchangedManagedConfig() {
+        #expect(AppState.piMCPGeneratedConfigExcludePath == ".pi/mcp.json")
         #expect(AppState.shouldExcludePiDirectory(after: .wrote))
         #expect(AppState.shouldExcludePiDirectory(after: .unchanged))
         #expect(!AppState.shouldExcludePiDirectory(after: .failed))

@@ -6,6 +6,8 @@ import os
 @Observable
 @MainActor
 final class AppState {
+    static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
+
     /// Stable for this process; identifies this app instance to the ACP
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
@@ -4852,8 +4854,8 @@ final class AppState {
         do {
             let infoExcludeURL = try await resolveGitInfoExcludeURL(worktreeURL: worktreeURL)
             _ = try GitIgnoreService.appendIgnore(
-                entryPath: ".pi",
-                isDirectory: true,
+                entryPath: Self.piMCPGeneratedConfigExcludePath,
+                isDirectory: false,
                 destination: .infoExclude,
                 repoURL: worktreeURL,
                 infoExcludeURL: infoExcludeURL
