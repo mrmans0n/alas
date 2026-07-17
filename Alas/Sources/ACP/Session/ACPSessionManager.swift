@@ -2629,7 +2629,7 @@ extension ACPSessionManager {
                     .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
                 let preambleMode: ACPMCPPreambleMode
                 if case .external = spec.mcpInjection {
-                    let adapterInstalled = session.mcpExternalStatus?.adapterInstalled == true
+                    let adapterInstalled = session.mcpExternalStatus?.adapterServersAvailable == true
                     preambleMode = .cli(adapterInstalled: adapterInstalled)
                 } else {
                     preambleMode = .mcp

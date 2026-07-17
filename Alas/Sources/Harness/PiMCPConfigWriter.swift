@@ -5,13 +5,16 @@ import Foundation
 /// unmanaged files are never touched. The built-in alas server is never
 /// written here — its env is per-session, and the CLI covers it.
 enum PiMCPConfigWriter {
-    enum Outcome: Equatable { case wrote, unchanged, refusedUnmanaged, removedManaged, noServers }
+    enum Outcome: Equatable { case wrote, unchanged, refusedUnmanaged, removedManaged, noServers, failed }
 
     static let markerKey = "$alas"
 
+    /// `servers` must already be fully resolved (e.g. via
+    /// `MCPAttachmentPlanner.plan(...).wireServers`) — `${WORKTREE_DIR}` /
+    /// `${PROJECT_DIR}` templates are not interpolated here.
     static func sync(
         worktreeURL: URL,
-        servers: [ProjectMCPServer],
+        servers: [ACPMCPServer],
         fingerprint: String
     ) throws -> Outcome {
         let dir = worktreeURL.appendingPathComponent(".pi", isDirectory: true)
@@ -33,19 +36,19 @@ enum PiMCPConfigWriter {
 
         var mcpServers: [String: Any] = [:]
         for server in servers {
-            switch server.transport {
-            case let .stdio(command, args, environment):
+            switch server {
+            case let .stdio(name, command, args, env):
                 var entry: [String: Any] = ["command": command, "args": args]
-                if !environment.isEmpty {
-                    entry["env"] = Dictionary(environment.map { ($0.name, $0.value) }) { _, last in last }
+                if !env.isEmpty {
+                    entry["env"] = Dictionary(env.map { ($0.name, $0.value) }) { _, last in last }
                 }
-                mcpServers[server.name] = entry
-            case let .http(url, headers), let .sse(url, headers):
+                mcpServers[name] = entry
+            case let .http(name, url, headers), let .sse(name, url, headers):
                 var entry: [String: Any] = ["url": url]
                 if !headers.isEmpty {
                     entry["headers"] = Dictionary(headers.map { ($0.name, $0.value) }) { _, last in last }
                 }
-                mcpServers[server.name] = entry
+                mcpServers[name] = entry
             }
         }
         let payload: [String: Any] = [

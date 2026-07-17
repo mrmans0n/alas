@@ -57,6 +57,7 @@ struct ACPMCPStatusState: Equatable {
             let adapterDetail: String
             switch (externalStatus.adapterState, externalStatus.configOutcome) {
             case (.installed, .refusedUnmanaged?): adapterDetail = "using your existing .pi/mcp.json"
+            case (.installed, .failed?): adapterDetail = "config sync failed — see logs"
             case (.installed, _): adapterDetail = "via pi-mcp-adapter"
             case (.missing, _), (.unknown, _): adapterDetail = "requires the pi-mcp-adapter extension"
             }
@@ -64,7 +65,7 @@ struct ACPMCPStatusState: Equatable {
                 id: "external-adapter", name: "user MCP servers",
                 transport: "pi-mcp-adapter",
                 detail: adapterDetail,
-                isRequested: externalStatus.adapterState == .installed)
+                isRequested: externalStatus.adapterServersAvailable)
             externalRows = [cliRow, adapterRow]
             showsAdapterInstallAction = externalStatus.adapterState != .installed
         } else {

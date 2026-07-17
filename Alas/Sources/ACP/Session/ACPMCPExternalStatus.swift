@@ -10,4 +10,10 @@ struct ACPMCPExternalStatus: Equatable {
     let hint: String
 
     var adapterInstalled: Bool { adapterState == .installed }
+
+    /// True when the adapter is installed AND the last `.pi/mcp.json` sync
+    /// actually succeeded — a failed write means user MCP servers are not
+    /// reachable through pi-mcp-adapter even though the extension itself is
+    /// present.
+    var adapterServersAvailable: Bool { adapterState == .installed && configOutcome != .failed }
 }

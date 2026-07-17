@@ -111,6 +111,16 @@ struct ACPMCPStatusPolicyTests {
                                   configOutcome: .refusedUnmanaged, hint: "h")))
         #expect(try #require(unmanaged.externalRows)[1].detail == "using your existing .pi/mcp.json")
 
+        let failedSync = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(cliActive: true, adapterState: .installed,
+                                  configOutcome: .failed, hint: "h")))
+        let failedRows = try #require(failedSync.externalRows)
+        #expect(failedRows[1].detail == "config sync failed — see logs")
+        #expect(failedRows[1].isRequested == false)
+        // the adapter extension itself is installed, so no install action
+        #expect(failedSync.showsAdapterInstallAction == false)
+
         // no external status → unchanged classic behavior
         let classic = try #require(ACPMCPStatusState(summary: summary, currentServers: []))
         #expect(classic.externalRows == nil)

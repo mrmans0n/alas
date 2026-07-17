@@ -4793,14 +4793,34 @@ final class AppState {
             guard let self else { return (.unknown, nil) }
             let adapterState = PiMCPAdapterInspector.state()
             guard adapterState == .installed else { return (adapterState, nil) }
-            let servers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+            let project = self.projects.first(where: { $0.id == worktree.projectId })
+            let servers = project?.mcpServers ?? []
             let fingerprint = MCPAttachmentPlanner.configurationFingerprint(for: servers)
             let worktreeURL = URL(fileURLWithPath: worktreePath)
-            let configOutcome = try? PiMCPConfigWriter.sync(
-                worktreeURL: worktreeURL,
-                servers: servers,
-                fingerprint: fingerprint
-            )
+            // pi-mcp-adapter reads the resolved wire config, not the raw
+            // project definitions, so ${WORKTREE_DIR}/${PROJECT_DIR}
+            // templates are interpolated exactly as the normal ACP
+            // session/new attach path does. Unlike that path, http/sse are
+            // force-enabled here: pi-mcp-adapter supports them even though
+            // pi-acp's own ACP layer reports them unsupported, so this must
+            // not drop those servers.
+            let plan = MCPAttachmentPlanner.plan(.init(
+                configuredServers: servers,
+                projectDirectory: project?.path ?? worktreePath,
+                worktreeDirectory: worktreePath,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: [:]),
+                capabilities: ACPMCPServerCapabilities(http: true, sse: true)
+            ))
+            let configOutcome: PiMCPConfigWriter.Outcome
+            do {
+                configOutcome = try PiMCPConfigWriter.sync(
+                    worktreeURL: worktreeURL,
+                    servers: plan.wireServers,
+                    fingerprint: fingerprint
+                )
+            } catch {
+                configOutcome = .failed
+            }
             if configOutcome == .wrote {
                 await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
             }

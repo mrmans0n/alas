@@ -10,11 +10,10 @@ struct PiMCPConfigWriterTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
-    private var servers: [ProjectMCPServer] {
-        [ProjectMCPServer(
-            id: "1", name: "linear",
-            transport: .stdio(command: "/usr/bin/linear-mcp", args: ["--x"],
-                              environment: [MCPKeyValue(id: "k", name: "TOKEN", value: "t0k")]))]
+    private var servers: [ACPMCPServer] {
+        [.stdio(
+            name: "linear", command: "/usr/bin/linear-mcp", args: ["--x"],
+            env: [ACPMCPKeyValue(name: "TOKEN", value: "t0k")])]
     }
 
     @Test("writes a managed config with 0600 and standard mcpServers shape")
@@ -73,14 +72,52 @@ struct PiMCPConfigWriterTests {
     @Test("http and sse servers map to url and headers")
     func httpShape() throws {
         let wt = try makeWorktree()
-        let http = [ProjectMCPServer(id: "2", name: "docs",
-            transport: .http(url: "https://x/mcp",
-                             headers: [MCPKeyValue(id: "h", name: "Authorization", value: "Bearer z")]))]
+        let http: [ACPMCPServer] = [.http(
+            name: "docs", url: "https://x/mcp",
+            headers: [ACPMCPKeyValue(name: "Authorization", value: "Bearer z")])]
         _ = try PiMCPConfigWriter.sync(worktreeURL: wt, servers: http, fingerprint: "fp")
         let json = try #require(try JSONSerialization.jsonObject(
             with: Data(contentsOf: wt.appendingPathComponent(".pi/mcp.json"))) as? [String: Any])
         let docs = try #require((json["mcpServers"] as? [String: Any])?["docs"] as? [String: Any])
         #expect(docs["url"] as? String == "https://x/mcp")
         #expect((docs["headers"] as? [String: String])?["Authorization"] == "Bearer z")
+    }
+
+    @Test("throws when the .pi path is occupied by a regular file")
+    func throwsWhenPiPathIsAFile() throws {
+        let wt = try makeWorktree()
+        try Data("not a directory".utf8).write(to: wt.appendingPathComponent(".pi"))
+        #expect(throws: (any Error).self) {
+            try PiMCPConfigWriter.sync(worktreeURL: wt, servers: servers, fingerprint: "fp1")
+        }
+    }
+
+    @Test("template variables are resolved before reaching the written file")
+    func writesResolvedTemplates() throws {
+        let wt = try makeWorktree()
+        let raw = [ProjectMCPServer(
+            id: "1", name: "scoped",
+            transport: .stdio(
+                command: "/usr/bin/tool",
+                args: ["--root=${WORKTREE_DIR}"],
+                environment: []))]
+        let plan = MCPAttachmentPlanner.plan(.init(
+            configuredServers: raw,
+            projectDirectory: "/tmp/project",
+            worktreeDirectory: wt.path,
+            environment: [:],
+            capabilities: ACPMCPServerCapabilities(http: true, sse: true)
+        ))
+        #expect(plan.wireServers.count == 1)
+        let fingerprint = MCPAttachmentPlanner.configurationFingerprint(for: raw)
+        let outcome = try PiMCPConfigWriter.sync(
+            worktreeURL: wt, servers: plan.wireServers, fingerprint: fingerprint)
+        #expect(outcome == .wrote)
+        let json = try #require(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: wt.appendingPathComponent(".pi/mcp.json"))) as? [String: Any])
+        let scoped = try #require((json["mcpServers"] as? [String: Any])?["scoped"] as? [String: Any])
+        let args = try #require(scoped["args"] as? [String])
+        #expect(args == ["--root=\(wt.path)"])
+        #expect(!args.contains { $0.contains("${WORKTREE_DIR}") })
     }
 }
