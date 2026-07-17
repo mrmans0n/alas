@@ -97,7 +97,11 @@ fn open_list_and_close_broker_without_persisting_env_values() {
     assert_eq!(open["snapshot"]["metadata"]["brokerId"], "broker-open");
     assert_eq!(
         open["snapshot"]["metadata"]["envKeys"],
-        json!(["FAKE_ACP_LOG", "FAKE_ACP_PROMPT_DELAY"])
+        json!([
+            "FAKE_ACP_LOG",
+            "FAKE_ACP_PROMPT_DELAY",
+            "__CFBundleIdentifier"
+        ])
     );
 
     let metadata = std::fs::read_to_string(
@@ -336,7 +340,8 @@ impl Fixture {
             "cwd": self.root,
             "env": {
                 "FAKE_ACP_LOG": self.log,
-                "FAKE_ACP_PROMPT_DELAY": delay_seconds.to_string()
+                "FAKE_ACP_PROMPT_DELAY": delay_seconds.to_string(),
+                "__CFBundleIdentifier": "io.nlopez.alas"
             }
         })
     }

@@ -7,7 +7,10 @@ struct ACPBrokerClientTests {
     @Test func startOpensAndAttachesBroker() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
-        let client = makeClient(service: service)
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
 
         let opened = try await client.start()
 
@@ -17,7 +20,7 @@ struct ACPBrokerClientTests {
         #expect(openParams.sessionId == "local-session-1")
         #expect(openParams.command == "codex-acp")
         let attachParams = try await #require(service.attached.first)
-        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 4))
     }
 
     @Test func startPublishesDurableStateFromBrokerSnapshots() async throws {
@@ -67,6 +70,36 @@ struct ACPBrokerClientTests {
                 "text": .string("hi")
             ])])
         ]))
+    }
+
+    @Test func adoptedHandshakeAndRemoteSessionResultsAreReplayedFromSnapshot() async throws {
+        let service = MockBrokerService()
+        await service.setSnapshotResults(
+            initializeResult: .object([
+                "protocolVersion": .number(1),
+                "agentCapabilities": .object([
+                    "loadSession": .bool(true),
+                    "sessionCapabilities": .object(["load": .object([:])])
+                ]),
+                "authMethods": .array([])
+            ]),
+            remoteSessionResult: .object(["sessionId": .string("remote-restored")])
+        )
+        await service.enqueueAttach(events: [])
+        let client = makeClient(service: service)
+        try await client.start()
+
+        let initialize = try await client.send(ACPRequest(method: "initialize"))
+        let initialized = try JSONDecoder().decode(ACPInitializeResult.self, from: initialize.body)
+        #expect(initialized.protocolVersion == 1)
+
+        let session = try await client.send(ACPRequest(
+            method: "session/load",
+            params: ACPSessionLoadParams(cwd: "/repo", sessionId: "remote-old", mcpServers: [])
+        ))
+        let loaded = try JSONDecoder().decode(ACPSessionNewResult.self, from: session.body)
+        #expect(loaded.sessionId == "remote-restored")
+        #expect(await service.sent.isEmpty)
     }
 
     @Test func replayedSessionUpdateIsYieldedAndAckedAfterDurableConsumption() async throws {
@@ -217,6 +250,7 @@ struct ACPBrokerClientTests {
 
     private func makeClient(
         service: MockBrokerService,
+        initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) -> ACPBrokerClient {
         ACPBrokerClient(
@@ -228,6 +262,7 @@ struct ACPBrokerClientTests {
             cwd: "/repo",
             env: ["PATH": "/bin"],
             operationKeyPrefix: "op-prefix",
+            initialAcknowledgedCursor: initialAcknowledgedCursor,
             onDurableStateChanged: onDurableStateChanged
         )
     }
@@ -291,6 +326,8 @@ private actor MockBrokerService: ACPBrokerServicing {
     var closed: [ACPBrokerCloseParams] = []
     var attachEvents: [[ACPBrokerEvent]] = []
     var sendResults: [ACPBrokerSendResult] = []
+    var snapshotInitializeResult: ACPBrokerJSONValue?
+    var snapshotRemoteSessionResult: ACPBrokerJSONValue?
 
     func enqueueAttach(events: [ACPBrokerEvent]) {
         attachEvents.append(events)
@@ -298,6 +335,14 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func enqueueSendResult(_ result: ACPBrokerSendResult) {
         sendResults.append(result)
+    }
+
+    func setSnapshotResults(
+        initializeResult: ACPBrokerJSONValue?,
+        remoteSessionResult: ACPBrokerJSONValue?
+    ) {
+        snapshotInitializeResult = initializeResult
+        snapshotRemoteSessionResult = remoteSessionResult
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -361,8 +406,8 @@ private actor MockBrokerService: ACPBrokerServicing {
                 envKeys: ["PATH"],
                 createdAtMillis: 10
             ),
-            initializeResult: nil,
-            remoteSessionResult: nil,
+            initializeResult: snapshotInitializeResult,
+            remoteSessionResult: snapshotRemoteSessionResult,
             turnState: .idle,
             acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0),
             journalTail: ACPBrokerEventCursor(rawValue: journalTail),

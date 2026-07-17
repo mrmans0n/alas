@@ -50,6 +50,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var generation: ACPBrokerGeneration?
     private var acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
     private var latestCursor = ACPBrokerEventCursor(rawValue: 0)
+    private var initializeResult: ACPBrokerJSONValue?
+    private var remoteSessionResult: ACPBrokerJSONValue?
     private var nextOperationIndex = 0
     private var _yieldedUpdateCount = 0
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
@@ -69,6 +71,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         cwd: String,
         env: [String: String],
         operationKeyPrefix: String,
+        initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) {
         self.service = service
@@ -79,6 +82,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         self.cwd = cwd
         self.env = env
         self.operationKeyPrefix = operationKeyPrefix
+        self.acknowledgedCursor = initialAcknowledgedCursor
         self.onDurableStateChanged = onDurableStateChanged
 
         var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
@@ -126,6 +130,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
+        if let replayed = cachedResponse(for: request.method) {
+            return ACPResponse(body: try replayed.data)
+        }
         let generation = try currentGeneration()
         let result = try await service.send(ACPBrokerSendParams(
             brokerId: brokerId,
@@ -406,6 +413,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         generation = snapshot.metadata.generation
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
         latestCursor = max(latestCursor, snapshot.journalTail)
+        initializeResult = snapshot.initializeResult ?? initializeResult
+        remoteSessionResult = snapshot.remoteSessionResult ?? remoteSessionResult
         let state = durableStateLocked()
         stateLock.unlock()
         if let state {
@@ -437,6 +446,19 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         defer { stateLock.unlock() }
         nextOperationIndex += 1
         return ACPBrokerOperationKey(rawValue: "\(operationKeyPrefix):\(nextOperationIndex):\(method)")
+    }
+
+    private func cachedResponse(for method: String) -> ACPBrokerJSONValue? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        switch method {
+        case "initialize":
+            return initializeResult
+        case "session/new", "session/load", "session/resume":
+            return remoteSessionResult
+        default:
+            return nil
+        }
     }
 
     private func durableStateLocked() -> ACPBrokerDurableState? {

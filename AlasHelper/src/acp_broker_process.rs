@@ -765,12 +765,7 @@ fn decode_env(value: Value) -> Result<HashMap<String, String>, AcpBrokerProcessE
 }
 
 fn validate_env_key(key: &str) -> Result<(), AcpBrokerProcessError> {
-    if !key.is_empty()
-        && !key.as_bytes()[0].is_ascii_digit()
-        && key
-            .bytes()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-    {
+    if !key.is_empty() && !key.bytes().any(|byte| byte == b'=' || byte == b'\0') {
         return Ok(());
     }
     Err(broker_error(-32602, format!("invalid env key: {key}")))
