@@ -181,6 +181,64 @@ struct ReviewTargetPaletteModelTests {
         #expect(opened?.payload == .commitRange(base: "aaa1^", head: "ccc3"))
     }
 
+    @Test func shiftDownAnchorsCurrentCommitAndLaunchesOrderedRange() async {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        model.open(prefill: w)
+        // Newest first, git log order.
+        let newest = commit("ccc3", "third")
+        let middle = commit("bbb2", "second")
+        let oldest = commit("aaa1", "first")
+        var opened: ReviewSessionTarget?
+        let env = environment(commits: [newest, middle, oldest], onOpen: { t, _ in opened = t })
+        await model.loadTargets(environment: env)
+
+        #expect(model.selectedIndex == 1)
+        #expect(model.extendCommitRangeSelection(step: 1))
+        #expect(model.rangeAnchor == newest)
+        #expect(model.selectedIndex == 2)
+
+        await model.activateSelection(environment: env)
+        #expect(opened?.kind == .commitRange)
+        #expect(opened?.payload == .commitRange(base: "bbb2^", head: "ccc3"))
+    }
+
+    @Test func repeatedShiftDownKeepsOriginalAnchorAndExtendsRange() async {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        model.open(prefill: w)
+        // Newest first, git log order.
+        let newest = commit("ccc3", "third")
+        let middle = commit("bbb2", "second")
+        let oldest = commit("aaa1", "first")
+        var opened: ReviewSessionTarget?
+        let env = environment(commits: [newest, middle, oldest], onOpen: { t, _ in opened = t })
+        await model.loadTargets(environment: env)
+
+        #expect(model.extendCommitRangeSelection(step: 1))
+        #expect(model.extendCommitRangeSelection(step: 1))
+        #expect(model.rangeAnchor == newest)
+        #expect(model.selectedIndex == 3)
+
+        await model.activateSelection(environment: env)
+        #expect(opened?.kind == .commitRange)
+        #expect(opened?.payload == .commitRange(base: "aaa1^", head: "ccc3"))
+    }
+
+    @Test func shiftDownFromLastCommitDoesNotMoveIntoBranchRows() async {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        model.open(prefill: w)
+        let only = commit("aaa1", "first")
+        let env = environment(commits: [only], branches: ["main"])
+        await model.loadTargets(environment: env)
+
+        #expect(model.selectedIndex == 1)
+        #expect(model.extendCommitRangeSelection(step: 1))
+        #expect(model.selectedIndex == 1)
+        #expect(model.rangeAnchor == nil)
+    }
+
     @Test func enterOnBranchLaunchesPinnedBranchReview() async {
         let model = ReviewTargetPaletteModel()
         model.open(prefill: worktree("feature"))

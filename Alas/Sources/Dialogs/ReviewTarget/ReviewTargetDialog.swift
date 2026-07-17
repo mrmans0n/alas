@@ -409,9 +409,17 @@ struct ReviewTargetDialog: View {
             }
             return .handled
         case .upArrow:
+            if press.modifiers.contains(.shift),
+               model.extendCommitRangeSelection(step: -1) {
+                return .handled
+            }
             model.moveSelection(step: -1, selectable: selectable)
             return .handled
         case .downArrow:
+            if press.modifiers.contains(.shift),
+               model.extendCommitRangeSelection(step: 1) {
+                return .handled
+            }
             model.moveSelection(step: 1, selectable: selectable)
             return .handled
         case .return:

@@ -186,6 +186,36 @@ final class ReviewTargetPaletteModel {
         }
     }
 
+    /// Extends a commit-range selection from the current commit to the next
+    /// visible commit. Returns true when the key press was consumed, including
+    /// the edge where there is no further commit in that direction.
+    @discardableResult
+    func extendCommitRangeSelection(step: Int) -> Bool {
+        guard step != 0, case .targets = level else { return false }
+        let rows = targetRows()
+        guard rows.indices.contains(selectedIndex),
+              case .commit(let currentCommit) = rows[selectedIndex]
+        else { return false }
+
+        var nextIndex = selectedIndex + step
+        while rows.indices.contains(nextIndex) {
+            switch rows[nextIndex] {
+            case .commit:
+                if rangeAnchor == nil {
+                    rangeAnchor = currentCommit
+                }
+                selectedIndex = nextIndex
+                scrollToSelectionTick &+= 1
+                return true
+            case .header, .message:
+                nextIndex += step
+            case .branch:
+                return true
+            }
+        }
+        return true
+    }
+
     /// Set selection directly, snapping forward (then backward) to the
     /// nearest selectable row if the target is not selectable. Used on hover
     /// and by the level-2 default selection.
@@ -277,7 +307,6 @@ final class ReviewTargetPaletteModel {
         guard case .targets(let worktree) = level else { return }
         isLoadingTargets = true
         targetsError = nil
-        defer { isLoadingTargets = false }
         do {
             async let ahead = env.loadCommitsAhead(worktree)
             async let branchList = env.loadBranches(worktree)
@@ -289,11 +318,13 @@ final class ReviewTargetPaletteModel {
             if let ref = result.comparisonRef {
                 comparisonRefs[worktree.id] = ref
             }
+            isLoadingTargets = false
             let rows = targetRows()
             setSelectedIndex(0, selectable: rows.map(\.isSelectable))
         } catch {
             guard case .targets(let current) = level, current.id == worktree.id else { return }
             targetsError = "Could not load commits: \(error.localizedDescription)"
+            isLoadingTargets = false
         }
     }
 
