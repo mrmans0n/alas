@@ -2562,9 +2562,9 @@ extension ACPSessionManager {
                     isDelegated: builtInMCP?.isDelegated == true,
                     userServerNames: userServerNames
                 )
-                session.pendingMCPPreamble = preamble
-                session.mcpPreambleSent = false
                 if isWriter(for: sessionId) {
+                    session.pendingMCPPreamble = preamble
+                    session.mcpPreambleSent = false
                     persistMCPPreamble(sessionId: sessionId, pendingText: preamble, sent: false)
                 }
             }

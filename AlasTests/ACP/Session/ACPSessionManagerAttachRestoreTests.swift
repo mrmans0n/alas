@@ -84,6 +84,50 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.pendingMCPPreamble == nil)
     }
 
+    @Test("fresh remote session preamble omits built-in but names a surviving user server")
+    func freshRemoteSessionPreambleOmitsBuiltInButNamesUserServer() async throws {
+        let root = "/srv/task4-remote-preamble-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(mcpCapabilities: .init(http: true)),
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let configuredServers = [
+            ProjectMCPServer(
+                id: UUID().uuidString,
+                name: "docs",
+                transport: .http(url: "https://mcp.example.com/docs", headers: [])
+            )
+        ]
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/codex/bin/codex-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            mcpProjectContextProvider: {
+                MCPProjectContext(projectDirectory: root, configuredServers: configuredServers)
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("(built-in)") == false)
+        #expect(preamble.contains("docs") == true)
+        #expect(session.mcpPreambleSent == false)
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

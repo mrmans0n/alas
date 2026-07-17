@@ -1290,6 +1290,10 @@ extension ACPSessionRunner {
     /// `sendNow` right after the wire prompt that carried the preamble
     /// succeeds — mirrors `persistQueue()`'s fire-and-forget pattern since
     /// losing this write just means the preamble is (harmlessly) resent.
+    /// When `holdsLeaseForWrite()` is false this returns early and leaves
+    /// the row `pending`: a later hydrate on the writing instance will see
+    /// the still-pending row and re-inject the preamble, which is a benign
+    /// duplicate delivery — the agent just sees the context text twice.
     private func persistMCPPreambleSent() {
         guard holdsLeaseForWrite() else { return }
         let fence = leaseFenceProvider()
