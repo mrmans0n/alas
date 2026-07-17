@@ -794,9 +794,10 @@ final class DiffPaneTextScrollView: NSScrollView {
             // otherwise leave a stale per-line height in place and make the
             // row too short to match its counterpart.
             var candidateLineHeight: CGFloat?
+            var lineCount = 1
             if let targetHeight {
                 let lineCountHeight = previousLineHeight ?? lineHeight()
-                let lineCount = max(1, Int(round(currentRows[index].height / max(lineCountHeight, 1))))
+                lineCount = max(1, Int(round(currentRows[index].height / max(lineCountHeight, 1))))
                 let computed = targetHeight / CGFloat(lineCount)
                 if computed > lineHeight() + 0.5 {
                     candidateLineHeight = computed
@@ -808,13 +809,17 @@ final class DiffPaneTextScrollView: NSScrollView {
             // recomputing an identical value every pass is what previously
             // turned a single legitimate height change into an unbounded
             // apply/strip/reapply cycle that re-triggered
-            // `invalidateIntrinsicContentSize()` forever.
+            // `invalidateIntrinsicContentSize()` forever. Compare the TOTAL
+            // row height (per-line delta × line count), not the per-line
+            // delta alone — a row wrapped into many fragments can have a
+            // genuine multi-point total height change that rounds to well
+            // under 0.5pt per line, which would otherwise be skipped.
             let valueUnchanged: Bool
             switch (previousLineHeight, candidateLineHeight) {
             case (nil, nil):
                 valueUnchanged = true
             case let (previous?, candidate?):
-                valueUnchanged = abs(previous - candidate) <= 0.5
+                valueUnchanged = abs(previous - candidate) * CGFloat(lineCount) <= 0.5
             default:
                 valueUnchanged = false
             }
@@ -845,8 +850,16 @@ final class DiffPaneTextScrollView: NSScrollView {
         textStorage.endEditing()
 
         synchronizedRowLineHeights = nextLineHeights
-        textView.lineTones = lineTones
-        textView.theme = theme
+        // `lineTones`'s didSet unconditionally invalidates cached row
+        // geometry, so only forward these when they actually differ —
+        // otherwise a fully-stable call (nothing above changed) would still
+        // force a row-geometry recompute on every parent layout pass.
+        if textView.lineTones != lineTones {
+            textView.lineTones = lineTones
+        }
+        if textView.theme != theme {
+            textView.theme = theme
+        }
         if changedParagraphs {
             needsLayout = true
             invalidateIntrinsicContentSize()

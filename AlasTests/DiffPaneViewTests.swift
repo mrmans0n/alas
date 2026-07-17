@@ -1357,6 +1357,83 @@ let second = true
         #expect(abs(recomputedParagraph.minimumLineHeight - target) < 0.5)
     }
 
+    /// Regression test for a second review-flagged edge case: a row wrapped
+    /// into many visual fragments can have a genuine target-height change
+    /// that's small per line (well under the 0.5pt tolerance) but adds up to
+    /// several points across the whole row. Comparing only the per-line delta
+    /// would skip the update and leave the row visibly too short; the
+    /// comparison must scale by the row's line count so the TOTAL height
+    /// delta is what's checked against the tolerance.
+    @Test func synchronizeRowHeightsAppliesSmallPerLineDeltasThatAddUpAcrossManyWraps() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let longLine = String(repeating: "padding ", count: 30)
+        let metadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 0, length: (longLine as NSString).length)
+            ),
+        ]
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: longLine,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let naturalRows = codeView.diffRowRects()
+        #expect(naturalRows.count == 1)
+
+        let fontLineHeight = ceil(font.ascender + abs(font.descender) + font.leading)
+        let naturalLineCount = max(1, Int(round(naturalRows[0].height / fontLineHeight)))
+        #expect(naturalLineCount >= 7)
+
+        let target1 = CGFloat(naturalLineCount + 2) * fontLineHeight
+        scrollView.synchronizeRowHeights([target1])
+        scrollView.layoutSubtreeIfNeeded()
+
+        let firstParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let firstLineHeight = firstParagraph.minimumLineHeight
+
+        // A total target increase small enough that spread across every wrap
+        // it's under 0.5pt per line, but it's still several points overall.
+        let totalDelta: CGFloat = 3
+        #expect(totalDelta / CGFloat(naturalLineCount) < 0.5)
+        let target2 = target1 + totalDelta
+        scrollView.synchronizeRowHeights([target2])
+        scrollView.layoutSubtreeIfNeeded()
+
+        // The row must grow to reflect the new (larger) target — a stale
+        // per-line height that only differs by "under 0.5pt" locally would
+        // otherwise leave the row under-height by roughly `totalDelta`.
+        let rows = codeView.diffRowRects()
+        #expect(abs(rows[0].height - target2) < 0.75)
+
+        let secondParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(secondParagraph.minimumLineHeight - firstLineHeight > 0.1)
+    }
+
     /// Regression test for a live-lock (beachball): a row whose target height
     /// permanently differs from its natural height (e.g. its paired old/new
     /// row wraps to a different line count) must keep its custom line-height
