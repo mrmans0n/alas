@@ -549,12 +549,31 @@ fn spawn_waiter(runtime: Runtime, mut child: std::process::Child) {
         let mut state = lock.lock().expect("broker state poisoned");
         if !state.closing {
             let _ = state.broker.set_turn_state(BrokerTurnState::Ambiguous);
+            complete_pending_operations_after_adapter_exit(&mut state);
             state
                 .broker
                 .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
         }
         condvar.notify_all();
     });
+}
+
+fn complete_pending_operations_after_adapter_exit(state: &mut RuntimeState) {
+    let outcome = AdapterRPCOutcome::error(JSONRPCErrorObject {
+        code: -32074,
+        message: "adapter exited before completing request".to_string(),
+        data: None,
+    });
+    let pending: Vec<_> = state
+        .pending_methods
+        .drain()
+        .map(|(_, pending)| pending)
+        .collect();
+    for pending in pending {
+        let _ = state
+            .broker
+            .complete_operation(&pending.operation_key, outcome.clone());
+    }
 }
 
 fn handle_adapter_stdout_line(runtime: &Runtime, line: &str) {

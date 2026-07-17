@@ -240,6 +240,73 @@ fn prompt_streaming_update_returns_progress_before_turn_completion() {
 }
 
 #[test]
+fn adapter_exit_completes_inflight_prompt_with_error() {
+    let fixture = Fixture::new("prompt-exit");
+    let mut helper = Helper::start(&fixture.home);
+    let mut open_params = fixture.open_params("broker-prompt-exit", 0);
+    open_params["env"]["FAKE_ACP_EXIT_DURING_PROMPT"] = json!("1");
+    let open = helper.request("acp/open", open_params);
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-prompt-exit",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-prompt-exit",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    let completed = drive_until_prompt_completed(
+        &mut helper,
+        "broker-prompt-exit",
+        generation.clone(),
+        "prompt-exit",
+        json!({ "prompt": "adapter exits" }),
+    );
+
+    assert_eq!(completed["replayed"], true, "{completed}");
+    assert_eq!(completed["error"]["code"], -32074, "{completed}");
+    assert_eq!(
+        completed["error"]["message"],
+        "adapter exited before completing request"
+    );
+
+    let attached = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-prompt-exit",
+            "generation": generation,
+            "acknowledgedCursor": 0
+        }),
+    );
+    let events = attached["events"].as_array().expect("events");
+    assert!(
+        events.iter().any(|event| {
+            event["kind"]["type"] == "operationCompleted"
+                && event["kind"]["operationKey"] == "prompt-exit"
+                && event["kind"]["outcome"]["error"]["code"] == -32074
+        }),
+        "attached payload: {attached}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["kind"]["type"] == "adapterNotification"
+                && event["kind"]["method"] == "adapter/exit"
+        }),
+        "attached payload: {attached}"
+    );
+}
+
+#[test]
 fn pending_permission_survives_helper_crash_and_can_be_answered_after_attach() {
     let fixture = Fixture::new("permission-crash");
     let mut helper = Helper::start(&fixture.home);
@@ -503,6 +570,71 @@ fn adapter_jsonrpc_errors_are_returned_as_send_errors() {
     assert!(failed.get("result").is_none());
 }
 
+#[test]
+fn adapter_exit_completes_pending_operation_and_replays_error() {
+    let fixture = Fixture::new("adapter-exit");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-adapter-exit", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-adapter-exit",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+
+    helper.write_request_without_reading(
+        "acp/send",
+        json!({
+            "brokerId": "broker-adapter-exit",
+            "generation": generation,
+            "operationKey": "session-load-exit",
+            "method": "session/load",
+            "params": { "sessionId": "exit-load" }
+        }),
+    );
+    fixture.wait_for_log("session/load\n");
+    std::thread::sleep(Duration::from_millis(250));
+
+    let mut inspector = Helper::start(&fixture.home);
+    let attached = inspector.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-adapter-exit",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "acknowledgedCursor": 0
+        }),
+    );
+    assert!(
+        attached["events"].as_array().unwrap().iter().any(|event| {
+            event["kind"]["type"] == "operationCompleted"
+                && event["kind"]["operationKey"] == "session-load-exit"
+                && event["kind"]["outcome"]["error"]["code"] == -32074
+        }),
+        "attached payload: {attached}"
+    );
+
+    let retried = inspector.request(
+        "acp/send",
+        json!({
+            "brokerId": "broker-adapter-exit",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "operationKey": "session-load-exit",
+            "method": "session/load",
+            "params": { "sessionId": "exit-load" }
+        }),
+    );
+    assert_eq!(retried["replayed"], true);
+    assert_eq!(retried["error"]["code"], -32074);
+    assert_eq!(
+        retried["error"]["message"],
+        "adapter exited before completing request"
+    );
+}
+
 fn send(
     helper: &mut Helper,
     broker_id: &str,
@@ -690,11 +822,17 @@ while IFS= read -r line; do
       ;;
     *'"method":"session/load"'*)
       printf 'session/load\n' >> "$FAKE_ACP_LOG"
+      if printf '%s\n' "$line" | grep -q exit-load; then
+        exit 42
+      fi
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32042,"message":"load failed"}}\n' "$id"
       ;;
     *'"method":"session/prompt"'*)
       printf 'session/prompt\n' >> "$FAKE_ACP_LOG"
       printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"kind":"text","text":"started"}}}\n'
+      if [ "${FAKE_ACP_EXIT_DURING_PROMPT:-0}" = "1" ]; then
+        exit 42
+      fi
       if printf '%s\n' "$line" | grep -q permission; then
         if printf '%s\n' "$line" | grep -q string-permission; then
           request_id='"req-alpha"'
