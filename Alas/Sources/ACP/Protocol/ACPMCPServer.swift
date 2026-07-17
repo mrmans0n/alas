@@ -10,6 +10,13 @@ enum ACPMCPServer: Codable, Equatable {
     case http(name: String, url: String, headers: [ACPMCPKeyValue])
     case sse(name: String, url: String, headers: [ACPMCPKeyValue])
 
+    var name: String {
+        switch self {
+        case let .stdio(name, _, _, _), let .http(name, _, _), let .sse(name, _, _):
+            return name
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case name

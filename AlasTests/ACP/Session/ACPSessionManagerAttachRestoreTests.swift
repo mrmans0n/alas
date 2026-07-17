@@ -46,6 +46,44 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-restored")
     }
 
+    @Test("fresh session/new sets a pending MCP preamble when servers attach")
+    func freshSessionSetsPendingPreamble() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let configuredServers = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
+        let manager = manager(store: store, client: client, mcpProjectContextProvider: {
+            MCPProjectContext(projectDirectory: "/tmp/project", configuredServers: configuredServers)
+        })
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(session.pendingMCPPreamble?.contains("filesystem") == true)
+        #expect(session.mcpPreambleSent == false)
+    }
+
+    @Test("loaded session does not reset the MCP preamble")
+    func loadedSessionDoesNotResetPreamble() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-restored")
+        let configuredServers = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
+        let manager = manager(store: store, client: client, mcpProjectContextProvider: {
+            MCPProjectContext(projectDirectory: "/tmp/project", configuredServers: configuredServers)
+        })
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.pendingMCPPreamble == nil)
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

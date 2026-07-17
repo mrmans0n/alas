@@ -12,6 +12,7 @@ enum BuiltInAlasMCP {
     struct Injection: Equatable {
         let server: ACPMCPServer
         let status: MCPAttachmentServerStatus
+        let isDelegated: Bool
     }
 
     /// The wire entry + status row for the built-in server, or nil when it
@@ -48,7 +49,8 @@ enum BuiltInAlasMCP {
                 name: serverName,
                 transport: .stdio,
                 disposition: .requested
-            )
+            ),
+            isDelegated: parentSessionId != nil
         )
     }
 }

@@ -622,6 +622,8 @@ final class ACPSessionManager: ObservableObject {
                 session.contextRecoveryStatus = .sendingTranscript
             }
         }
+        session.pendingMCPPreamble = result.row.mcpPreamblePending
+        session.mcpPreambleSent = result.row.mcpPreambleSent
         session.autoRunEnabled = result.row.autoRun
         // Title intentionally NOT overwritten: `placeholderSession` already
         // seeded it from the same row, and a rename made through the
@@ -1035,6 +1037,23 @@ final class ACPSessionManager: ObservableObject {
             _ = try await persistence.setContextRecoveryPending(
                 sessionId: sessionId,
                 pending: pending,
+                fence: fence
+            )
+        }
+    }
+
+    private func persistMCPPreamble(sessionId: ACPSession.ID, pendingText: String?, sent: Bool) {
+        if var row = persistedRows[sessionId] {
+            row.mcpPreamblePending = pendingText
+            row.mcpPreambleSent = sent
+            persistedRows[sessionId] = row
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.setMCPPreamble(
+                sessionId: sessionId,
+                pendingText: pendingText,
+                sent: sent,
                 fence: fence
             )
         }
@@ -2390,6 +2409,7 @@ extension ACPSessionManager {
                 startRunnerIfNeeded()
             }
             let pendingRecovery = persistedRows[sessionId]?.contextRecoveryPending == true
+            var createdFreshRemoteSession = false
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
             let hasRestorableContext = pendingRecovery || session.hasConversationTranscript
@@ -2399,6 +2419,7 @@ extension ACPSessionManager {
             }
             if freshlyCreated {
                 result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                createdFreshRemoteSession = true
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
@@ -2428,6 +2449,7 @@ extension ACPSessionManager {
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
                         result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                        createdFreshRemoteSession = true
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             if isWriter(for: sessionId) {
@@ -2478,6 +2500,7 @@ extension ACPSessionManager {
                             throw error
                         }
                         result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                        createdFreshRemoteSession = true
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             // Guard the store write: if another instance took over
@@ -2502,6 +2525,7 @@ extension ACPSessionManager {
                 }
             } else {
                 result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
+                createdFreshRemoteSession = true
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
                     // Guard the store write: if another instance took over
@@ -2528,6 +2552,20 @@ extension ACPSessionManager {
                 )
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
+                }
+            }
+            if createdFreshRemoteSession {
+                let userServerNames = wireMCPServers.map(\.name)
+                    .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
+                let preamble = ACPMCPPromptPreamble.text(
+                    builtInInjected: builtInMCP != nil,
+                    isDelegated: builtInMCP?.isDelegated == true,
+                    userServerNames: userServerNames
+                )
+                session.pendingMCPPreamble = preamble
+                session.mcpPreambleSent = false
+                if isWriter(for: sessionId) {
+                    persistMCPPreamble(sessionId: sessionId, pendingText: preamble, sent: false)
                 }
             }
             // Abort the commit if we were taken over OR the manager was disposed
