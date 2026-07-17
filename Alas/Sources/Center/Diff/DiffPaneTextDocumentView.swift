@@ -609,7 +609,6 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var lineTones: [DiffPaneLineTone] = []
     private var expansionRequests: [(key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?)?] = []
     private var baseDocument: DiffPaneTextDocumentBuilder.CodeDocument?
-    private var synchronizedRowHeights: [CGFloat] = []
     private var synchronizedRowLineHeights: [CGFloat?] = []
     private var shouldResetHorizontalOrigin = false
     private var wraps = false
@@ -725,7 +724,6 @@ final class DiffPaneTextScrollView: NSScrollView {
             metadata.expansionKey.map { (key: $0, edge: metadata.expansionEdge) }
         }
         self.baseDocument = document
-        self.synchronizedRowHeights = []
         self.synchronizedRowLineHeights = []
         self.shouldResetHorizontalOrigin = true
         self.wraps = wraps
@@ -776,30 +774,56 @@ final class DiffPaneTextScrollView: NSScrollView {
     func synchronizeRowHeights(_ rowHeights: [CGFloat]) {
         guard let baseDocument else { return }
         guard rowHeights.count > 0 else { return }
-        guard rowHeights.count != synchronizedRowHeights.count
-            || zip(rowHeights, synchronizedRowHeights).contains(where: { abs($0.0 - $0.1) > 0.5 })
-        else {
-            return
-        }
 
         let currentRows = textView.diffRowRects()
         guard let textStorage = textView.textStorage else { return }
-        let previousRowHeights = synchronizedRowHeights
         var nextLineHeights = Array<CGFloat?>(repeating: nil, count: rowHeights.count)
         var changedParagraphs = false
-        var needsFollowUpSynchronization = false
-        let affectedCount = min(max(rowHeights.count, previousRowHeights.count), baseDocument.lines.count, currentRows.count)
+        let affectedCount = min(max(rowHeights.count, synchronizedRowLineHeights.count), baseDocument.lines.count, currentRows.count)
 
         textStorage.beginEditing()
         for index in 0..<affectedCount {
-            let previousHeight = index < previousRowHeights.count ? previousRowHeights[index] : nil
             let targetHeight = index < rowHeights.count ? rowHeights[index] : nil
             let previousLineHeight = index < synchronizedRowLineHeights.count ? synchronizedRowLineHeights[index] : nil
-            let targetChanged = previousHeight == nil
-                || targetHeight == nil
-                || abs(previousHeight! - targetHeight!) > 0.5
-            guard targetChanged || previousLineHeight != nil
-            else {
+
+            // Always re-derive the ideal per-line height from the row's
+            // CURRENT geometry (rather than gating on "did the target height
+            // change since last time"): a resize can change how many visual
+            // lines this row's own text wraps to while the target height
+            // (driven by the paired old/new row) stays the same, which would
+            // otherwise leave a stale per-line height in place and make the
+            // row too short to match its counterpart.
+            var candidateLineHeight: CGFloat?
+            var lineCount = 1
+            if let targetHeight {
+                let lineCountHeight = previousLineHeight ?? lineHeight()
+                lineCount = max(1, Int(round(currentRows[index].height / max(lineCountHeight, 1))))
+                let computed = targetHeight / CGFloat(lineCount)
+                if computed > lineHeight() + 0.5 {
+                    candidateLineHeight = computed
+                }
+            }
+
+            // Only touch textStorage (and invalidate layout) when the
+            // derived value actually differs from what's already applied —
+            // recomputing an identical value every pass is what previously
+            // turned a single legitimate height change into an unbounded
+            // apply/strip/reapply cycle that re-triggered
+            // `invalidateIntrinsicContentSize()` forever. Compare the TOTAL
+            // row height (per-line delta × line count), not the per-line
+            // delta alone — a row wrapped into many fragments can have a
+            // genuine multi-point total height change that rounds to well
+            // under 0.5pt per line, which would otherwise be skipped.
+            let valueUnchanged: Bool
+            switch (previousLineHeight, candidateLineHeight) {
+            case (nil, nil):
+                valueUnchanged = true
+            case let (previous?, candidate?):
+                valueUnchanged = abs(previous - candidate) * CGFloat(lineCount) <= 0.5
+            default:
+                valueUnchanged = false
+            }
+            guard !valueUnchanged else {
                 nextLineHeights[index] = previousLineHeight
                 continue
             }
@@ -814,17 +838,10 @@ final class DiffPaneTextScrollView: NSScrollView {
             let paragraph = NSMutableParagraphStyle()
             paragraph.setParagraphStyle(baseParagraph)
 
-            if targetChanged, let targetHeight {
-                let lineCountHeight = synchronizedLineHeight(at: index) ?? lineHeight()
-                let lineCount = max(1, Int(round(currentRows[index].height / max(lineCountHeight, 1))))
-                let targetLineHeight = targetHeight / CGFloat(lineCount)
-                if targetLineHeight > lineHeight() + 0.5 {
-                    paragraph.minimumLineHeight = targetLineHeight
-                    paragraph.maximumLineHeight = targetLineHeight
-                    nextLineHeights[index] = targetLineHeight
-                }
-            } else if previousLineHeight != nil {
-                needsFollowUpSynchronization = true
+            if let candidateLineHeight {
+                paragraph.minimumLineHeight = candidateLineHeight
+                paragraph.maximumLineHeight = candidateLineHeight
+                nextLineHeights[index] = candidateLineHeight
             }
 
             textStorage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
@@ -832,11 +849,26 @@ final class DiffPaneTextScrollView: NSScrollView {
         }
         textStorage.endEditing()
 
-        synchronizedRowHeights = needsFollowUpSynchronization ? [] : rowHeights
         synchronizedRowLineHeights = nextLineHeights
-        textView.lineTones = lineTones
-        textView.theme = theme
+        // `lineTones`'s didSet unconditionally invalidates cached row
+        // geometry, so only forward these when they actually differ —
+        // otherwise a fully-stable call (nothing above changed) would still
+        // force a row-geometry recompute on every parent layout pass.
+        if textView.lineTones != lineTones {
+            textView.lineTones = lineTones
+        }
+        if textView.theme != theme {
+            textView.theme = theme
+        }
         if changedParagraphs {
+            // Explicit, rather than relying on the paragraph-style edit to
+            // indirectly trigger it (e.g. via a `lineTones` reassignment):
+            // `diffRowRects()` is typically already cached from an earlier
+            // read in this same layout pass (the row heights this method was
+            // just handed were measured from it), so a just-applied padding
+            // change must invalidate it directly or callers later in the same
+            // pass (e.g. `documentHeight`) read pre-padding geometry.
+            textView.invalidateDiffRowGeometry()
             needsLayout = true
             invalidateIntrinsicContentSize()
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.needsDisplay = true
@@ -849,11 +881,6 @@ final class DiffPaneTextScrollView: NSScrollView {
     ) -> NSParagraphStyle {
         document.attributedString.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
             ?? CenterTypography.paragraphStyle()
-    }
-
-    private func synchronizedLineHeight(at index: Int) -> CGFloat? {
-        guard index < synchronizedRowLineHeights.count else { return nil }
-        return synchronizedRowLineHeights[index]
     }
 
     override func layout() {

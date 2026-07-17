@@ -1278,7 +1278,235 @@ let second = true
         #expect(value == "kept")
     }
 
-    @Test func synchronizedRowHeightsResetPreviouslyPaddedRowsForRemeasurement() throws {
+    /// Regression test for a review-flagged edge case: skipping the
+    /// unconditional `lineTones` reassignment when it hasn't changed must not
+    /// skip invalidating the row-geometry cache when a paragraph style
+    /// actually changed. `diffRowRects()` is asserted immediately after
+    /// `synchronizeRowHeights` returns, with no intervening AppKit layout
+    /// pass, to catch the exact staleness window a caller reading
+    /// `documentHeight` later in the same `layout()` pass would hit.
+    @Test func synchronizeRowHeightsInvalidatesRowGeometryImmediatelyAfterPadding() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = [
+            "let first = true",
+            "let second = false",
+        ]
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        // Populate the row-geometry cache with pre-padding measurements,
+        // mirroring `synchronizeSplitRowHeights` reading `diffRowRects()`
+        // right before calling `synchronizeRowHeights`.
+        let rowRects = codeView.diffRowRects()
+        #expect(rowRects.count == 2)
+
+        let target = rowRects[0].height + 18
+        scrollView.synchronizeRowHeights([target, rowRects[1].height])
+
+        // No `layoutSubtreeIfNeeded()` here: read geometry exactly as a
+        // caller later in the same layout pass would, before any further
+        // AppKit layout tick could paper over stale cached geometry.
+        let paddedRows = codeView.diffRowRects()
+        #expect(abs(paddedRows[0].height - target) < 0.5)
+    }
+
+    /// Regression test for a review-flagged edge case in the beachball fix: a
+    /// row's OWN local wrap count can change on a resize (e.g. widening the
+    /// pane lets a previously two-line row fit on one line) while its target
+    /// height — driven by the paired old/new row — stays exactly the same.
+    /// The applied per-line height must be re-derived from the row's CURRENT
+    /// geometry in that case, not left at the stale value computed for the
+    /// old wrap count, or the row renders too short and misaligns with its
+    /// counterpart.
+    @Test func synchronizeRowHeightsRecomputesAfterWrapCountChangesWithStableTarget() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let longLine = "let value = \"padding padding padding padding\""
+        let metadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 0, length: (longLine as NSString).length)
+            ),
+        ]
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: longLine,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 160, height: 200))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let narrowRows = codeView.diffRowRects()
+        #expect(narrowRows.count == 1)
+
+        let fontLineHeight = ceil(font.ascender + abs(font.descender) + font.leading)
+        let narrowLineCount = max(1, Int(round(narrowRows[0].height / fontLineHeight)))
+        #expect(narrowLineCount > 1)
+
+        // Simulate a counterpart on the other side that's one visual line
+        // taller than this (currently multi-line-wrapped) row.
+        let target = CGFloat(narrowLineCount + 1) * fontLineHeight
+        scrollView.synchronizeRowHeights([target])
+
+        let paddedParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(abs(paddedParagraph.minimumLineHeight - target / CGFloat(narrowLineCount)) < 0.5)
+
+        // Widen the pane so the same text now fits on a single visual line.
+        // The row's target height (still `target`, as if the counterpart
+        // hasn't changed) is unchanged, but the per-line height needed to
+        // reach it is no longer `target / 2` — it's `target / 1`.
+        scrollView.setFrameSize(NSSize(width: 600, height: 200))
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.synchronizeRowHeights([target])
+        scrollView.layoutSubtreeIfNeeded()
+
+        let wideRows = codeView.diffRowRects()
+        #expect(wideRows.count == 1)
+        #expect(abs(wideRows[0].height - target) < 0.5)
+
+        let recomputedParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(abs(recomputedParagraph.minimumLineHeight - target) < 0.5)
+    }
+
+    /// Regression test for a second review-flagged edge case: a row wrapped
+    /// into many visual fragments can have a genuine target-height change
+    /// that's small per line (well under the 0.5pt tolerance) but adds up to
+    /// several points across the whole row. Comparing only the per-line delta
+    /// would skip the update and leave the row visibly too short; the
+    /// comparison must scale by the row's line count so the TOTAL height
+    /// delta is what's checked against the tolerance.
+    @Test func synchronizeRowHeightsAppliesSmallPerLineDeltasThatAddUpAcrossManyWraps() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let longLine = String(repeating: "padding ", count: 30)
+        let metadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 0, length: (longLine as NSString).length)
+            ),
+        ]
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: longLine,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let naturalRows = codeView.diffRowRects()
+        #expect(naturalRows.count == 1)
+
+        let fontLineHeight = ceil(font.ascender + abs(font.descender) + font.leading)
+        let naturalLineCount = max(1, Int(round(naturalRows[0].height / fontLineHeight)))
+        #expect(naturalLineCount >= 7)
+
+        let target1 = CGFloat(naturalLineCount + 2) * fontLineHeight
+        scrollView.synchronizeRowHeights([target1])
+        scrollView.layoutSubtreeIfNeeded()
+
+        let firstParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let firstLineHeight = firstParagraph.minimumLineHeight
+
+        // A total target increase small enough that spread across every wrap
+        // it's under 0.5pt per line, but it's still several points overall.
+        let totalDelta: CGFloat = 3
+        #expect(totalDelta / CGFloat(naturalLineCount) < 0.5)
+        let target2 = target1 + totalDelta
+        scrollView.synchronizeRowHeights([target2])
+        scrollView.layoutSubtreeIfNeeded()
+
+        // The row must grow to reflect the new (larger) target — a stale
+        // per-line height that only differs by "under 0.5pt" locally would
+        // otherwise leave the row under-height by roughly `totalDelta`.
+        let rows = codeView.diffRowRects()
+        #expect(abs(rows[0].height - target2) < 0.75)
+
+        let secondParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(secondParagraph.minimumLineHeight - firstLineHeight > 0.1)
+    }
+
+    /// Regression test for a live-lock (beachball): a row whose target height
+    /// permanently differs from its natural height (e.g. its paired old/new
+    /// row wraps to a different line count) must keep its custom line-height
+    /// paragraph style untouched while some OTHER row's target changes.
+    /// Previously, any other row's target change unconditionally stripped
+    /// every already-padded row for "remeasurement", which reapplied the same
+    /// padding on the very next layout pass — an unbounded
+    /// apply/strip/reapply cycle that kept calling
+    /// `invalidateIntrinsicContentSize()` forever.
+    @Test func synchronizedRowHeightsKeepsStablePaddingWhileOtherRowsChange() throws {
         let theme = theme()
         let font = CenterTypography.resolveCodeFont(family: "", size: 13)
         let lines = [
@@ -1322,6 +1550,9 @@ let second = true
         let rowRects = codeView.diffRowRects()
         #expect(rowRects.count == 3)
 
+        // Row 0 permanently needs padding (its paired row on the other side
+        // is taller by a whole line) — its target height never changes
+        // across any of the following calls.
         let firstInflatedHeight = rowRects[0].height + 18
         scrollView.synchronizeRowHeights([
             firstInflatedHeight,
@@ -1334,17 +1565,20 @@ let second = true
         )
         #expect(paddedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
 
+        // Row 1's target changes; row 0's does not. Row 0's existing padding
+        // must be left alone, not stripped back to the base paragraph style.
         scrollView.synchronizeRowHeights([
             firstInflatedHeight,
             rowRects[1].height + 18,
             rowRects[2].height,
         ])
 
-        let restoredParagraph = try #require(
+        let unchangedParagraph = try #require(
             codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
         )
-        #expect(restoredParagraph.minimumLineHeight <= rowRects[0].height + 0.5)
+        #expect(unchangedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
 
+        // Settling further with the same heights must not disturb row 0 either.
         scrollView.layoutSubtreeIfNeeded()
         scrollView.synchronizeRowHeights([
             firstInflatedHeight,
@@ -1352,10 +1586,70 @@ let second = true
             rowRects[2].height,
         ])
 
-        let reappliedParagraph = try #require(
+        let stillUnchangedParagraph = try #require(
             codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
         )
-        #expect(reappliedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
+        #expect(stillUnchangedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
+    }
+
+    /// Regression test for the beachball: once row heights settle, calling
+    /// `synchronizeRowHeights` again with the identical target heights must be
+    /// a no-op that doesn't re-trigger a layout pass. If it did, the resulting
+    /// `invalidateIntrinsicContentSize()` would schedule another AppKit
+    /// layout, which re-enters this same synchronization and never converges
+    /// — pegging the main thread at 100% CPU (the live-lock this guards
+    /// against).
+    @Test func synchronizeRowHeightsIsNoOpOnceStable() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = [
+            "let first = true",
+            "let second = false",
+            "let third = true",
+        ]
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2", "3"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRects = codeView.diffRowRects()
+        #expect(rowRects.count == 3)
+
+        let heights = [rowRects[0].height + 18, rowRects[1].height, rowRects[2].height]
+        scrollView.synchronizeRowHeights(heights)
+        scrollView.layoutSubtreeIfNeeded()
+        #expect(scrollView.needsLayout == false)
+
+        scrollView.synchronizeRowHeights(heights)
+        #expect(scrollView.needsLayout == false)
     }
 
     @Test func gutterSelectionOutlineWrapsContiguousRows() {
