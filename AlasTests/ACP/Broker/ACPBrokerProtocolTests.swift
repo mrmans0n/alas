@@ -55,7 +55,7 @@ struct ACPBrokerProtocolTests {
           "kind": {
             "type": "operationCompleted",
             "operationKey": "prompt-1",
-            "result": { "stopReason": "end_turn" }
+            "outcome": { "result": { "stopReason": "end_turn" } }
           }
         }
         """#.utf8)
@@ -64,8 +64,28 @@ struct ACPBrokerProtocolTests {
         #expect(event.cursor == ACPBrokerEventCursor(rawValue: 12))
         #expect(event.kind == .operationCompleted(
             operationKey: ACPBrokerOperationKey(rawValue: "prompt-1"),
-            result: .object(["stopReason": .string("end_turn")])
+            outcome: ACPBrokerRPCOutcome(
+                result: .object(["stopReason": .string("end_turn")]),
+                error: nil
+            )
         ))
+    }
+
+    @Test func respondParamsPreserveStringRequestIdsAndErrorShape() throws {
+        let params = ACPBrokerRespondParams(
+            brokerId: ACPBrokerID(rawValue: "broker-1"),
+            generation: ACPBrokerGeneration(rawValue: 1),
+            requestId: .string("req-alpha"),
+            operationKey: ACPBrokerOperationKey(rawValue: "respond-1"),
+            error: JSONRPCError(code: -32001, message: "denied", data: nil)
+        )
+
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+        #expect(object["requestId"] as? String == "req-alpha")
+        #expect(object["result"] == nil)
+        let error = try #require(object["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32001)
+        #expect(error["message"] as? String == "denied")
     }
 
     @Test func unknownEventKindPreservesPayloadWhenReencoded() throws {

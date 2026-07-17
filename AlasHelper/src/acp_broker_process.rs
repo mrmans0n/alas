@@ -1,6 +1,6 @@
 use crate::acp_broker::{
-    ACPBrokerMetadata, ACPBrokerState, BrokerGeneration, BrokerId, BrokerTurnState, OperationKey,
-    PendingClientRequestKind,
+    ACPBrokerMetadata, ACPBrokerState, AdapterRPCOutcome, BrokerGeneration, BrokerId,
+    BrokerTurnState, JSONRPCErrorObject, OperationKey, PendingClientRequestKind,
 };
 use crate::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpCloseParams, AcpDetachParams, AcpNotifyParams, AcpOpenParams,
@@ -70,7 +70,6 @@ struct BrokerIpcResponse {
 struct Runtime {
     state: Arc<(Mutex<RuntimeState>, Condvar)>,
     adapter_stdin: Arc<Mutex<std::process::ChildStdin>>,
-    broker_dir: PathBuf,
 }
 
 struct RuntimeState {
@@ -175,7 +174,6 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
             Condvar::new(),
         )),
         adapter_stdin: Arc::new(Mutex::new(adapter_stdin)),
-        broker_dir: dir.clone(),
     };
 
     spawn_stdout_reader(runtime.clone(), adapter_stdout);
@@ -426,39 +424,38 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
             )
             .map_err(domain_error)?;
         if operation.replayed {
-            if let Some(result) = operation.terminal_result {
-                return Ok(json!({
+            if let Some(outcome) = operation.terminal_outcome {
+                let mut response = json!({
                     "requestId": operation.adapter_request_id,
                     "replayed": true,
-                    "result": result
-                }));
+                });
+                apply_outcome_fields(&mut response, outcome);
+                return Ok(response);
             }
-            return Ok(json!({
-                "requestId": operation.adapter_request_id,
-                "replayed": true,
-                "pending": true
-            }));
-        }
-        state.pending_methods.insert(
-            operation.adapter_request_id.value(),
-            PendingOperation {
-                operation_key: params.operation_key.clone(),
-                method: params.method.clone(),
-            },
-        );
-        if params.method == "session/prompt" {
-            let _ = state.broker.set_turn_state(BrokerTurnState::Sending);
+        } else {
+            state.pending_methods.insert(
+                operation.adapter_request_id.value(),
+                PendingOperation {
+                    operation_key: params.operation_key.clone(),
+                    method: params.method.clone(),
+                },
+            );
+            if params.method == "session/prompt" {
+                let _ = state.broker.set_turn_state(BrokerTurnState::Sending);
+            }
         }
         operation
     };
 
-    write_adapter_request(
-        runtime,
-        operation.adapter_request_id.value(),
-        &params.method,
-        params.params,
-    )?;
-    wait_for_operation(
+    if !operation.replayed {
+        write_adapter_request(
+            runtime,
+            operation.adapter_request_id.value(),
+            &params.method,
+            params.params,
+        )?;
+    }
+    wait_for_operation_or_pending_input(
         runtime,
         &params.operation_key,
         Duration::from_secs(24 * 60 * 60),
@@ -483,18 +480,19 @@ fn broker_respond(
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpRespondParams = decode(params)?;
+    let request_key = request_id_key(&params.request_id);
+    let outcome = params
+        .outcome()
+        .ok_or_else(|| broker_error(-32602, "respond requires exactly one of result or error"))?;
     {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
         state
             .broker
-            .respond_to_pending_request(
-                &params.request_id.value().to_string(),
-                params.result.clone(),
-            )
+            .respond_to_pending_request(&request_key, outcome.clone())
             .map_err(domain_error)?;
     }
-    write_adapter_response(runtime, params.request_id.value(), params.result)?;
+    write_adapter_response(runtime, params.request_id, outcome)?;
     Ok(json!({ "ok": true }))
 }
 
@@ -567,10 +565,9 @@ fn handle_adapter_response(runtime: &Runtime, value: Value) {
     let Some(id) = value.get("id").and_then(Value::as_u64) else {
         return;
     };
-    let result = value
-        .get("result")
-        .cloned()
-        .unwrap_or_else(|| json!({ "error": value.get("error").cloned().unwrap_or(Value::Null) }));
+    let Some(outcome) = adapter_response_outcome(&value) else {
+        return;
+    };
     let (lock, condvar) = &*runtime.state;
     let mut state = lock.lock().expect("broker state poisoned");
     let Some(pending) = state.pending_methods.remove(&id) else {
@@ -579,19 +576,22 @@ fn handle_adapter_response(runtime: &Runtime, value: Value) {
             .add_adapter_notification("adapter/orphanResponse", value);
         return;
     };
-    if pending.method == "initialize" {
-        let _ = state.broker.record_initialize_result(result.clone());
-    } else if matches!(
-        pending.method.as_str(),
-        "session/new" | "session/load" | "session/resume"
-    ) {
-        let _ = state.broker.record_remote_session_result(result.clone());
-    } else if pending.method == "session/prompt" {
+    if let Some(result) = &outcome.result {
+        if pending.method == "initialize" {
+            let _ = state.broker.record_initialize_result(result.clone());
+        } else if matches!(
+            pending.method.as_str(),
+            "session/new" | "session/load" | "session/resume"
+        ) {
+            let _ = state.broker.record_remote_session_result(result.clone());
+        }
+    }
+    if pending.method == "session/prompt" {
         let _ = state.broker.set_turn_state(BrokerTurnState::Completed);
     }
     let _ = state
         .broker
-        .complete_operation(&pending.operation_key, result);
+        .complete_operation(&pending.operation_key, outcome);
     condvar.notify_all();
 }
 
@@ -611,7 +611,8 @@ fn handle_adapter_client_request(runtime: &Runtime, value: Value) {
         .to_string();
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     let kind = pending_kind(&method);
-    let mut state = lock_runtime(runtime);
+    let (lock, condvar) = &*runtime.state;
+    let mut state = lock.lock().expect("broker state poisoned");
     let _ = state.broker.add_pending_request(
         request_id,
         id,
@@ -619,6 +620,7 @@ fn handle_adapter_client_request(runtime: &Runtime, value: Value) {
         json!({ "method": method, "params": params }),
     );
     let _ = state.broker.set_turn_state(BrokerTurnState::AwaitingInput);
+    condvar.notify_all();
 }
 
 fn pending_kind(method: &str) -> PendingClientRequestKind {
@@ -635,7 +637,55 @@ fn pending_kind(method: &str) -> PendingClientRequestKind {
     }
 }
 
-fn wait_for_operation(
+fn adapter_response_outcome(value: &Value) -> Option<AdapterRPCOutcome> {
+    if let Some(result) = value.get("result") {
+        return Some(AdapterRPCOutcome::result(result.clone()));
+    }
+    if let Some(error) = value.get("error") {
+        return Some(AdapterRPCOutcome::error(jsonrpc_error_object(error)));
+    }
+    None
+}
+
+fn jsonrpc_error_object(value: &Value) -> JSONRPCErrorObject {
+    JSONRPCErrorObject {
+        code: value.get("code").and_then(Value::as_i64).unwrap_or(-32000),
+        message: value
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("adapter JSON-RPC error")
+            .to_string(),
+        data: value.get("data").cloned(),
+    }
+}
+
+fn request_id_key(id: &Value) -> String {
+    id.as_u64()
+        .map(|number| number.to_string())
+        .or_else(|| id.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| id.to_string())
+}
+
+fn apply_outcome_fields(response: &mut Value, outcome: AdapterRPCOutcome) {
+    if let Some(object) = response.as_object_mut() {
+        match (outcome.result, outcome.error) {
+            (Some(result), None) => {
+                object.insert("result".to_string(), result);
+            }
+            (None, Some(error)) => {
+                object.insert("error".to_string(), json!(error));
+            }
+            _ => {
+                object.insert(
+                    "error".to_string(),
+                    json!({ "code": -32603, "message": "invalid broker outcome" }),
+                );
+            }
+        }
+    }
+}
+
+fn wait_for_operation_or_pending_input(
     runtime: &Runtime,
     operation_key: &OperationKey,
     timeout: Duration,
@@ -650,11 +700,19 @@ fn wait_for_operation(
             .iter()
             .find(|operation| operation.operation_key == *operation_key)
         {
-            if let Some(result) = &operation.terminal_result {
+            if let Some(outcome) = &operation.terminal_outcome {
+                let mut response = json!({
+                    "requestId": operation.adapter_request_id,
+                    "replayed": false,
+                });
+                apply_outcome_fields(&mut response, outcome.clone());
+                return Ok(response);
+            }
+            if !snapshot.pending_requests.is_empty() {
                 return Ok(json!({
                     "requestId": operation.adapter_request_id,
                     "replayed": false,
-                    "result": result
+                    "pending": true
                 }));
             }
         }
@@ -702,14 +760,14 @@ fn write_adapter_notification(
 
 fn write_adapter_response(
     runtime: &Runtime,
-    id: u64,
-    result: Value,
+    id: Value,
+    outcome: AdapterRPCOutcome,
 ) -> Result<(), AcpBrokerProcessError> {
-    let response = json!({
+    let mut response = json!({
         "jsonrpc": "2.0",
         "id": id,
-        "result": result
     });
+    apply_outcome_fields(&mut response, outcome);
     write_adapter_line(runtime, &response)
 }
 

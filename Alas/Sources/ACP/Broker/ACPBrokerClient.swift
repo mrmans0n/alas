@@ -134,21 +134,32 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             return ACPResponse(body: try replayed.data)
         }
         let generation = try currentGeneration()
-        let result = try await service.send(ACPBrokerSendParams(
-            brokerId: brokerId,
-            generation: generation,
-            operationKey: nextOperationKey(method: request.method),
-            method: request.method,
-            params: try ACPBrokerJSONValue(encodable: request.params)
-        ))
-        try await attachAndReplay()
-        let cursor = currentLatestCursor()
-        return ACPResponse(
-            body: try (result.result ?? .null).data,
-            durableConsumptionAcknowledgement: { [weak self] in
-                self?.ack(cursor: cursor)
+        let operationKey = nextOperationKey(method: request.method)
+        let params = try ACPBrokerJSONValue(encodable: request.params)
+        while true {
+            let result = try await service.send(ACPBrokerSendParams(
+                brokerId: brokerId,
+                generation: generation,
+                operationKey: operationKey,
+                method: request.method,
+                params: params
+            ))
+            try await attachAndReplay()
+            if let error = result.error {
+                throw ACPClientError.jsonrpc(error)
             }
-        )
+            if result.pending == true && result.result == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                continue
+            }
+            let cursor = currentLatestCursor()
+            return ACPResponse(
+                body: try (result.result ?? .null).data,
+                durableConsumptionAcknowledgement: { [weak self] in
+                    self?.ack(cursor: cursor)
+                }
+            )
+        }
     }
 
     func notify(_ request: ACPRequest) async throws {
@@ -178,7 +189,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         case .success(let response):
             respond(id: id, value: response)
         case .failure(let error):
-            respond(id: id, value: JSONRPCFailureResult(error: error))
+            respond(id: id, error: error)
         }
     }
 
@@ -349,7 +360,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.respond(id: id, result: ACPBrokerJSONValue(encodable: value))
+                try await self.respond(id: id, result: ACPBrokerJSONValue(encodable: value), error: nil)
             } catch {}
         }
     }
@@ -360,23 +371,32 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             do {
                 switch result {
                 case .success(let data):
-                    try await self.respond(id: id, result: ACPBrokerJSONValue(data: data))
+                    try await self.respond(id: id, result: ACPBrokerJSONValue(data: data), error: nil)
                 case .failure(let error):
-                    try await self.respond(id: id, result: ACPBrokerJSONValue(encodable: JSONRPCFailureResult(error: error)))
+                    try await self.respond(id: id, result: nil, error: error)
                 }
             } catch {}
         }
     }
 
-    private func respond(id: JSONRPCID, result: ACPBrokerJSONValue) async throws {
+    private func respond(id: JSONRPCID, error: JSONRPCError) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.respond(id: id, result: nil, error: error)
+            } catch {}
+        }
+    }
+
+    private func respond(id: JSONRPCID, result: ACPBrokerJSONValue?, error: JSONRPCError?) async throws {
         let generation = try currentGeneration()
-        guard let requestId = ACPBrokerAdapterRequestID(jsonRPCID: id) else { return }
         _ = try await service.respond(ACPBrokerRespondParams(
             brokerId: brokerId,
             generation: generation,
-            requestId: requestId,
+            requestId: ACPBrokerJSONValue(jsonRPCID: id),
             operationKey: nextOperationKey(method: "respond"),
-            result: result
+            result: result,
+            error: error
         ))
         stateLock.lock()
         let cursor = pendingInboundCursors.removeValue(forKey: id)
@@ -471,10 +491,6 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 }
 
-private struct JSONRPCFailureResult: Encodable {
-    let error: JSONRPCError
-}
-
 private struct AnyEncodableBrokerBox: Encodable {
     let value: Encodable
 
@@ -535,17 +551,13 @@ private extension ACPBrokerJSONValue {
             return nil
         }
     }
-}
 
-private extension ACPBrokerAdapterRequestID {
-    init?(jsonRPCID: JSONRPCID) {
+    init(jsonRPCID: JSONRPCID) {
         switch jsonRPCID {
         case .number(let value):
-            guard value >= 0 else { return nil }
-            self.init(rawValue: UInt64(value))
+            self = .number(Double(value))
         case .string(let value):
-            guard let parsed = UInt64(value) else { return nil }
-            self.init(rawValue: parsed)
+            self = .string(value)
         }
     }
 }

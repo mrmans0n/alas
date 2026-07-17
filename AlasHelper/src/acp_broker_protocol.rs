@@ -1,5 +1,6 @@
 use crate::acp_broker::{
-    ACPBrokerSnapshot, AdapterRequestId, BrokerGeneration, BrokerId, EventCursor, OperationKey,
+    ACPBrokerSnapshot, AdapterRPCOutcome, BrokerGeneration, BrokerId, EventCursor,
+    JSONRPCErrorObject, OperationKey,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -54,9 +55,20 @@ pub struct AcpNotifyParams {
 pub struct AcpRespondParams {
     pub broker_id: BrokerId,
     pub generation: BrokerGeneration,
-    pub request_id: AdapterRequestId,
+    pub request_id: Value,
     pub operation_key: OperationKey,
-    pub result: Value,
+    pub result: Option<Value>,
+    pub error: Option<JSONRPCErrorObject>,
+}
+
+impl AcpRespondParams {
+    pub fn outcome(&self) -> Option<AdapterRPCOutcome> {
+        match (&self.result, &self.error) {
+            (Some(result), None) => Some(AdapterRPCOutcome::result(result.clone())),
+            (None, Some(error)) => Some(AdapterRPCOutcome::error(error.clone())),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

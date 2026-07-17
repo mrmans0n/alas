@@ -225,9 +225,88 @@ struct ACPBrokerClientTests {
 
         try await waitUntil { await service.responded.count == 1 }
         let response = try await #require(service.responded.first)
-        #expect(response.requestId == ACPBrokerAdapterRequestID(rawValue: 99))
+        #expect(response.requestId == .number(99))
         #expect(response.operationKey == ACPBrokerOperationKey(rawValue: "op-prefix:1:respond"))
         #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
+    }
+
+    @Test func pendingPermissionResponsePreservesStringRequestId() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "req-alpha",
+                    adapterRequestId: .string("req-alpha"),
+                    kind: .permission,
+                    payload: .object([
+                        "sessionId": .string("remote-1"),
+                        "toolCall": .object(["toolCallId": .string("tool-1")]),
+                        "options": .array([
+                            .object([
+                                "optionId": .string("allow"),
+                                "name": .string("Allow"),
+                                "kind": .string("allow_once")
+                            ])
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        let permissionTask = Task { try await nextPermission(from: client.permissionRequests) }
+        try await client.start()
+
+        let permission = try await permissionTask.value
+        #expect(permission.id == .string("req-alpha"))
+        client.respondToPermission(id: permission.id, response: .init(outcome: .selected(optionId: "allow")))
+
+        try await waitUntil { await service.responded.count == 1 }
+        let response = try await #require(service.responded.first)
+        #expect(response.requestId == .string("req-alpha"))
+        #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
+    }
+
+    @Test func sendWaitsAcrossPendingResultAndReplaysPendingRequest() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "99",
+                    adapterRequestId: .number(99),
+                    kind: .permission,
+                    payload: .object([
+                        "sessionId": .string("remote-1"),
+                        "toolCall": .object(["toolCallId": .string("tool-1")]),
+                        "options": .array([])
+                    ])
+                ))
+            )
+        ])
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: false,
+            pending: true
+        ))
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: true,
+            result: .object(["stopReason": .string("end_turn")])
+        ))
+        let client = makeClient(service: service)
+        try await client.start()
+
+        let response = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
+        ))
+
+        let body = try #require(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
+        #expect(body["stopReason"] as? String == "end_turn")
+        #expect(await service.sent.count == 2)
+        #expect(await service.attached.count == 3)
     }
 
     @Test func notifyUsesBrokerNotificationPath() async throws {

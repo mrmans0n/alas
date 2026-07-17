@@ -160,12 +160,17 @@ struct ACPBrokerPendingRequest: Codable, Equatable, Sendable {
     let payload: ACPBrokerJSONValue
 }
 
+struct ACPBrokerRPCOutcome: Codable, Equatable, Sendable {
+    let result: ACPBrokerJSONValue?
+    let error: JSONRPCError?
+}
+
 struct ACPBrokerOperationSnapshot: Codable, Equatable, Sendable {
     let operationKey: ACPBrokerOperationKey
     let adapterRequestId: ACPBrokerAdapterRequestID
     let method: String
     let params: ACPBrokerJSONValue
-    let terminalResult: ACPBrokerJSONValue?
+    let terminalOutcome: ACPBrokerRPCOutcome?
 }
 
 struct ACPBrokerSnapshot: Codable, Equatable, Sendable {
@@ -189,14 +194,14 @@ enum ACPBrokerEventKind: Equatable, Sendable {
     case remoteSessionReady(result: ACPBrokerJSONValue)
     case turnStateChanged(state: ACPBrokerTurnState)
     case pendingRequest(ACPBrokerPendingRequest)
-    case pendingRequestResolved(requestId: String, response: ACPBrokerJSONValue)
+    case pendingRequestResolved(requestId: String, response: ACPBrokerRPCOutcome)
     case operationStarted(
         operationKey: ACPBrokerOperationKey,
         adapterRequestId: ACPBrokerAdapterRequestID,
         method: String,
         params: ACPBrokerJSONValue
     )
-    case operationCompleted(operationKey: ACPBrokerOperationKey, result: ACPBrokerJSONValue)
+    case operationCompleted(operationKey: ACPBrokerOperationKey, outcome: ACPBrokerRPCOutcome)
     case adapterNotification(method: String, params: ACPBrokerJSONValue)
     case unknown(type: String, payload: [String: ACPBrokerJSONValue])
 }
@@ -213,6 +218,8 @@ extension ACPBrokerEventKind: Codable {
         case adapterRequestId
         case method
         case params
+        case outcome
+        case error
     }
 
     init(from decoder: Decoder) throws {
@@ -230,7 +237,7 @@ extension ACPBrokerEventKind: Codable {
         case "pendingRequestResolved":
             self = .pendingRequestResolved(
                 requestId: try container.decode(String.self, forKey: .requestId),
-                response: try container.decode(ACPBrokerJSONValue.self, forKey: .response)
+                response: try container.decode(ACPBrokerRPCOutcome.self, forKey: .response)
             )
         case "operationStarted":
             self = .operationStarted(
@@ -240,9 +247,14 @@ extension ACPBrokerEventKind: Codable {
                 params: try container.decode(ACPBrokerJSONValue.self, forKey: .params)
             )
         case "operationCompleted":
+            let outcome = try container.decodeIfPresent(ACPBrokerRPCOutcome.self, forKey: .outcome)
+                ?? ACPBrokerRPCOutcome(
+                    result: try container.decodeIfPresent(ACPBrokerJSONValue.self, forKey: .result),
+                    error: try container.decodeIfPresent(JSONRPCError.self, forKey: .error)
+                )
             self = .operationCompleted(
                 operationKey: try container.decode(ACPBrokerOperationKey.self, forKey: .operationKey),
-                result: try container.decode(ACPBrokerJSONValue.self, forKey: .result)
+                outcome: outcome
             )
         case "adapterNotification":
             self = .adapterNotification(
@@ -280,10 +292,10 @@ extension ACPBrokerEventKind: Codable {
             try container.encode(adapterRequestId, forKey: .adapterRequestId)
             try container.encode(method, forKey: .method)
             try container.encode(params, forKey: .params)
-        case .operationCompleted(let operationKey, let result):
+        case .operationCompleted(let operationKey, let outcome):
             try container.encode("operationCompleted", forKey: .type)
             try container.encode(operationKey, forKey: .operationKey)
-            try container.encode(result, forKey: .result)
+            try container.encode(outcome, forKey: .outcome)
         case .adapterNotification(let method, let params):
             try container.encode("adapterNotification", forKey: .type)
             try container.encode(method, forKey: .method)
@@ -355,15 +367,47 @@ struct ACPBrokerSendResult: Codable, Equatable, Sendable {
     let requestId: ACPBrokerAdapterRequestID
     let replayed: Bool
     let result: ACPBrokerJSONValue?
+    let error: JSONRPCError?
     let pending: Bool?
+
+    init(
+        requestId: ACPBrokerAdapterRequestID,
+        replayed: Bool,
+        result: ACPBrokerJSONValue? = nil,
+        error: JSONRPCError? = nil,
+        pending: Bool? = nil
+    ) {
+        self.requestId = requestId
+        self.replayed = replayed
+        self.result = result
+        self.error = error
+        self.pending = pending
+    }
 }
 
 struct ACPBrokerRespondParams: Codable, Equatable, Sendable {
     let brokerId: ACPBrokerID
     let generation: ACPBrokerGeneration
-    let requestId: ACPBrokerAdapterRequestID
+    let requestId: ACPBrokerJSONValue
     let operationKey: ACPBrokerOperationKey
-    let result: ACPBrokerJSONValue
+    let result: ACPBrokerJSONValue?
+    let error: JSONRPCError?
+
+    init(
+        brokerId: ACPBrokerID,
+        generation: ACPBrokerGeneration,
+        requestId: ACPBrokerJSONValue,
+        operationKey: ACPBrokerOperationKey,
+        result: ACPBrokerJSONValue? = nil,
+        error: JSONRPCError? = nil
+    ) {
+        self.brokerId = brokerId
+        self.generation = generation
+        self.requestId = requestId
+        self.operationKey = operationKey
+        self.result = result
+        self.error = error
+    }
 }
 
 struct ACPBrokerSimpleOK: Codable, Equatable, Sendable {

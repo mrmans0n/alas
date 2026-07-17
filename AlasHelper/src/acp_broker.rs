@@ -72,6 +72,40 @@ impl AdapterRequestId {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JSONRPCErrorObject {
+    pub code: i64,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterRPCOutcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JSONRPCErrorObject>,
+}
+
+impl AdapterRPCOutcome {
+    pub fn result(result: Value) -> Self {
+        Self {
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    pub fn error(error: JSONRPCErrorObject) -> Self {
+        Self {
+            result: None,
+            error: Some(error),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BrokerTurnState {
@@ -113,7 +147,7 @@ pub struct OperationStart {
     pub operation_key: OperationKey,
     pub adapter_request_id: AdapterRequestId,
     pub replayed: bool,
-    pub terminal_result: Option<Value>,
+    pub terminal_outcome: Option<AdapterRPCOutcome>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -153,7 +187,7 @@ pub enum BrokerEventKind {
     },
     PendingRequestResolved {
         request_id: String,
-        response: Value,
+        response: AdapterRPCOutcome,
     },
     OperationStarted {
         operation_key: OperationKey,
@@ -163,7 +197,7 @@ pub enum BrokerEventKind {
     },
     OperationCompleted {
         operation_key: OperationKey,
-        result: Value,
+        outcome: AdapterRPCOutcome,
     },
     AdapterNotification {
         method: String,
@@ -191,7 +225,7 @@ pub struct OperationSnapshot {
     pub adapter_request_id: AdapterRequestId,
     pub method: String,
     pub params: Value,
-    pub terminal_result: Option<Value>,
+    pub terminal_outcome: Option<AdapterRPCOutcome>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,7 +282,7 @@ struct OperationRecord {
     key: OperationKey,
     fingerprint: OperationFingerprint,
     adapter_request_id: AdapterRequestId,
-    terminal_result: Option<Value>,
+    terminal_outcome: Option<AdapterRPCOutcome>,
 }
 
 #[derive(Clone, Debug)]
@@ -345,7 +379,7 @@ impl ACPBrokerState {
                 operation_key,
                 adapter_request_id: record.adapter_request_id,
                 replayed: true,
-                terminal_result: record.terminal_result.clone(),
+                terminal_outcome: record.terminal_outcome.clone(),
             });
         }
 
@@ -355,7 +389,7 @@ impl ACPBrokerState {
             key: operation_key.clone(),
             fingerprint,
             adapter_request_id,
-            terminal_result: None,
+            terminal_outcome: None,
         };
         self.push_event(BrokerEventKind::OperationStarted {
             operation_key: operation_key.clone(),
@@ -369,15 +403,15 @@ impl ACPBrokerState {
             operation_key,
             adapter_request_id,
             replayed: false,
-            terminal_result: None,
+            terminal_outcome: None,
         })
     }
 
     pub fn complete_operation(
         &mut self,
         operation_key: &OperationKey,
-        result: Value,
-    ) -> Result<Value, BrokerError> {
+        outcome: AdapterRPCOutcome,
+    ) -> Result<AdapterRPCOutcome, BrokerError> {
         let record = self.operations.get_mut(operation_key).ok_or_else(|| {
             BrokerError::new(
                 BrokerErrorKind::OperationNotFound,
@@ -385,9 +419,9 @@ impl ACPBrokerState {
             )
         })?;
 
-        if let Some(existing_result) = &record.terminal_result {
-            if existing_result == &result {
-                return Ok(existing_result.clone());
+        if let Some(existing_outcome) = &record.terminal_outcome {
+            if existing_outcome == &outcome {
+                return Ok(existing_outcome.clone());
             }
             return Err(BrokerError::new(
                 BrokerErrorKind::OperationAlreadyCompletedWithDifferentResult,
@@ -395,12 +429,12 @@ impl ACPBrokerState {
             ));
         }
 
-        record.terminal_result = Some(result.clone());
+        record.terminal_outcome = Some(outcome.clone());
         self.push_event(BrokerEventKind::OperationCompleted {
             operation_key: operation_key.clone(),
-            result: result.clone(),
+            outcome: outcome.clone(),
         });
-        Ok(result)
+        Ok(outcome)
     }
 
     pub fn set_turn_state(&mut self, state: BrokerTurnState) -> Result<EventCursor, BrokerError> {
@@ -453,7 +487,7 @@ impl ACPBrokerState {
     pub fn respond_to_pending_request(
         &mut self,
         request_id: &str,
-        response: Value,
+        response: AdapterRPCOutcome,
     ) -> Result<EventCursor, BrokerError> {
         if self.resolved_requests.contains(request_id) {
             return Err(BrokerError::new(
@@ -524,7 +558,7 @@ impl ACPBrokerState {
                 adapter_request_id: record.adapter_request_id,
                 method: record.fingerprint.method.clone(),
                 params: record.fingerprint.params.clone(),
-                terminal_result: record.terminal_result.clone(),
+                terminal_outcome: record.terminal_outcome.clone(),
             })
             .collect();
         operations.sort_by(|lhs, rhs| lhs.operation_key.as_str().cmp(rhs.operation_key.as_str()));

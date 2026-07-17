@@ -1,7 +1,7 @@
 use alas_helper::acp_broker::{
-    ACPBrokerMetadata, ACPBrokerState, AdapterRequestId, BrokerErrorKind, BrokerEventKind,
-    BrokerGeneration, BrokerId, BrokerTurnState, EventCursor, OperationKey,
-    PendingClientRequestKind,
+    ACPBrokerMetadata, ACPBrokerState, AdapterRPCOutcome, AdapterRequestId, BrokerErrorKind,
+    BrokerEventKind, BrokerGeneration, BrokerId, BrokerTurnState, EventCursor, JSONRPCErrorObject,
+    OperationKey, PendingClientRequestKind,
 };
 use alas_helper::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpBrokerMethod, AcpCloseParams, AcpDetachParams, AcpListResult,
@@ -138,7 +138,10 @@ fn completed_operations_return_the_original_terminal_result_on_retry() {
         )
         .unwrap();
     broker
-        .complete_operation(&OperationKey::new("stable-key"), json!({"ok": true}))
+        .complete_operation(
+            &OperationKey::new("stable-key"),
+            AdapterRPCOutcome::result(json!({"ok": true})),
+        )
         .unwrap();
 
     let retried = broker
@@ -150,7 +153,50 @@ fn completed_operations_return_the_original_terminal_result_on_retry() {
         .unwrap();
 
     assert!(retried.replayed);
-    assert_eq!(retried.terminal_result, Some(json!({"ok": true})));
+    assert_eq!(
+        retried.terminal_outcome,
+        Some(AdapterRPCOutcome::result(json!({"ok": true})))
+    );
+}
+
+#[test]
+fn completed_operations_replay_jsonrpc_errors() {
+    let mut broker = broker();
+    broker
+        .begin_operation(
+            OperationKey::new("stable-key"),
+            "session/prompt",
+            json!({"prompt": "a"}),
+        )
+        .unwrap();
+    broker
+        .complete_operation(
+            &OperationKey::new("stable-key"),
+            AdapterRPCOutcome::error(JSONRPCErrorObject {
+                code: -32001,
+                message: "denied".to_string(),
+                data: None,
+            }),
+        )
+        .unwrap();
+
+    let retried = broker
+        .begin_operation(
+            OperationKey::new("stable-key"),
+            "session/prompt",
+            json!({"prompt": "a"}),
+        )
+        .unwrap();
+
+    assert!(retried.replayed);
+    assert_eq!(
+        retried.terminal_outcome,
+        Some(AdapterRPCOutcome::error(JSONRPCErrorObject {
+            code: -32001,
+            message: "denied".to_string(),
+            data: None,
+        }))
+    );
 }
 
 #[test]
@@ -164,12 +210,18 @@ fn completing_operation_twice_with_different_result_is_rejected() {
         )
         .unwrap();
     broker
-        .complete_operation(&OperationKey::new("stable-key"), json!({"ok": true}))
+        .complete_operation(
+            &OperationKey::new("stable-key"),
+            AdapterRPCOutcome::result(json!({"ok": true})),
+        )
         .unwrap();
 
     assert_eq!(
         broker
-            .complete_operation(&OperationKey::new("stable-key"), json!({"ok": false}))
+            .complete_operation(
+                &OperationKey::new("stable-key"),
+                AdapterRPCOutcome::result(json!({"ok": false})),
+            )
             .unwrap_err()
             .kind(),
         BrokerErrorKind::OperationAlreadyCompletedWithDifferentResult
@@ -262,11 +314,17 @@ fn pending_request_variants_are_snapshotted_and_answered_once() {
     assert_eq!(broker.snapshot().pending_requests.len(), 5);
 
     broker
-        .respond_to_pending_request("permission", json!({"outcome": "approved"}))
+        .respond_to_pending_request(
+            "permission",
+            AdapterRPCOutcome::result(json!({"outcome": "approved"})),
+        )
         .unwrap();
     assert_eq!(
         broker
-            .respond_to_pending_request("permission", json!({"outcome": "approved"}))
+            .respond_to_pending_request(
+                "permission",
+                AdapterRPCOutcome::result(json!({"outcome": "approved"})),
+            )
             .unwrap_err()
             .kind(),
         BrokerErrorKind::PendingRequestAlreadyResolved
@@ -295,7 +353,7 @@ fn missing_pending_request_response_fails_closed() {
 
     assert_eq!(
         broker
-            .respond_to_pending_request("missing", json!({"ok": true}))
+            .respond_to_pending_request("missing", AdapterRPCOutcome::result(json!({"ok": true})))
             .unwrap_err()
             .kind(),
         BrokerErrorKind::PendingRequestNotFound
@@ -417,9 +475,10 @@ fn protocol_dtos_use_stable_wire_field_names() {
     let _: AcpRespondParams = round_trip(&AcpRespondParams {
         broker_id: BrokerId::new("local-session"),
         generation: BrokerGeneration::new(1),
-        request_id: AdapterRequestId::new(1),
+        request_id: json!(1),
         operation_key: OperationKey::new("answer"),
-        result: Value::Null,
+        result: Some(Value::Null),
+        error: None,
     });
     let _: AcpAckParams = round_trip(&AcpAckParams {
         broker_id: BrokerId::new("local-session"),
@@ -455,7 +514,7 @@ fn journal_contains_semantic_events_for_protocol_replay() {
     broker
         .complete_operation(
             &OperationKey::new("queue-item"),
-            json!({"stopReason": "end_turn"}),
+            AdapterRPCOutcome::result(json!({"stopReason": "end_turn"})),
         )
         .unwrap();
 

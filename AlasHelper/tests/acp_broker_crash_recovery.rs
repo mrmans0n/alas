@@ -283,6 +283,211 @@ fn pending_permission_survives_helper_crash_and_can_be_answered_after_attach() {
     assert_eq!(retried["result"]["stopReason"], "end_turn");
 }
 
+#[test]
+fn pending_permission_returns_before_prompt_completion_and_can_resume() {
+    let fixture = Fixture::new("permission-pending");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-pending", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-pending",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-pending",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    let pending = send(
+        &mut helper,
+        "broker-pending",
+        generation.clone(),
+        "session/prompt",
+        "prompt-permission",
+        json!({ "prompt": "needs permission" }),
+    );
+    assert_eq!(pending["pending"], true);
+
+    let attached = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-pending",
+            "generation": generation,
+            "acknowledgedCursor": 0
+        }),
+    );
+    assert!(
+        attached["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["kind"]["type"] == "pendingRequest")
+    );
+
+    let response = helper.request(
+        "acp/respond",
+        json!({
+            "brokerId": "broker-pending",
+            "generation": open["snapshot"]["metadata"]["generation"],
+            "requestId": 900,
+            "operationKey": "permission-answer",
+            "result": { "outcome": "approved" }
+        }),
+    );
+    assert_eq!(response["ok"], true);
+
+    let completed = send(
+        &mut helper,
+        "broker-pending",
+        open["snapshot"]["metadata"]["generation"].clone(),
+        "session/prompt",
+        "prompt-permission",
+        json!({ "prompt": "needs permission" }),
+    );
+    assert_eq!(completed["replayed"], false);
+    assert_eq!(completed["result"]["stopReason"], "end_turn");
+}
+
+#[test]
+fn string_permission_request_id_is_preserved_when_responding() {
+    let fixture = Fixture::new("permission-string-id");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-string-id", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-string-id",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-string-id",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    let pending = send(
+        &mut helper,
+        "broker-string-id",
+        generation.clone(),
+        "session/prompt",
+        "prompt-string-permission",
+        json!({ "prompt": "needs string-permission" }),
+    );
+    assert_eq!(pending["pending"], true);
+
+    helper.request(
+        "acp/respond",
+        json!({
+            "brokerId": "broker-string-id",
+            "generation": generation,
+            "requestId": "req-alpha",
+            "operationKey": "permission-answer",
+            "result": { "outcome": "approved" }
+        }),
+    );
+    fixture.wait_for_log("\"id\":\"req-alpha\"");
+    let log = std::fs::read_to_string(&fixture.log).expect("adapter log");
+    assert!(
+        log.contains("\"result\":{\"outcome\":\"approved\"}"),
+        "{log}"
+    );
+}
+
+#[test]
+fn failed_permission_response_is_sent_to_adapter_as_jsonrpc_error() {
+    let fixture = Fixture::new("permission-error");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request(
+        "acp/open",
+        fixture.open_params("broker-permission-error", 0),
+    );
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-permission-error",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-permission-error",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    let pending = send(
+        &mut helper,
+        "broker-permission-error",
+        generation.clone(),
+        "session/prompt",
+        "prompt-string-permission",
+        json!({ "prompt": "needs string-permission" }),
+    );
+    assert_eq!(pending["pending"], true);
+
+    helper.request(
+        "acp/respond",
+        json!({
+            "brokerId": "broker-permission-error",
+            "generation": generation,
+            "requestId": "req-alpha",
+            "operationKey": "permission-answer",
+            "error": { "code": -32001, "message": "denied" }
+        }),
+    );
+    fixture.wait_for_log("\"error\":{\"code\":-32001");
+}
+
+#[test]
+fn adapter_jsonrpc_errors_are_returned_as_send_errors() {
+    let fixture = Fixture::new("adapter-error");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-adapter-error", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-adapter-error",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+
+    let failed = send(
+        &mut helper,
+        "broker-adapter-error",
+        generation.clone(),
+        "session/load",
+        "session-load-error",
+        json!({ "sessionId": "fail-load" }),
+    );
+    assert_eq!(failed["error"]["code"], -32042);
+    assert_eq!(failed["error"]["message"], "load failed");
+    assert!(failed.get("result").is_none());
+}
+
 fn send(
     helper: &mut Helper,
     broker_id: &str,
@@ -382,11 +587,20 @@ while IFS= read -r line; do
       printf 'session/new\n' >> "$FAKE_ACP_LOG"
       printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"remote-1"}}\n' "$id"
       ;;
+    *'"method":"session/load"'*)
+      printf 'session/load\n' >> "$FAKE_ACP_LOG"
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32042,"message":"load failed"}}\n' "$id"
+      ;;
     *'"method":"session/prompt"'*)
       printf 'session/prompt\n' >> "$FAKE_ACP_LOG"
       printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"kind":"text","text":"started"}}}\n'
       if printf '%s\n' "$line" | grep -q permission; then
-        printf '{"jsonrpc":"2.0","id":900,"method":"session/request_permission","params":{"toolCallId":"tool-1"}}\n'
+        if printf '%s\n' "$line" | grep -q string-permission; then
+          request_id='"req-alpha"'
+        else
+          request_id='900'
+        fi
+        printf '{"jsonrpc":"2.0","id":%s,"method":"session/request_permission","params":{"toolCallId":"tool-1"}}\n' "$request_id"
         IFS= read -r answer
         printf 'permission-answer:%s\n' "$answer" >> "$FAKE_ACP_LOG"
       fi
