@@ -488,19 +488,31 @@ struct ACPMessageList: View {
 
     private func handleRowFramePreference(_ frames: [String: CGRect], proxy: ScrollViewProxy) {
         restoreRememberedAnchorIfNeeded(proxy: proxy)
+        guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
+        // Unlike the modern per-row `onGeometryChange` callback (fired once per
+        // ROW), this legacy path receives the full frame dictionary once per
+        // PreferenceKey change — effectively once per layout pass already — so
+        // keeping `latestTopVisibleAnchor` current here isn't the O(rows) cost
+        // the early-out below guards against on the modern path. This is also
+        // the ONLY place that populates `latestTopVisibleAnchor` on the legacy
+        // path (there is no unconditional frame cache to fall back to here,
+        // unlike `modernRowFrameCache` on the modern path) — gating this write
+        // left `setFollowsTranscriptTail`'s pause-anchor fallback with nothing
+        // correct to use on macOS 14, so it must stay live even while
+        // following the tail.
+        let anchorChanged = latestTopVisibleAnchor.value != anchor
+        if anchorChanged {
+            latestTopVisibleAnchor.value = anchor
+        }
         // Same early-out as `handleModernRowFrame`: while following the tail,
         // restoring, or backfilling older messages, the remainder of this
-        // method is discarded work.
+        // method (the remembered-anchor persistence bookkeeping) is discarded
+        // work.
         guard Self.shouldTrackAnchorFromRowFrames(
             followsTranscriptTail: session.followsTranscriptTail,
             isRestoringTail: scrollBook.isRestoringTail,
             isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
         ) else { return }
-        guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
-        let anchorChanged = latestTopVisibleAnchor.value != anchor
-        if anchorChanged {
-            latestTopVisibleAnchor.value = anchor
-        }
         let lookup = visibleMessageLookup
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
