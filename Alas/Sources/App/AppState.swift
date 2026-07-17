@@ -4771,6 +4771,24 @@ final class AppState {
                 )
             }
         )
+        mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
+            guard let self else { return nil }
+            let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
+            let persistedParent = try? await self.acpOrchestrationPersistence.parent(
+                childSessionId: sessionId
+            )
+            let parentSessionId = self.delegatedSessionParents[sessionId]
+                ?? persistedParent?.parentSessionId
+            return AlasCLIEnvInjection.environment(
+                enabled: self.config.harness.exposeAlasMCP,
+                binDirPath: binDirPath,
+                socketPath: self.harness.socketServer.socketPath,
+                worktreePath: worktreePath,
+                sessionId: sessionId,
+                parentSessionId: parentSessionId,
+                basePATH: ACPProcessEnvironment.augmented()["PATH"]
+            )
+        }
         acpManagers[worktree.id] = mgr
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG

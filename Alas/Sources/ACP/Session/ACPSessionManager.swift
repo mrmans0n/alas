@@ -32,6 +32,12 @@ final class ACPSessionManager: ObservableObject {
         _ worktreePath: String,
         _ sessionId: ACPSession.ID
     ) async -> BuiltInAlasMCP.Injection?
+    /// Extra process env for locally spawned adapters so any agent's shell
+    /// can drive the `alas` CLI. Nil (or a nil return) skips injection.
+    typealias AlasCLIEnvProvider = @MainActor (
+        _ worktreePath: String,
+        _ sessionId: ACPSession.ID
+    ) async -> [String: String]?
 
     let instanceId: String
     let pid: Int64
@@ -57,6 +63,12 @@ final class ACPSessionManager: ObservableObject {
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
+    /// Builds extra env for locally spawned adapter processes so the agent's
+    /// shell can drive the `alas` CLI. Set post-init (unlike
+    /// `builtInMCPProvider`) so AppState can wire it without threading it
+    /// through every manager construction call site. Local sessions only;
+    /// remote hosts skip it in `attach`.
+    var alasCLIEnvProvider: AlasCLIEnvProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
@@ -2218,9 +2230,18 @@ extension ACPSessionManager {
         }
 
         let connection: ACPConnection
+        // Set inside the do-block below when the alas CLI env was merged
+        // into the launch spec (local sessions only). Consumed further down
+        // to decide whether the first-prompt preamble should mention the
+        // CLI alongside any injected MCP servers.
+        var cliEnvActive = false
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+            var launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+            if host == nil, let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId) {
+                launchSpec = launchSpec.mergingExtraEnv(cliEnv)
+                cliEnvActive = true
+            }
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
             } else {
@@ -2251,6 +2272,9 @@ extension ACPSessionManager {
             await releaseWriterLease(sessionId: sessionId)
             return
         }
+        // TODO(pi-MCP-parity task 4): fold into the first-prompt preamble
+        // alongside injected MCP servers.
+        _ = cliEnvActive
         // Collect a short tail of stderr so we can surface it when the
         // agent rejects initialize / new for protocol or auth reasons.
         let stderrBuffer = StderrBuffer()

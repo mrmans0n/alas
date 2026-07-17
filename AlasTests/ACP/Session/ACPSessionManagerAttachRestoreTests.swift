@@ -128,6 +128,69 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.mcpPreambleSent == false)
     }
 
+    @Test("local attach merges alas CLI env into the launch spec")
+    func localAttachMergesCLIEnv() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        var capturedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { spec, _, _ in
+                capturedSpec = spec
+                return ACPConnection(client: client)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let spec = try #require(capturedSpec)
+        #expect(spec.extraEnv["ALAS_SESSION_ID"] == session.id)
+        #expect(spec.extraEnv["PATH"] == "/managed/bin:/usr/bin")
+    }
+
+    @Test("remote attach skips alas CLI env")
+    func remoteAttachSkipsCLIEnv() async throws {
+        let root = "/srv/task3-remote-cli-env-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        var capturedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/codex/bin/codex-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { spec, _, _ in
+                capturedSpec = spec
+                return ACPConnection(client: client)
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let spec = try #require(capturedSpec)
+        #expect(spec.extraEnv["ALAS_SESSION_ID"] == nil)
+        #expect(spec.extraEnv["PATH"] != "/managed/bin:/usr/bin")
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
