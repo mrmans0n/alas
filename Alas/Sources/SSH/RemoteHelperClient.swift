@@ -434,6 +434,38 @@ actor RemoteHelperClient {
         try await request(method: "proc/list", params: RemoteHelperNoParams())
     }
 
+    func openACPBroker(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        try await request(method: "acp/open", params: params)
+    }
+
+    func attachACPBroker(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        try await request(method: "acp/attach", params: params)
+    }
+
+    func sendACPBroker(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        try await request(method: "acp/send", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    func respondACPBroker(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/respond", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    func ackACPBroker(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/ack", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    func detachACPBroker(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/detach", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    func closeACPBroker(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/close", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    func listACPBroker() async throws -> ACPBrokerListResult {
+        try await request(method: "acp/list", params: RemoteHelperNoParams(), replaySubscriptionsOnStart: false)
+    }
+
     func shutdown() {
         idleShutdownTask?.cancel()
         idleShutdownTask = nil

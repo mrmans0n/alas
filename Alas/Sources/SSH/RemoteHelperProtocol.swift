@@ -26,6 +26,7 @@ struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     let fs: RemoteHelperFSCapabilities
     let search: Bool?
     let proc: Bool?
+    let acp: Bool?
     let ping: Bool
 }
 

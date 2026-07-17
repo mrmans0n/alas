@@ -106,6 +106,14 @@ pub fn handle_control_request(
 }
 
 pub fn run_broker_supervisor(dir: PathBuf) -> Result<(), AcpBrokerProcessError> {
+    let result = run_broker_supervisor_inner(dir.clone());
+    if let Err(error) = &result {
+        let _ = write_restrictive_bytes(&dir.join("startup-error"), error.message.as_bytes());
+    }
+    result
+}
+
+fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError> {
     let launch_path = dir.join("launch.json");
     let launch: BrokerLaunch = serde_json::from_slice(
         &std::fs::read(&launch_path)
@@ -203,6 +211,7 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
         cwd: params.cwd,
         env,
     };
+    remove_transient_startup_files(&dir);
     write_restrictive_json(&dir.join("launch.json"), &launch)?;
     spawn_broker_supervisor(&dir)?;
     let snapshot = send_ipc_with_retry(&dir, "snapshot", json!({}), Duration::from_secs(2))?;
@@ -787,6 +796,9 @@ fn send_ipc_with_retry(
 ) -> Result<Value, AcpBrokerProcessError> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
+        if let Some(message) = read_startup_error(dir) {
+            return Err(broker_error(-32072, message));
+        }
         match send_ipc(dir, method, params.clone()) {
             Ok(value) => return Ok(value),
             Err(error) if std::time::Instant::now() < deadline => {
@@ -795,6 +807,22 @@ fn send_ipc_with_retry(
             }
             Err(error) => return Err(error),
         }
+    }
+}
+
+fn read_startup_error(dir: &Path) -> Option<String> {
+    let message = std::fs::read_to_string(dir.join("startup-error")).ok()?;
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn remove_transient_startup_files(dir: &Path) {
+    for name in ["broker.sock", "ready", "startup-error", "pid.json"] {
+        let _ = std::fs::remove_file(dir.join(name));
     }
 }
 
