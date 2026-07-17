@@ -55,22 +55,28 @@ struct ACPMCPStatusState: Equatable {
             let availability = externalStatus.adapterServerAvailability
             let adapterDetail: String
             let adapterIsRequested: Bool
+            let adapterCountsAsSkipped: Bool
             switch availability {
             case .available:
                 adapterDetail = "via pi-mcp-adapter"
                 adapterIsRequested = true
+                adapterCountsAsSkipped = false
             case .userManaged:
                 adapterDetail = "using your existing .pi/mcp.json"
                 adapterIsRequested = false
+                adapterCountsAsSkipped = true
             case .syncFailed:
                 adapterDetail = "config sync failed — see logs"
                 adapterIsRequested = false
+                adapterCountsAsSkipped = true
             case .notInstalled:
                 adapterDetail = "requires the pi-mcp-adapter extension"
                 adapterIsRequested = false
+                adapterCountsAsSkipped = true
             case .noServers:
                 adapterDetail = "via pi-mcp-adapter"
                 adapterIsRequested = false
+                adapterCountsAsSkipped = false
             }
             let adapterRow = Row(
                 id: "external-adapter", name: "user MCP servers",
@@ -80,7 +86,8 @@ struct ACPMCPStatusState: Equatable {
             let rows = [cliRow, adapterRow]
             externalRows = rows
             requestedCount = rows.count(where: \.isRequested)
-            skippedCount = rows.count - requestedCount
+            skippedCount = (cliRow.isRequested ? 0 : 1)
+                + (adapterCountsAsSkipped ? 1 : 0)
             showsAdapterInstallAction = availability == .notInstalled
         } else {
             externalRows = nil

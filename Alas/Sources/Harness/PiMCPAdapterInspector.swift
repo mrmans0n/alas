@@ -10,10 +10,10 @@ enum PiMCPAdapterInspector {
     static let packageName = "pi-mcp-adapter"
 
     static func state(
-        agentDir: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".pi/agent", isDirectory: true),
+        agentDir: URL? = nil,
         worktreeURL: URL? = nil
     ) -> State {
+        let agentDir = agentDir ?? defaultAgentDir()
         var states: [State] = []
         if let worktreeURL {
             states.append(manifestState(worktreeURL.appendingPathComponent(".pi/npm/package.json")))
@@ -22,6 +22,17 @@ enum PiMCPAdapterInspector {
         if states.contains(.installed) { return .installed }
         if states.contains(.missing) { return .missing }
         return .unknown
+    }
+
+    static func defaultAgentDir(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let custom = environment["PI_CODING_AGENT_DIR"],
+           !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: custom, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi/agent", isDirectory: true)
     }
 
     private static func manifestState(_ manifest: URL) -> State {

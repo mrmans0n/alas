@@ -111,6 +111,14 @@ struct ACPMCPStatusPolicyTests {
         #expect(notInstalled.skippedCount == 2)
         #expect(notInstalled.showsAdapterInstallAction == true)
 
+        let noServers = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(cliActive: true, adapterState: .missing,
+                                  configOutcome: nil, hint: "h", userServerNames: [])))
+        #expect(noServers.requestedCount == 1)
+        #expect(noServers.skippedCount == 0)
+        #expect(noServers.showsAdapterInstallAction == false)
+
         let userManaged = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: true, adapterState: .installed,

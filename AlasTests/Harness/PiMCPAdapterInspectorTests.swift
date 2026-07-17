@@ -42,6 +42,15 @@ struct PiMCPAdapterInspectorTests {
         #expect(PiMCPAdapterInspector.state(agentDir: agentDir, worktreeURL: worktree) == .installed)
     }
 
+    @Test("default agent directory honors PI_CODING_AGENT_DIR")
+    func defaultAgentDirHonorsEnvironmentOverride() {
+        let dir = PiMCPAdapterInspector.defaultAgentDir(environment: [
+            "PI_CODING_AGENT_DIR": "/tmp/custom-pi-agent"
+        ])
+
+        #expect(dir.path == "/tmp/custom-pi-agent")
+    }
+
     @Test("missing when the manifest parses without it")
     func missing() throws {
         let dir = try makeAgentDir(packageJSON: #"{"dependencies": {"other": "1.0.0"}}"#)

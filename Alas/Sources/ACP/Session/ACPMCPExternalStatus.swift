@@ -34,6 +34,9 @@ struct ACPMCPExternalStatus: Equatable {
     /// Precise reason the project's MCP servers are (or are not) reachable
     /// through the external adapter.
     var adapterServerAvailability: AdapterServerAvailability {
+        if userServerNames.isEmpty || configOutcome == .noServers || configOutcome == .removedManaged {
+            return .noServers
+        }
         guard adapterState == .installed else { return .notInstalled }
         switch configOutcome {
         case .wrote?, .unchanged?: return .available
