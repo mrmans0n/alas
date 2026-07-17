@@ -197,14 +197,23 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     set_restrictive_dir_permissions(&dir)?;
 
     if broker_is_running(&dir) {
-        if let Ok(result) = send_ipc(&dir, "snapshot", json!({})) {
-            return Ok(json!(AcpOpenResult {
-                snapshot: serde_json::from_value(result).map_err(|error| broker_error(
-                    -32072,
-                    format!("snapshot decode failed: {error}")
-                ))?,
-                adopted: true,
-            }));
+        match send_ipc_with_retry(&dir, "snapshot", json!({}), Duration::from_secs(2)) {
+            Ok(result) => {
+                return Ok(json!(AcpOpenResult {
+                    snapshot: serde_json::from_value(result).map_err(|error| broker_error(
+                        -32072,
+                        format!("snapshot decode failed: {error}")
+                    ))?,
+                    adopted: true,
+                }));
+            }
+            Err(error) if broker_is_running(&dir) => {
+                return Err(error);
+            }
+            Err(_) => {
+                // The pid disappeared while we were waiting for its socket.
+                // It is now safe to remove stale startup files and spawn a replacement.
+            }
         }
     }
 
