@@ -20,6 +20,23 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
+    @Test func startPublishesDurableStateFromBrokerSnapshots() async throws {
+        let service = MockBrokerService()
+        let stateSink = DurableStateSink()
+        await service.enqueueAttach(events: [])
+        let client = makeClient(service: service) { state in
+            Task { await stateSink.append(state) }
+        }
+
+        try await client.start()
+
+        try await waitUntil { await stateSink.recordCount() >= 2 }
+        let last = try await #require(stateSink.lastRecord())
+        #expect(last.brokerId == ACPBrokerID(rawValue: "broker-1"))
+        #expect(last.generation == ACPBrokerGeneration(rawValue: 7))
+        #expect(last.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+    }
+
     @Test func sendUsesBrokerOperationAndReturnsResult() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -100,6 +117,47 @@ struct ACPBrokerClientTests {
         try await waitUntil { await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 3)] }
     }
 
+    @Test func durableConsumptionReportsAdvancedCursorAfterBrokerAck() async throws {
+        let service = MockBrokerService()
+        let stateSink = DurableStateSink()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 5),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("hello")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ])
+        let client = makeClient(service: service) { state in
+            Task { await stateSink.append(state) }
+        }
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+        try await client.start()
+
+        let update = try await updateTask.value
+        let snapshotStateCount = await stateSink.recordCount()
+        update.durableConsumptionAcknowledgement?()
+
+        let expectedState = ACPBrokerDurableState(
+            brokerId: ACPBrokerID(rawValue: "broker-1"),
+            generation: ACPBrokerGeneration(rawValue: 7),
+            acknowledgedCursor: ACPBrokerEventCursor(rawValue: 5)
+        )
+        try await waitUntil {
+            await stateSink.hasLastRecord(after: snapshotStateCount, matching: expectedState)
+        }
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -150,7 +208,10 @@ struct ACPBrokerClientTests {
         }
     }
 
-    private func makeClient(service: MockBrokerService) -> ACPBrokerClient {
+    private func makeClient(
+        service: MockBrokerService,
+        onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
+    ) -> ACPBrokerClient {
         ACPBrokerClient(
             service: service,
             brokerId: ACPBrokerID(rawValue: "broker-1"),
@@ -159,7 +220,8 @@ struct ACPBrokerClientTests {
             args: ["--stdio"],
             cwd: "/repo",
             env: ["PATH": "/bin"],
-            operationKeyPrefix: "op-prefix"
+            operationKeyPrefix: "op-prefix",
+            onDurableStateChanged: onDurableStateChanged
         )
     }
 
@@ -190,6 +252,26 @@ struct ACPBrokerClientTests {
 }
 
 private struct ACPBrokerClientTestTimeout: Error {}
+
+private actor DurableStateSink {
+    private var records: [ACPBrokerDurableState] = []
+
+    func append(_ state: ACPBrokerDurableState) {
+        records.append(state)
+    }
+
+    func recordCount() -> Int {
+        records.count
+    }
+
+    func lastRecord() -> ACPBrokerDurableState? {
+        records.last
+    }
+
+    func hasLastRecord(after count: Int, matching expected: ACPBrokerDurableState) -> Bool {
+        records.count == count + 1 && records.last == expected
+    }
+}
 
 private actor MockBrokerService: ACPBrokerServicing {
     var opened: [ACPBrokerOpenParams] = []

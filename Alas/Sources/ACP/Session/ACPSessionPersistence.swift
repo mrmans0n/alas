@@ -1,6 +1,17 @@
 import Foundation
 import SQLite3
 
+private enum ACPSessionPersistenceError: Error, LocalizedError {
+    case brokerValueOutOfRange(field: String, value: UInt64)
+
+    var errorDescription: String? {
+        switch self {
+        case .brokerValueOutOfRange(let field, let value):
+            return "ACP broker \(field) is out of SQLite Int64 range: \(value)"
+        }
+    }
+}
+
 /// Serial, off-main owner of a worktree's writable ACP session store.
 ///
 /// The initializer only records a path. Opening SQLite and running migrations
@@ -147,6 +158,72 @@ actor ACPSessionPersistence {
         let operation = { try store.resetHelperProcOffsets(sessionId: sessionId) }
         if let fence { return try store.withLeaseFence(fence, operation) ?? false }
         return try operation()
+    }
+
+    @discardableResult
+    func updateACPBrokerState(
+        sessionId: String,
+        state: ACPBrokerDurableState,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let generation = try sqliteBrokerInt64(state.generation.rawValue, field: "generation")
+        let acknowledgedCursor = try sqliteBrokerInt64(
+            state.acknowledgedCursor.rawValue,
+            field: "acknowledged cursor"
+        )
+        let operation = {
+            try store.updateACPBrokerState(
+                sessionId: sessionId,
+                brokerId: state.brokerId.rawValue,
+                generation: generation,
+                acknowledgedCursor: acknowledgedCursor
+            )
+        }
+        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+        return try operation()
+    }
+
+    @discardableResult
+    func updateACPBrokerAcknowledgedCursor(
+        sessionId: String,
+        state: ACPBrokerDurableState,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let generation = try sqliteBrokerInt64(state.generation.rawValue, field: "generation")
+        let acknowledgedCursor = try sqliteBrokerInt64(
+            state.acknowledgedCursor.rawValue,
+            field: "acknowledged cursor"
+        )
+        let operation = {
+            try store.updateACPBrokerAcknowledgedCursor(
+                sessionId: sessionId,
+                brokerId: state.brokerId.rawValue,
+                generation: generation,
+                cursor: acknowledgedCursor
+            )
+        }
+        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+        return try operation()
+    }
+
+    @discardableResult
+    func clearACPBrokerState(
+        sessionId: String,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.clearACPBrokerState(sessionId: sessionId) }
+        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+        return try operation()
+    }
+
+    private func sqliteBrokerInt64(_ value: UInt64, field: String) throws -> Int64 {
+        guard value <= UInt64(Int64.max) else {
+            throw ACPSessionPersistenceError.brokerValueOutOfRange(field: field, value: value)
+        }
+        return Int64(value)
     }
 
     @discardableResult

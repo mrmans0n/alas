@@ -12,6 +12,12 @@ protocol ACPBrokerServicing: Sendable {
 
 extension LocalACPBrokerService: ACPBrokerServicing {}
 
+struct ACPBrokerDurableState: Equatable, Sendable {
+    let brokerId: ACPBrokerID
+    let generation: ACPBrokerGeneration
+    let acknowledgedCursor: ACPBrokerEventCursor
+}
+
 final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let service: ACPBrokerServicing
     private let brokerId: ACPBrokerID
@@ -21,6 +27,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let cwd: String
     private let env: [String: String]
     private let operationKeyPrefix: String
+    private let onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)?
 
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
@@ -60,7 +67,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         args: [String],
         cwd: String,
         env: [String: String],
-        operationKeyPrefix: String
+        operationKeyPrefix: String,
+        onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) {
         self.service = service
         self.brokerId = brokerId
@@ -70,6 +78,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         self.cwd = cwd
         self.env = env
         self.operationKeyPrefix = operationKeyPrefix
+        self.onDurableStateChanged = onDurableStateChanged
 
         var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
         incomingUpdates = AsyncStream { u = $0 }
@@ -365,14 +374,22 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private func ack(cursor: ACPBrokerEventCursor) {
         Task { [weak self] in
             guard let self, let generation = try? self.currentGeneration() else { return }
-            _ = try? await self.service.ack(ACPBrokerAckParams(
-                brokerId: self.brokerId,
-                generation: generation,
-                cursor: cursor
-            ))
+            do {
+                _ = try await self.service.ack(ACPBrokerAckParams(
+                    brokerId: self.brokerId,
+                    generation: generation,
+                    cursor: cursor
+                ))
+            } catch {
+                return
+            }
             self.stateLock.lock()
             self.acknowledgedCursor = max(self.acknowledgedCursor, cursor)
+            let state = self.durableStateLocked()
             self.stateLock.unlock()
+            if let state {
+                self.onDurableStateChanged?(state)
+            }
         }
     }
 
@@ -381,7 +398,11 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         generation = snapshot.metadata.generation
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
         latestCursor = max(latestCursor, snapshot.journalTail)
+        let state = durableStateLocked()
         stateLock.unlock()
+        if let state {
+            onDurableStateChanged?(state)
+        }
     }
 
     private func currentGeneration() throws -> ACPBrokerGeneration {
@@ -408,6 +429,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         defer { stateLock.unlock() }
         nextOperationIndex += 1
         return ACPBrokerOperationKey(rawValue: "\(operationKeyPrefix):\(nextOperationIndex):\(method)")
+    }
+
+    private func durableStateLocked() -> ACPBrokerDurableState? {
+        guard let generation else { return nil }
+        return ACPBrokerDurableState(
+            brokerId: brokerId,
+            generation: generation,
+            acknowledgedCursor: acknowledgedCursor
+        )
     }
 }
 
