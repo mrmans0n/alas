@@ -74,4 +74,10 @@ struct ACPUserScrollEventTests {
         #expect(!ACPUserScrollEvent.isHeadPaginationDriven(.leftMouseUp))
         #expect(!ACPUserScrollEvent.isHeadPaginationDriven(nil))
     }
+
+    @Test func staleEventIsNotUserDriven() {
+        #expect(ACPUserScrollEvent.isFresh(eventTimestamp: 10.0, now: 10.2))
+        #expect(!ACPUserScrollEvent.isFresh(eventTimestamp: 10.0, now: 10.6))
+        #expect(ACPUserScrollEvent.isFresh(eventTimestamp: nil, now: 10.0) == false)
+    }
 }

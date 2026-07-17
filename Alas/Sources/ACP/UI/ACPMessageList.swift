@@ -921,14 +921,22 @@ struct ACPMessageList: View {
         proxy: ScrollViewProxy
     ) {
         // Tail-follow pause/resume — reuse the shared classifier so the rules
-        // match the legacy observer exactly.
-        let currentEventType = NSApp.currentEvent?.type
-        let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
+        // match the legacy observer exactly. `NSApp.currentEvent` reports the
+        // most recently processed event, not necessarily the cause of this
+        // geometry change, so a stale event (from a scroll gesture long over)
+        // must not be classified as driving the current bounds change.
+        let event = NSApp.currentEvent
+        let eventIsFresh = ACPUserScrollEvent.isFresh(
+            eventTimestamp: event?.timestamp,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        let currentEventType = eventIsFresh ? event?.type : nil
+        let isUserDriven = eventIsFresh && ACPUserScrollEvent.isUserDriven(currentEventType)
         let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
             currentEventType,
             previousMinY: previousMinY,
             newMinY: newMinY,
-            isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(NSApp.currentEvent)
+            isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
         )
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
@@ -1360,7 +1368,12 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         }
 
         private static var isUserDrivenScrollEvent: Bool {
-            ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
+            let event = NSApp.currentEvent
+            let eventIsFresh = ACPUserScrollEvent.isFresh(
+                eventTimestamp: event?.timestamp,
+                now: ProcessInfo.processInfo.systemUptime
+            )
+            return eventIsFresh && ACPUserScrollEvent.isUserDriven(event?.type)
         }
     }
 
@@ -1406,6 +1419,25 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
 /// The covered cases (trackpad and dragging the scroller knob) only fire while
 /// actually scrolling, so they can't be confused with idle layout reflow.
 enum ACPUserScrollEvent {
+    /// `NSApp.currentEvent` lingers after the gesture ends; only treat it as
+    /// the cause of a bounds change when it happened within this window.
+    /// Trackpad momentum keeps emitting scrollWheel events, so live scrolling
+    /// stays fresh.
+    static let freshnessWindow: TimeInterval = 0.35
+
+    /// `NSEvent.timestamp` is seconds since system startup, the same
+    /// timebase as `ProcessInfo.processInfo.systemUptime` (per Apple's
+    /// documentation for `NSEvent.timestamp`), so the two are directly
+    /// comparable without conversion.
+    static func isFresh(
+        eventTimestamp: TimeInterval?,
+        now: TimeInterval,
+        window: TimeInterval = freshnessWindow
+    ) -> Bool {
+        guard let eventTimestamp else { return false }
+        return now - eventTimestamp <= window
+    }
+
     static func isUserDriven(_ type: NSEvent.EventType?) -> Bool {
         guard let type else { return false }
         switch type {
