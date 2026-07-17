@@ -111,6 +111,15 @@ struct ACPMCPStatusPolicyTests {
         #expect(notInstalled.skippedCount == 2)
         #expect(notInstalled.showsAdapterInstallAction == true)
 
+        let remoteNotInstalled = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(cliActive: false, adapterState: .unknown,
+                                  configOutcome: nil, hint: "h", userServerNames: ["linear"],
+                                  canInstallAdapterLocally: false)))
+        let remoteRows = try #require(remoteNotInstalled.externalRows)
+        #expect(remoteRows[1].detail == "requires the pi-mcp-adapter extension")
+        #expect(remoteNotInstalled.showsAdapterInstallAction == false)
+
         let noServers = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: true, adapterState: .missing,

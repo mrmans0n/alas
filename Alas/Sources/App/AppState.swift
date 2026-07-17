@@ -4826,7 +4826,7 @@ final class AppState {
             } catch {
                 configOutcome = .failed
             }
-            if configOutcome == .wrote {
+            if Self.shouldExcludePiDirectory(after: configOutcome) {
                 await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
             }
             return (adapterState, configOutcome, userServerNames)
@@ -4840,11 +4840,11 @@ final class AppState {
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
-    /// `.pi/mcp.json` is first written, so the generated file never shows up
-    /// as untracked/dirty in the changes list. `GitIgnoreService.appendIgnore`
-    /// is idempotent (skips if the pattern already exists), so calling this
-    /// on every write is safe. Linked worktrees keep `info/exclude` outside
-    /// the working tree, so the path is resolved via
+    /// `.pi/mcp.json` is written or confirmed unchanged, so the generated file
+    /// never shows up as untracked/dirty in the changes list. `GitIgnoreService.appendIgnore`
+    /// is idempotent (skips if the pattern already exists), so retrying this
+    /// for managed configs is safe. Linked worktrees keep `info/exclude`
+    /// outside the working tree, so the path is resolved via
     /// `git rev-parse --git-path` — same approach as
     /// `RightPaneState.ignore(path:isDirectory:destination:)`. Best-effort:
     /// failures are silently ignored (worst case `.pi/` shows as untracked).
@@ -4862,6 +4862,10 @@ final class AppState {
             // Non-fatal: the managed mcp.json still works, it just may show
             // as untracked until the next successful attach retries this.
         }
+    }
+
+    static func shouldExcludePiDirectory(after outcome: PiMCPConfigWriter.Outcome) -> Bool {
+        outcome == .wrote || outcome == .unchanged
     }
 
     private func resolveGitInfoExcludeURL(worktreeURL: URL) async throws -> URL {

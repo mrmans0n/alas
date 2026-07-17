@@ -343,6 +343,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
         #expect(session.mcpExternalStatus?.userServerNames == ["linear"])
         #expect(session.mcpExternalStatus?.adapterServerAvailability == .notInstalled)
+        #expect(session.mcpExternalStatus?.canInstallAdapterLocally == false)
         let preamble = try #require(session.pendingMCPPreamble)
         #expect(preamble.contains("linear"))
         #expect(preamble.contains("cannot be reached"))

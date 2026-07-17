@@ -2388,7 +2388,8 @@ extension ACPSessionManager {
                         adapterState: .unknown,
                         configOutcome: nil,
                         hint: hint,
-                        userServerNames: mcpPlan.statuses.map(\.name)
+                        userServerNames: mcpPlan.statuses.map(\.name),
+                        canInstallAdapterLocally: false
                     )
                 }
             } else {

@@ -89,6 +89,7 @@ struct ACPMCPStatusState: Equatable {
             skippedCount = (cliRow.isRequested ? 0 : 1)
                 + (adapterCountsAsSkipped ? 1 : 0)
             showsAdapterInstallAction = availability == .notInstalled
+                && externalStatus.canInstallAdapterLocally
         } else {
             externalRows = nil
             requestedCount = summary.statuses.count { $0.disposition == .requested }
