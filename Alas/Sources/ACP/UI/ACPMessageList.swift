@@ -1056,16 +1056,112 @@ struct ACPMessageList: View {
     private func visibleRow(_ visibleRow: VisibleRow) -> some View {
         if transcript.messages.indices.contains(visibleRow.index) {
             let message = transcript.messages[visibleRow.index]
-            row(for: message, stableId: visibleRow.stableId)
-                .background(rowFrameReporter(id: visibleRow.stableId))
+            ACPTranscriptRowContent(
+                stableId: visibleRow.stableId,
+                message: message,
+                contentMaxWidth: contentMaxWidth,
+                typography: typography,
+                trustedImageRoot: trustedImageRoot,
+                transcript: transcript,
+                session: session,
+                onOpenDiff: onOpenDiff,
+                onLoadFullToolCallContent: onLoadFullToolCallContent
+            )
+            .equatable()
+            .background(rowFrameReporter(id: visibleRow.stableId))
         } else {
             EmptyView()
         }
     }
 
-    @ViewBuilder
-    private func row(for m: ACPMessage, stableId: String) -> some View {
-        switch m {
+    static func markdownCacheMessageId(for message: ACPMessage) -> String {
+        message.stableId
+    }
+}
+
+/// A single transcript row's content, extracted from `ACPMessageList.body` so
+/// it can be gated with `.equatable()`. A full-list body re-eval (from a
+/// scroll/geometry pass) used to re-diff every visible row's deep modifier
+/// tree even when nothing about the row had changed — the dominant cost in
+/// the live-lock sample (`ModifiedViewList.applyNodes`,
+/// `LazySubviewPlacements.placeSubviews`). Gating on the render-relevant
+/// values below lets SwiftUI skip re-diffing a row's subtree entirely when
+/// they're unchanged. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md
+/// (Task 7) for the stale-closure audit backing the excluded fields below.
+struct ACPTranscriptRowContent: View, Equatable {
+    // Compared (render-relevant values):
+    let stableId: String
+    let message: ACPMessage
+    let contentMaxWidth: CGFloat
+    let typography: ACPChatTypography
+    let trustedImageRoot: URL?
+    // Excluded from equality — reference-stable for the session's lifetime
+    // (`transcript`/`session` are `let` properties on `ACPSession`, never
+    // reassigned), or closures whose behavior only depends on already-compared
+    // data:
+    // - `onOpenDiff` / queue callbacks capture stable host references
+    //   (`state`, `worktree`, `manager`, `sessionId`) wired once by
+    //   `ACPTabView`, not per-render-varying state.
+    // - `onLoadFullToolCallContent` is only ever invoked when
+    //   `tc.isContentTruncated` is true; that flag is intentionally excluded
+    //   from `ACPMessage.ToolCall`'s own `==`/`hash` (a row must stay equal
+    //   across the in-memory truncation boundary), but `truncateForOffWindow`
+    //   only fires on messages that are, at that same moment, leaving the
+    //   render window (`ACPTranscript.trimHiddenMessage`) — so the flag never
+    //   flips on a message that remains part of an already-rendered,
+    //   gate-compared row. When a row re-enters the window later it is
+    //   constructed fresh (no prior instance to gate against), so the current
+    //   `isContentTruncated` value is always picked up correctly.
+    // - `session.terminalHost` is itself a `let` (stable reference) on
+    //   `ACPSession`; the terminal card's own live output flows through a
+    //   nested `@ObservedObject var terminal: ACPTerminal` inside
+    //   `ACPTerminalTailView`, which keeps reacting independently of this
+    //   gate — the same pattern already relied on for streaming `StreamingText`
+    //   buffers inside `AgentMessageRow`. New terminal-id associations arrive
+    //   via `tc.terminalIds`, which IS part of `message` and thus compared.
+    let transcript: ACPTranscript
+    let session: ACPSession
+    let onOpenDiff: (String) -> Void
+    let onLoadFullToolCallContent: (String) async -> String?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        equalityKey(
+            stableId: lhs.stableId, message: lhs.message,
+            contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
+            trustedImageRoot: lhs.trustedImageRoot
+        )
+        == equalityKey(
+            stableId: rhs.stableId, message: rhs.message,
+            contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
+            trustedImageRoot: rhs.trustedImageRoot
+        )
+    }
+
+    /// Exposed so equality can be exercised in tests without constructing
+    /// (and rendering) a `View`.
+    static func equalityKey(
+        stableId: String,
+        message: ACPMessage,
+        contentMaxWidth: CGFloat,
+        typography: ACPChatTypography,
+        trustedImageRoot: URL?
+    ) -> EqualityKey {
+        EqualityKey(
+            stableId: stableId, message: message, contentMaxWidth: contentMaxWidth,
+            typography: typography, trustedImageRoot: trustedImageRoot
+        )
+    }
+
+    struct EqualityKey: Equatable {
+        let stableId: String
+        let message: ACPMessage
+        let contentMaxWidth: CGFloat
+        let typography: ACPChatTypography
+        let trustedImageRoot: URL?
+    }
+
+    var body: some View {
+        switch message {
         case .user(_, _, let text, let attachments, let delegatedSource):
             ACPMessageGutter(copySource: .text(text)) {
                 UserMessageRow(
@@ -1100,10 +1196,6 @@ struct ACPMessageList: View {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }
-    }
-
-    static func markdownCacheMessageId(for message: ACPMessage) -> String {
-        message.stableId
     }
 }
 

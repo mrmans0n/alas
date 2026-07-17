@@ -1,0 +1,87 @@
+import Testing
+import Foundation
+import CoreGraphics
+@testable import Alas
+
+@Suite("ACPTranscriptRowContent equality")
+struct ACPTranscriptRowContentTests {
+    @Test("equality ignores closure identity")
+    @MainActor
+    func rowContentEqualityIgnoresClosureIdentity() {
+        let msg = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        #expect(a == b)
+    }
+
+    @Test("equality detects a message change")
+    @MainActor
+    func rowContentEqualityDetectsMessageChange() {
+        let msgA = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let msgB = ACPMessage.systemNotice(id: UUID(), text: "goodbye")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msgA, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msgB, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        #expect(a != b)
+    }
+
+    @Test("equality detects a content-width change")
+    @MainActor
+    func rowContentEqualityDetectsWidthChange() {
+        let msg = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 640,
+            typography: .default, trustedImageRoot: nil)
+        #expect(a != b)
+    }
+
+    @Test("equality detects a typography change")
+    @MainActor
+    func rowContentEqualityDetectsTypographyChange() {
+        let msg = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: ACPChatTypography(fontFamily: "Menlo", fontSize: 15),
+            trustedImageRoot: nil)
+        #expect(a != b)
+    }
+
+    @Test("equality detects a stable-id change")
+    @MainActor
+    func rowContentEqualityDetectsStableIdChange() {
+        let msg = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s2", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        #expect(a != b)
+    }
+
+    @Test("equality detects a trusted-image-root change")
+    @MainActor
+    func rowContentEqualityDetectsTrustedImageRootChange() {
+        let msg = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg, contentMaxWidth: 800,
+            typography: .default, trustedImageRoot: URL(fileURLWithPath: "/tmp"))
+        #expect(a != b)
+    }
+}

@@ -236,6 +236,7 @@
 		2ED636DD3A179B95C061A9E6 /* InlineErrorStripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2345B9578E57D570FDB058B /* InlineErrorStripTests.swift */; };
 		2ED82820F76F5032E4339926 /* ZmxClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3300F31455EE1BDF7BDE15 /* ZmxClientTests.swift */; };
 		2F110275F3EC46505EF4DA48 /* SettingsSaveNormalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346272D3AF9A7D78067C96F /* SettingsSaveNormalizationTests.swift */; };
+		2F1165AE6FD339D03943C182 /* ACPTranscriptRowContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E62A0DA334B03D7D65A7D0B3 /* ACPTranscriptRowContentTests.swift */; };
 		2FAA421AF3C23D27A864FDCA /* AgentBuiltins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F451C90EC9036CA8A7A04C /* AgentBuiltins.swift */; };
 		2FAAA60EF431D109D842428F /* SelfUpdaterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBDEF50915BACBD0C3EE36AE /* SelfUpdaterTests.swift */; };
 		2FE10FC44BD9CDBD0C969374 /* MergeBulkResolvePromptEditorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61EB45499D244E44EB170BC /* MergeBulkResolvePromptEditorWindow.swift */; };
@@ -2431,6 +2432,7 @@
 		E504D11F9B69ACCE7B8E5CA4 /* ACPTerminalHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTerminalHost.swift; sourceTree = "<group>"; };
 		E5788263AE679D146F9BF49C /* MergeConflictMinimap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictMinimap.swift; sourceTree = "<group>"; };
 		E5A257562FAB9C5932A6BD69 /* DiffPaneViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneViewTests.swift; sourceTree = "<group>"; };
+		E62A0DA334B03D7D65A7D0B3 /* ACPTranscriptRowContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowContentTests.swift; sourceTree = "<group>"; };
 		E63FA8816D43E1A08AE8164B /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		E64221361A2743CDAD692E64 /* ACPMCPStatusPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMCPStatusPolicyTests.swift; sourceTree = "<group>"; };
 		E69452CB123EB0AABB632F03 /* ACPComposerActionButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerActionButton.swift; sourceTree = "<group>"; };
@@ -3516,6 +3518,7 @@
 				39B7BC45B64591618784F650 /* ACPSlashPickerTests.swift */,
 				B3E9B2665E18F4C4BF3FB683 /* ACPThumbnailImageCacheTests.swift */,
 				B77D7A400059AFD189D1CA5A /* ACPToolCallPresentationTests.swift */,
+				E62A0DA334B03D7D65A7D0B3 /* ACPTranscriptRowContentTests.swift */,
 				79A6CF0F6BDA59AAE1354EE7 /* ACPUserInputFormStateTests.swift */,
 				CA1C663053BAB6A85A664A52 /* ACPVisibleRowsCacheTests.swift */,
 				EDABAB5EEE4C15A78B5429E6 /* ComposerActionTests.swift */,
@@ -5862,6 +5865,7 @@
 				A8EE9207A828D4D1BAF1C1C1 /* ACPTranscriptLatestPlanTests.swift in Sources */,
 				F1C4DD0D3A95ED5301EE2AC9 /* ACPTranscriptMarkdownCacheEvictionTests.swift in Sources */,
 				6682233134C258D81E22D7AD /* ACPTranscriptMarkdownTests.swift in Sources */,
+				2F1165AE6FD339D03943C182 /* ACPTranscriptRowContentTests.swift in Sources */,
 				625DD4666D7788F537A3E853 /* ACPTranscriptTests.swift in Sources */,
 				A3F27DE52BAC71EFFA69938A /* ACPTranscriptWindowTests.swift in Sources */,
 				441EC5990D107F1059F377F3 /* ACPUsageUpdateDecodeTests.swift in Sources */,
