@@ -277,6 +277,101 @@ fn prompt_streaming_update_returns_progress_before_turn_completion() {
 }
 
 #[test]
+fn attach_replays_from_stale_persisted_cursor_without_moving_ack_back() {
+    let fixture = Fixture::new("stale-attach-cursor");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-stale-attach", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-stale-attach",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+
+    let attached = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-stale-attach",
+            "generation": generation.clone(),
+            "acknowledgedCursor": 0
+        }),
+    );
+    let journal_tail = attached["snapshot"]["journalTail"]
+        .as_u64()
+        .expect("journal tail");
+    assert!(journal_tail > 0, "{attached}");
+
+    helper.request(
+        "acp/ack",
+        json!({
+            "brokerId": "broker-stale-attach",
+            "generation": generation.clone(),
+            "cursor": journal_tail
+        }),
+    );
+
+    let stale_attach = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-stale-attach",
+            "generation": generation,
+            "acknowledgedCursor": 0
+        }),
+    );
+    assert_eq!(
+        stale_attach["snapshot"]["acknowledgedCursor"],
+        json!(journal_tail)
+    );
+    assert!(
+        stale_attach["events"]
+            .as_array()
+            .is_some_and(|events| !events.is_empty()),
+        "{stale_attach}"
+    );
+}
+
+#[test]
+fn load_updates_do_not_mark_turn_as_streaming() {
+    let fixture = Fixture::new("load-update-state");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-load-update", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    let mut loaded = Value::Null;
+    for _ in 0..20 {
+        let result = send(
+            &mut helper,
+            "broker-load-update",
+            generation.clone(),
+            "session/load",
+            "load-with-update",
+            json!({ "mode": "stream-load" }),
+        );
+        if result["result"]["sessionId"] == "remote-loaded" {
+            loaded = result;
+            break;
+        }
+        assert_eq!(result["pending"], true, "{result}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(loaded["result"]["sessionId"], "remote-loaded");
+
+    let attached = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-load-update",
+            "generation": generation,
+            "acknowledgedCursor": 0
+        }),
+    );
+    assert_ne!(attached["snapshot"]["turnState"], "streaming", "{attached}");
+}
+
+#[test]
 fn adapter_exit_completes_inflight_prompt_with_error() {
     let fixture = Fixture::new("prompt-exit");
     let mut helper = Helper::start(&fixture.home);
@@ -862,6 +957,11 @@ while IFS= read -r line; do
       printf 'session/load\n' >> "$FAKE_ACP_LOG"
       if printf '%s\n' "$line" | grep -q exit-load; then
         exit 42
+      fi
+      if printf '%s\n' "$line" | grep -q stream-load; then
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-loaded","update":{"kind":"text","text":"restored"}}}\n'
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"remote-loaded"}}\n' "$id"
+        continue
       fi
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32042,"message":"load failed"}}\n' "$id"
       ;;

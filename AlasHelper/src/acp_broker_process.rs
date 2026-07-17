@@ -409,12 +409,8 @@ fn handle_ipc_request(
 
 fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpAttachParams = decode(params)?;
-    let mut state = lock_runtime(runtime);
+    let state = lock_runtime(runtime);
     ensure_generation(&state, params.generation)?;
-    state
-        .broker
-        .ack(params.acknowledged_cursor)
-        .map_err(domain_error)?;
     let events = state
         .broker
         .replay_after(params.acknowledged_cursor)
@@ -602,7 +598,12 @@ fn handle_adapter_stdout_line(runtime: &Runtime, line: &str) {
         let params = value.get("params").cloned().unwrap_or(Value::Null);
         let (lock, condvar) = &*runtime.state;
         let mut state = lock.lock().expect("broker state poisoned");
-        if method == "session/update" {
+        if method == "session/update"
+            && state
+                .pending_methods
+                .values()
+                .any(|pending| pending.method == "session/prompt")
+        {
             let _ = state.broker.set_turn_state(BrokerTurnState::Streaming);
         }
         state.broker.add_adapter_notification(method, params);
