@@ -17,23 +17,24 @@ struct ACPMCPStatusState: Equatable {
     let isStale: Bool
     let rows: [Row]
     let preambleDetail: String?
+    let externalRows: [Row]?
+    let showsAdapterInstallAction: Bool
 
     init?(
         summary: MCPAttachmentSummary?,
         currentServers: [ProjectMCPServer],
         preamblePending: Bool = false,
-        preambleSent: Bool = false
+        preambleSent: Bool = false,
+        externalStatus: ACPMCPExternalStatus? = nil
     ) {
         guard let summary,
               !summary.statuses.isEmpty || !currentServers.isEmpty else {
             return nil
         }
 
-        requestedCount = summary.statuses.count { $0.disposition == .requested }
-        skippedCount = summary.statuses.count - requestedCount
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)
-        rows = summary.statuses.map(Self.row)
+        rows = summary.statuses.map { Self.row($0) }
 
         if preamblePending {
             preambleDetail = "Context preamble pending — sent with the next prompt"
@@ -41,6 +42,63 @@ struct ACPMCPStatusState: Equatable {
             preambleDetail = "Context preamble sent"
         } else {
             preambleDetail = nil
+        }
+
+        if let externalStatus {
+            let cliRow = Row(
+                id: "external-cli", name: "alas tools",
+                transport: "CLI",
+                detail: externalStatus.cliActive
+                    ? "via alas CLI (environment injected)"
+                    : "unavailable (Alas CLI not injected)",
+                isRequested: externalStatus.cliActive)
+            let availability = externalStatus.adapterServerAvailability
+            let adapterDetail: String
+            let adapterIsRequested: Bool
+            let adapterCountsAsSkipped: Bool
+            switch availability {
+            case .available:
+                adapterDetail = "via pi-mcp-adapter"
+                adapterIsRequested = true
+                adapterCountsAsSkipped = false
+            case .userManaged:
+                adapterDetail = "using your existing .pi/mcp.json"
+                adapterIsRequested = false
+                adapterCountsAsSkipped = true
+            case .syncFailed:
+                adapterDetail = "config sync failed — see logs"
+                adapterIsRequested = false
+                adapterCountsAsSkipped = true
+            case .notInstalled:
+                adapterDetail = "requires the pi-mcp-adapter extension"
+                adapterIsRequested = false
+                adapterCountsAsSkipped = true
+            case .noServers:
+                adapterDetail = "via pi-mcp-adapter"
+                adapterIsRequested = false
+                adapterCountsAsSkipped = false
+            }
+            let adapterRow = Row(
+                id: "external-adapter", name: "user MCP servers",
+                transport: "pi-mcp-adapter",
+                detail: adapterDetail,
+                isRequested: adapterIsRequested)
+            let skippedRows = externalStatus.skippedServerStatuses.map {
+                Self.row($0, idPrefix: "external-skipped-")
+            }
+            let rows = [cliRow, adapterRow] + skippedRows
+            externalRows = rows
+            requestedCount = rows.count(where: \.isRequested)
+            skippedCount = (cliRow.isRequested ? 0 : 1)
+                + (adapterCountsAsSkipped ? 1 : 0)
+                + skippedRows.count
+            showsAdapterInstallAction = availability == .notInstalled
+                && externalStatus.canInstallAdapterLocally
+        } else {
+            externalRows = nil
+            requestedCount = summary.statuses.count { $0.disposition == .requested }
+            skippedCount = summary.statuses.count - requestedCount
+            showsAdapterInstallAction = false
         }
     }
 
@@ -59,7 +117,7 @@ struct ACPMCPStatusState: Equatable {
         return parts.joined(separator: ", ")
     }
 
-    private static func row(_ status: MCPAttachmentServerStatus) -> Row {
+    private static func row(_ status: MCPAttachmentServerStatus, idPrefix: String = "") -> Row {
         let transport: String
         switch status.transport {
         case .stdio: transport = "stdio"
@@ -70,7 +128,7 @@ struct ACPMCPStatusState: Equatable {
         switch status.disposition {
         case .requested:
             return .init(
-                id: status.id,
+                id: idPrefix + status.id,
                 name: status.name,
                 transport: transport,
                 detail: "Requested",
@@ -78,7 +136,7 @@ struct ACPMCPStatusState: Equatable {
             )
         case let .skipped(reason):
             return .init(
-                id: status.id,
+                id: idPrefix + status.id,
                 name: status.name,
                 transport: transport,
                 detail: skipDetail(reason),

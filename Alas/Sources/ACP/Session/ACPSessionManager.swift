@@ -32,6 +32,23 @@ final class ACPSessionManager: ObservableObject {
         _ worktreePath: String,
         _ sessionId: ACPSession.ID
     ) async -> BuiltInAlasMCP.Injection?
+    /// Extra process env for locally spawned adapters so any agent's shell
+    /// can drive the `alas` CLI. Nil (or a nil return) skips injection.
+    typealias AlasCLIEnvProvider = @MainActor (
+        _ worktreePath: String,
+        _ sessionId: ACPSession.ID
+    ) async -> [String: String]?
+    /// For `.external` adapters (which ignore ACP MCP config), inspects the
+    /// agent-side adapter and syncs its managed config file. Called once per
+    /// attach, after the built-in MCP composition, so `attach` can populate
+    /// `session.mcpExternalStatus` before the first-prompt preamble is built.
+    typealias ExternalMCPStatusProvider = @MainActor (_ worktreePath: String) async
+        -> (
+            adapterState: PiMCPAdapterInspector.State,
+            configOutcome: PiMCPConfigWriter.Outcome?,
+            userServerNames: [String],
+            skippedServerStatuses: [MCPAttachmentServerStatus]
+        )
 
     let instanceId: String
     let pid: Int64
@@ -57,6 +74,17 @@ final class ACPSessionManager: ObservableObject {
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
+    /// Builds extra env for locally spawned adapter processes so the agent's
+    /// shell can drive the `alas` CLI. Set post-init (unlike
+    /// `builtInMCPProvider`) so AppState can wire it without threading it
+    /// through every manager construction call site. Local sessions only;
+    /// remote hosts skip it in `attach`.
+    var alasCLIEnvProvider: AlasCLIEnvProvider?
+    /// Builds the `.external` adapter status (adapter inspection + managed
+    /// config sync) for a worktree path. Set post-init, mirroring
+    /// `alasCLIEnvProvider`, so AppState can wire it without threading it
+    /// through every manager construction call site.
+    var externalMCPStatusProvider: ExternalMCPStatusProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
@@ -2218,9 +2246,27 @@ extension ACPSessionManager {
         }
 
         let connection: ACPConnection
+        // Set inside the do-block below when the alas CLI env was merged
+        // into the launch spec (local sessions only). Consumed further down
+        // to decide whether the first-prompt preamble should mention the
+        // CLI alongside any injected MCP servers.
+        var cliEnvActive = false
+        // Set alongside `cliEnvActive`, from the merged launch spec's
+        // `ALAS_PARENT_SESSION_ID` (see `AlasCLIEnvInjection.environment`).
+        // Consumed by the CLI-mode preamble below to decide whether this is
+        // a delegated session (`launchSpec` itself is scoped to this
+        // `do` block, so its `extraEnv` is captured here for later use).
+        var cliParentSessionId: String?
+        var effectiveLaunchSpec = spec
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+            var launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+            if host == nil, let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId) {
+                launchSpec = launchSpec.mergingExtraEnv(cliEnv)
+                cliEnvActive = true
+                cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
+            }
+            effectiveLaunchSpec = launchSpec
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
             } else {
@@ -2251,6 +2297,9 @@ extension ACPSessionManager {
             await releaseWriterLease(sessionId: sessionId)
             return
         }
+        // `cliEnvActive` / `cliParentSessionId` are consumed below, once we
+        // know whether this attach created a fresh remote session (the
+        // preamble is only sent once, on first prompt).
         // Collect a short tail of stderr so we can surface it when the
         // agent rejects initialize / new for protocol or auth reasons.
         let stderrBuffer = StderrBuffer()
@@ -2289,7 +2338,7 @@ extension ACPSessionManager {
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
-            let agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv)
+            let agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: effectiveLaunchSpec.extraEnv)
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
             let mcpPlan = MCPAttachmentPlanner.plan(.init(
@@ -2316,6 +2365,42 @@ extension ACPSessionManager {
                 statuses: plannedStatuses,
                 configurationFingerprint: mcpPlan.configurationFingerprint
             )
+            // `.external` adapters ignore the ACP MCP config above and need
+            // agent-side setup instead (config files, plugins). Recomputed on
+            // every attach so a freshly installed adapter or an edited
+            // server list is picked up on the next reconnect.
+            if case let .external(hint) = spec.mcpInjection {
+                if remoteHost == nil {
+                    let external = await externalMCPStatusProvider?(worktreePath)
+                    session.mcpExternalStatus = ACPMCPExternalStatus(
+                        cliActive: cliEnvActive,
+                        adapterState: external?.adapterState ?? .unknown,
+                        configOutcome: external?.configOutcome,
+                        hint: hint,
+                        userServerNames: external?.userServerNames ?? [],
+                        skippedServerStatuses: external?.skippedServerStatuses ?? []
+                    )
+                } else {
+                    // Remote pi session: the worktree lives on the remote host, so
+                    // there is no local `.pi/agent` to inspect and no local
+                    // `.pi/mcp.json` to write. Report an honest "unavailable"
+                    // status instead of calling the (local-only) status provider.
+                    session.mcpExternalStatus = ACPMCPExternalStatus(
+                        cliActive: false,
+                        adapterState: .unknown,
+                        configOutcome: nil,
+                        hint: hint,
+                        userServerNames: mcpPlan.statuses.map(\.name),
+                        skippedServerStatuses: mcpPlan.statuses.filter {
+                            if case .skipped = $0.disposition { return true }
+                            return false
+                        },
+                        canInstallAdapterLocally: false
+                    )
+                }
+            } else {
+                session.mcpExternalStatus = nil
+            }
             let mcpSplit = remoteHost.map { _ in
                 ACPRemoteMCPFilter.split(plannedWireServers)
             }
@@ -2555,12 +2640,31 @@ extension ACPSessionManager {
                 }
             }
             if createdFreshRemoteSession {
-                let userServerNames = wireMCPServers.map(\.name)
-                    .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
+                let preambleMode: ACPMCPPreambleMode
+                let userServerNames: [String]
+                if case .external = spec.mcpInjection {
+                    // The `.external` (pi) status provider resolves an
+                    // all-transports plan (http/sse force-enabled) because
+                    // pi-mcp-adapter — unlike pi-acp's own ACP MCP support —
+                    // can reach those transports. `wireMCPServers` here was
+                    // planned against pi's real (http/sse-less)
+                    // capabilities and would drop them, so the preamble must
+                    // use the external status's resolved names instead.
+                    userServerNames = session.mcpExternalStatus?.userServerNames ?? []
+                    let serverAvailability = session.mcpExternalStatus?.adapterServerAvailability ?? .notInstalled
+                    preambleMode = .cli(serverAvailability: serverAvailability)
+                } else {
+                    userServerNames = wireMCPServers.map(\.name)
+                        .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
+                    preambleMode = .mcp
+                }
                 let preamble = ACPMCPPromptPreamble.text(
-                    builtInInjected: builtInMCP != nil,
-                    isDelegated: builtInMCP?.isDelegated == true,
-                    userServerNames: userServerNames
+                    builtInInjected: preambleMode == .mcp ? (builtInMCP != nil) : cliEnvActive,
+                    isDelegated: preambleMode == .mcp
+                        ? (builtInMCP?.isDelegated == true)
+                        : (cliParentSessionId != nil),
+                    userServerNames: userServerNames,
+                    mode: preambleMode
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

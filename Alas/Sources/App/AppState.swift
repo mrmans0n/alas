@@ -6,6 +6,8 @@ import os
 @Observable
 @MainActor
 final class AppState {
+    static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
+
     /// Stable for this process; identifies this app instance to the ACP
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
@@ -4771,12 +4773,136 @@ final class AppState {
                 )
             }
         )
+        mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
+            guard let self else { return nil }
+            let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
+            let persistedParent = try? await self.acpOrchestrationPersistence.parent(
+                childSessionId: sessionId
+            )
+            let parentSessionId = self.delegatedSessionParents[sessionId]
+                ?? persistedParent?.parentSessionId
+            return AlasCLIEnvInjection.environment(
+                enabled: self.config.harness.exposeAlasMCP,
+                binDirPath: binDirPath,
+                socketPath: self.harness.socketServer.socketPath,
+                worktreePath: worktreePath,
+                sessionId: sessionId,
+                parentSessionId: parentSessionId,
+                basePATH: ACPProcessEnvironment.augmented()["PATH"]
+            )
+        }
+        mgr.externalMCPStatusProvider = { [weak self] worktreePath in
+            guard let self else { return (.unknown, nil, [], []) }
+            let worktreeURL = URL(fileURLWithPath: worktreePath)
+            let adapterState = PiMCPAdapterInspector.state(worktreeURL: worktreeURL)
+            let project = self.projects.first(where: { $0.id == worktree.projectId })
+            let servers = project?.mcpServers ?? []
+            // Resolved unconditionally — even when the adapter is not
+            // (yet) installed — so the preamble can name the project's
+            // servers regardless of adapter state ("not installed" wording
+            // still lists them). pi-mcp-adapter reads the resolved wire
+            // config, not the raw project definitions, so
+            // ${WORKTREE_DIR}/${PROJECT_DIR} templates are interpolated
+            // exactly as the normal ACP session/new attach path does.
+            // Unlike that path, http/sse are force-enabled here:
+            // pi-mcp-adapter supports them even though pi-acp's own ACP
+            // layer reports them unsupported, so this must not drop those
+            // servers.
+            let plan = MCPAttachmentPlanner.plan(.init(
+                configuredServers: servers,
+                projectDirectory: project?.path ?? worktreePath,
+                worktreeDirectory: worktreePath,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: [:]),
+                capabilities: ACPMCPServerCapabilities(http: true, sse: true)
+            ))
+            let userServerNames = plan.wireServers.map(\.name)
+            let skippedServerStatuses = plan.statuses.filter {
+                if case .skipped = $0.disposition { return true }
+                return false
+            }
+            guard adapterState == .installed else {
+                return (adapterState, nil, userServerNames, skippedServerStatuses)
+            }
+            let fingerprint = MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: plan.wireServers)
+            let configOutcome: PiMCPConfigWriter.Outcome
+            do {
+                configOutcome = try PiMCPConfigWriter.sync(
+                    worktreeURL: worktreeURL,
+                    servers: plan.wireServers,
+                    fingerprint: fingerprint
+                )
+            } catch {
+                configOutcome = .failed
+            }
+            if Self.shouldExcludePiDirectory(after: configOutcome) {
+                await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
+            }
+            return (adapterState, configOutcome, userServerNames, skippedServerStatuses)
+        }
         acpManagers[worktree.id] = mgr
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
         #endif
         return mgr
+    }
+
+    /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
+    /// `.pi/mcp.json` is written or confirmed unchanged, so the generated file
+    /// never shows up as untracked/dirty in the changes list. `GitIgnoreService.appendIgnore`
+    /// is idempotent (skips if the pattern already exists), so retrying this
+    /// for managed configs is safe. Linked worktrees keep `info/exclude`
+    /// outside the working tree, so the path is resolved via
+    /// `git rev-parse --git-path` — same approach as
+    /// `RightPaneState.ignore(path:isDirectory:destination:)`. Best-effort:
+    /// failures are silently ignored (worst case `.pi/` shows as untracked).
+    private func excludePiDirectoryFromGit(worktreeURL: URL) async {
+        do {
+            let infoExcludeURL = try await resolveGitInfoExcludeURL(worktreeURL: worktreeURL)
+            _ = try GitIgnoreService.appendIgnore(
+                entryPath: Self.piMCPGeneratedConfigExcludePath,
+                isDirectory: false,
+                destination: .infoExclude,
+                repoURL: worktreeURL,
+                infoExcludeURL: infoExcludeURL
+            )
+        } catch {
+            // Non-fatal: the managed mcp.json still works, it just may show
+            // as untracked until the next successful attach retries this.
+        }
+    }
+
+    static func shouldExcludePiDirectory(after outcome: PiMCPConfigWriter.Outcome) -> Bool {
+        outcome == .wrote || outcome == .unchanged
+    }
+
+    private func resolveGitInfoExcludeURL(worktreeURL: URL) async throws -> URL {
+        let result = try await Process.git(["rev-parse", "--git-path", "info/exclude"], cwd: worktreeURL)
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.hasPrefix("/") {
+            return URL(fileURLWithPath: raw)
+        }
+        return URL(fileURLWithPath: raw, relativeTo: worktreeURL).standardizedFileURL
+    }
+
+    /// Runs `pi install npm:pi-mcp-adapter` (pi resolves its own package
+    /// management). Returns true when pi exits 0.
+    func installPiMCPAdapter() async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = ["pi", "install", "npm:pi-mcp-adapter"]
+                process.environment = ACPProcessEnvironment.augmented()
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    continuation.resume(returning: process.terminationStatus == 0)
+                } catch {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
     }
 
     /// Release the ACP session manager for the given worktree id.

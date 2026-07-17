@@ -135,6 +135,13 @@ enum MCPAttachmentPlanner {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    static func resolvedConfigurationFingerprint(for servers: [ACPMCPServer]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = (try? encoder.encode(servers)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func resolvedEnvironment(for input: MCPAttachmentPlannerInput) -> [String: String] {
         var environment = input.environment
         environment["PROJECT_DIR"] = input.projectDirectory

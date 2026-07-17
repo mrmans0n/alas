@@ -21,7 +21,8 @@ struct ACPToolbar: View {
             )
             ACPMCPStatusControl(
                 session: session,
-                currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+                currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
+                onInstallPiMCPAdapter: { await state.installPiMCPAdapter() }
             )
             ACPRecoveryPill(session: session)
             if let currentGoal = session.currentGoal {

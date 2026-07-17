@@ -128,6 +128,227 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.mcpPreambleSent == false)
     }
 
+    @Test("local attach merges alas CLI env into the launch spec")
+    func localAttachMergesCLIEnv() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        var capturedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { spec, _, _ in
+                capturedSpec = spec
+                return ACPConnection(client: client)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let spec = try #require(capturedSpec)
+        #expect(spec.extraEnv["ALAS_SESSION_ID"] == session.id)
+        #expect(spec.extraEnv["PATH"] == "/managed/bin:/usr/bin")
+        #expect(session.terminalHost.sessionEnv["ALAS_SESSION_ID"] == session.id)
+        #expect(session.terminalHost.sessionEnv["PATH"] == "/managed/bin:/usr/bin")
+    }
+
+    @Test("remote attach skips alas CLI env")
+    func remoteAttachSkipsCLIEnv() async throws {
+        let root = "/srv/task3-remote-cli-env-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        var capturedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/codex/bin/codex-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { spec, _, _ in
+                capturedSpec = spec
+                return ACPConnection(client: client)
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let spec = try #require(capturedSpec)
+        #expect(spec.extraEnv["ALAS_SESSION_ID"] == nil)
+        #expect(spec.extraEnv["PATH"] != "/managed/bin:/usr/bin")
+    }
+
+    @Test("fresh pi attach with CLI env active produces a CLI-mode preamble")
+    func freshPiAttachProducesCLIModePreamble() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("alas open"))
+        #expect(!preamble.contains("MCP server \"alas\""))
+    }
+
+    @Test("local pi attach invokes the external MCP status provider")
+    func localPiAttachInvokesExternalMCPStatusProvider() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        var providerCalled = false
+        manager.externalMCPStatusProvider = { _ in
+            providerCalled = true
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [])
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(providerCalled)
+        #expect(session.mcpExternalStatus?.adapterState == .installed)
+        #expect(session.mcpExternalStatus?.configOutcome == .wrote)
+    }
+
+    @Test("pi attach preamble names http/sse-only servers from the external plan")
+    func piAttachPreambleNamesExternalPlanServers() async throws {
+        // Regression guard: `wireMCPServers` is planned against pi's real
+        // (http/sse-less) ACP capabilities and would drop an http/sse-only
+        // server, but `.pi/mcp.json` is written from the external plan's
+        // all-transports resolution and DOES include it. The preamble must
+        // use the external status's resolved names, not `wireMCPServers`,
+        // or it silently omits the `mcp()` hint for exactly the servers
+        // this feature exists to surface.
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+        manager.externalMCPStatusProvider = { _ in
+            (adapterState: .installed, configOutcome: .wrote, userServerNames: ["docs-http"], skippedServerStatuses: [])
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("docs-http"))
+        #expect(preamble.contains("mcp()"))
+    }
+
+    @Test("remote pi attach skips the external MCP status provider")
+    func remotePiAttachSkipsExternalMCPStatusProvider() async throws {
+        let root = "/srv/task5-remote-external-mcp-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/pi/bin/pi-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        var providerCalled = false
+        manager.externalMCPStatusProvider = { _ in
+            providerCalled = true
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [])
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(!providerCalled)
+        #expect(session.mcpExternalStatus?.adapterState == .unknown)
+        #expect(session.mcpExternalStatus?.cliActive == false)
+        #expect(session.mcpExternalStatus?.configOutcome == nil)
+    }
+
+    @Test("remote pi attach preserves configured MCP server names as unavailable")
+    func remotePiAttachPreservesConfiguredMCPServerNames() async throws {
+        let root = "/srv/task5-remote-external-mcp-names-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let configuredServers = [
+            ProjectMCPServer.stdio(name: "linear", command: "linear-mcp")
+        ]
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/pi/bin/pi-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            mcpProjectContextProvider: {
+                MCPProjectContext(projectDirectory: root, configuredServers: configuredServers)
+            }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(session.mcpExternalStatus?.userServerNames == ["linear"])
+        #expect(session.mcpExternalStatus?.adapterServerAvailability == .notInstalled)
+        #expect(session.mcpExternalStatus?.canInstallAdapterLocally == false)
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("linear"))
+        #expect(preamble.contains("cannot be reached"))
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

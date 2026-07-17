@@ -31,6 +31,16 @@ struct AppStateCleanupTests {
         return dir
     }
 
+    @Test func piMCPExcludeRetriesForUnchangedManagedConfig() {
+        #expect(AppState.piMCPGeneratedConfigExcludePath == ".pi/mcp.json")
+        #expect(AppState.shouldExcludePiDirectory(after: .wrote))
+        #expect(AppState.shouldExcludePiDirectory(after: .unchanged))
+        #expect(!AppState.shouldExcludePiDirectory(after: .failed))
+        #expect(!AppState.shouldExcludePiDirectory(after: .refusedUnmanaged))
+        #expect(!AppState.shouldExcludePiDirectory(after: .removedManaged))
+        #expect(!AppState.shouldExcludePiDirectory(after: .noServers))
+    }
+
     @Test func allWorktreeIdsReturnsIdsAfterRefresh() async throws {
         let repo = try await makeRepo(name: "all-ids")
         defer { try? FileManager.default.removeItem(at: repo) }
