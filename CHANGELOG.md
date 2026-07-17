@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-07-18
+
+### ✨ Features
+
+- Make injected MCP tools discoverable via ACP first-prompt preambles (#825).
+- Add pi parity for Alas tools through CLI environment injection and pi-mcp-adapter support (#828).
+- Restart local ACP sessions through the broker (#826).
+
+### 🐛 Fixes
+
+- Break split-pane row-height sync live-locks that could beachball diff views (#827).
+
 ## [0.11.4] - 2026-07-17
 
 ### ✨ Features

@@ -34,7 +34,8 @@ struct ACPBrokerClientTests {
         try await client.start()
 
         try await waitUntil { await stateSink.recordCount() >= 2 }
-        let last = try await #require(stateSink.lastRecord())
+        let lastRecord = await stateSink.lastRecord()
+        let last = try #require(lastRecord)
         #expect(last.brokerId == ACPBrokerID(rawValue: "broker-1"))
         #expect(last.generation == ACPBrokerGeneration(rawValue: 7))
         #expect(last.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
