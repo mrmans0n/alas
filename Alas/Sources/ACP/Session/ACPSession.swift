@@ -855,9 +855,6 @@ final class ACPSession: ObservableObject, Identifiable {
 
         var item = queue.remove(at: idx)
         item.status = .pending
-        if item.lastError != nil {
-            item.advanceBrokerOperationAttempt()
-        }
         item.lastError = nil
 
         let insertAt = protectedPrefixCount
@@ -937,10 +934,13 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Roll the `.sending` head back to `.pending` with an error message.
     /// Used by the flusher's failure path. Keeps the item at the head so
     /// the user sees "Retry" on the bubble.
-    func setQueueHeadError(_ message: String) {
+    func setQueueHeadError(_ message: String, advancesBrokerOperationAttempt: Bool = false) {
         guard !queue.isEmpty else { return }
         var item = queue.removeFirst()
         item.status = .pending
+        if advancesBrokerOperationAttempt {
+            item.advanceBrokerOperationAttempt()
+        }
         item.lastError = message
 
         if let forcedId = forceSendAfterSendingHeadId,

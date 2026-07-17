@@ -73,11 +73,28 @@ struct ACPSessionQueueAPITests {
         s.enqueue(blocks: [.text("a")])
         s.queue[0].lastError = "network"
         let id = s.queue[0].id
+        let operationKey = s.queue[0].brokerOperationKey
 
         #expect(s.forceQueueItem(id: id))
         #expect(s.queue[0].id == id)
         #expect(s.queue[0].lastError == nil)
         #expect(s.queue[0].status == .pending)
+        #expect(s.queue[0].brokerOperationKey == operationKey)
+    }
+
+    @Test("terminal queue errors advance the retry broker operation key")
+    func terminalQueueErrorAdvancesBrokerOperationKey() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        s.markQueueHeadSending()
+        let operationKey = s.queue[0].brokerOperationKey
+
+        s.setQueueHeadError("terminal", advancesBrokerOperationAttempt: true)
+        #expect(s.queue[0].brokerOperationKey != operationKey)
+
+        let retryKey = s.queue[0].brokerOperationKey
+        #expect(s.forceQueueItem(id: s.queue[0].id))
+        #expect(s.queue[0].brokerOperationKey == retryKey)
     }
 
     @Test("forceQueueItem refuses a .sending item")

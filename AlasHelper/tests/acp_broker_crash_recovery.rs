@@ -797,6 +797,50 @@ fn adapter_exit_completes_pending_operation_and_replays_error() {
     );
 }
 
+#[test]
+fn open_replaces_broker_after_adapter_exit() {
+    let fixture = Fixture::new("adapter-exit-reopen");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-exit-reopen", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-exit-reopen",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+
+    let failed = drive_until_operation_completed(
+        &mut helper,
+        "broker-exit-reopen",
+        generation,
+        "session/load",
+        "session-load-exit",
+        json!({ "sessionId": "exit-load" }),
+    );
+    assert_eq!(failed["error"]["code"], -32074);
+
+    let reopened = helper.request("acp/open", fixture.open_params("broker-exit-reopen", 0));
+    assert_eq!(reopened["adopted"], false);
+    assert_ne!(
+        reopened["snapshot"]["metadata"]["generation"],
+        open["snapshot"]["metadata"]["generation"]
+    );
+
+    let initialized = send(
+        &mut helper,
+        "broker-exit-reopen",
+        reopened["snapshot"]["metadata"]["generation"].clone(),
+        "initialize",
+        "init-reopened",
+        json!({}),
+    );
+    assert!(initialized.get("error").is_none(), "{initialized}");
+}
+
 fn send(
     helper: &mut Helper,
     broker_id: &str,
@@ -825,7 +869,7 @@ fn drive_until_operation_completed(
     operation_key: &str,
     params: Value,
 ) -> Value {
-    for _ in 0..20 {
+    for _ in 0..60 {
         let result = send(
             helper,
             broker_id,

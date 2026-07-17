@@ -1,6 +1,6 @@
 use crate::acp_broker::{
-    ACPBrokerMetadata, ACPBrokerState, AdapterRPCOutcome, BrokerGeneration, BrokerId,
-    BrokerTurnState, JSONRPCErrorObject, OperationKey, PendingClientRequestKind,
+    ACPBrokerMetadata, ACPBrokerSnapshot, ACPBrokerState, AdapterRPCOutcome, BrokerGeneration,
+    BrokerId, BrokerTurnState, JSONRPCErrorObject, OperationKey, PendingClientRequestKind,
 };
 use crate::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpCloseParams, AcpDetachParams, AcpNotifyParams, AcpOpenParams,
@@ -199,13 +199,31 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     if broker_is_running(&dir) {
         match send_ipc_with_retry(&dir, "snapshot", json!({}), Duration::from_secs(2)) {
             Ok(result) => {
-                return Ok(json!(AcpOpenResult {
-                    snapshot: serde_json::from_value(result).map_err(|error| broker_error(
-                        -32072,
-                        format!("snapshot decode failed: {error}")
-                    ))?,
-                    adopted: true,
-                }));
+                let snapshot: ACPBrokerSnapshot =
+                    serde_json::from_value(result.clone()).map_err(|error| {
+                        broker_error(-32072, format!("snapshot decode failed: {error}"))
+                    })?;
+                if result
+                    .get("adapterExited")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let _ = send_ipc(
+                        &dir,
+                        "close",
+                        json!({
+                            "brokerId": params.broker_id.clone(),
+                            "generation": snapshot.metadata.generation
+                        }),
+                    );
+                    // The supervisor is alive but its adapter is gone. Close
+                    // that generation and fall through to spawn a replacement.
+                } else {
+                    return Ok(json!(AcpOpenResult {
+                        snapshot,
+                        adopted: true,
+                    }));
+                }
             }
             Err(error) if broker_is_running(&dir) => {
                 return Err(error);
@@ -319,6 +337,13 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
             continue;
         }
         if let Ok(snapshot) = send_ipc(&dir, "snapshot", json!({})) {
+            if snapshot
+                .get("adapterExited")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             brokers.push(snapshot);
         }
     }
@@ -407,7 +432,7 @@ fn handle_ipc_request(
     request: BrokerIpcRequest,
 ) -> Result<Value, AcpBrokerProcessError> {
     match request.method.as_str() {
-        "snapshot" => Ok(json!(lock_runtime(runtime).broker.snapshot())),
+        "snapshot" => Ok(broker_snapshot(runtime)),
         "attach" => broker_attach(runtime, request.params),
         "send" => broker_send(runtime, request.params),
         "notify" => broker_notify(runtime, request.params),
@@ -419,6 +444,15 @@ fn handle_ipc_request(
             format!("broker method not found: {}", request.method),
         )),
     }
+}
+
+fn broker_snapshot(runtime: &Runtime) -> Value {
+    let state = lock_runtime(runtime);
+    let mut snapshot = json!(state.broker.snapshot());
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert("adapterExited".to_string(), json!(state.adapter_exited));
+    }
+    snapshot
 }
 
 fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {

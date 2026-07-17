@@ -1635,7 +1635,17 @@ extension ACPSessionRunner {
                             // at the head with lastError so the bubble shows
                             // Retry. Cancelled queued sends had the item
                             // discarded elsewhere (steer) and don't surface.
-                            self.session.setQueueHeadError(errorMessage)
+                            let terminalBrokerFailure: Bool = {
+                                guard brokerOperationKey != nil else { return false }
+                                if case ACPClientError.jsonrpc = error {
+                                    return true
+                                }
+                                return false
+                            }()
+                            self.session.setQueueHeadError(
+                                errorMessage,
+                                advancesBrokerOperationAttempt: terminalBrokerFailure
+                            )
                             self.persistQueue()
                         } else if queuedItemId != nil, authReason != nil {
                             self.session.restoreQueue(self.session.queue)

@@ -164,14 +164,35 @@ struct ACPSessionRunnerQueueTests {
             throw ACPClientError.noScript(method: "session/prompt")  // any throw
         }
         session.enqueue(blocks: [.text("will-fail")])
+        let operationKey = session.queue[0].brokerOperationKey
         runner.persistQueue()
         runner.flushQueueIfIdle()
         try await Task.sleep(nanoseconds: 200_000_000)
         #expect(session.queue.count == 1)
         #expect(session.queue[0].status == .pending)
         #expect(session.queue[0].lastError != nil)
+        #expect(session.queue[0].brokerOperationKey == operationKey)
         let persisted = try store.loadQueue(sessionId: "s")
         #expect(persisted == session.queue)
+    }
+
+    @Test("terminal queued failure advances broker operation key before retry")
+    func terminalQueuedFailureAdvancesBrokerOperationKey() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32042, message: "terminal", data: nil))
+        }
+        session.enqueue(blocks: [.text("will-fail-terminally")])
+        let operationKey = session.queue[0].brokerOperationKey
+
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
+        #expect(session.queue[0].lastError != nil)
+        #expect(session.queue[0].brokerOperationKey != operationKey)
     }
 
     @Test(".steer while streaming with queue → cancel sent, queue cleared, new prompt sent, snapshot captured")
