@@ -98,7 +98,8 @@ enum ACPLaunchCatalog {
                 binary: ACPManagedAdapterDescriptor.pi.binaryName,
                 npmPackage: ACPManagedAdapterDescriptor.pi.packageName),
             supportsModelSelection: false,
-            supportsModeSelection: false),
+            supportsModeSelection: false,
+            mcpInjection: .external(hint: "Pi ignores ACP MCP config. Alas tools work via the alas CLI; other MCP servers need the pi-mcp-adapter extension.")),
     ]
 
     static func spec(for agentID: String) -> ACPLaunchSpec? {

@@ -1,5 +1,13 @@
 import Foundation
 
+/// How an adapter receives MCP servers. Most honor the `mcpServers`
+/// payload in ACP `session/new`; `.external` adapters ignore it and need
+/// agent-side setup (config files, plugins) instead.
+enum ACPMCPInjectionSupport: Equatable {
+    case sessionNew
+    case external(hint: String)
+}
+
 struct ACPLaunchSpec: Equatable {
     let agentID: String
     let command: String
@@ -8,6 +16,7 @@ struct ACPLaunchSpec: Equatable {
     let setupCheck: ACPSetupCheck
     let supportsModelSelection: Bool
     let supportsModeSelection: Bool
+    let mcpInjection: ACPMCPInjectionSupport
     let remoteNodeBinDirectory: String?
 
     init(
@@ -18,6 +27,7 @@ struct ACPLaunchSpec: Equatable {
         setupCheck: ACPSetupCheck,
         supportsModelSelection: Bool,
         supportsModeSelection: Bool,
+        mcpInjection: ACPMCPInjectionSupport = .sessionNew,
         remoteNodeBinDirectory: String? = nil
     ) {
         self.agentID = agentID
@@ -27,6 +37,7 @@ struct ACPLaunchSpec: Equatable {
         self.setupCheck = setupCheck
         self.supportsModelSelection = supportsModelSelection
         self.supportsModeSelection = supportsModeSelection
+        self.mcpInjection = mcpInjection
         self.remoteNodeBinDirectory = remoteNodeBinDirectory
     }
 
@@ -56,6 +67,19 @@ struct ACPLaunchSpec: Equatable {
             setupCheck: setupCheck,
             supportsModelSelection: supportsModelSelection,
             supportsModeSelection: supportsModeSelection,
+            mcpInjection: mcpInjection,
+            remoteNodeBinDirectory: remoteNodeBinDirectory)
+    }
+
+    /// A copy of this spec with `env` overlaid onto `extraEnv` (new keys win).
+    func mergingExtraEnv(_ env: [String: String]) -> ACPLaunchSpec {
+        ACPLaunchSpec(
+            agentID: agentID, command: command, arguments: arguments,
+            extraEnv: extraEnv.merging(env) { _, new in new },
+            setupCheck: setupCheck,
+            supportsModelSelection: supportsModelSelection,
+            supportsModeSelection: supportsModeSelection,
+            mcpInjection: mcpInjection,
             remoteNodeBinDirectory: remoteNodeBinDirectory)
     }
 }
