@@ -4790,20 +4790,22 @@ final class AppState {
             )
         }
         mgr.externalMCPStatusProvider = { [weak self] worktreePath in
-            guard let self else { return (.unknown, nil) }
+            guard let self else { return (.unknown, nil, []) }
             let adapterState = PiMCPAdapterInspector.state()
-            guard adapterState == .installed else { return (adapterState, nil) }
             let project = self.projects.first(where: { $0.id == worktree.projectId })
             let servers = project?.mcpServers ?? []
-            let fingerprint = MCPAttachmentPlanner.configurationFingerprint(for: servers)
             let worktreeURL = URL(fileURLWithPath: worktreePath)
-            // pi-mcp-adapter reads the resolved wire config, not the raw
-            // project definitions, so ${WORKTREE_DIR}/${PROJECT_DIR}
-            // templates are interpolated exactly as the normal ACP
-            // session/new attach path does. Unlike that path, http/sse are
-            // force-enabled here: pi-mcp-adapter supports them even though
-            // pi-acp's own ACP layer reports them unsupported, so this must
-            // not drop those servers.
+            // Resolved unconditionally — even when the adapter is not
+            // (yet) installed — so the preamble can name the project's
+            // servers regardless of adapter state ("not installed" wording
+            // still lists them). pi-mcp-adapter reads the resolved wire
+            // config, not the raw project definitions, so
+            // ${WORKTREE_DIR}/${PROJECT_DIR} templates are interpolated
+            // exactly as the normal ACP session/new attach path does.
+            // Unlike that path, http/sse are force-enabled here:
+            // pi-mcp-adapter supports them even though pi-acp's own ACP
+            // layer reports them unsupported, so this must not drop those
+            // servers.
             let plan = MCPAttachmentPlanner.plan(.init(
                 configuredServers: servers,
                 projectDirectory: project?.path ?? worktreePath,
@@ -4811,6 +4813,9 @@ final class AppState {
                 environment: ACPProcessEnvironment.sanitizedForACP(extra: [:]),
                 capabilities: ACPMCPServerCapabilities(http: true, sse: true)
             ))
+            let userServerNames = plan.wireServers.map(\.name)
+            guard adapterState == .installed else { return (adapterState, nil, userServerNames) }
+            let fingerprint = MCPAttachmentPlanner.configurationFingerprint(for: servers)
             let configOutcome: PiMCPConfigWriter.Outcome
             do {
                 configOutcome = try PiMCPConfigWriter.sync(
@@ -4824,7 +4829,7 @@ final class AppState {
             if configOutcome == .wrote {
                 await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
             }
-            return (adapterState, configOutcome)
+            return (adapterState, configOutcome, userServerNames)
         }
         acpManagers[worktree.id] = mgr
         acpHarnessBridge.attach(manager: mgr)

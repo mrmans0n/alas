@@ -68,7 +68,7 @@ struct ACPMCPPromptPreambleTests {
     func cliMode() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: true, isDelegated: false, userServerNames: [],
-            mode: .cli(adapterInstalled: false)))
+            mode: .cli(serverAvailability: .notInstalled)))
         #expect(text.contains("alas open"))
         #expect(text.contains("alas wt list"))
         #expect(text.contains("alas review"))
@@ -82,26 +82,45 @@ struct ACPMCPPromptPreambleTests {
     func cliModeDelegated() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: true, isDelegated: true, userServerNames: [],
-            mode: .cli(adapterInstalled: false)))
+            mode: .cli(serverAvailability: .notInstalled)))
         #expect(text.contains("alas session send"))
         #expect(!text.contains("alas session new"))
         #expect(text.contains("delegated by a parent session"))
     }
 
-    @Test("cli mode user servers depend on adapter state")
+    @Test("cli mode user servers depend on adapter server availability")
     func cliModeUserServers() throws {
-        let installed = try #require(ACPMCPPromptPreamble.text(
+        let available = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
-            mode: .cli(adapterInstalled: true)))
-        #expect(installed.contains("mcp()"))
-        #expect(installed.contains("pi-mcp-adapter"))
-        #expect(installed.contains("linear"))
+            mode: .cli(serverAvailability: .available)))
+        #expect(available.contains("mcp()"))
+        #expect(available.contains("pi-mcp-adapter"))
+        #expect(available.contains("linear"))
 
-        let missing = try #require(ACPMCPPromptPreamble.text(
+        let notInstalled = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
-            mode: .cli(adapterInstalled: false)))
-        #expect(missing.contains("cannot be reached"))
-        #expect(missing.contains("pi-mcp-adapter"))
+            mode: .cli(serverAvailability: .notInstalled)))
+        #expect(notInstalled.contains("cannot be reached"))
+        #expect(notInstalled.contains("pi-mcp-adapter"))
+
+        let syncFailed = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            mode: .cli(serverAvailability: .syncFailed)))
+        #expect(syncFailed.contains("linear"))
+        #expect(syncFailed.contains("could not write .pi/mcp.json"))
+
+        let userManaged = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            mode: .cli(serverAvailability: .userManaged)))
+        #expect(userManaged.contains("linear"))
+        #expect(userManaged.contains("existing .pi/mcp.json"))
+        #expect(userManaged.contains("Alas did not add them"))
+
+        let noServers = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [],
+            mode: .cli(serverAvailability: .noServers)))
+        #expect(!noServers.contains("Additional MCP servers"))
+        #expect(!noServers.contains("This project configures"))
     }
 
     @Test("default mode is unchanged mcp wording")

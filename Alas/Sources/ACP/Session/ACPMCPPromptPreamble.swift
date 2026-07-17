@@ -10,7 +10,7 @@ import Foundation
 /// names.
 enum ACPMCPPreambleMode: Equatable {
     case mcp
-    case cli(adapterInstalled: Bool)
+    case cli(serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability)
 }
 
 /// Builds the one-time, wire-only context preamble injected into the first
@@ -44,12 +44,12 @@ enum ACPMCPPromptPreamble {
                 builtInInjected: builtInInjected,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames)
-        case .cli(let adapterInstalled):
+        case .cli(let serverAvailability):
             return cliText(
                 builtInInjected: builtInInjected,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
-                adapterInstalled: adapterInstalled)
+                serverAvailability: serverAvailability)
         }
     }
 
@@ -96,12 +96,12 @@ enum ACPMCPPromptPreamble {
         builtInInjected: Bool,
         isDelegated: Bool,
         userServerNames: [String],
-        adapterInstalled: Bool
+        serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
         var intro = "This session runs inside Alas, the user's macOS workspace app."
-        if adapterInstalled, !userServerNames.isEmpty {
+        if serverAvailability == .available, !userServerNames.isEmpty {
             intro += " MCP tools may be deferred behind tool search — they ARE "
                 + "available; use your tool discovery/search mechanism to load them."
         }
@@ -126,15 +126,25 @@ enum ACPMCPPromptPreamble {
             lines.append(line)
         }
         if !userServerNames.isEmpty {
-            if adapterInstalled {
+            let names = userServerNames.joined(separator: ", ")
+            switch serverAvailability {
+            case .available:
                 lines.append("Additional MCP servers are available through the "
-                    + "`mcp()` tool (pi-mcp-adapter): "
-                    + userServerNames.joined(separator: ", ") + ".")
-            } else {
-                lines.append("This project configures MCP servers ("
-                    + userServerNames.joined(separator: ", ")
-                    + ") that cannot be reached until the pi-mcp-adapter extension "
+                    + "`mcp()` tool (pi-mcp-adapter): \(names).")
+            case .notInstalled:
+                lines.append("This project configures MCP servers (\(names)) "
+                    + "that cannot be reached until the pi-mcp-adapter extension "
                     + "is installed.")
+            case .syncFailed:
+                lines.append("This project configures MCP servers (\(names)), "
+                    + "but Alas could not write .pi/mcp.json, so they may not "
+                    + "be reachable.")
+            case .userManaged:
+                lines.append("This project configures MCP servers (\(names)), "
+                    + "but an existing .pi/mcp.json governs pi's MCP config, so "
+                    + "Alas did not add them — they may not be present.")
+            case .noServers:
+                break
             }
         }
         lines.append("</alas-workspace-context>")

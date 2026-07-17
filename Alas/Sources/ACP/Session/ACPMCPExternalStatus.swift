@@ -4,16 +4,47 @@ import Foundation
 /// `session/new` MCP config) for the most recent attach. Runtime-only —
 /// recomputed every attach, never persisted.
 struct ACPMCPExternalStatus: Equatable {
+    /// Availability of the project's MCP servers through the external
+    /// adapter, distinguishing *why* they may not be reachable.
+    enum AdapterServerAvailability: Equatable {
+        /// Alas wrote/maintains a managed `.pi/mcp.json` with the servers.
+        case available
+        /// pi-mcp-adapter extension absent.
+        case notInstalled
+        /// Installed, but Alas could not write `.pi/mcp.json`.
+        case syncFailed
+        /// Installed, but an unmanaged `.pi/mcp.json` exists — Alas did not
+        /// write the project's servers into it.
+        case userManaged
+        /// Installed, but there is nothing to provide.
+        case noServers
+    }
+
     let cliActive: Bool
     let adapterState: PiMCPAdapterInspector.State
     let configOutcome: PiMCPConfigWriter.Outcome?
     let hint: String
+    /// The project's `.external`-plan (all-transports) MCP server names,
+    /// resolved regardless of adapter/config state so the preamble can name
+    /// them even when they are not (yet) reachable.
+    let userServerNames: [String]
 
     var adapterInstalled: Bool { adapterState == .installed }
 
-    /// True when the adapter is installed AND the last `.pi/mcp.json` sync
-    /// actually succeeded — a failed write means user MCP servers are not
-    /// reachable through pi-mcp-adapter even though the extension itself is
-    /// present.
-    var adapterServersAvailable: Bool { adapterState == .installed && configOutcome != .failed }
+    /// Precise reason the project's MCP servers are (or are not) reachable
+    /// through the external adapter.
+    var adapterServerAvailability: AdapterServerAvailability {
+        guard adapterState == .installed else { return .notInstalled }
+        switch configOutcome {
+        case .wrote?, .unchanged?: return .available
+        case .failed?: return .syncFailed
+        case .refusedUnmanaged?: return .userManaged
+        case .removedManaged?, .noServers?, nil: return .noServers
+        }
+    }
+
+    /// True only when the adapter is installed AND Alas actually wrote (or
+    /// confirmed unchanged) the managed `.pi/mcp.json` — i.e. the project's
+    /// servers are genuinely reachable through pi-mcp-adapter.
+    var adapterServersAvailable: Bool { adapterServerAvailability == .available }
 }

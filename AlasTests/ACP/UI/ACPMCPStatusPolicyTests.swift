@@ -86,40 +86,46 @@ struct ACPMCPStatusPolicyTests {
             statuses: [.init(id: "a", name: "alas", transport: .stdio, disposition: .requested)],
             configurationFingerprint: "fp")
 
-        let installed = try #require(ACPMCPStatusState(
+        let available = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: true, adapterState: .installed,
-                                  configOutcome: .wrote, hint: "h")))
-        let rows = try #require(installed.externalRows)
+                                  configOutcome: .wrote, hint: "h", userServerNames: ["linear"])))
+        let rows = try #require(available.externalRows)
         #expect(rows.count == 2)
         #expect(rows[0].detail == "via alas CLI (environment injected)")
         #expect(rows[1].detail == "via pi-mcp-adapter")
-        #expect(installed.showsAdapterInstallAction == false)
+        #expect(rows[1].isRequested == true)
+        #expect(available.showsAdapterInstallAction == false)
 
-        let missing = try #require(ACPMCPStatusState(
+        let notInstalled = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: false, adapterState: .missing,
-                                  configOutcome: nil, hint: "h")))
-        let mrows = try #require(missing.externalRows)
+                                  configOutcome: nil, hint: "h", userServerNames: ["linear"])))
+        let mrows = try #require(notInstalled.externalRows)
         #expect(mrows[0].detail == "unavailable (Alas CLI not injected)")
         #expect(mrows[1].detail == "requires the pi-mcp-adapter extension")
-        #expect(missing.showsAdapterInstallAction == true)
+        #expect(mrows[1].isRequested == false)
+        #expect(notInstalled.showsAdapterInstallAction == true)
 
-        let unmanaged = try #require(ACPMCPStatusState(
+        let userManaged = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: true, adapterState: .installed,
-                                  configOutcome: .refusedUnmanaged, hint: "h")))
-        #expect(try #require(unmanaged.externalRows)[1].detail == "using your existing .pi/mcp.json")
+                                  configOutcome: .refusedUnmanaged, hint: "h", userServerNames: ["linear"])))
+        let userManagedRows = try #require(userManaged.externalRows)
+        #expect(userManagedRows[1].detail == "using your existing .pi/mcp.json")
+        #expect(userManagedRows[1].isRequested == false)
+        // an unmanaged file means the extension IS installed — no install action
+        #expect(userManaged.showsAdapterInstallAction == false)
 
-        let failedSync = try #require(ACPMCPStatusState(
+        let syncFailed = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: true, adapterState: .installed,
-                                  configOutcome: .failed, hint: "h")))
-        let failedRows = try #require(failedSync.externalRows)
+                                  configOutcome: .failed, hint: "h", userServerNames: ["linear"])))
+        let failedRows = try #require(syncFailed.externalRows)
         #expect(failedRows[1].detail == "config sync failed — see logs")
         #expect(failedRows[1].isRequested == false)
         // the adapter extension itself is installed, so no install action
-        #expect(failedSync.showsAdapterInstallAction == false)
+        #expect(syncFailed.showsAdapterInstallAction == false)
 
         // no external status → unchanged classic behavior
         let classic = try #require(ACPMCPStatusState(summary: summary, currentServers: []))

@@ -43,7 +43,11 @@ final class ACPSessionManager: ObservableObject {
     /// attach, after the built-in MCP composition, so `attach` can populate
     /// `session.mcpExternalStatus` before the first-prompt preamble is built.
     typealias ExternalMCPStatusProvider = @MainActor (_ worktreePath: String) async
-        -> (adapterState: PiMCPAdapterInspector.State, configOutcome: PiMCPConfigWriter.Outcome?)
+        -> (
+            adapterState: PiMCPAdapterInspector.State,
+            configOutcome: PiMCPConfigWriter.Outcome?,
+            userServerNames: [String]
+        )
 
     let instanceId: String
     let pid: Int64
@@ -2369,7 +2373,8 @@ extension ACPSessionManager {
                         cliActive: cliEnvActive,
                         adapterState: external?.adapterState ?? .unknown,
                         configOutcome: external?.configOutcome,
-                        hint: hint
+                        hint: hint,
+                        userServerNames: external?.userServerNames ?? []
                     )
                 } else {
                     // Remote pi session: the worktree lives on the remote host, so
@@ -2380,7 +2385,8 @@ extension ACPSessionManager {
                         cliActive: false,
                         adapterState: .unknown,
                         configOutcome: nil,
-                        hint: hint
+                        hint: hint,
+                        userServerNames: []
                     )
                 }
             } else {
@@ -2625,13 +2631,22 @@ extension ACPSessionManager {
                 }
             }
             if createdFreshRemoteSession {
-                let userServerNames = wireMCPServers.map(\.name)
-                    .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
                 let preambleMode: ACPMCPPreambleMode
+                let userServerNames: [String]
                 if case .external = spec.mcpInjection {
-                    let adapterInstalled = session.mcpExternalStatus?.adapterServersAvailable == true
-                    preambleMode = .cli(adapterInstalled: adapterInstalled)
+                    // The `.external` (pi) status provider resolves an
+                    // all-transports plan (http/sse force-enabled) because
+                    // pi-mcp-adapter — unlike pi-acp's own ACP MCP support —
+                    // can reach those transports. `wireMCPServers` here was
+                    // planned against pi's real (http/sse-less)
+                    // capabilities and would drop them, so the preamble must
+                    // use the external status's resolved names instead.
+                    userServerNames = session.mcpExternalStatus?.userServerNames ?? []
+                    let serverAvailability = session.mcpExternalStatus?.adapterServerAvailability ?? .notInstalled
+                    preambleMode = .cli(serverAvailability: serverAvailability)
                 } else {
+                    userServerNames = wireMCPServers.map(\.name)
+                        .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
                     preambleMode = .mcp
                 }
                 let preamble = ACPMCPPromptPreamble.text(

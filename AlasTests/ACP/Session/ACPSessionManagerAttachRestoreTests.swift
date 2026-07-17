@@ -233,7 +233,7 @@ struct ACPSessionManagerAttachRestoreTests {
         var providerCalled = false
         manager.externalMCPStatusProvider = { _ in
             providerCalled = true
-            return (adapterState: .installed, configOutcome: .wrote)
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [])
         }
 
         await manager.attach(to: session.id, freshlyCreated: true)
@@ -241,6 +241,41 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(providerCalled)
         #expect(session.mcpExternalStatus?.adapterState == .installed)
         #expect(session.mcpExternalStatus?.configOutcome == .wrote)
+    }
+
+    @Test("pi attach preamble names http/sse-only servers from the external plan")
+    func piAttachPreambleNamesExternalPlanServers() async throws {
+        // Regression guard: `wireMCPServers` is planned against pi's real
+        // (http/sse-less) ACP capabilities and would drop an http/sse-only
+        // server, but `.pi/mcp.json` is written from the external plan's
+        // all-transports resolution and DOES include it. The preamble must
+        // use the external status's resolved names, not `wireMCPServers`,
+        // or it silently omits the `mcp()` hint for exactly the servers
+        // this feature exists to surface.
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+        manager.externalMCPStatusProvider = { _ in
+            (adapterState: .installed, configOutcome: .wrote, userServerNames: ["docs-http"])
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("docs-http"))
+        #expect(preamble.contains("mcp()"))
     }
 
     @Test("remote pi attach skips the external MCP status provider")
@@ -265,7 +300,7 @@ struct ACPSessionManagerAttachRestoreTests {
         var providerCalled = false
         manager.externalMCPStatusProvider = { _ in
             providerCalled = true
-            return (adapterState: .installed, configOutcome: .wrote)
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [])
         }
 
         await manager.attach(to: session.id, freshlyCreated: true)

@@ -54,20 +54,33 @@ struct ACPMCPStatusState: Equatable {
                     ? "via alas CLI (environment injected)"
                     : "unavailable (Alas CLI not injected)",
                 isRequested: externalStatus.cliActive)
+            let availability = externalStatus.adapterServerAvailability
             let adapterDetail: String
-            switch (externalStatus.adapterState, externalStatus.configOutcome) {
-            case (.installed, .refusedUnmanaged?): adapterDetail = "using your existing .pi/mcp.json"
-            case (.installed, .failed?): adapterDetail = "config sync failed — see logs"
-            case (.installed, _): adapterDetail = "via pi-mcp-adapter"
-            case (.missing, _), (.unknown, _): adapterDetail = "requires the pi-mcp-adapter extension"
+            let adapterIsRequested: Bool
+            switch availability {
+            case .available:
+                adapterDetail = "via pi-mcp-adapter"
+                adapterIsRequested = true
+            case .userManaged:
+                adapterDetail = "using your existing .pi/mcp.json"
+                adapterIsRequested = false
+            case .syncFailed:
+                adapterDetail = "config sync failed — see logs"
+                adapterIsRequested = false
+            case .notInstalled:
+                adapterDetail = "requires the pi-mcp-adapter extension"
+                adapterIsRequested = false
+            case .noServers:
+                adapterDetail = "via pi-mcp-adapter"
+                adapterIsRequested = false
             }
             let adapterRow = Row(
                 id: "external-adapter", name: "user MCP servers",
                 transport: "pi-mcp-adapter",
                 detail: adapterDetail,
-                isRequested: externalStatus.adapterServersAvailable)
+                isRequested: adapterIsRequested)
             externalRows = [cliRow, adapterRow]
-            showsAdapterInstallAction = externalStatus.adapterState != .installed
+            showsAdapterInstallAction = availability == .notInstalled
         } else {
             externalRows = nil
             showsAdapterInstallAction = false
