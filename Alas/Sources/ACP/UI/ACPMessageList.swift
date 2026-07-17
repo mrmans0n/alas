@@ -60,7 +60,12 @@ struct ACPMessageList: View {
     /// Minimum gap between automatic head-back steps so a single scroll
     /// doesn't decrement multiple times before layout settles.
     private let headStepDebounceInterval: TimeInterval = 0.3
-    private var scrollSpaceName: String { "acp-message-list-\(session.id)" }
+    /// A named coordinate space only needs to be unambiguous relative to its
+    /// nearest `.coordinateSpace(.named(...))` ancestor, and each
+    /// `ACPMessageList` instance declares its own locally, so a shared
+    /// constant here is safe even with multiple transcript lists mounted at
+    /// once (e.g. across windows).
+    private static let scrollSpaceName = "acp-message-list"
 
     /// Window-sliced, plan-filtered list of rows to render. The slice
     /// bounds first-paint cost on long transcripts (`visibleHead` is
@@ -228,7 +233,7 @@ struct ACPMessageList: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.openURL, openTranscriptURLAction)
                 }
-                .coordinateSpace(.named(scrollSpaceName))
+                .coordinateSpace(.named(Self.scrollSpaceName))
                 .modifier(ACPTranscriptScrollTracking(
                     isRestoring: { scrollBook.isRestoringTail },
                     onResolveScrollView: { scrollViewRef.scrollView = $0 },
@@ -611,7 +616,7 @@ struct ACPMessageList: View {
         GeometryReader { rowGeometry in
             Color.clear.preference(
                 key: ACPRowFramesPreferenceKey.self,
-                value: [id: rowGeometry.frame(in: .named(scrollSpaceName))]
+                value: [id: rowGeometry.frame(in: .named(Self.scrollSpaceName))]
             )
         }
     }
@@ -619,7 +624,7 @@ struct ACPMessageList: View {
     @available(macOS 15, *)
     private func modernRowFrameReporter(id: String) -> some View {
         Color.clear.onGeometryChange(for: CGRect.self) { rowGeometry in
-            rowGeometry.frame(in: .named(scrollSpaceName))
+            rowGeometry.frame(in: .named(Self.scrollSpaceName))
         } action: { frame in
             handleModernRowFrame(id: id, frame: frame)
         }
@@ -638,7 +643,7 @@ struct ACPMessageList: View {
         GeometryReader { headGeom in
             Color.clear.preference(
                 key: ACPHeadFramePreferenceKey.self,
-                value: headGeom.frame(in: .named(scrollSpaceName))
+                value: headGeom.frame(in: .named(Self.scrollSpaceName))
             )
         }
         .frame(height: 1)
