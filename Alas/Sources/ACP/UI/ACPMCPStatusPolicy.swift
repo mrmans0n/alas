@@ -32,8 +32,6 @@ struct ACPMCPStatusState: Equatable {
             return nil
         }
 
-        requestedCount = summary.statuses.count { $0.disposition == .requested }
-        skippedCount = summary.statuses.count - requestedCount
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)
         rows = summary.statuses.map(Self.row)
@@ -79,10 +77,15 @@ struct ACPMCPStatusState: Equatable {
                 transport: "pi-mcp-adapter",
                 detail: adapterDetail,
                 isRequested: adapterIsRequested)
-            externalRows = [cliRow, adapterRow]
+            let rows = [cliRow, adapterRow]
+            externalRows = rows
+            requestedCount = rows.count(where: \.isRequested)
+            skippedCount = rows.count - requestedCount
             showsAdapterInstallAction = availability == .notInstalled
         } else {
             externalRows = nil
+            requestedCount = summary.statuses.count { $0.disposition == .requested }
+            skippedCount = summary.statuses.count - requestedCount
             showsAdapterInstallAction = false
         }
     }

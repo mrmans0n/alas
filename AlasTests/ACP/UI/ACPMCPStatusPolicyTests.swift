@@ -95,6 +95,8 @@ struct ACPMCPStatusPolicyTests {
         #expect(rows[0].detail == "via alas CLI (environment injected)")
         #expect(rows[1].detail == "via pi-mcp-adapter")
         #expect(rows[1].isRequested == true)
+        #expect(available.requestedCount == 2)
+        #expect(available.skippedCount == 0)
         #expect(available.showsAdapterInstallAction == false)
 
         let notInstalled = try #require(ACPMCPStatusState(
@@ -105,6 +107,8 @@ struct ACPMCPStatusPolicyTests {
         #expect(mrows[0].detail == "unavailable (Alas CLI not injected)")
         #expect(mrows[1].detail == "requires the pi-mcp-adapter extension")
         #expect(mrows[1].isRequested == false)
+        #expect(notInstalled.requestedCount == 0)
+        #expect(notInstalled.skippedCount == 2)
         #expect(notInstalled.showsAdapterInstallAction == true)
 
         let userManaged = try #require(ACPMCPStatusState(
