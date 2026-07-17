@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-07-17
+
+### ✨ Features
+
+- Support keyboard range selection in review flows (#822).
+
+### 🐛 Fixes
+
+- Prevent ACP transcript live-locks in the chat view (#823).
+- Auto-expand commit descriptions in the commit details tab (#824).
+- Render diff expansion actions inline (#820).
+- Improve the diff comment send button (#821).
+
 ## [0.11.3] - 2026-07-16
 
 ### ✨ Features
