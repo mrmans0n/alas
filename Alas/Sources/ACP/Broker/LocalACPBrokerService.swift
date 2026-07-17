@@ -75,6 +75,11 @@ actor LocalACPBrokerService {
         return try await client.sendACPBroker(params)
     }
 
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        try await verifyACPIfNeeded()
+        return try await client.notifyACPBroker(params)
+    }
+
     func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
         try await verifyACPIfNeeded()
         return try await client.respondACPBroker(params)

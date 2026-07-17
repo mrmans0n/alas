@@ -446,6 +446,10 @@ actor RemoteHelperClient {
         try await request(method: "acp/send", params: params, replaySubscriptionsOnStart: false)
     }
 
+    func notifyACPBroker(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/notify", params: params, replaySubscriptionsOnStart: false)
+    }
+
     func respondACPBroker(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
         try await request(method: "acp/respond", params: params, replaySubscriptionsOnStart: false)
     }

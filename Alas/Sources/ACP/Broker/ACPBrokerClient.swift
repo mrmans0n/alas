@@ -4,6 +4,7 @@ protocol ACPBrokerServicing: Sendable {
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK
     func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK
     func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK
     func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK
@@ -144,7 +145,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func notify(_ request: ACPRequest) async throws {
-        throw ACPClientError.decoding("Broker-backed ACP notifications are not supported yet: \(request.method)")
+        let generation = try currentGeneration()
+        _ = try await service.notify(ACPBrokerNotifyParams(
+            brokerId: brokerId,
+            generation: generation,
+            method: request.method,
+            params: try ACPBrokerJSONValue(encodable: request.params)
+        ))
+        try await attachAndReplay()
     }
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {

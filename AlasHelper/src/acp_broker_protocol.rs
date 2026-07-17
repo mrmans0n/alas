@@ -42,6 +42,15 @@ pub struct AcpSendParams {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpNotifyParams {
+    pub broker_id: BrokerId,
+    pub generation: BrokerGeneration,
+    pub method: String,
+    pub params: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpRespondParams {
     pub broker_id: BrokerId,
     pub generation: BrokerGeneration,
@@ -83,6 +92,7 @@ pub enum AcpBrokerMethod {
     Open,
     Attach,
     Send,
+    Notify,
     Respond,
     Ack,
     Detach,
@@ -96,6 +106,7 @@ impl AcpBrokerMethod {
             Self::Open => "acp/open",
             Self::Attach => "acp/attach",
             Self::Send => "acp/send",
+            Self::Notify => "acp/notify",
             Self::Respond => "acp/respond",
             Self::Ack => "acp/ack",
             Self::Detach => "acp/detach",

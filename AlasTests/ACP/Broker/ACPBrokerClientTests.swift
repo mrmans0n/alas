@@ -197,15 +197,22 @@ struct ACPBrokerClientTests {
         #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
     }
 
-    @Test func notifyFailsClosedUntilBrokerSupportsNotifications() async throws {
+    @Test func notifyUsesBrokerNotificationPath() async throws {
         let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
         await service.enqueueAttach(events: [])
         let client = makeClient(service: service)
         try await client.start()
 
-        await #expect(throws: ACPClientError.self) {
-            try await client.notify(ACPRequest(method: "session/cancel"))
-        }
+        try await client.notify(ACPRequest(
+            method: "session/cancel",
+            params: ACPSessionCancelParams(sessionId: "remote-1")
+        ))
+
+        let notified = try await #require(service.notified.first)
+        #expect(notified.method == "session/cancel")
+        #expect(notified.params == .object(["sessionId": .string("remote-1")]))
+        #expect(await service.attached.count == 2)
     }
 
     private func makeClient(
@@ -277,6 +284,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     var opened: [ACPBrokerOpenParams] = []
     var attached: [ACPBrokerAttachParams] = []
     var sent: [ACPBrokerSendParams] = []
+    var notified: [ACPBrokerNotifyParams] = []
     var responded: [ACPBrokerRespondParams] = []
     var acks: [ACPBrokerAckParams] = []
     var detached: [ACPBrokerDetachParams] = []
@@ -314,6 +322,11 @@ private actor MockBrokerService: ACPBrokerServicing {
                 pending: nil
             )
             : sendResults.removeFirst()
+    }
+
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        notified.append(params)
+        return ACPBrokerSimpleOK(ok: true)
     }
 
     func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {

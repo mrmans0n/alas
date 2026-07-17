@@ -3,8 +3,8 @@ use crate::acp_broker::{
     PendingClientRequestKind,
 };
 use crate::acp_broker_protocol::{
-    AcpAckParams, AcpAttachParams, AcpCloseParams, AcpDetachParams, AcpOpenParams, AcpOpenResult,
-    AcpRespondParams, AcpSendParams,
+    AcpAckParams, AcpAttachParams, AcpCloseParams, AcpDetachParams, AcpNotifyParams, AcpOpenParams,
+    AcpOpenResult, AcpRespondParams, AcpSendParams,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -93,6 +93,7 @@ pub fn handle_control_request(
         "acp/open" => acp_open(params),
         "acp/attach" => acp_attach(params),
         "acp/send" => acp_send(params),
+        "acp/notify" => acp_notify(params),
         "acp/respond" => acp_respond(params),
         "acp/ack" => acp_ack(params),
         "acp/detach" => acp_detach(params),
@@ -242,6 +243,16 @@ fn acp_send(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     Ok(result)
 }
 
+fn acp_notify(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
+    let params: AcpNotifyParams = decode(params)?;
+    let result = send_ipc(
+        &broker_dir(params.broker_id.as_str())?,
+        "notify",
+        serde_json::to_value(params).expect("notify params serialize"),
+    )?;
+    Ok(result)
+}
+
 fn acp_respond(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpRespondParams = decode(params)?;
     let result = send_ipc(
@@ -369,6 +380,7 @@ fn handle_ipc_request(
         "snapshot" => Ok(json!(lock_runtime(runtime).broker.snapshot())),
         "attach" => broker_attach(runtime, request.params),
         "send" => broker_send(runtime, request.params),
+        "notify" => broker_notify(runtime, request.params),
         "respond" => broker_respond(runtime, request.params),
         "ack" => broker_ack(runtime, request.params),
         "close" => {
@@ -451,6 +463,19 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
         &params.operation_key,
         Duration::from_secs(24 * 60 * 60),
     )
+}
+
+fn broker_notify(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
+    let params: AcpNotifyParams = decode(params)?;
+    {
+        let mut state = lock_runtime(runtime);
+        ensure_generation(&state, params.generation)?;
+        if params.method == "session/cancel" {
+            let _ = state.broker.set_turn_state(BrokerTurnState::Cancelling);
+        }
+    }
+    write_adapter_notification(runtime, &params.method, params.params)?;
+    Ok(json!({ "ok": true }))
 }
 
 fn broker_respond(
@@ -660,6 +685,19 @@ fn write_adapter_request(
         "params": params
     });
     write_adapter_line(runtime, &request)
+}
+
+fn write_adapter_notification(
+    runtime: &Runtime,
+    method: &str,
+    params: Value,
+) -> Result<(), AcpBrokerProcessError> {
+    let notification = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params
+    });
+    write_adapter_line(runtime, &notification)
 }
 
 fn write_adapter_response(

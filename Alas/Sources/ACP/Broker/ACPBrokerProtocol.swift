@@ -344,6 +344,13 @@ struct ACPBrokerSendParams: Codable, Equatable, Sendable {
     let params: ACPBrokerJSONValue
 }
 
+struct ACPBrokerNotifyParams: Codable, Equatable, Sendable {
+    let brokerId: ACPBrokerID
+    let generation: ACPBrokerGeneration
+    let method: String
+    let params: ACPBrokerJSONValue
+}
+
 struct ACPBrokerSendResult: Codable, Equatable, Sendable {
     let requestId: ACPBrokerAdapterRequestID
     let replayed: Bool

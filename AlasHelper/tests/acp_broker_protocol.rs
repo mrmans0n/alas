@@ -376,6 +376,7 @@ fn protocol_dtos_use_stable_wire_field_names() {
     assert_eq!(AcpBrokerMethod::Open.as_str(), "acp/open");
     assert_eq!(AcpBrokerMethod::Attach.as_str(), "acp/attach");
     assert_eq!(AcpBrokerMethod::Send.as_str(), "acp/send");
+    assert_eq!(AcpBrokerMethod::Notify.as_str(), "acp/notify");
     assert_eq!(AcpBrokerMethod::Respond.as_str(), "acp/respond");
     assert_eq!(AcpBrokerMethod::Ack.as_str(), "acp/ack");
     assert_eq!(AcpBrokerMethod::Detach.as_str(), "acp/detach");
