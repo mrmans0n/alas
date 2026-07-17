@@ -4,6 +4,30 @@ import Testing
 
 @MainActor
 struct ACPBrokerClientTests {
+    // Regression: `JSONSerialization` returns every JSON number as an
+    // `NSNumber`, and bridging an `NSNumber` to `Bool` succeeds for any value
+    // equal to 0 or 1. The broker re-encoded outgoing request params through
+    // that bridge, so `initialize`'s `protocolVersion: 1` was rewritten to
+    // `true` and every ACP agent rejected the attach with -32602 Invalid params.
+    @Test func encodableIntegerParamsSurviveAsNumbers() throws {
+        struct Payload: Encodable { let protocolVersion: Int }
+
+        #expect(try ACPBrokerJSONValue(encodable: Payload(protocolVersion: 1))
+            == .object(["protocolVersion": .number(1)]))
+        #expect(try ACPBrokerJSONValue(encodable: Payload(protocolVersion: 0))
+            == .object(["protocolVersion": .number(0)]))
+        #expect(try ACPBrokerJSONValue(encodable: Payload(protocolVersion: 2))
+            == .object(["protocolVersion": .number(2)]))
+    }
+
+    // Guard the fix from over-correcting: genuine JSON booleans must stay bool.
+    @Test func encodableBooleansStayBooleans() throws {
+        struct Payload: Encodable { let enabled: Bool; let disabled: Bool }
+
+        #expect(try ACPBrokerJSONValue(encodable: Payload(enabled: true, disabled: false))
+            == .object(["enabled": .bool(true), "disabled": .bool(false)]))
+    }
+
     @Test func startOpensAndAttachesBroker() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])

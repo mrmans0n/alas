@@ -745,7 +745,7 @@ private extension ACPBrokerAdapterRequestID {
     }
 }
 
-private extension ACPBrokerJSONValue {
+extension ACPBrokerJSONValue {
     init(encodable value: Encodable?) throws {
         guard let value else {
             self = .null
@@ -764,14 +764,18 @@ private extension ACPBrokerJSONValue {
         switch jsonObject {
         case is NSNull:
             self = .null
-        case let value as Bool:
-            self = .bool(value)
-        case let value as Int:
-            self = .number(Double(value))
-        case let value as UInt:
-            self = .number(Double(value))
-        case let value as Double:
-            self = .number(value)
+        case let value as NSNumber:
+            // `JSONSerialization` boxes every JSON number *and* boolean as an
+            // `NSNumber`. Bridging that to `Bool` (`as Bool`) succeeds for any
+            // value equal to 0 or 1, so an integer `1` — e.g. `initialize`'s
+            // `protocolVersion` — would be misread as `true`. JSON booleans are
+            // backed by `CFBoolean`, which has a distinct `CFTypeID`; use it to
+            // tell real booleans apart from numbers before mapping.
+            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+                self = .bool(value.boolValue)
+            } else {
+                self = .number(value.doubleValue)
+            }
         case let value as String:
             self = .string(value)
         case let value as [Any]:
