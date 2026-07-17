@@ -313,6 +313,41 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.mcpExternalStatus?.configOutcome == nil)
     }
 
+    @Test("remote pi attach preserves configured MCP server names as unavailable")
+    func remotePiAttachPreservesConfiguredMCPServerNames() async throws {
+        let root = "/srv/task5-remote-external-mcp-names-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let configuredServers = [
+            ProjectMCPServer.stdio(name: "linear", command: "linear-mcp")
+        ]
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/pi/bin/pi-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            mcpProjectContextProvider: {
+                MCPProjectContext(projectDirectory: root, configuredServers: configuredServers)
+            }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(session.mcpExternalStatus?.userServerNames == ["linear"])
+        #expect(session.mcpExternalStatus?.adapterServerAvailability == .notInstalled)
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("linear"))
+        #expect(preamble.contains("cannot be reached"))
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
