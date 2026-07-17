@@ -12,7 +12,9 @@ struct ACPMCPStatusControl: View {
     private var status: ACPMCPStatusState? {
         ACPMCPStatusState(
             summary: session.mcpAttachmentSummary,
-            currentServers: currentServers
+            currentServers: currentServers,
+            preamblePending: session.pendingMCPPreamble != nil,
+            preambleSent: session.mcpPreambleSent
         )
     }
 
@@ -121,6 +123,20 @@ private struct ACPMCPStatusPopover: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
+            }
+
+            if let detail = status.preambleDetail {
+                Divider().background(theme.color("line"))
+                HStack(spacing: 7) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 10))
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                }
+                .foregroundStyle(theme.color("fg-muted"))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(width: 300)
