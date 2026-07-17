@@ -308,6 +308,28 @@ fn acknowledgement_prunes_events_without_reusing_cursors() {
 }
 
 #[test]
+fn acknowledgement_prunes_completed_operation_records() {
+    let mut broker = broker();
+    let key = OperationKey::new("prompt-1");
+    broker
+        .begin_operation(key.clone(), "session/prompt", json!({"prompt": "large"}))
+        .unwrap();
+    broker
+        .complete_operation(
+            &key,
+            AdapterRPCOutcome::result(json!({"stopReason": "end_turn"})),
+        )
+        .unwrap();
+
+    let completed_tail = broker.journal_tail();
+    assert_eq!(broker.snapshot().operations.len(), 1);
+
+    broker.ack(completed_tail).unwrap();
+    assert!(broker.snapshot().operations.is_empty());
+    assert_eq!(broker.journal_tail(), completed_tail);
+}
+
+#[test]
 fn pending_request_variants_are_snapshotted_and_answered_once() {
     let mut broker = broker();
     let variants = [

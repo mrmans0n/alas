@@ -721,8 +721,19 @@ fn handle_adapter_client_request(runtime: &Runtime, value: Value) {
         kind,
         json!({ "method": method, "params": params }),
     );
-    let _ = state.broker.set_turn_state(BrokerTurnState::AwaitingInput);
+    if pending_kind_awaits_user(kind) {
+        let _ = state.broker.set_turn_state(BrokerTurnState::AwaitingInput);
+    }
     condvar.notify_all();
+}
+
+fn pending_kind_awaits_user(kind: PendingClientRequestKind) -> bool {
+    matches!(
+        kind,
+        PendingClientRequestKind::Permission
+            | PendingClientRequestKind::Question
+            | PendingClientRequestKind::Elicitation
+    )
 }
 
 fn pending_kind(method: &str) -> PendingClientRequestKind {
@@ -1211,4 +1222,24 @@ fn domain_error(error: crate::acp_broker::BrokerError) -> AcpBrokerProcessError 
 
 fn broker_error(code: i64, message: impl Into<String>) -> AcpBrokerProcessError {
     AcpBrokerProcessError::new(code, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_user_facing_pending_requests_move_turn_to_awaiting_input() {
+        assert!(pending_kind_awaits_user(
+            PendingClientRequestKind::Permission
+        ));
+        assert!(pending_kind_awaits_user(PendingClientRequestKind::Question));
+        assert!(pending_kind_awaits_user(
+            PendingClientRequestKind::Elicitation
+        ));
+        assert!(!pending_kind_awaits_user(PendingClientRequestKind::File));
+        assert!(!pending_kind_awaits_user(
+            PendingClientRequestKind::Terminal
+        ));
+    }
 }

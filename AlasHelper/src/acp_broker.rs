@@ -283,6 +283,7 @@ struct OperationRecord {
     fingerprint: OperationFingerprint,
     adapter_request_id: AdapterRequestId,
     terminal_outcome: Option<AdapterRPCOutcome>,
+    completed_cursor: Option<EventCursor>,
 }
 
 #[derive(Clone, Debug)]
@@ -387,6 +388,7 @@ impl ACPBrokerState {
             fingerprint,
             adapter_request_id,
             terminal_outcome: None,
+            completed_cursor: None,
         };
         self.push_event(BrokerEventKind::OperationStarted {
             operation_key: operation_key.clone(),
@@ -427,10 +429,13 @@ impl ACPBrokerState {
         }
 
         record.terminal_outcome = Some(outcome.clone());
-        self.push_event(BrokerEventKind::OperationCompleted {
+        let cursor = self.push_event(BrokerEventKind::OperationCompleted {
             operation_key: operation_key.clone(),
             outcome: outcome.clone(),
         });
+        if let Some(record) = self.operations.get_mut(operation_key) {
+            record.completed_cursor = Some(cursor);
+        }
         Ok(outcome)
     }
 
@@ -516,6 +521,12 @@ impl ACPBrokerState {
         }
         self.acknowledged_cursor = cursor;
         self.journal.retain(|event| event.cursor > cursor);
+        self.operations.retain(|_, record| {
+            record
+                .completed_cursor
+                .map(|completed_cursor| completed_cursor > cursor)
+                .unwrap_or(true)
+        });
         Ok(())
     }
 
