@@ -203,6 +203,43 @@ fn helper_crash_during_prompt_preserves_completion_and_replays_events() {
 }
 
 #[test]
+fn prompt_streaming_update_returns_progress_before_turn_completion() {
+    let fixture = Fixture::new("prompt-progress");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-progress", 1));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    send(
+        &mut helper,
+        "broker-progress",
+        generation.clone(),
+        "initialize",
+        "init",
+        json!({}),
+    );
+    send(
+        &mut helper,
+        "broker-progress",
+        generation.clone(),
+        "session/new",
+        "session-new",
+        json!({}),
+    );
+
+    let progress = send(
+        &mut helper,
+        "broker-progress",
+        generation,
+        "session/prompt",
+        "prompt-progress",
+        json!({ "prompt": "stream before completion" }),
+    );
+
+    assert_eq!(progress["pending"], true);
+    assert!(progress.get("result").is_none(), "{progress}");
+}
+
+#[test]
 fn pending_permission_survives_helper_crash_and_can_be_answered_after_attach() {
     let fixture = Fixture::new("permission-crash");
     let mut helper = Helper::start(&fixture.home);
@@ -307,31 +344,14 @@ fn pending_permission_returns_before_prompt_completion_and_can_resume() {
         json!({}),
     );
 
-    let pending = send(
+    let attached = drive_until_pending_request(
         &mut helper,
         "broker-pending",
         generation.clone(),
-        "session/prompt",
         "prompt-permission",
         json!({ "prompt": "needs permission" }),
     );
-    assert_eq!(pending["pending"], true);
-
-    let attached = helper.request(
-        "acp/attach",
-        json!({
-            "brokerId": "broker-pending",
-            "generation": generation,
-            "acknowledgedCursor": 0
-        }),
-    );
-    assert!(
-        attached["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|event| event["kind"]["type"] == "pendingRequest")
-    );
+    assert!(attached_has_pending_request(&attached), "{attached}");
 
     let response = helper.request(
         "acp/respond",
@@ -381,15 +401,13 @@ fn string_permission_request_id_is_preserved_when_responding() {
         json!({}),
     );
 
-    let pending = send(
+    drive_until_pending_request(
         &mut helper,
         "broker-string-id",
         generation.clone(),
-        "session/prompt",
         "prompt-string-permission",
         json!({ "prompt": "needs string-permission" }),
     );
-    assert_eq!(pending["pending"], true);
 
     helper.request(
         "acp/respond",
@@ -436,15 +454,13 @@ fn failed_permission_response_is_sent_to_adapter_as_jsonrpc_error() {
         json!({}),
     );
 
-    let pending = send(
+    drive_until_pending_request(
         &mut helper,
         "broker-permission-error",
         generation.clone(),
-        "session/prompt",
         "prompt-string-permission",
         json!({ "prompt": "needs string-permission" }),
     );
-    assert_eq!(pending["pending"], true);
 
     helper.request(
         "acp/respond",
@@ -506,6 +522,66 @@ fn send(
             "params": params
         }),
     )
+}
+
+fn drive_until_pending_request(
+    helper: &mut Helper,
+    broker_id: &str,
+    generation: Value,
+    operation_key: &str,
+    params: Value,
+) -> Value {
+    let mut acknowledged_cursor = 0;
+    let mut last_attached = Value::Null;
+    for _ in 0..5 {
+        let progress = send(
+            helper,
+            broker_id,
+            generation.clone(),
+            "session/prompt",
+            operation_key,
+            params.clone(),
+        );
+        assert_eq!(progress["pending"], true, "{progress}");
+
+        last_attached = helper.request(
+            "acp/attach",
+            json!({
+                "brokerId": broker_id,
+                "generation": generation.clone(),
+                "acknowledgedCursor": acknowledged_cursor
+            }),
+        );
+        if attached_has_pending_request(&last_attached) {
+            return last_attached;
+        }
+
+        let journal_tail = last_attached["snapshot"]["journalTail"]
+            .as_u64()
+            .unwrap_or(acknowledged_cursor);
+        if journal_tail > acknowledged_cursor {
+            helper.request(
+                "acp/ack",
+                json!({
+                    "brokerId": broker_id,
+                    "generation": generation.clone(),
+                    "cursor": journal_tail
+                }),
+            );
+            acknowledged_cursor = journal_tail;
+        }
+    }
+    panic!("timed out waiting for pending request: {last_attached}");
+}
+
+fn attached_has_pending_request(attached: &Value) -> bool {
+    attached["events"].as_array().is_some_and(|events| {
+        events
+            .iter()
+            .any(|event| event["kind"]["type"] == "pendingRequest")
+    }) || attached["snapshot"]["pendingRequests"]
+        .as_array()
+        .is_some_and(|requests| !requests.is_empty())
 }
 
 struct Fixture {

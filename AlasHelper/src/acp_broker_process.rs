@@ -553,11 +553,13 @@ fn handle_adapter_stdout_line(runtime: &Runtime, line: &str) {
         handle_adapter_client_request(runtime, value);
     } else if let Some(method) = value.get("method").and_then(Value::as_str) {
         let params = value.get("params").cloned().unwrap_or(Value::Null);
-        let mut state = lock_runtime(runtime);
+        let (lock, condvar) = &*runtime.state;
+        let mut state = lock.lock().expect("broker state poisoned");
         if method == "session/update" {
             let _ = state.broker.set_turn_state(BrokerTurnState::Streaming);
         }
         state.broker.add_adapter_notification(method, params);
+        condvar.notify_all();
     }
 }
 
@@ -715,6 +717,13 @@ fn wait_for_operation_or_pending_input(
                     "pending": true
                 }));
             }
+            if has_replayable_progress(&state) {
+                return Ok(json!({
+                    "requestId": operation.adapter_request_id,
+                    "replayed": false,
+                    "pending": true
+                }));
+            }
         }
         let now = std::time::Instant::now();
         if now >= deadline {
@@ -728,6 +737,22 @@ fn wait_for_operation_or_pending_input(
             .expect("broker state poisoned");
         state = next_state;
     }
+}
+
+fn has_replayable_progress(state: &RuntimeState) -> bool {
+    let snapshot = state.broker.snapshot();
+    state
+        .broker
+        .replay_after_ack()
+        .into_iter()
+        .any(|event| match event.kind {
+            crate::acp_broker::BrokerEventKind::AdapterNotification { .. } => true,
+            crate::acp_broker::BrokerEventKind::PendingRequest { request } => snapshot
+                .pending_requests
+                .iter()
+                .any(|pending| pending.request_id == request.request_id),
+            _ => false,
+        })
 }
 
 fn write_adapter_request(

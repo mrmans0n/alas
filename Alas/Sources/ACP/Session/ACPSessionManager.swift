@@ -1570,6 +1570,7 @@ final class ACPSessionManager: ObservableObject {
             cwd: worktreePath,
             env: environment,
             operationKeyPrefix: "\(instanceId):\(sessionId):\(UUID().uuidString)",
+            initialBrokerGeneration: Self.brokerGeneration(from: persistedRows[sessionId]),
             initialAcknowledgedCursor: Self.brokerCursor(from: persistedRows[sessionId]),
             onDurableStateChanged: { [weak self] state in
                 Task { @MainActor [weak self] in
@@ -1591,6 +1592,11 @@ final class ACPSessionManager: ObservableObject {
         let raw = row?.acpBrokerAcknowledgedCursor ?? 0
         guard raw > 0 else { return ACPBrokerEventCursor(rawValue: 0) }
         return ACPBrokerEventCursor(rawValue: UInt64(raw))
+    }
+
+    private static func brokerGeneration(from row: ACPSessionRow?) -> ACPBrokerGeneration? {
+        guard let raw = row?.acpBrokerGeneration, raw > 0 else { return nil }
+        return ACPBrokerGeneration(rawValue: UInt64(raw))
     }
 
     private static func makeDefaultConnection(

@@ -28,6 +28,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let cwd: String
     private let env: [String: String]
     private let operationKeyPrefix: String
+    private let initialBrokerGeneration: ACPBrokerGeneration?
     private let onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)?
 
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
@@ -73,6 +74,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         cwd: String,
         env: [String: String],
         operationKeyPrefix: String,
+        initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) {
@@ -84,6 +86,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         self.cwd = cwd
         self.env = env
         self.operationKeyPrefix = operationKeyPrefix
+        self.initialBrokerGeneration = initialBrokerGeneration
         self.acknowledgedCursor = initialAcknowledgedCursor
         self.onDurableStateChanged = onDurableStateChanged
 
@@ -126,6 +129,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             cwd: cwd,
             env: env
         ))
+        if let initialBrokerGeneration,
+           initialBrokerGeneration != opened.snapshot.metadata.generation {
+            resetAcknowledgedCursor()
+        }
         setSnapshot(opened.snapshot)
         try await attachAndReplay()
         return opened
@@ -286,6 +293,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private func dispatchPendingRequest(_ request: ACPBrokerPendingRequest, cursor: ACPBrokerEventCursor) {
         guard let id = request.adapterRequestId.jsonRPCID else { return }
         stateLock.lock()
+        if pendingInboundCursors[id] != nil {
+            stateLock.unlock()
+            return
+        }
         pendingInboundCursors[id] = cursor
         stateLock.unlock()
 
@@ -506,6 +517,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return acknowledgedCursor
+    }
+
+    private func resetAcknowledgedCursor() {
+        stateLock.lock()
+        acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
+        stateLock.unlock()
     }
 
     private func currentOperationCompletionCursor(for operationKey: ACPBrokerOperationKey) -> ACPBrokerEventCursor? {

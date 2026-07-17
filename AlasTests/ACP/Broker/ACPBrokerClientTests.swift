@@ -40,6 +40,21 @@ struct ACPBrokerClientTests {
         #expect(last.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
+    @Test func startResetsInitialCursorWhenBrokerGenerationChanges() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        let client = makeClient(
+            service: service,
+            initialBrokerGeneration: ACPBrokerGeneration(rawValue: 6),
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        try await client.start()
+
+        let attachParams = try await #require(service.attached.first)
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+    }
+
     @Test func sendUsesBrokerOperationAndReturnsResult() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -391,6 +406,7 @@ struct ACPBrokerClientTests {
 
     private func makeClient(
         service: MockBrokerService,
+        initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) -> ACPBrokerClient {
@@ -403,6 +419,7 @@ struct ACPBrokerClientTests {
             cwd: "/repo",
             env: ["PATH": "/bin"],
             operationKeyPrefix: "op-prefix",
+            initialBrokerGeneration: initialBrokerGeneration,
             initialAcknowledgedCursor: initialAcknowledgedCursor,
             onDurableStateChanged: onDurableStateChanged
         )
