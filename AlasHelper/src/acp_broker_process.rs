@@ -1028,9 +1028,12 @@ fn spawn_broker_supervisor(dir: &Path) -> Result<(), AcpBrokerProcessError> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command
+    let mut child = command
         .spawn()
         .map_err(|error| broker_error(-32070, format!("broker spawn failed: {error}")))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
