@@ -163,11 +163,21 @@ final class ACPConnection: @unchecked Sendable {
         return result?.configOptions ?? []
     }
 
-    func prompt(sessionId: String, blocks: [ACPContentBlock], brokerOperationKey: String? = nil) async throws {
+    @discardableResult
+    func prompt(
+        sessionId: String,
+        blocks: [ACPContentBlock],
+        brokerOperationKey: String? = nil,
+        acknowledgeDurableConsumption: Bool = true
+    ) async throws -> ACPDurableConsumptionAcknowledgement? {
         let resp = try await client.send(ACPRequest(method: "session/prompt",
                                                     params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks),
                                                     brokerOperationKey: brokerOperationKey))
-        resp.acknowledgeDurableConsumption()
+        if acknowledgeDurableConsumption {
+            resp.acknowledgeDurableConsumption()
+            return nil
+        }
+        return resp.durableConsumptionAcknowledgement
     }
 
     func acknowledgeDurableSessionResponses() {

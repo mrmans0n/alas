@@ -1271,17 +1271,31 @@ extension ACPSessionRunner {
     /// swallowed — the same pattern as transcript persistence; surfacing
     /// would block the UI for a transient SQLite error and we'd rather
     /// lose a queue snapshot than the user's draft.
-    func persistQueue() {
+    func persistQueue(acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
         guard holdsLeaseForWrite() else { return }
         let items = session.queue
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertQueue(
-                sessionId: sessionId,
-                items: items,
-                fence: fence
-            )
+        if let acknowledgement {
+            enqueuePersistence({ persistence in
+                try await persistence.upsertQueue(
+                    sessionId: sessionId,
+                    items: items,
+                    fence: fence
+                )
+            }, completion: { persisted in
+                if persisted == true {
+                    acknowledgement()
+                }
+            })
+        } else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.upsertQueue(
+                    sessionId: sessionId,
+                    items: items,
+                    fence: fence
+                )
+            }
         }
     }
 
@@ -1588,10 +1602,11 @@ extension ACPSessionRunner {
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
-                try await self.connection.prompt(
+                let promptAcknowledgement = try await self.connection.prompt(
                     sessionId: remoteId,
                     blocks: wireBlocks,
-                    brokerOperationKey: brokerOperationKey
+                    brokerOperationKey: brokerOperationKey,
+                    acknowledgeDurableConsumption: queuedItemId == nil
                 )
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
@@ -1609,7 +1624,7 @@ extension ACPSessionRunner {
                     if isActivePrompt {
                         if queuedItemId != nil {
                             _ = self.session.popQueueHead()
-                            self.persistQueue()
+                            self.persistQueue(acknowledging: promptAcknowledgement)
                         }
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
