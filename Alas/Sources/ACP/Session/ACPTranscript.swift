@@ -44,6 +44,13 @@ final class ACPTranscript: ObservableObject {
     /// stableId + StreamingText identity equality keep the ForEach row
     /// tree stable across ticks.
     @Published var streamingTick: UInt32 = 0
+    /// Wall-clock time (`ProcessInfo.systemUptime`) of the last `streamingTick`
+    /// publish. Used to throttle publishes to `streamingTickMinInterval`.
+    private var lastStreamingTickPublish: TimeInterval = 0
+    /// Pending trailing-edge publish scheduled when a chunk arrives inside
+    /// the throttle window. Guarantees the last chunk of a fast burst still
+    /// produces a publish even if no further chunk arrives to trigger one.
+    private var streamingTickDrain: Task<Void, Never>?
     /// True while post-hydration tail-first backfill is materialising older
     /// persisted rows. This is separate from `visibleHead`: a non-zero head
     /// means older rows are available behind the render window, not that an
@@ -112,6 +119,8 @@ final class ACPTranscript: ObservableObject {
     /// discarded (e.g. session close).
     func resetMarkdownCaches() {
         markdownCaches.removeAll()
+        streamingTickDrain?.cancel()
+        streamingTickDrain = nil
     }
 
     private func refreshPlanCaches() {
@@ -167,14 +176,73 @@ final class ACPTranscript: ObservableObject {
         }
     }
 
+    /// Decision returned by `streamingTickAction` for a single streaming
+    /// chunk arrival.
+    enum StreamingTickAction: Equatable {
+        /// Publish `streamingTick` immediately.
+        case publishNow
+        /// Coalesce this chunk into a trailing-edge publish fired after
+        /// `after` seconds, unless a further chunk supersedes it first.
+        case scheduleDrain(after: TimeInterval)
+        /// A drain is already pending; nothing to do for this chunk.
+        case drop
+    }
+
+    /// Target throttle interval for `streamingTick` publishes: roughly
+    /// display refresh rate, so a fast agent response cannot force more than
+    /// ~30 full `ACPMessageList` body re-evals per second. `nonisolated`
+    /// alongside `streamingTickAction` so the pure decision function stays
+    /// callable (and testable) without main-actor isolation.
+    nonisolated static let streamingTickMinInterval: TimeInterval = 1.0 / 30.0
+
+    /// Pure decision for how a streaming chunk arrival should affect the
+    /// throttled `streamingTick` publish. Kept side-effect free and
+    /// `nonisolated` so it is trivially unit-testable without a running
+    /// transcript instance.
+    nonisolated static func streamingTickAction(
+        elapsedSincePublish: TimeInterval,
+        hasPendingDrain: Bool,
+        minInterval: TimeInterval = streamingTickMinInterval
+    ) -> StreamingTickAction {
+        if hasPendingDrain { return .drop }
+        if elapsedSincePublish >= minInterval { return .publishNow }
+        return .scheduleDrain(after: minInterval - elapsedSincePublish)
+    }
+
     /// Streaming chunk appends mutate a `StreamingText` buffer in place —
     /// the array element compares equal (identity equality), so
     /// `messages.didSet` cannot see them. Callers pass the mutated index.
     /// Replaces direct `streamingTick &+= 1` writes.
+    ///
+    /// `streamingTick` publishes are throttled to `streamingTickMinInterval`
+    /// with a trailing edge (see `streamingTickAction`): a fast burst of
+    /// chunks coalesces into at most ~30 publishes/sec, but the last chunk
+    /// in a burst is always eventually delivered via the scheduled drain
+    /// task, even if no further chunk arrives. The change log recording
+    /// below is intentionally NOT throttled — every chunk still records a
+    /// per-index dirty entry for remote-web gateway consumers.
     func noteStreamingChange(at index: Int) {
-        streamingTick &+= 1
         if changeLog.isTracking, messages.indices.contains(index) {
             changeLog.record(index: index)
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        switch Self.streamingTickAction(
+            elapsedSincePublish: now - lastStreamingTickPublish,
+            hasPendingDrain: streamingTickDrain != nil
+        ) {
+        case .publishNow:
+            lastStreamingTickPublish = now
+            streamingTick &+= 1
+        case .scheduleDrain(let delay):
+            streamingTickDrain = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled else { return }
+                self.streamingTickDrain = nil
+                self.lastStreamingTickPublish = ProcessInfo.processInfo.systemUptime
+                self.streamingTick &+= 1
+            }
+        case .drop:
+            break
         }
     }
 
