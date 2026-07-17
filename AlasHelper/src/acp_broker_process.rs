@@ -139,6 +139,7 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
     command
         .args(&launch.args)
         .current_dir(&launch.cwd)
+        .env_clear()
         .envs(&launch.env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -318,10 +319,7 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
                 Ok(stream) => stream,
                 Err(_) => continue,
             };
-            let request_runtime = runtime.clone();
-            std::thread::spawn(move || {
-                let _ = handle_ipc_stream(request_runtime, stream);
-            });
+            let _ = handle_ipc_stream(runtime.clone(), stream);
             if runtime_is_closing(&runtime) {
                 break;
             }
