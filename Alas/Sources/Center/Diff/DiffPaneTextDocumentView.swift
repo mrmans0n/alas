@@ -861,6 +861,14 @@ final class DiffPaneTextScrollView: NSScrollView {
             textView.theme = theme
         }
         if changedParagraphs {
+            // Explicit, rather than relying on the paragraph-style edit to
+            // indirectly trigger it (e.g. via a `lineTones` reassignment):
+            // `diffRowRects()` is typically already cached from an earlier
+            // read in this same layout pass (the row heights this method was
+            // just handed were measured from it), so a just-applied padding
+            // change must invalidate it directly or callers later in the same
+            // pass (e.g. `documentHeight`) read pre-padding geometry.
+            textView.invalidateDiffRowGeometry()
             needsLayout = true
             invalidateIntrinsicContentSize()
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.needsDisplay = true

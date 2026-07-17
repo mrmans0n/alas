@@ -1278,6 +1278,69 @@ let second = true
         #expect(value == "kept")
     }
 
+    /// Regression test for a review-flagged edge case: skipping the
+    /// unconditional `lineTones` reassignment when it hasn't changed must not
+    /// skip invalidating the row-geometry cache when a paragraph style
+    /// actually changed. `diffRowRects()` is asserted immediately after
+    /// `synchronizeRowHeights` returns, with no intervening AppKit layout
+    /// pass, to catch the exact staleness window a caller reading
+    /// `documentHeight` later in the same `layout()` pass would hit.
+    @Test func synchronizeRowHeightsInvalidatesRowGeometryImmediatelyAfterPadding() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = [
+            "let first = true",
+            "let second = false",
+        ]
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        // Populate the row-geometry cache with pre-padding measurements,
+        // mirroring `synchronizeSplitRowHeights` reading `diffRowRects()`
+        // right before calling `synchronizeRowHeights`.
+        let rowRects = codeView.diffRowRects()
+        #expect(rowRects.count == 2)
+
+        let target = rowRects[0].height + 18
+        scrollView.synchronizeRowHeights([target, rowRects[1].height])
+
+        // No `layoutSubtreeIfNeeded()` here: read geometry exactly as a
+        // caller later in the same layout pass would, before any further
+        // AppKit layout tick could paper over stale cached geometry.
+        let paddedRows = codeView.diffRowRects()
+        #expect(abs(paddedRows[0].height - target) < 0.5)
+    }
+
     /// Regression test for a review-flagged edge case in the beachball fix: a
     /// row's OWN local wrap count can change on a resize (e.g. widening the
     /// pane lets a previously two-line row fit on one line) while its target
