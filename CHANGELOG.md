@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-07-18
+
+### 🐛 Fixes
+
+- Preserve integer parameters through ACP broker JSON round-trips (#829).
+
 ## [0.11.5] - 2026-07-18
 
 ### ✨ Features
