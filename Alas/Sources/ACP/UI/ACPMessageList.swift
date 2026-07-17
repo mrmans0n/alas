@@ -31,19 +31,18 @@ struct ACPMessageList: View {
     /// the row is gone or the payload is undecodable.
     let onLoadFullToolCallContent: (String) async -> String?
     @Environment(\.theme) private var theme
-    @State private var isRestoringTail = false
-    @State private var headFrame: CGRect = .zero
-    @State private var lastHeadStepAt: Date = .distantPast
-    @State private var lastTailStepAt: Date = .distantPast
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
-    @State private var latestRememberedScrollAnchorIndex: Int?
-    @State private var restoredRememberedAnchor: String?
-    @State private var pendingTailScrollTask: Task<Void, Never>?
+    @State private var scrollBook = ACPTranscriptScrollBookkeeping()
     // Geometry callbacks can run while AppKit is tracking a native menu. Keep
     // their per-row bookkeeping out of SwiftUI-observed value state: changing
     // a cached frame must not invalidate the entire lazy transcript list.
     @State private var modernRowFrameCache = ACPRowFrameCache()
+    // Rebuilding the window-sliced row list + stable-id lookup is O(rows); it
+    // used to happen from scratch inside every per-row geometry callback,
+    // making a full layout pass O(rows²). Memoized per (messages generation,
+    // window bounds) so a pass rebuilds it once instead of once per row.
+    @State private var visibleRowsCache = ACPVisibleRowsCache()
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -61,7 +60,12 @@ struct ACPMessageList: View {
     /// Minimum gap between automatic head-back steps so a single scroll
     /// doesn't decrement multiple times before layout settles.
     private let headStepDebounceInterval: TimeInterval = 0.3
-    private var scrollSpaceName: String { "acp-message-list-\(session.id)" }
+    /// A named coordinate space only needs to be unambiguous relative to its
+    /// nearest `.coordinateSpace(.named(...))` ancestor, and each
+    /// `ACPMessageList` instance declares its own locally, so a shared
+    /// constant here is safe even with multiple transcript lists mounted at
+    /// once (e.g. across windows).
+    private static let scrollSpaceName = "acp-message-list"
 
     /// Window-sliced, plan-filtered list of rows to render. The slice
     /// bounds first-paint cost on long transcripts (`visibleHead` is
@@ -69,6 +73,15 @@ struct ACPMessageList: View {
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
     private var visibleRows: [VisibleRow] {
+        visibleRowsCache.rows(
+            generation: transcript.messagesGeneration,
+            head: transcript.visibleHead,
+            tail: transcript.visibleTailBound,
+            build: buildVisibleRows
+        )
+    }
+
+    private func buildVisibleRows() -> [VisibleRow] {
         Self.visibleRows(
             messages: transcript.messages,
             visibleHead: transcript.visibleHead,
@@ -220,9 +233,9 @@ struct ACPMessageList: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.openURL, openTranscriptURLAction)
                 }
-                .coordinateSpace(.named(scrollSpaceName))
+                .coordinateSpace(.named(Self.scrollSpaceName))
                 .modifier(ACPTranscriptScrollTracking(
-                    isRestoring: { isRestoringTail },
+                    isRestoring: { scrollBook.isRestoringTail },
                     onResolveScrollView: { scrollViewRef.scrollView = $0 },
                     onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
                     onPaused: { setFollowsTranscriptTail(false) },
@@ -244,8 +257,8 @@ struct ACPMessageList: View {
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onDisappear {
-                    pendingTailScrollTask?.cancel()
-                    pendingTailScrollTask = nil
+                    scrollBook.pendingTailScrollTask?.cancel()
+                    scrollBook.pendingTailScrollTask = nil
                 }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
@@ -308,24 +321,29 @@ struct ACPMessageList: View {
     }
 
     private func restoreRememberedAnchorIfNeeded(proxy: ScrollViewProxy) {
+        guard !scrollBook.isRestoringTail else { return }
         guard !session.followsTranscriptTail else {
-            restoredRememberedAnchor = nil
+            scrollBook.restoredRememberedAnchor = nil
             return
         }
-        guard let anchor = rememberedScrollAnchor(), restoredRememberedAnchor != anchor else { return }
+        guard let anchor = rememberedScrollAnchor(), scrollBook.restoredRememberedAnchor != anchor else { return }
         guard visibleMessageLookup.contains(anchor) else { return }
-        isRestoringTail = true
+        scrollBook.isRestoringTail = true
         proxy.scrollTo(anchor, anchor: .top)
-        restoredRememberedAnchor = anchor
+        scrollBook.restoredRememberedAnchor = anchor
         DispatchQueue.main.async {
-            isRestoringTail = false
+            scrollBook.isRestoringTail = false
         }
     }
 
     private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
-        pendingTailScrollTask?.cancel()
-        pendingTailScrollTask = nil
-        isRestoringTail = true
+        scrollBook.pendingTailScrollTask?.cancel()
+        scrollBook.pendingTailScrollTask = nil
+        let distance = scrollBook.lastScrollProbe.map {
+            max(0, $0.contentHeight - $0.viewportHeight - $0.minY)
+        }
+        guard Self.shouldPerformTailScroll(distanceFromBottom: distance) else { return }
+        scrollBook.isRestoringTail = true
         let scroll = {
             proxy.scrollTo("__composer_spacer__", anchor: .bottom)
         }
@@ -337,7 +355,7 @@ struct ACPMessageList: View {
             scroll()
         }
         let releaseRestoring = {
-            isRestoringTail = false
+            scrollBook.isRestoringTail = false
         }
         if animated {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
@@ -351,18 +369,18 @@ struct ACPMessageList: View {
     }
 
     private func scheduleTailScroll(proxy: ScrollViewProxy, animated: Bool) {
-        guard Self.shouldScheduleTailScroll(hasPendingTailScroll: pendingTailScrollTask != nil) else {
+        guard Self.shouldScheduleTailScroll(hasPendingTailScroll: scrollBook.pendingTailScrollTask != nil) else {
             return
         }
-        pendingTailScrollTask?.cancel()
-        pendingTailScrollTask = Task { @MainActor in
+        scrollBook.pendingTailScrollTask?.cancel()
+        scrollBook.pendingTailScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled,
                   ACPMessageList.shouldRunScheduledTailScroll(
                     followsTranscriptTail: session.followsTranscriptTail
                   )
             else {
-                pendingTailScrollTask = nil
+                scrollBook.pendingTailScrollTask = nil
                 return
             }
             scrollToTail(proxy: proxy, animated: animated)
@@ -431,14 +449,29 @@ struct ACPMessageList: View {
             session.followsTranscriptTail = true
             transcript.resetWindowToTail()
             onRememberScrollAnchor(nil, nil, true)
-            latestRememberedScrollAnchorIndex = nil
+            scrollBook.latestRememberedScrollAnchorIndex = nil
+            // `latestTopVisibleAnchor` is only maintained while NOT following
+            // the tail (see `shouldTrackAnchorFromRowFrames`), so a value left
+            // over from a previous pause must not survive a resume: without
+            // this reset, the NEXT pause would reuse that stale anchor instead
+            // of falling through to a fresh computation from
+            // `modernRowFrameCache.frames`.
+            latestTopVisibleAnchor.value = Self.trackedAnchorAfterFollowsChange(
+                follows: true,
+                previousTrackedAnchor: latestTopVisibleAnchor.value
+            )
         } else {
             session.followsTranscriptTail = false
-            pendingTailScrollTask?.cancel()
-            pendingTailScrollTask = nil
+            scrollBook.pendingTailScrollTask?.cancel()
+            scrollBook.pendingTailScrollTask = nil
             let lookup = visibleMessageLookup
+            // Tail-follow no longer maintains `latestTopVisibleAnchor` on every
+            // row callback (see `handleModernRowFrame`), so compute it here,
+            // lazily, only now that we actually need a pause anchor.
+            let pauseAnchor = latestTopVisibleAnchor.value
+                ?? Self.topVisibleAnchorID(in: modernRowFrameCache.frames)
             let anchor = Self.rememberedAnchorWhenPausingTailFollow(
-                latestTopVisibleAnchor: latestTopVisibleAnchor.value,
+                latestTopVisibleAnchor: pauseAnchor,
                 lookup: lookup,
                 allowFirstRenderedAnchorFallback: allowFirstRenderedAnchorFallback
             )
@@ -448,57 +481,95 @@ struct ACPMessageList: View {
                 anchorIndex,
                 false
             )
-            latestRememberedScrollAnchorIndex = anchorIndex
-            restoredRememberedAnchor = anchor
+            scrollBook.latestRememberedScrollAnchorIndex = anchorIndex
+            scrollBook.restoredRememberedAnchor = anchor
         }
     }
 
     private func handleRowFramePreference(_ frames: [String: CGRect], proxy: ScrollViewProxy) {
         restoreRememberedAnchorIfNeeded(proxy: proxy)
         guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
+        // Unlike the modern per-row `onGeometryChange` callback (fired once per
+        // ROW), this legacy path receives the full frame dictionary once per
+        // PreferenceKey change — effectively once per layout pass already — so
+        // keeping `latestTopVisibleAnchor` current here isn't the O(rows) cost
+        // the early-out below guards against on the modern path. This is also
+        // the ONLY place that populates `latestTopVisibleAnchor` on the legacy
+        // path (there is no unconditional frame cache to fall back to here,
+        // unlike `modernRowFrameCache` on the modern path) — gating this write
+        // left `setFollowsTranscriptTail`'s pause-anchor fallback with nothing
+        // correct to use on macOS 14, so it must stay live even while
+        // following the tail.
         let anchorChanged = latestTopVisibleAnchor.value != anchor
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
         }
+        // Same early-out as `handleModernRowFrame`: while following the tail,
+        // restoring, or backfilling older messages, the remainder of this
+        // method (the remembered-anchor persistence bookkeeping) is discarded
+        // work.
+        guard Self.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoringTail: scrollBook.isRestoringTail,
+            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+        ) else { return }
         let lookup = visibleMessageLookup
-        guard !isRestoringTail else { return }
-        guard !session.followsTranscriptTail else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
-        let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
+        let anchorIndexChanged = rememberedAnchor == anchor && scrollBook.latestRememberedScrollAnchorIndex != anchorIndex
         guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
         if !Self.shouldRememberVisibleAnchor(
             anchor,
             rememberedAnchor: rememberedAnchor,
-            restoredRememberedAnchor: restoredRememberedAnchor,
+            restoredRememberedAnchor: scrollBook.restoredRememberedAnchor,
             visibleMessageIds: lookup.ids,
             isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
         ) {
             return
         }
         onRememberScrollAnchor(anchor, anchorIndex, false)
-        latestRememberedScrollAnchorIndex = anchorIndex
-        restoredRememberedAnchor = anchor
+        scrollBook.latestRememberedScrollAnchorIndex = anchorIndex
+        scrollBook.restoredRememberedAnchor = anchor
     }
 
     private func handleModernRowFrame(id: String, frame: CGRect) {
         let lookup = visibleMessageLookup
-        modernRowFrameCache.update(id: id, frame: frame, lookup: lookup)
+        // `windowKey` gates `ACPRowFrameCache`'s stale-entry scan to only run
+        // when the render window has actually moved since the last cleanup
+        // (see `ACPRowFrameCache.update`), so this call is O(1) per row on
+        // every callback except the first one after the window shifts.
+        modernRowFrameCache.update(
+            id: id,
+            frame: frame,
+            lookup: lookup,
+            windowKey: ACPRowFrameCache.WindowKey(
+                generation: transcript.messagesGeneration,
+                head: transcript.visibleHead,
+                tail: transcript.visibleTailBound
+            )
+        )
+        // While following the tail (streaming), restoring, or backfilling
+        // older messages, the anchor bookkeeping below is discarded by the
+        // guards further down anyway — skip it entirely so every streamed
+        // row's geometry callback stays O(1) instead of paying an O(rows)
+        // lookup + min-scan that's thrown away.
+        guard Self.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoringTail: scrollBook.isRestoringTail,
+            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+        ) else { return }
         guard let anchor = Self.topVisibleAnchorID(in: modernRowFrameCache.frames) else { return }
         let anchorChanged = latestTopVisibleAnchor.value != anchor
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
         }
-        guard !isRestoringTail else { return }
-        guard !session.followsTranscriptTail else { return }
-        guard !transcript.isBackfillingOlderMessages else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
-        let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
+        let anchorIndexChanged = rememberedAnchor == anchor && scrollBook.latestRememberedScrollAnchorIndex != anchorIndex
         guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
         onRememberScrollAnchor(anchor, anchorIndex, false)
-        latestRememberedScrollAnchorIndex = anchorIndex
-        restoredRememberedAnchor = anchor
+        scrollBook.latestRememberedScrollAnchorIndex = anchorIndex
+        scrollBook.restoredRememberedAnchor = anchor
     }
 
     private func pauseTailFollowFromGeometry(newMinY: CGFloat) {
@@ -516,34 +587,30 @@ struct ACPMessageList: View {
         proxy: ScrollViewProxy,
         lookup: VisibleMessageLookup
     ) {
-        guard !isRestoringTail else { return }
+        guard !scrollBook.isRestoringTail else { return }
         guard transcript.visibleTailBound < transcript.messages.count else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastTailStepAt) > headStepDebounceInterval else { return }
-        lastTailStepAt = now
+        guard now.timeIntervalSince(scrollBook.lastTailStepAt) > headStepDebounceInterval else { return }
+        scrollBook.lastTailStepAt = now
         let anchorId = Self.anchorForTailForwardPreservation(
             latestTopVisibleAnchor: latestTopVisibleAnchor.value,
             lookup: lookup
         )
         let anchorIndex = lookup.transcriptIndex(for: anchorId)
-        isRestoringTail = true
+        scrollBook.isRestoringTail = true
         transcript.stepTailForward(preserving: anchorIndex)
-        let updatedRows = Self.visibleRows(
-            messages: transcript.messages,
-            visibleHead: transcript.visibleHead,
-            visibleTail: transcript.visibleTailBound,
-            stableId: { transcript.stableId(for: $0) }
-        )
-        let updatedLookup = Self.visibleMessageLookup(rows: updatedRows.map { row in
-            (index: row.index, stableId: row.stableId)
-        })
+        // `visibleTailBound` has already advanced (stepTailForward guarantees
+        // newTail > currentTail), so the cache key differs from the
+        // pre-mutation lookup above and this recomputes rather than reusing
+        // the stale entry.
+        let updatedLookup = visibleMessageLookup
         let scrollTargetId = updatedLookup.contains(anchorId) ? anchorId : updatedLookup.firstStableId
         DispatchQueue.main.async {
             if let scrollTargetId {
                 proxy.scrollTo(scrollTargetId, anchor: .top)
             }
             DispatchQueue.main.async {
-                isRestoringTail = false
+                scrollBook.isRestoringTail = false
             }
         }
     }
@@ -584,7 +651,7 @@ struct ACPMessageList: View {
         GeometryReader { rowGeometry in
             Color.clear.preference(
                 key: ACPRowFramesPreferenceKey.self,
-                value: [id: rowGeometry.frame(in: .named(scrollSpaceName))]
+                value: [id: rowGeometry.frame(in: .named(Self.scrollSpaceName))]
             )
         }
     }
@@ -592,23 +659,26 @@ struct ACPMessageList: View {
     @available(macOS 15, *)
     private func modernRowFrameReporter(id: String) -> some View {
         Color.clear.onGeometryChange(for: CGRect.self) { rowGeometry in
-            rowGeometry.frame(in: .named(scrollSpaceName))
+            rowGeometry.frame(in: .named(Self.scrollSpaceName))
         } action: { frame in
             handleModernRowFrame(id: id, frame: frame)
         }
     }
 
     private var visibleMessageLookup: VisibleMessageLookup {
-        Self.visibleMessageLookup(rows: visibleRows.map { row in
-            (index: row.index, stableId: row.stableId)
-        })
+        visibleRowsCache.lookup(
+            generation: transcript.messagesGeneration,
+            head: transcript.visibleHead,
+            tail: transcript.visibleTailBound,
+            build: buildVisibleRows
+        )
     }
 
     private var topPaginationSentinel: some View {
         GeometryReader { headGeom in
             Color.clear.preference(
                 key: ACPHeadFramePreferenceKey.self,
-                value: headGeom.frame(in: .named(scrollSpaceName))
+                value: headGeom.frame(in: .named(Self.scrollSpaceName))
             )
         }
         .frame(height: 1)
@@ -686,13 +756,27 @@ struct ACPMessageList: View {
         newContentHeight: CGFloat,
         viewportHeight: CGFloat,
         newMinY: CGFloat,
-        followsTranscriptTail: Bool
+        followsTranscriptTail: Bool,
+        isRestoring: Bool
     ) -> Bool {
+        guard !isRestoring else { return false }
         guard followsTranscriptTail else { return false }
         guard newContentHeight > previousContentHeight + ACPScrollDirectionClassifier.upwardEpsilon else {
             return false
         }
         let distanceFromBottom = max(0, newContentHeight - viewportHeight - newMinY)
+        return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
+    }
+
+    /// Whether `scrollToTail` should actually issue `proxy.scrollTo`. A
+    /// programmatic scroll that lands where the viewport already sits is
+    /// itself a geometry change that can retrigger the very callback that
+    /// scheduled it — so skip it once the last known probe says we're
+    /// already within tolerance of the bottom. Unknown geometry (no probe
+    /// yet, or the legacy pre-macOS 15 path, which never populates the
+    /// probe) always scrolls, preserving prior behavior there.
+    nonisolated static func shouldPerformTailScroll(distanceFromBottom: CGFloat?) -> Bool {
+        guard let distanceFromBottom else { return true }
         return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
     }
 
@@ -729,6 +813,19 @@ struct ACPMessageList: View {
     ) -> Bool {
         guard followsTranscriptTail else { return false }
         return abs(newWidth - previousWidth) > 0.5
+    }
+
+    /// Whether a row-frame callback should bother finding/remembering the
+    /// top-visible anchor at all. While following the tail (streaming),
+    /// restoring a programmatic scroll, or backfilling older messages, the
+    /// result is discarded by later guards anyway — skipping the lookup here
+    /// keeps every row's geometry callback O(1) instead of O(rows) per row.
+    nonisolated static func shouldTrackAnchorFromRowFrames(
+        followsTranscriptTail: Bool,
+        isRestoringTail: Bool,
+        isBackfillingOlderMessages: Bool
+    ) -> Bool {
+        !followsTranscriptTail && !isRestoringTail && !isBackfillingOlderMessages
     }
 
     nonisolated static func topVisibleAnchorID(in frames: [String: CGRect]) -> String? {
@@ -806,6 +903,19 @@ struct ACPMessageList: View {
         )
     }
 
+    /// The value `latestTopVisibleAnchor.value` should hold after a
+    /// tail-follow transition. Resuming (`follows == true`) always clears it:
+    /// the anchor-tracking row callbacks are skipped while following the
+    /// tail, so a value left over from before the resume is stale by
+    /// construction and must not be reused by a later pause. Pausing leaves
+    /// it untouched — the pause path computes its own anchor separately.
+    nonisolated static func trackedAnchorAfterFollowsChange(
+        follows: Bool,
+        previousTrackedAnchor: String?
+    ) -> String? {
+        follows ? nil : previousTrackedAnchor
+    }
+
     nonisolated static func rememberedAnchorWhenPausingTailFollow(
         latestTopVisibleAnchor: String?,
         lookup: VisibleMessageLookup,
@@ -859,12 +969,11 @@ struct ACPMessageList: View {
     /// would still satisfy `minY < threshold`, defeating the window before the
     /// user scrolled.
     private func handleHeadFramePreference(_ frame: CGRect, proxy: ScrollViewProxy) {
-        headFrame = frame
         guard transcript.visibleHead > 0 else { return }
         guard frame.minY < headStepScrollThreshold, frame.maxY > 0 else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
-        lastHeadStepAt = now
+        guard now.timeIntervalSince(scrollBook.lastHeadStepAt) > headStepDebounceInterval else { return }
+        scrollBook.lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
     }
 
@@ -883,22 +992,34 @@ struct ACPMessageList: View {
         contentHeight: CGFloat,
         proxy: ScrollViewProxy
     ) {
+        // Always current for `scrollToTail`'s idempotency check below, even
+        // when none of the branches in this function fire.
+        scrollBook.lastScrollProbe = ACPScrollProbe(
+            minY: newMinY, viewportHeight: viewportHeight, contentHeight: contentHeight)
         // Tail-follow pause/resume — reuse the shared classifier so the rules
-        // match the legacy observer exactly.
-        let currentEventType = NSApp.currentEvent?.type
-        let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
+        // match the legacy observer exactly. `NSApp.currentEvent` reports the
+        // most recently processed event, not necessarily the cause of this
+        // geometry change, so a stale event (from a scroll gesture long over)
+        // must not be classified as driving the current bounds change.
+        let event = NSApp.currentEvent
+        let eventIsFresh = ACPUserScrollEvent.isFresh(
+            eventTimestamp: event?.timestamp,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        let currentEventType = eventIsFresh ? event?.type : nil
+        let isUserDriven = eventIsFresh && ACPUserScrollEvent.isUserDriven(currentEventType)
         let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
             currentEventType,
             previousMinY: previousMinY,
             newMinY: newMinY,
-            isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(NSApp.currentEvent)
+            isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
         )
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
             newOffsetY: newMinY,
             viewportHeight: viewportHeight,
             contentHeight: contentHeight,
-            isRestoring: isRestoringTail,
+            isRestoring: scrollBook.isRestoringTail,
             isUserDriven: isUserDriven
         )
         switch decision {
@@ -909,7 +1030,7 @@ struct ACPMessageList: View {
                 proxy: proxy,
                 shouldPageHiddenTail: Self.shouldStepTailForwardFromBottomGeometry(
                     isUserDriven: isUserDriven,
-                    isRestoring: isRestoringTail,
+                    isRestoring: scrollBook.isRestoringTail,
                     previousMinY: previousMinY,
                     newMinY: newMinY,
                     visibleTail: transcript.visibleTailBound,
@@ -923,7 +1044,8 @@ struct ACPMessageList: View {
             newContentHeight: contentHeight,
             viewportHeight: viewportHeight,
             newMinY: newMinY,
-            followsTranscriptTail: session.followsTranscriptTail
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoring: scrollBook.isRestoringTail
         ) {
             scheduleTailScroll(
                 proxy: proxy,
@@ -940,14 +1062,14 @@ struct ACPMessageList: View {
         // settles; geometry alone must not page the transcript upward.
         guard Self.shouldStepHeadBackFromGeometry(
             visibleHead: transcript.visibleHead,
-            isRestoring: isRestoringTail,
+            isRestoring: scrollBook.isRestoringTail,
             isHeadPaginationDriven: isHeadPaginationDriven,
             newMinY: newMinY,
             threshold: headStepScrollThreshold
         ) else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
-        lastHeadStepAt = now
+        guard now.timeIntervalSince(scrollBook.lastHeadStepAt) > headStepDebounceInterval else { return }
+        scrollBook.lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
     }
 
@@ -973,13 +1095,13 @@ struct ACPMessageList: View {
         // does not depend on net content-height changes when the bounded window
         // also trims newer rows from the bottom.
         let anchorId = visibleMessageLookup.firstStableId
-        isRestoringTail = true
+        scrollBook.isRestoringTail = true
         transcript.stepHeadBack()
         DispatchQueue.main.async {
             if let anchorId {
                 proxy.scrollTo(anchorId, anchor: .top)
             }
-            DispatchQueue.main.async { isRestoringTail = false }
+            DispatchQueue.main.async { scrollBook.isRestoringTail = false }
         }
     }
 
@@ -987,16 +1109,112 @@ struct ACPMessageList: View {
     private func visibleRow(_ visibleRow: VisibleRow) -> some View {
         if transcript.messages.indices.contains(visibleRow.index) {
             let message = transcript.messages[visibleRow.index]
-            row(for: message, stableId: visibleRow.stableId)
-                .background(rowFrameReporter(id: visibleRow.stableId))
+            ACPTranscriptRowContent(
+                stableId: visibleRow.stableId,
+                message: message,
+                contentMaxWidth: contentMaxWidth,
+                typography: typography,
+                trustedImageRoot: trustedImageRoot,
+                transcript: transcript,
+                session: session,
+                onOpenDiff: onOpenDiff,
+                onLoadFullToolCallContent: onLoadFullToolCallContent
+            )
+            .equatable()
+            .background(rowFrameReporter(id: visibleRow.stableId))
         } else {
             EmptyView()
         }
     }
 
-    @ViewBuilder
-    private func row(for m: ACPMessage, stableId: String) -> some View {
-        switch m {
+    static func markdownCacheMessageId(for message: ACPMessage) -> String {
+        message.stableId
+    }
+}
+
+/// A single transcript row's content, extracted from `ACPMessageList.body` so
+/// it can be gated with `.equatable()`. A full-list body re-eval (from a
+/// scroll/geometry pass) used to re-diff every visible row's deep modifier
+/// tree even when nothing about the row had changed — the dominant cost in
+/// the live-lock sample (`ModifiedViewList.applyNodes`,
+/// `LazySubviewPlacements.placeSubviews`). Gating on the render-relevant
+/// values below lets SwiftUI skip re-diffing a row's subtree entirely when
+/// they're unchanged. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md
+/// (Task 7) for the stale-closure audit backing the excluded fields below.
+struct ACPTranscriptRowContent: View, Equatable {
+    // Compared (render-relevant values):
+    let stableId: String
+    let message: ACPMessage
+    let contentMaxWidth: CGFloat
+    let typography: ACPChatTypography
+    let trustedImageRoot: URL?
+    // Excluded from equality — reference-stable for the session's lifetime
+    // (`transcript`/`session` are `let` properties on `ACPSession`, never
+    // reassigned), or closures whose behavior only depends on already-compared
+    // data:
+    // - `onOpenDiff` / queue callbacks capture stable host references
+    //   (`state`, `worktree`, `manager`, `sessionId`) wired once by
+    //   `ACPTabView`, not per-render-varying state.
+    // - `onLoadFullToolCallContent` is only ever invoked when
+    //   `tc.isContentTruncated` is true; that flag is intentionally excluded
+    //   from `ACPMessage.ToolCall`'s own `==`/`hash` (a row must stay equal
+    //   across the in-memory truncation boundary), but `truncateForOffWindow`
+    //   only fires on messages that are, at that same moment, leaving the
+    //   render window (`ACPTranscript.trimHiddenMessage`) — so the flag never
+    //   flips on a message that remains part of an already-rendered,
+    //   gate-compared row. When a row re-enters the window later it is
+    //   constructed fresh (no prior instance to gate against), so the current
+    //   `isContentTruncated` value is always picked up correctly.
+    // - `session.terminalHost` is itself a `let` (stable reference) on
+    //   `ACPSession`; the terminal card's own live output flows through a
+    //   nested `@ObservedObject var terminal: ACPTerminal` inside
+    //   `ACPTerminalTailView`, which keeps reacting independently of this
+    //   gate — the same pattern already relied on for streaming `StreamingText`
+    //   buffers inside `AgentMessageRow`. New terminal-id associations arrive
+    //   via `tc.terminalIds`, which IS part of `message` and thus compared.
+    let transcript: ACPTranscript
+    let session: ACPSession
+    let onOpenDiff: (String) -> Void
+    let onLoadFullToolCallContent: (String) async -> String?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        equalityKey(
+            stableId: lhs.stableId, message: lhs.message,
+            contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
+            trustedImageRoot: lhs.trustedImageRoot
+        )
+        == equalityKey(
+            stableId: rhs.stableId, message: rhs.message,
+            contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
+            trustedImageRoot: rhs.trustedImageRoot
+        )
+    }
+
+    /// Exposed so equality can be exercised in tests without constructing
+    /// (and rendering) a `View`.
+    static func equalityKey(
+        stableId: String,
+        message: ACPMessage,
+        contentMaxWidth: CGFloat,
+        typography: ACPChatTypography,
+        trustedImageRoot: URL?
+    ) -> EqualityKey {
+        EqualityKey(
+            stableId: stableId, message: message, contentMaxWidth: contentMaxWidth,
+            typography: typography, trustedImageRoot: trustedImageRoot
+        )
+    }
+
+    struct EqualityKey: Equatable {
+        let stableId: String
+        let message: ACPMessage
+        let contentMaxWidth: CGFloat
+        let typography: ACPChatTypography
+        let trustedImageRoot: URL?
+    }
+
+    var body: some View {
+        switch message {
         case .user(_, _, let text, let attachments, let delegatedSource):
             ACPMessageGutter(copySource: .text(text)) {
                 UserMessageRow(
@@ -1032,10 +1250,6 @@ struct ACPMessageList: View {
             ACPSystemNoticeView(text: text)
         }
     }
-
-    static func markdownCacheMessageId(for message: ACPMessage) -> String {
-        message.stableId
-    }
 }
 
 private final class ACPWeakScrollViewRef {
@@ -1046,26 +1260,72 @@ private final class ACPMutableScrollAnchor {
     var value: String?
 }
 
+/// Non-observed bookkeeping for scroll/restore callbacks. These values are
+/// only read from callbacks (never from `body`), so keeping them in plain
+/// `@State` value storage would buy nothing except a full-list invalidation
+/// on every write — which is exactly the transaction-feedback edge behind
+/// the transcript live-lock. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md.
+@MainActor
+private final class ACPTranscriptScrollBookkeeping {
+    var isRestoringTail = false
+    var restoredRememberedAnchor: String?
+    var latestRememberedScrollAnchorIndex: Int?
+    var lastHeadStepAt: Date = .distantPast
+    var lastTailStepAt: Date = .distantPast
+    var pendingTailScrollTask: Task<Void, Never>?
+    /// Most recent modern-path scroll geometry, refreshed on every
+    /// `handleScrollGeometry` call. Lets programmatic scrolls (`scrollToTail`)
+    /// check whether the viewport is already at rest before issuing another
+    /// `proxy.scrollTo`, so a redundant scroll doesn't retrigger the geometry
+    /// callback that scheduled it.
+    var lastScrollProbe: ACPScrollProbe?
+}
+
 /// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's
 /// `onGeometryChange` may be serviced by nested AppKit run loops (such as an
 /// open `NSMenu`), so assigning a dictionary held in `@State` here would
 /// invalidate the full list for every callback.
 final class ACPRowFrameCache {
+    /// Same shape/idiom as `ACPVisibleRowsCache.Key`: identifies the render
+    /// window a row-frame report belongs to. Kept as its own type (rather
+    /// than sharing that private type) since the two caches are otherwise
+    /// independent.
+    struct WindowKey: Equatable {
+        let generation: UInt64
+        let head: Int
+        let tail: Int
+    }
+
     private(set) var frames: [String: CGRect] = [:]
+    /// The window key the stale-entry scan below last ran against. `nil`
+    /// until the first `update` call, guaranteeing that call always cleans.
+    private var lastCleanedWindowKey: WindowKey?
 
     /// Returns whether the cached frame set changed. Keeping stable reports as
     /// no-ops prevents needless work even outside nested menu tracking loops.
+    ///
+    /// The stale-key scan below is O(rows) — it used to run unconditionally
+    /// on every call, which made a full layout pass (up to
+    /// `ACPTranscript.maxVisibleRows` per-row callbacks) O(rows²). It only
+    /// needs to run once per render window: `lookup` (and therefore which
+    /// keys are stale) only changes when the window moves, so `windowKey`
+    /// lets every row after the first in a pass skip straight to the O(1)
+    /// single-entry update below.
     @discardableResult
     func update(
         id: String,
         frame: CGRect,
-        lookup: ACPMessageList.VisibleMessageLookup
+        lookup: ACPMessageList.VisibleMessageLookup,
+        windowKey: WindowKey
     ) -> Bool {
         var changed = false
-        let staleIDs = frames.keys.filter { !lookup.contains($0) }
-        for staleID in staleIDs {
-            frames.removeValue(forKey: staleID)
-            changed = true
+        if lastCleanedWindowKey != windowKey {
+            let staleIDs = frames.keys.filter { !lookup.contains($0) }
+            for staleID in staleIDs {
+                frames.removeValue(forKey: staleID)
+                changed = true
+            }
+            lastCleanedWindowKey = windowKey
         }
 
         if lookup.contains(id), frame.height > 0, frame.maxY > 0 {
@@ -1078,6 +1338,46 @@ final class ACPRowFrameCache {
             changed = true
         }
         return changed
+    }
+}
+
+/// Non-observed memo for the window-sliced row list + id lookup. Keyed on
+/// (messages generation, window bounds); geometry callbacks hit this once
+/// per layout pass instead of rebuilding an O(rows) dictionary per row.
+/// See docs/plans/2026-07-17-acp-transcript-livelock-fix.md (Task 2).
+@MainActor
+final class ACPVisibleRowsCache {
+    private struct Key: Equatable {
+        let generation: UInt64
+        let head: Int
+        let tail: Int
+    }
+    private var key: Key?
+    private var rows: [ACPMessageList.VisibleRow] = []
+    private var lookup: ACPMessageList.VisibleMessageLookup?
+
+    func rows(
+        generation: UInt64, head: Int, tail: Int,
+        build: () -> [ACPMessageList.VisibleRow]
+    ) -> [ACPMessageList.VisibleRow] {
+        let k = Key(generation: generation, head: head, tail: tail)
+        if key != k {
+            rows = build()
+            lookup = nil
+            key = k
+        }
+        return rows
+    }
+
+    func lookup(
+        generation: UInt64, head: Int, tail: Int,
+        build: () -> [ACPMessageList.VisibleRow]
+    ) -> ACPMessageList.VisibleMessageLookup {
+        let r = rows(generation: generation, head: head, tail: tail, build: build)
+        if let lookup { return lookup }
+        let l = ACPMessageList.visibleMessageLookup(rows: r.map { ($0.index, $0.stableId) })
+        lookup = l
+        return l
     }
 }
 
@@ -1268,7 +1568,12 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         }
 
         private static var isUserDrivenScrollEvent: Bool {
-            ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
+            let event = NSApp.currentEvent
+            let eventIsFresh = ACPUserScrollEvent.isFresh(
+                eventTimestamp: event?.timestamp,
+                now: ProcessInfo.processInfo.systemUptime
+            )
+            return eventIsFresh && ACPUserScrollEvent.isUserDriven(event?.type)
         }
     }
 
@@ -1314,6 +1619,25 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
 /// The covered cases (trackpad and dragging the scroller knob) only fire while
 /// actually scrolling, so they can't be confused with idle layout reflow.
 enum ACPUserScrollEvent {
+    /// `NSApp.currentEvent` lingers after the gesture ends; only treat it as
+    /// the cause of a bounds change when it happened within this window.
+    /// Trackpad momentum keeps emitting scrollWheel events, so live scrolling
+    /// stays fresh.
+    static let freshnessWindow: TimeInterval = 0.35
+
+    /// `NSEvent.timestamp` is seconds since system startup, the same
+    /// timebase as `ProcessInfo.processInfo.systemUptime` (per Apple's
+    /// documentation for `NSEvent.timestamp`), so the two are directly
+    /// comparable without conversion.
+    static func isFresh(
+        eventTimestamp: TimeInterval?,
+        now: TimeInterval,
+        window: TimeInterval = freshnessWindow
+    ) -> Bool {
+        guard let eventTimestamp else { return false }
+        return now - eventTimestamp <= window
+    }
+
     static func isUserDriven(_ type: NSEvent.EventType?) -> Bool {
         guard let type else { return false }
         switch type {

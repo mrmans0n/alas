@@ -67,7 +67,8 @@ struct ACPMessageListPaginationTests {
             newContentHeight: newContentHeight,
             viewportHeight: viewportHeight,
             newMinY: oldTailOffset,
-            followsTranscriptTail: true
+            followsTranscriptTail: true,
+            isRestoring: false
         ))
     }
 
@@ -78,7 +79,8 @@ struct ACPMessageListPaginationTests {
             newContentHeight: 5_220,
             viewportHeight: 600,
             newMinY: 4_400,
-            followsTranscriptTail: false
+            followsTranscriptTail: false,
+            isRestoring: false
         ))
     }
 
@@ -93,7 +95,8 @@ struct ACPMessageListPaginationTests {
             newContentHeight: newContentHeight,
             viewportHeight: viewportHeight,
             newMinY: newTailOffset,
-            followsTranscriptTail: true
+            followsTranscriptTail: true,
+            isRestoring: false
         ))
     }
 
@@ -191,9 +194,10 @@ struct ACPMessageListPaginationTests {
         ])
         let cache = ACPRowFrameCache()
         let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let windowKey = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
 
-        #expect(cache.update(id: "message-40", frame: frame, lookup: lookup))
-        #expect(!cache.update(id: "message-40", frame: frame, lookup: lookup))
+        #expect(cache.update(id: "message-40", frame: frame, lookup: lookup, windowKey: windowKey))
+        #expect(!cache.update(id: "message-40", frame: frame, lookup: lookup, windowKey: windowKey))
         #expect(cache.frames == ["message-40": frame])
     }
 
@@ -205,11 +209,57 @@ struct ACPMessageListPaginationTests {
             (index: 40, stableId: "message-40")
         ])
         let emptyLookup = ACPMessageList.visibleMessageLookup(rows: [])
+        let originalWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
+        let movedWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 0)
 
-        #expect(cache.update(id: "message-40", frame: frame, lookup: originalLookup))
-        #expect(cache.update(id: "message-40", frame: frame, lookup: emptyLookup))
-        #expect(!cache.update(id: "message-40", frame: frame, lookup: emptyLookup))
+        #expect(cache.update(id: "message-40", frame: frame, lookup: originalLookup, windowKey: originalWindow))
+        // Window moved (tail bound changed): the stale scan should run once
+        // here and evict "message-40", which the new lookup no longer contains.
+        #expect(cache.update(id: "message-40", frame: frame, lookup: emptyLookup, windowKey: movedWindow))
+        #expect(!cache.update(id: "message-40", frame: frame, lookup: emptyLookup, windowKey: movedWindow))
         #expect(cache.frames.isEmpty)
+    }
+
+    @Test("modern row-frame cache skips the stale-entry scan while the window key is unchanged")
+    func modernRowFrameCacheSkipsStaleScanForUnchangedWindow() {
+        let cache = ACPRowFrameCache()
+        let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let windowKey = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
+        // The lookup no longer contains "message-40", but the window key is
+        // identical to the one already recorded by the cache's first update
+        // below, so the stale scan must not run again and evict it.
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 41, stableId: "message-41")
+        ])
+
+        #expect(cache.update(id: "message-40", frame: frame, lookup: ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40")
+        ]), windowKey: windowKey))
+        // Same window key as above: even though "message-40" is stale
+        // relative to `lookup`, the cleanup scan already ran for this window
+        // and must not run again, so "message-40" survives this call.
+        #expect(cache.update(id: "message-41", frame: frame, lookup: lookup, windowKey: windowKey))
+        #expect(cache.frames["message-40"] == frame)
+        #expect(cache.frames["message-41"] == frame)
+    }
+
+    @Test("modern row-frame cache runs the stale-entry scan again once the window key changes")
+    func modernRowFrameCacheRerunsStaleScanWhenWindowChanges() {
+        let cache = ACPRowFrameCache()
+        let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let firstWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
+        let secondWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 1, tail: 91)
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 41, stableId: "message-41")
+        ])
+
+        #expect(cache.update(id: "message-40", frame: frame, lookup: ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40")
+        ]), windowKey: firstWindow))
+        // Different window key: the scan must run and evict "message-40",
+        // which `lookup` no longer contains.
+        #expect(cache.update(id: "message-41", frame: frame, lookup: lookup, windowKey: secondWindow))
+        #expect(cache.frames == ["message-41": frame])
     }
 
     @Test("visible message lookup records ids and transcript indices")
@@ -223,6 +273,27 @@ struct ACPMessageListPaginationTests {
         #expect(!lookup.contains("message-39"))
         #expect(lookup.transcriptIndex(for: "message-41") == 41)
         #expect(lookup.firstStableId == "message-40")
+    }
+
+    @Test("tracked anchor is cleared when tail-follow resumes so a later pause can't reuse a stale value")
+    func trackedAnchorResetsWhenTailFollowResumes() {
+        // Resuming clears whatever anchor a previous pause left behind, so
+        // the next pause is forced to recompute from the live frame cache
+        // instead of reusing a value that predates the resume.
+        #expect(ACPMessageList.trackedAnchorAfterFollowsChange(
+            follows: true,
+            previousTrackedAnchor: "message-40"
+        ) == nil)
+        #expect(ACPMessageList.trackedAnchorAfterFollowsChange(
+            follows: true,
+            previousTrackedAnchor: nil
+        ) == nil)
+        // Pausing doesn't touch the tracked anchor; the pause path computes
+        // its own anchor separately.
+        #expect(ACPMessageList.trackedAnchorAfterFollowsChange(
+            follows: false,
+            previousTrackedAnchor: "message-40"
+        ) == "message-40")
     }
 
     @Test("tail pause anchor selection prefers sampled anchors before fallback")
@@ -436,5 +507,32 @@ struct ACPMessageListPaginationTests {
             visibleMessageIds: ["tail-1", "tail-2", "tail-3"],
             isBackfillingOlderMessages: true
         ))
+    }
+
+    @Test func rowFrameAnchorTrackingSkippedWhileFollowingTailOrRestoring() {
+        #expect(!ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: true, isRestoringTail: false, isBackfillingOlderMessages: false))
+        #expect(!ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: false, isRestoringTail: true, isBackfillingOlderMessages: false))
+        #expect(!ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: false, isRestoringTail: false, isBackfillingOlderMessages: true))
+        #expect(ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: false, isRestoringTail: false, isBackfillingOlderMessages: false))
+    }
+
+    @Test func tailScrollSkippedWhenAlreadyAtBottom() {
+        #expect(!ACPMessageList.shouldPerformTailScroll(distanceFromBottom: 0))
+        #expect(!ACPMessageList.shouldPerformTailScroll(
+            distanceFromBottom: ACPScrollDirectionClassifier.bottomTolerance))
+        #expect(ACPMessageList.shouldPerformTailScroll(
+            distanceFromBottom: ACPScrollDirectionClassifier.bottomTolerance + 1))
+        // Unknown geometry (no probe yet) must scroll.
+        #expect(ACPMessageList.shouldPerformTailScroll(distanceFromBottom: nil))
+    }
+
+    @Test func contentGrowthRestoreSuppressedWhileRestoring() {
+        #expect(!ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: 100, newContentHeight: 200, viewportHeight: 50,
+            newMinY: 0, followsTranscriptTail: true, isRestoring: true))
     }
 }
