@@ -316,6 +316,7 @@ struct ACPMessageList: View {
     }
 
     private func restoreRememberedAnchorIfNeeded(proxy: ScrollViewProxy) {
+        guard !scrollBook.isRestoringTail else { return }
         guard !session.followsTranscriptTail else {
             scrollBook.restoredRememberedAnchor = nil
             return
@@ -333,6 +334,10 @@ struct ACPMessageList: View {
     private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
         scrollBook.pendingTailScrollTask?.cancel()
         scrollBook.pendingTailScrollTask = nil
+        let distance = scrollBook.lastScrollProbe.map {
+            max(0, $0.contentHeight - $0.viewportHeight - $0.minY)
+        }
+        guard Self.shouldPerformTailScroll(distanceFromBottom: distance) else { return }
         scrollBook.isRestoringTail = true
         let scroll = {
             proxy.scrollTo("__composer_spacer__", anchor: .bottom)
@@ -711,13 +716,27 @@ struct ACPMessageList: View {
         newContentHeight: CGFloat,
         viewportHeight: CGFloat,
         newMinY: CGFloat,
-        followsTranscriptTail: Bool
+        followsTranscriptTail: Bool,
+        isRestoring: Bool
     ) -> Bool {
+        guard !isRestoring else { return false }
         guard followsTranscriptTail else { return false }
         guard newContentHeight > previousContentHeight + ACPScrollDirectionClassifier.upwardEpsilon else {
             return false
         }
         let distanceFromBottom = max(0, newContentHeight - viewportHeight - newMinY)
+        return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
+    }
+
+    /// Whether `scrollToTail` should actually issue `proxy.scrollTo`. A
+    /// programmatic scroll that lands where the viewport already sits is
+    /// itself a geometry change that can retrigger the very callback that
+    /// scheduled it — so skip it once the last known probe says we're
+    /// already within tolerance of the bottom. Unknown geometry (no probe
+    /// yet, or the legacy pre-macOS 15 path, which never populates the
+    /// probe) always scrolls, preserving prior behavior there.
+    nonisolated static func shouldPerformTailScroll(distanceFromBottom: CGFloat?) -> Bool {
+        guard let distanceFromBottom else { return true }
         return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
     }
 
@@ -920,6 +939,10 @@ struct ACPMessageList: View {
         contentHeight: CGFloat,
         proxy: ScrollViewProxy
     ) {
+        // Always current for `scrollToTail`'s idempotency check below, even
+        // when none of the branches in this function fire.
+        scrollBook.lastScrollProbe = ACPScrollProbe(
+            minY: newMinY, viewportHeight: viewportHeight, contentHeight: contentHeight)
         // Tail-follow pause/resume — reuse the shared classifier so the rules
         // match the legacy observer exactly. `NSApp.currentEvent` reports the
         // most recently processed event, not necessarily the cause of this
@@ -968,7 +991,8 @@ struct ACPMessageList: View {
             newContentHeight: contentHeight,
             viewportHeight: viewportHeight,
             newMinY: newMinY,
-            followsTranscriptTail: session.followsTranscriptTail
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoring: scrollBook.isRestoringTail
         ) {
             scheduleTailScroll(
                 proxy: proxy,
@@ -1104,6 +1128,12 @@ private final class ACPTranscriptScrollBookkeeping {
     var lastHeadStepAt: Date = .distantPast
     var lastTailStepAt: Date = .distantPast
     var pendingTailScrollTask: Task<Void, Never>?
+    /// Most recent modern-path scroll geometry, refreshed on every
+    /// `handleScrollGeometry` call. Lets programmatic scrolls (`scrollToTail`)
+    /// check whether the viewport is already at rest before issuing another
+    /// `proxy.scrollTo`, so a redundant scroll doesn't retrigger the geometry
+    /// callback that scheduled it.
+    var lastScrollProbe: ACPScrollProbe?
 }
 
 /// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's

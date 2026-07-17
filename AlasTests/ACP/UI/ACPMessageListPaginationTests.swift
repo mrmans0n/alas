@@ -67,7 +67,8 @@ struct ACPMessageListPaginationTests {
             newContentHeight: newContentHeight,
             viewportHeight: viewportHeight,
             newMinY: oldTailOffset,
-            followsTranscriptTail: true
+            followsTranscriptTail: true,
+            isRestoring: false
         ))
     }
 
@@ -78,7 +79,8 @@ struct ACPMessageListPaginationTests {
             newContentHeight: 5_220,
             viewportHeight: 600,
             newMinY: 4_400,
-            followsTranscriptTail: false
+            followsTranscriptTail: false,
+            isRestoring: false
         ))
     }
 
@@ -93,7 +95,8 @@ struct ACPMessageListPaginationTests {
             newContentHeight: newContentHeight,
             viewportHeight: viewportHeight,
             newMinY: newTailOffset,
-            followsTranscriptTail: true
+            followsTranscriptTail: true,
+            isRestoring: false
         ))
     }
 
@@ -447,5 +450,21 @@ struct ACPMessageListPaginationTests {
             followsTranscriptTail: false, isRestoringTail: false, isBackfillingOlderMessages: true))
         #expect(ACPMessageList.shouldTrackAnchorFromRowFrames(
             followsTranscriptTail: false, isRestoringTail: false, isBackfillingOlderMessages: false))
+    }
+
+    @Test func tailScrollSkippedWhenAlreadyAtBottom() {
+        #expect(!ACPMessageList.shouldPerformTailScroll(distanceFromBottom: 0))
+        #expect(!ACPMessageList.shouldPerformTailScroll(
+            distanceFromBottom: ACPScrollDirectionClassifier.bottomTolerance))
+        #expect(ACPMessageList.shouldPerformTailScroll(
+            distanceFromBottom: ACPScrollDirectionClassifier.bottomTolerance + 1))
+        // Unknown geometry (no probe yet) must scroll.
+        #expect(ACPMessageList.shouldPerformTailScroll(distanceFromBottom: nil))
+    }
+
+    @Test func contentGrowthRestoreSuppressedWhileRestoring() {
+        #expect(!ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: 100, newContentHeight: 200, viewportHeight: 50,
+            newMinY: 0, followsTranscriptTail: true, isRestoring: true))
     }
 }
