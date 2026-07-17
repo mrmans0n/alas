@@ -2,7 +2,10 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
 struct Helper {
     child: Child,
@@ -750,11 +753,12 @@ struct Fixture {
 
 impl Fixture {
     fn new(_name: &str) -> Self {
+        let id = NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = PathBuf::from(format!("/tmp/aab-{}-{nonce}", std::process::id()));
+        let root = PathBuf::from(format!("/tmp/aab-{}-{id}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).expect("fixture root");
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("fixture home");

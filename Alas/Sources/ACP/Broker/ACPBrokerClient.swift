@@ -58,6 +58,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
     private var unacknowledgedDurableEventCursors: Set<ACPBrokerEventCursor> = []
     private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
+    private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
+    private var activeTurnPollingTask: Task<Void, Never>?
 
     var yieldedUpdateCount: Int {
         stateLock.lock()
@@ -134,7 +136,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             resetAcknowledgedCursor()
         }
         setSnapshot(opened.snapshot)
-        try await attachAndReplay()
+        let snapshot = try await attachAndReplay()
+        if opened.adopted {
+            startActiveTurnPollingIfNeeded(snapshot: snapshot)
+        }
         return opened
     }
 
@@ -220,6 +225,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func shutdown() async {
+        cancelActiveTurnPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
         }
@@ -236,7 +242,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         terminalsCont.finish()
     }
 
-    private func attachAndReplay() async throws {
+    @discardableResult
+    private func attachAndReplay() async throws -> ACPBrokerSnapshot {
         let generation = try currentGeneration()
         let cursor = currentAcknowledgedCursor()
         let attached = try await service.attach(ACPBrokerAttachParams(
@@ -249,9 +256,64 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         for event in attached.events {
             dispatch(event, pendingRequestIds: pendingRequestIds)
         }
+        for request in attached.snapshot.pendingRequests {
+            dispatchPendingRequest(request, cursor: attached.snapshot.acknowledgedCursor)
+        }
+        return attached.snapshot
+    }
+
+    private func startActiveTurnPollingIfNeeded(snapshot: ACPBrokerSnapshot) {
+        guard snapshot.turnState.needsActiveTurnPolling else { return }
+        stateLock.lock()
+        if activeTurnPollingTask != nil {
+            stateLock.unlock()
+            return
+        }
+        activeTurnPollingTask = Task { [weak self] in
+            await self?.pollActiveTurn()
+        }
+        stateLock.unlock()
+    }
+
+    private func pollActiveTurn() async {
+        defer { clearActiveTurnPollingTask() }
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+                let snapshot = try await attachAndReplay()
+                if !snapshot.turnState.needsActiveTurnPolling {
+                    return
+                }
+            } catch {
+                finishStreams()
+                return
+            }
+        }
+    }
+
+    private func cancelActiveTurnPolling() {
+        stateLock.lock()
+        let task = activeTurnPollingTask
+        activeTurnPollingTask = nil
+        stateLock.unlock()
+        task?.cancel()
+    }
+
+    private func clearActiveTurnPollingTask() {
+        stateLock.lock()
+        activeTurnPollingTask = nil
+        stateLock.unlock()
     }
 
     private func dispatch(_ event: ACPBrokerEvent, pendingRequestIds: Set<String>? = nil) {
+        stateLock.lock()
+        if dispatchedEventCursors.contains(event.cursor) {
+            stateLock.unlock()
+            return
+        }
+        dispatchedEventCursors.insert(event.cursor)
+        stateLock.unlock()
+
         switch event.kind {
         case .adapterNotification(let method, let params):
             dispatchAdapterNotification(method: method, params: params, cursor: event.cursor)
@@ -295,6 +357,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 elicitationCompletionsCont.yield(decoded)
             }
         case "adapter/exit":
+            cancelActiveTurnPolling()
             finishStreams()
         default:
             break
@@ -585,6 +648,17 @@ private struct AnyEncodableBrokerBox: Encodable {
 
     func encode(to encoder: Encoder) throws {
         try value.encode(to: encoder)
+    }
+}
+
+private extension ACPBrokerTurnState {
+    var needsActiveTurnPolling: Bool {
+        switch self {
+        case .sending, .streaming, .awaitingInput, .cancelling:
+            return true
+        case .idle, .completed, .ambiguous, .unknown:
+            return false
+        }
     }
 }
 

@@ -330,6 +330,45 @@ struct ACPBrokerClientTests {
         #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
     }
 
+    @Test func snapshotPendingRequestIsYieldedWhenEventIsAlreadyAcknowledged() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(
+            events: [],
+            snapshotPendingRequests: [
+                ACPBrokerPendingRequest(
+                    requestId: "99",
+                    adapterRequestId: .number(99),
+                    kind: .permission,
+                    payload: .object([
+                        "method": .string("session/request_permission"),
+                        "params": .object([
+                            "sessionId": .string("remote-1"),
+                            "toolCall": .object(["toolCallId": .string("tool-1")]),
+                            "options": .array([])
+                        ])
+                    ])
+                )
+            ],
+            snapshotJournalTail: ACPBrokerEventCursor(rawValue: 8)
+        )
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 5)
+        )
+        let permissionTask = Task { try await nextPermission(from: client.permissionRequests) }
+
+        try await client.start()
+
+        let permission = try await permissionTask.value
+        #expect(permission.id == .number(99))
+        client.respondToPermission(id: permission.id, response: .init(outcome: .selected(optionId: "allow")))
+
+        try await waitUntil { await service.responded.count == 1 }
+        let response = try await #require(service.responded.first)
+        #expect(response.requestId == .number(99))
+        #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 5)])
+    }
+
     @Test func pendingRequestAckWaitsForEarlierStreamedUpdateAck() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -486,6 +525,56 @@ struct ACPBrokerClientTests {
         #expect(await service.attached.count == 3)
     }
 
+    @Test func adoptedActiveTurnPollsForLaterEventsAfterStart() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.enqueueAttach(events: [], turnState: .streaming)
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("hello")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ], turnState: .streaming)
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: "queued-prompt:item:0:session/prompt"),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            )
+        ], turnState: .completed)
+        let client = makeClient(service: service)
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+
+        try await client.start()
+
+        let update = try await updateTask.value
+        if case .agentMessageChunk(let chunk) = update.update {
+            #expect(chunk.content == .text("hello"))
+        } else {
+            Issue.record("expected agent message chunk")
+        }
+        try await waitUntil { await service.attached.count == 3 }
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(await service.attached.count == 3)
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -613,17 +702,32 @@ private actor MockBrokerService: ACPBrokerServicing {
     var acks: [ACPBrokerAckParams] = []
     var detached: [ACPBrokerDetachParams] = []
     var closed: [ACPBrokerCloseParams] = []
-    var attachEvents: [[ACPBrokerEvent]] = []
+    private var attachReplies: [AttachReply] = []
     var sendResults: [ACPBrokerSendResult] = []
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
+    var openAdopted = false
 
-    func enqueueAttach(events: [ACPBrokerEvent]) {
-        attachEvents.append(events)
+    func enqueueAttach(
+        events: [ACPBrokerEvent],
+        snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
+        snapshotJournalTail: ACPBrokerEventCursor? = nil,
+        turnState: ACPBrokerTurnState = .idle
+    ) {
+        attachReplies.append(AttachReply(
+            events: events,
+            snapshotPendingRequests: snapshotPendingRequests,
+            snapshotJournalTail: snapshotJournalTail,
+            turnState: turnState
+        ))
     }
 
     func enqueueSendResult(_ result: ACPBrokerSendResult) {
         sendResults.append(result)
+    }
+
+    func setOpenAdopted(_ adopted: Bool) {
+        openAdopted = adopted
     }
 
     func setSnapshotResults(
@@ -636,17 +740,20 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
-        return ACPBrokerOpenResult(snapshot: snapshot(journalTail: 0), adopted: false)
+        return ACPBrokerOpenResult(snapshot: snapshot(journalTail: 0), adopted: openAdopted)
     }
 
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
         attached.append(params)
-        let events = attachEvents.isEmpty ? [] : attachEvents.removeFirst()
-        let tail = events.map(\.cursor).max() ?? params.acknowledgedCursor
+        let reply = attachReplies.isEmpty ? AttachReply(events: []) : attachReplies.removeFirst()
+        let events = reply.events
+        let tail = reply.snapshotJournalTail ?? events.map(\.cursor).max() ?? params.acknowledgedCursor
         return ACPBrokerAttachResult(
             snapshot: snapshot(
                 journalTail: tail.rawValue,
-                pendingRequests: pendingRequests(from: events)
+                acknowledgedCursor: params.acknowledgedCursor,
+                pendingRequests: reply.snapshotPendingRequests ?? pendingRequests(from: events),
+                turnState: reply.turnState
             ),
             events: events
         )
@@ -691,7 +798,9 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     private func snapshot(
         journalTail: UInt64,
-        pendingRequests: [ACPBrokerPendingRequest] = []
+        acknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
+        pendingRequests: [ACPBrokerPendingRequest] = [],
+        turnState: ACPBrokerTurnState = .idle
     ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
@@ -706,8 +815,8 @@ private actor MockBrokerService: ACPBrokerServicing {
             ),
             initializeResult: snapshotInitializeResult,
             remoteSessionResult: snapshotRemoteSessionResult,
-            turnState: .idle,
-            acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0),
+            turnState: turnState,
+            acknowledgedCursor: acknowledgedCursor,
             journalTail: ACPBrokerEventCursor(rawValue: journalTail),
             pendingRequests: pendingRequests,
             operations: []
@@ -727,5 +836,24 @@ private actor MockBrokerService: ACPBrokerServicing {
             }
         }
         return Array(pending.values)
+    }
+
+    private struct AttachReply {
+        let events: [ACPBrokerEvent]
+        let snapshotPendingRequests: [ACPBrokerPendingRequest]?
+        let snapshotJournalTail: ACPBrokerEventCursor?
+        let turnState: ACPBrokerTurnState
+
+        init(
+            events: [ACPBrokerEvent],
+            snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
+            snapshotJournalTail: ACPBrokerEventCursor? = nil,
+            turnState: ACPBrokerTurnState = .idle
+        ) {
+            self.events = events
+            self.snapshotPendingRequests = snapshotPendingRequests
+            self.snapshotJournalTail = snapshotJournalTail
+            self.turnState = turnState
+        }
     }
 }
