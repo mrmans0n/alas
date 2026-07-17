@@ -1582,8 +1582,11 @@ final class ACPSessionManager: ObservableObject {
             },
             onTurnStateChanged: { [weak self] turnState in
                 Task { @MainActor [weak self] in
-                    guard let session = self?.sessions[sessionId] else { return }
+                    guard let self, let session = self.sessions[sessionId] else { return }
                     Self.applyBrokerTurnState(turnState, to: session)
+                    if Self.brokerTurnStateAllowsQueueFlush(turnState) {
+                        self.runners[sessionId]?.flushQueueIfIdle()
+                    }
                 }
             }
         )
@@ -1619,6 +1622,15 @@ final class ACPSessionManager: ObservableObject {
             session.transcript.streamingState = .awaitingInput
         case .idle, .completed, .ambiguous, .unknown:
             session.transcript.streamingState = .idle
+        }
+    }
+
+    private static func brokerTurnStateAllowsQueueFlush(_ turnState: ACPBrokerTurnState) -> Bool {
+        switch turnState {
+        case .idle, .completed, .ambiguous, .unknown:
+            return true
+        case .sending, .streaming, .awaitingInput, .cancelling:
+            return false
         }
     }
 
