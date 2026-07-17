@@ -1278,6 +1278,85 @@ let second = true
         #expect(value == "kept")
     }
 
+    /// Regression test for a review-flagged edge case in the beachball fix: a
+    /// row's OWN local wrap count can change on a resize (e.g. widening the
+    /// pane lets a previously two-line row fit on one line) while its target
+    /// height — driven by the paired old/new row — stays exactly the same.
+    /// The applied per-line height must be re-derived from the row's CURRENT
+    /// geometry in that case, not left at the stale value computed for the
+    /// old wrap count, or the row renders too short and misaligns with its
+    /// counterpart.
+    @Test func synchronizeRowHeightsRecomputesAfterWrapCountChangesWithStableTarget() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let longLine = "let value = \"padding padding padding padding\""
+        let metadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 0, length: (longLine as NSString).length)
+            ),
+        ]
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: longLine,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 160, height: 200))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let narrowRows = codeView.diffRowRects()
+        #expect(narrowRows.count == 1)
+
+        let fontLineHeight = ceil(font.ascender + abs(font.descender) + font.leading)
+        let narrowLineCount = max(1, Int(round(narrowRows[0].height / fontLineHeight)))
+        #expect(narrowLineCount > 1)
+
+        // Simulate a counterpart on the other side that's one visual line
+        // taller than this (currently multi-line-wrapped) row.
+        let target = CGFloat(narrowLineCount + 1) * fontLineHeight
+        scrollView.synchronizeRowHeights([target])
+
+        let paddedParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(abs(paddedParagraph.minimumLineHeight - target / CGFloat(narrowLineCount)) < 0.5)
+
+        // Widen the pane so the same text now fits on a single visual line.
+        // The row's target height (still `target`, as if the counterpart
+        // hasn't changed) is unchanged, but the per-line height needed to
+        // reach it is no longer `target / 2` — it's `target / 1`.
+        scrollView.setFrameSize(NSSize(width: 600, height: 200))
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.synchronizeRowHeights([target])
+        scrollView.layoutSubtreeIfNeeded()
+
+        let wideRows = codeView.diffRowRects()
+        #expect(wideRows.count == 1)
+        #expect(abs(wideRows[0].height - target) < 0.5)
+
+        let recomputedParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(abs(recomputedParagraph.minimumLineHeight - target) < 0.5)
+    }
+
     /// Regression test for a live-lock (beachball): a row whose target height
     /// permanently differs from its natural height (e.g. its paired old/new
     /// row wraps to a different line count) must keep its custom line-height
