@@ -2900,7 +2900,11 @@ extension ACPSessionManager {
             session.contextRestoreWarning = restoreWarning
             guard await persistSessionRemoteId(session) else {
                 session.remoteSessionId = persistedRows[sessionId]?.remoteSessionId
-                await connection.shutdown()
+                if isDisposed {
+                    await connection.shutdown()
+                } else {
+                    await connection.detach()
+                }
                 startedRunner?.stop()
                 await startedRunner?.flushPersistence()
                 session.agentState = .idle
