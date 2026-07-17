@@ -2163,7 +2163,7 @@ struct ReviewDraftCommentCard: View {
     private func sendToAgentControl(isEnabled: Bool) -> some View {
         let targets = actions.agentTargets()
         if targets.count > 1 {
-            Menu("Send") {
+            Menu {
                 let existingTargets = targets.filter { !$0.isNewChat }
                 let newChatTargets = targets.filter { $0.isNewChat }
                 ForEach(existingTargets) { target in
@@ -2183,13 +2183,17 @@ struct ReviewDraftCommentCard: View {
                         sendToAgentTargetLabel(target)
                     }
                 }
+            } label: {
+                sendActionLabel(enabled: isEnabled, showsMenuIndicator: true)
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .disabled(!isEnabled)
             .help("Send")
             .accessibilityIdentifier("diff-review-draft-comment-action-send-\(comment.id)")
+            .accessibilityLabel("Send")
         } else {
-            actionButton(id: "send", title: "Send", enabled: isEnabled) {
+            sendActionButton(enabled: isEnabled) {
                 guard let target = targets.first else { return }
                 actions.sendToAgent(feedbackBundle, target)
             }
@@ -2206,6 +2210,50 @@ struct ReviewDraftCommentCard: View {
                 Image(systemName: "sparkle")
             }
         }
+    }
+
+    private func sendActionButton(enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            sendActionLabel(enabled: enabled, showsMenuIndicator: false)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .help("Send")
+        .accessibilityIdentifier(accessibilityIdentifier(forActionID: "send"))
+        .accessibilityLabel("Send")
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "\(markerIdentifier(forActionID: "send"))-label",
+                label: "Send"
+            )
+        )
+        .background(
+            ReviewDraftCommentActionPressMarker(
+                identifier: markerIdentifier(forActionID: "send"),
+                label: "Send",
+                isEnabled: enabled,
+                action: action
+            )
+        )
+    }
+
+    private func sendActionLabel(enabled: Bool, showsMenuIndicator: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 9.5, weight: .semibold))
+            Text("Send")
+                .font(.system(size: 10, weight: .semibold))
+            if showsMenuIndicator {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .padding(.leading, 1)
+            }
+        }
+        .foregroundColor(enabled ? theme.color("bg-0") : theme.color("fg-faint"))
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(enabled ? theme.color("accent") : theme.color("bg-3"))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
     private func actionButton(
