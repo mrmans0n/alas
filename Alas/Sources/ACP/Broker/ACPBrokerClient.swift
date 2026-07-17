@@ -55,6 +55,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var nextOperationIndex = 0
     private var _yieldedUpdateCount = 0
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
+    private var pendingOutboundRequestIds: Set<JSONRPCID> = []
     private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
     private var unacknowledgedDurableEventCursors: Set<ACPBrokerEventCursor> = []
     private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
@@ -159,14 +160,17 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 method: request.method,
                 params: params
             ))
+            markPendingOutboundRequest(id: result.requestId.jsonRPCID)
             try await attachAndReplay()
             if let error = result.error {
+                clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
                 throw ACPClientError.jsonrpc(error)
             }
             if result.pending == true && result.result == nil {
                 try await Task.sleep(for: .milliseconds(50))
                 continue
             }
+            clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
             let cursor = currentOperationCompletionCursor(for: operationKey)
             return ACPResponse(
                 body: try (result.result ?? .null).data,
@@ -221,7 +225,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return pendingInboundCursors[id] != nil
+        return pendingOutboundRequestIds.contains(id)
     }
 
     func shutdown() async {
@@ -577,6 +581,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
         initializeResult = snapshot.initializeResult ?? initializeResult
         remoteSessionResult = snapshot.remoteSessionResult ?? remoteSessionResult
+        for operation in snapshot.operations {
+            let id = operation.adapterRequestId.jsonRPCID
+            if operation.terminalOutcome == nil {
+                pendingOutboundRequestIds.insert(id)
+            } else {
+                pendingOutboundRequestIds.remove(id)
+            }
+        }
         let state = durableStateLocked()
         stateLock.unlock()
         if let state {
@@ -607,6 +619,18 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return operationCompletionCursors[operationKey]
+    }
+
+    private func markPendingOutboundRequest(id: JSONRPCID) {
+        stateLock.lock()
+        pendingOutboundRequestIds.insert(id)
+        stateLock.unlock()
+    }
+
+    private func clearPendingOutboundRequest(id: JSONRPCID) {
+        stateLock.lock()
+        pendingOutboundRequestIds.remove(id)
+        stateLock.unlock()
     }
 
     private func nextOperationKey(method: String) -> ACPBrokerOperationKey {
@@ -659,6 +683,12 @@ private extension ACPBrokerTurnState {
         case .idle, .completed, .ambiguous, .unknown:
             return false
         }
+    }
+}
+
+private extension ACPBrokerAdapterRequestID {
+    var jsonRPCID: JSONRPCID {
+        .number(Int(rawValue))
     }
 }
 

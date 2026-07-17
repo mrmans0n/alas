@@ -539,6 +539,57 @@ struct ACPBrokerClientTests {
         #expect(await service.attached.count == 3)
     }
 
+    @Test func pendingBrokerSendTracksOutboundRequestIdForScopedElicitations() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        await service.enqueueAttach(events: [])
+        await service.enqueueAttach(events: [])
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: false,
+            pending: true
+        ))
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: true,
+            result: .object(["stopReason": .string("end_turn")])
+        ))
+        let client = makeClient(service: service)
+        try await client.start()
+
+        let sendTask = Task {
+            try await client.send(ACPRequest(
+                method: "session/prompt",
+                params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
+            ))
+        }
+
+        try await waitUntil { client.hasPendingOutboundRequest(id: .number(4)) }
+        _ = try await sendTask.value
+        #expect(client.hasPendingOutboundRequest(id: .number(4)) == false)
+    }
+
+    @Test func restoredActiveOperationTracksOutboundRequestId() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(
+            events: [],
+            snapshotOperations: [
+                ACPBrokerOperationSnapshot(
+                    operationKey: ACPBrokerOperationKey(rawValue: "queued-prompt:item:0:session/prompt"),
+                    adapterRequestId: ACPBrokerAdapterRequestID(rawValue: 7),
+                    method: "session/prompt",
+                    params: .object(["prompt": .string("hi")]),
+                    terminalOutcome: nil
+                )
+            ]
+        )
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        #expect(client.hasPendingOutboundRequest(id: .number(7)) == true)
+    }
+
     @Test func adoptedActiveTurnPollsForLaterEventsAfterStart() async throws {
         let service = MockBrokerService()
         await service.setOpenAdopted(true)
@@ -726,12 +777,14 @@ private actor MockBrokerService: ACPBrokerServicing {
         events: [ACPBrokerEvent],
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
+        snapshotOperations: [ACPBrokerOperationSnapshot] = [],
         turnState: ACPBrokerTurnState = .idle
     ) {
         attachReplies.append(AttachReply(
             events: events,
             snapshotPendingRequests: snapshotPendingRequests,
             snapshotJournalTail: snapshotJournalTail,
+            snapshotOperations: snapshotOperations,
             turnState: turnState
         ))
     }
@@ -767,6 +820,7 @@ private actor MockBrokerService: ACPBrokerServicing {
                 journalTail: tail.rawValue,
                 acknowledgedCursor: params.acknowledgedCursor,
                 pendingRequests: reply.snapshotPendingRequests ?? pendingRequests(from: events),
+                operations: reply.snapshotOperations,
                 turnState: reply.turnState
             ),
             events: events
@@ -814,6 +868,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         journalTail: UInt64,
         acknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         pendingRequests: [ACPBrokerPendingRequest] = [],
+        operations: [ACPBrokerOperationSnapshot] = [],
         turnState: ACPBrokerTurnState = .idle
     ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
@@ -833,7 +888,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             acknowledgedCursor: acknowledgedCursor,
             journalTail: ACPBrokerEventCursor(rawValue: journalTail),
             pendingRequests: pendingRequests,
-            operations: []
+            operations: operations
         )
     }
 
@@ -856,17 +911,20 @@ private actor MockBrokerService: ACPBrokerServicing {
         let events: [ACPBrokerEvent]
         let snapshotPendingRequests: [ACPBrokerPendingRequest]?
         let snapshotJournalTail: ACPBrokerEventCursor?
+        let snapshotOperations: [ACPBrokerOperationSnapshot]
         let turnState: ACPBrokerTurnState
 
         init(
             events: [ACPBrokerEvent],
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
+            snapshotOperations: [ACPBrokerOperationSnapshot] = [],
             turnState: ACPBrokerTurnState = .idle
         ) {
             self.events = events
             self.snapshotPendingRequests = snapshotPendingRequests
             self.snapshotJournalTail = snapshotJournalTail
+            self.snapshotOperations = snapshotOperations
             self.turnState = turnState
         }
     }
