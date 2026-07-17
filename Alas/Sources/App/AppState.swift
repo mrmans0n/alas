@@ -4791,10 +4791,10 @@ final class AppState {
         }
         mgr.externalMCPStatusProvider = { [weak self] worktreePath in
             guard let self else { return (.unknown, nil, []) }
-            let adapterState = PiMCPAdapterInspector.state()
+            let worktreeURL = URL(fileURLWithPath: worktreePath)
+            let adapterState = PiMCPAdapterInspector.state(worktreeURL: worktreeURL)
             let project = self.projects.first(where: { $0.id == worktree.projectId })
             let servers = project?.mcpServers ?? []
-            let worktreeURL = URL(fileURLWithPath: worktreePath)
             // Resolved unconditionally — even when the adapter is not
             // (yet) installed — so the preamble can name the project's
             // servers regardless of adapter state ("not installed" wording

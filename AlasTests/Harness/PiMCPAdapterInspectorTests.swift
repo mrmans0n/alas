@@ -15,11 +15,31 @@ struct PiMCPAdapterInspectorTests {
         return dir.deletingLastPathComponent()
     }
 
+    private func makeWorktree(packageJSON: String?) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pi-worktree-\(UUID().uuidString)/.pi/npm", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let packageJSON {
+            try packageJSON.write(to: dir.appendingPathComponent("package.json"),
+                                  atomically: true, encoding: .utf8)
+        }
+        return dir.deletingLastPathComponent().deletingLastPathComponent()
+    }
+
     @Test("installed when dependencies contain pi-mcp-adapter")
     func installed() throws {
         let dir = try makeAgentDir(packageJSON:
             #"{"dependencies": {"pi-mcp-adapter": "^2.11.0", "other": "1.0.0"}}"#)
         #expect(PiMCPAdapterInspector.state(agentDir: dir) == .installed)
+    }
+
+    @Test("installed when project-local dependencies contain pi-mcp-adapter")
+    func installedProjectLocal() throws {
+        let agentDir = try makeAgentDir(packageJSON: nil)
+        let worktree = try makeWorktree(packageJSON:
+            #"{"dependencies": {"pi-mcp-adapter": "^2.11.0"}}"#)
+
+        #expect(PiMCPAdapterInspector.state(agentDir: agentDir, worktreeURL: worktree) == .installed)
     }
 
     @Test("missing when the manifest parses without it")
