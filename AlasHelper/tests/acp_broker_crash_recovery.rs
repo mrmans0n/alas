@@ -680,7 +680,7 @@ fn adapter_jsonrpc_errors_are_returned_as_send_errors() {
     let open = helper.request("acp/open", fixture.open_params("broker-adapter-error", 0));
     let generation = open["snapshot"]["metadata"]["generation"].clone();
 
-    send(
+    drive_until_operation_completed(
         &mut helper,
         "broker-adapter-error",
         generation.clone(),
@@ -689,7 +689,7 @@ fn adapter_jsonrpc_errors_are_returned_as_send_errors() {
         json!({}),
     );
 
-    let failed = send(
+    let failed = drive_until_operation_completed(
         &mut helper,
         "broker-adapter-error",
         generation.clone(),
@@ -785,6 +785,32 @@ fn send(
             "params": params
         }),
     )
+}
+
+fn drive_until_operation_completed(
+    helper: &mut Helper,
+    broker_id: &str,
+    generation: Value,
+    method: &str,
+    operation_key: &str,
+    params: Value,
+) -> Value {
+    for _ in 0..20 {
+        let result = send(
+            helper,
+            broker_id,
+            generation.clone(),
+            method,
+            operation_key,
+            params.clone(),
+        );
+        if result.get("result").is_some() || result.get("error").is_some() {
+            return result;
+        }
+        assert_eq!(result["pending"], true, "{result}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for operation completion");
 }
 
 fn drive_until_pending_request(

@@ -437,8 +437,6 @@ fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
 
 fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpSendParams = decode(params)?;
-    let method = params.method.clone();
-    let operation_key = params.operation_key.clone();
     let operation = {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
@@ -482,14 +480,11 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
             params.params,
         )?;
     }
-    if method == "session/prompt" {
-        return Ok(json!({
-            "requestId": operation.adapter_request_id,
-            "replayed": operation.replayed,
-            "pending": true
-        }));
-    }
-    wait_for_operation_or_pending_input(runtime, &operation_key, Duration::from_secs(24 * 60 * 60))
+    Ok(json!({
+        "requestId": operation.adapter_request_id,
+        "replayed": operation.replayed,
+        "pending": true
+    }))
 }
 
 fn broker_notify(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
@@ -756,74 +751,6 @@ fn apply_outcome_fields(response: &mut Value, outcome: AdapterRPCOutcome) {
             }
         }
     }
-}
-
-fn wait_for_operation_or_pending_input(
-    runtime: &Runtime,
-    operation_key: &OperationKey,
-    timeout: Duration,
-) -> Result<Value, AcpBrokerProcessError> {
-    let (lock, condvar) = &*runtime.state;
-    let mut state = lock.lock().expect("broker state poisoned");
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let snapshot = state.broker.snapshot();
-        if let Some(operation) = snapshot
-            .operations
-            .iter()
-            .find(|operation| operation.operation_key == *operation_key)
-        {
-            if let Some(outcome) = &operation.terminal_outcome {
-                let mut response = json!({
-                    "requestId": operation.adapter_request_id,
-                    "replayed": false,
-                });
-                apply_outcome_fields(&mut response, outcome.clone());
-                return Ok(response);
-            }
-            if !snapshot.pending_requests.is_empty() {
-                return Ok(json!({
-                    "requestId": operation.adapter_request_id,
-                    "replayed": false,
-                    "pending": true
-                }));
-            }
-            if has_replayable_progress(&state) {
-                return Ok(json!({
-                    "requestId": operation.adapter_request_id,
-                    "replayed": false,
-                    "pending": true
-                }));
-            }
-        }
-        let now = std::time::Instant::now();
-        if now >= deadline {
-            return Err(broker_error(-32073, "operation timed out"));
-        }
-        let wait_for = deadline
-            .saturating_duration_since(now)
-            .min(Duration::from_secs(1));
-        let (next_state, _) = condvar
-            .wait_timeout(state, wait_for)
-            .expect("broker state poisoned");
-        state = next_state;
-    }
-}
-
-fn has_replayable_progress(state: &RuntimeState) -> bool {
-    let snapshot = state.broker.snapshot();
-    state
-        .broker
-        .replay_after_ack()
-        .into_iter()
-        .any(|event| match event.kind {
-            crate::acp_broker::BrokerEventKind::AdapterNotification { .. } => true,
-            crate::acp_broker::BrokerEventKind::PendingRequest { request } => snapshot
-                .pending_requests
-                .iter()
-                .any(|pending| pending.request_id == request.request_id),
-            _ => false,
-        })
 }
 
 fn write_adapter_request(
