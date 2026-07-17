@@ -3029,11 +3029,13 @@ struct ACPSessionRunnerTests {
             mock.sent.first { $0.method == "session/prompt" }?.params as? ACPSessionPromptParams)
         #expect(params.prompt.count == 2)
         guard case let .text(first) = params.prompt[0] else {
-            Issue.record("expected leading text block"); return
+            Issue.record("expected leading text block")
+            return
         }
         #expect(first == "<alas-workspace-context>ctx</alas-workspace-context>")
         guard case let .text(second) = params.prompt[1] else {
-            Issue.record("expected user text block"); return
+            Issue.record("expected user text block")
+            return
         }
         #expect(second == "hello")
 
