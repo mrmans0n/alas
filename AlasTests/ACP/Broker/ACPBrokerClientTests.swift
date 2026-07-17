@@ -229,6 +229,28 @@ struct ACPBrokerClientTests {
         }
     }
 
+    @Test func adapterExitNotificationFinishesUpdateStream() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "adapter/exit",
+                    params: .object(["unexpected": .bool(true)])
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+        let finishedTask = Task {
+            var iterator = client.incomingUpdates.makeAsyncIterator()
+            return await iterator.next() == nil
+        }
+
+        try await client.start()
+
+        #expect(await finishedTask.value == true)
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

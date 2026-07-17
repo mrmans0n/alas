@@ -223,6 +223,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         if let generation = try? currentGeneration() {
             _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
         }
+        finishStreams()
+    }
+
+    private func finishStreams() {
         updatesCont.finish()
         permsCont.finish()
         questionsCont.finish()
@@ -290,6 +294,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             if let decoded = try? JSONDecoder().decode(ACPElicitationCompleteParams.self, from: params.data) {
                 elicitationCompletionsCont.yield(decoded)
             }
+        case "adapter/exit":
+            finishStreams()
         default:
             break
         }

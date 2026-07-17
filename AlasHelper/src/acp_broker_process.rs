@@ -192,14 +192,15 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     set_restrictive_dir_permissions(&dir)?;
 
     if broker_is_running(&dir) {
-        let result = send_ipc(&dir, "snapshot", json!({}))?;
-        return Ok(json!(AcpOpenResult {
-            snapshot: serde_json::from_value(result).map_err(|error| broker_error(
-                -32072,
-                format!("snapshot decode failed: {error}")
-            ))?,
-            adopted: true,
-        }));
+        if let Ok(result) = send_ipc(&dir, "snapshot", json!({})) {
+            return Ok(json!(AcpOpenResult {
+                snapshot: serde_json::from_value(result).map_err(|error| broker_error(
+                    -32072,
+                    format!("snapshot decode failed: {error}")
+                ))?,
+                adopted: true,
+            }));
+        }
     }
 
     let env = decode_env(params.env)?;
@@ -319,7 +320,21 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
                 Ok(stream) => stream,
                 Err(_) => continue,
             };
-            let _ = handle_ipc_stream(runtime.clone(), stream);
+            let mut line = String::new();
+            {
+                let mut reader = BufReader::new(&stream);
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+            }
+            if ipc_line_is_close(&line) {
+                let _ = handle_ipc_line(runtime.clone(), stream, line);
+            } else {
+                let request_runtime = runtime.clone();
+                std::thread::spawn(move || {
+                    let _ = handle_ipc_line(request_runtime, stream, line);
+                });
+            }
             if runtime_is_closing(&runtime) {
                 break;
             }
@@ -335,12 +350,7 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
 }
 
 #[cfg(unix)]
-fn handle_ipc_stream(runtime: Runtime, mut stream: UnixStream) -> io::Result<()> {
-    let mut line = String::new();
-    {
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut line)?;
-    }
+fn handle_ipc_line(runtime: Runtime, mut stream: UnixStream, line: String) -> io::Result<()> {
     let response = match serde_json::from_str::<BrokerIpcRequest>(&line) {
         Ok(request) => match handle_ipc_request(&runtime, request) {
             Ok(result) => BrokerIpcResponse {
@@ -366,6 +376,12 @@ fn handle_ipc_stream(runtime: Runtime, mut stream: UnixStream) -> io::Result<()>
         serde_json::to_string(&response).expect("IPC response serialization")
     )?;
     stream.flush()
+}
+
+fn ipc_line_is_close(line: &str) -> bool {
+    serde_json::from_str::<BrokerIpcRequest>(line)
+        .map(|request| request.method == "close")
+        .unwrap_or(false)
 }
 
 fn handle_ipc_request(
