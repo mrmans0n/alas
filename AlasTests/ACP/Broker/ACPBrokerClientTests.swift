@@ -511,6 +511,65 @@ struct ACPBrokerClientTests {
         }
     }
 
+    @Test func laterStreamedUpdateAckWaitsForDeferredPromptResponseAck() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: "op-prefix:1:session/prompt"),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("after-completion")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ])
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: false,
+            result: .object(["stopReason": .string("end_turn")])
+        ))
+        let client = makeClient(service: service)
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+        try await client.start()
+
+        let response = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
+        ))
+        let update = try await updateTask.value
+
+        update.durableConsumptionAcknowledgement?()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await service.acks.isEmpty)
+
+        response.acknowledgeDurableConsumption()
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [
+                ACPBrokerEventCursor(rawValue: 2),
+                ACPBrokerEventCursor(rawValue: 3)
+            ]
+        }
+    }
+
     @Test func sendWaitsAcrossPendingResultAndReplaysPendingRequest() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])

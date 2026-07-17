@@ -182,6 +182,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
             let cursor = currentOperationCompletionCursor(for: operationKey)
+            if let cursor {
+                trackDeferredResponse(cursor: cursor)
+            }
             return ACPResponse(
                 body: try (result.result ?? .null).data,
                 durableConsumptionAcknowledgement: { [weak self] in
@@ -561,11 +564,20 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         unacknowledgedDurableEventCursors.remove(cursor)
         stateLock.unlock()
-        ack(cursor: cursor)
+        ackAfterEarlierDurableEvents(cursor: cursor)
     }
 
     private func ackResponse(cursor: ACPBrokerEventCursor) {
+        stateLock.lock()
+        unacknowledgedDurableEventCursors.remove(cursor)
+        stateLock.unlock()
         ackAfterEarlierDurableEvents(cursor: cursor)
+    }
+
+    private func trackDeferredResponse(cursor: ACPBrokerEventCursor) {
+        stateLock.lock()
+        unacknowledgedDurableEventCursors.insert(cursor)
+        stateLock.unlock()
     }
 
     private func ackAfterEarlierDurableEvents(cursor: ACPBrokerEventCursor) {
