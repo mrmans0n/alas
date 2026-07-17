@@ -116,6 +116,8 @@ struct HydrationResult: Sendable {
                 remoteSessionId: row.remoteSessionId,
                 origin: row.origin,
                 contextRecoveryPending: row.contextRecoveryPending,
+                mcpPreamblePending: row.mcpPreamblePending,
+                mcpPreambleSent: row.mcpPreambleSent,
                 currentModel: row.currentModel, currentMode: row.currentMode,
                 autoRun: row.autoRun,
                 createdAt: row.createdAt, updatedAt: row.updatedAt,

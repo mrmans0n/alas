@@ -85,6 +85,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only MCP attachment result for the most recent attach. It
     /// contains no resolved commands, environment values, or headers.
     @Published var mcpAttachmentSummary: MCPAttachmentSummary?
+    /// MCP context preamble queued for the next prompt of a freshly created
+    /// remote session. Wire-only: prepended to the outgoing blocks by the
+    /// runner, never recorded in the transcript. Cleared after the first
+    /// successful `session/prompt`. Persisted so an app restart before the
+    /// first prompt does not lose it.
+    @Published var pendingMCPPreamble: String?
+    /// Whether this session's MCP preamble was delivered in a prompt.
+    @Published var mcpPreambleSent: Bool = false
     /// Runtime-only auth method selected by the user in the sign-in banner.
     /// The next attach consumes it by calling ACP `authenticate` after
     /// initialize and before session creation/loading.

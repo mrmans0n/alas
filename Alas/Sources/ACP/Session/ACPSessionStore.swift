@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 12
+    static let targetSchemaVersion = 13
     let path: String
     let db: SQLiteDatabase
 
@@ -39,6 +39,7 @@ final class ACPSessionStore {
         if current < 10 { try migrate_to_v10() }
         if current < 11 { try migrate_to_v11() }
         if current < 12 { try migrate_to_v12() }
+        if current < 13 { try migrate_to_v13() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -204,6 +205,17 @@ final class ACPSessionStore {
             try db.exec("ALTER TABLE sessions ADD COLUMN helper_proc_stderr_offset INTEGER")
         }
     }
+
+    private func migrate_to_v13() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        let names = Set(columns.compactMap { $0["name"] as? String })
+        if !names.contains("mcp_preamble_pending") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN mcp_preamble_pending TEXT")
+        }
+        if !names.contains("mcp_preamble_sent") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN mcp_preamble_sent INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -235,6 +247,8 @@ struct ACPSessionRow: Equatable, Sendable {
     var remoteSessionId: String? = nil
     var origin: ACPSessionOrigin = .alasCreated
     var contextRecoveryPending: Bool = false
+    var mcpPreamblePending: String? = nil
+    var mcpPreambleSent: Bool = false
     var currentModel: String?
     var currentMode: String?
     var autoRun: Bool
@@ -300,15 +314,18 @@ extension ACPSessionStore {
     func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
+                              mcp_preamble_pending, mcp_preamble_sent,
                               current_model, current_mode, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
             remote_session_id = COALESCE(excluded.remote_session_id, sessions.remote_session_id),
             origin = excluded.origin,
             context_recovery_pending = sessions.context_recovery_pending,
+            mcp_preamble_pending = sessions.mcp_preamble_pending,
+            mcp_preamble_sent = sessions.mcp_preamble_sent,
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
             auto_run = excluded.auto_run,
@@ -320,6 +337,7 @@ extension ACPSessionStore {
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0,
+            s.mcpPreamblePending, s.mcpPreambleSent ? 1 : 0,
             s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
@@ -358,6 +376,13 @@ extension ACPSessionStore {
         try db.exec(
             "UPDATE sessions SET context_recovery_pending = ? WHERE id = ?",
             bindings: [pending ? 1 : 0, sessionId]
+        )
+    }
+
+    func setMCPPreamble(sessionId: String, pendingText: String?, sent: Bool) throws {
+        try db.exec(
+            "UPDATE sessions SET mcp_preamble_pending = ?, mcp_preamble_sent = ? WHERE id = ?",
+            bindings: [pendingText, sent ? 1 : 0, sessionId]
         )
     }
 
@@ -662,6 +687,8 @@ extension ACPSessionStore {
             remoteSessionId: r["remote_session_id"] as? String,
             origin: ACPSessionOrigin(rawValue: r["origin"] as? String ?? "") ?? .alasCreated,
             contextRecoveryPending: ((r["context_recovery_pending"] as? Int64) ?? 0) != 0,
+            mcpPreamblePending: r["mcp_preamble_pending"] as? String,
+            mcpPreambleSent: ((r["mcp_preamble_sent"] as? Int64) ?? 0) != 0,
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,

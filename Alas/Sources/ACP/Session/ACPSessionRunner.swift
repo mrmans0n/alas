@@ -1285,6 +1285,25 @@ extension ACPSessionRunner {
         }
     }
 
+    /// Persist that the one-time MCP context preamble has been delivered:
+    /// clears the pending text and flips `mcpPreambleSent`. Called from
+    /// `sendNow` right after the wire prompt that carried the preamble
+    /// succeeds — mirrors `persistQueue()`'s fire-and-forget pattern since
+    /// losing this write just means the preamble is (harmlessly) resent.
+    /// When `holdsLeaseForWrite()` is false this returns early and leaves
+    /// the row `pending`: a later hydrate on the writing instance will see
+    /// the still-pending row and re-inject the preamble, which is a benign
+    /// duplicate delivery — the agent just sees the context text twice.
+    private func persistMCPPreambleSent() {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            _ = try await persistence.setMCPPreamble(
+                sessionId: sessionId, pendingText: nil, sent: true, fence: fence)
+        }
+    }
+
     /// Drain the queue head if the runner is still live, setup is not
     /// blocked on auth, no prompt owns the transport, transcript state is
     /// `.idle`, the head is `.pending`, and the head has no `lastError`.
@@ -1548,11 +1567,18 @@ extension ACPSessionRunner {
                 // Read the capability flags on the main actor (cheap), then
                 // hydrate off-main so file reads + encoding don't block UI.
                 let promptCapabilities = self.session.promptCapabilities
-                let wireBlocks = await Self.hydrate(
+                let pendingPreamble = self.session.pendingMCPPreamble
+                var wireBlocks = await Self.hydrate(
                     blocks,
                     promptCapabilities: promptCapabilities,
                     worktreePath: self.worktreePath
                 )
+                // Wire-only MCP context preamble: prepended for the agent,
+                // never part of the recorded transcript — `recordUserPrompt`
+                // above already ran on the original `blocks`.
+                if let pendingPreamble {
+                    wireBlocks.insert(.text(pendingPreamble), at: 0)
+                }
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
@@ -1560,6 +1586,16 @@ extension ACPSessionRunner {
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // The agent received the preamble whenever the RPC above
+                    // succeeded, regardless of whether this prompt is still
+                    // "active" by the time we get back on the main actor —
+                    // guard against a racing change (e.g. a new preamble
+                    // queued mid-flight) before clearing.
+                    if let pendingPreamble, self.session.pendingMCPPreamble == pendingPreamble {
+                        self.session.pendingMCPPreamble = nil
+                        self.session.mcpPreambleSent = true
+                        self.persistMCPPreambleSent()
+                    }
                     if isActivePrompt {
                         if queuedItemId != nil {
                             _ = self.session.popQueueHead()

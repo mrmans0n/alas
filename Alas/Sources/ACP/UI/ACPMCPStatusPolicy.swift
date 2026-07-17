@@ -16,8 +16,14 @@ struct ACPMCPStatusState: Equatable {
     let skippedCount: Int
     let isStale: Bool
     let rows: [Row]
+    let preambleDetail: String?
 
-    init?(summary: MCPAttachmentSummary?, currentServers: [ProjectMCPServer]) {
+    init?(
+        summary: MCPAttachmentSummary?,
+        currentServers: [ProjectMCPServer],
+        preamblePending: Bool = false,
+        preambleSent: Bool = false
+    ) {
         guard let summary,
               !summary.statuses.isEmpty || !currentServers.isEmpty else {
             return nil
@@ -28,6 +34,14 @@ struct ACPMCPStatusState: Equatable {
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)
         rows = summary.statuses.map(Self.row)
+
+        if preamblePending {
+            preambleDetail = "Context preamble pending — sent with the next prompt"
+        } else if preambleSent {
+            preambleDetail = "Context preamble sent"
+        } else {
+            preambleDetail = nil
+        }
     }
 
     var summaryText: String {

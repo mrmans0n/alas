@@ -60,4 +60,23 @@ struct ACPMCPStatusPolicyTests {
         #expect(state?.requestedCount == 0)
         #expect(state?.isStale == true)
     }
+
+    @Test("preamble detail reflects pending, sent, and none")
+    func preambleDetailStates() throws {
+        let summary = MCPAttachmentSummary(
+            statuses: [.init(id: "a", name: "alas", transport: .stdio, disposition: .requested)],
+            configurationFingerprint: "fp")
+
+        let pending = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [], preamblePending: true, preambleSent: false))
+        #expect(pending.preambleDetail == "Context preamble pending — sent with the next prompt")
+
+        let sent = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [], preamblePending: false, preambleSent: true))
+        #expect(sent.preambleDetail == "Context preamble sent")
+
+        let none = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: []))
+        #expect(none.preambleDetail == nil)
+    }
 }

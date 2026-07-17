@@ -115,6 +115,10 @@ actor ACPSessionPersistence {
         try openedStore().setContextRecoveryPending(sessionId: sessionId, pending: pending)
     }
 
+    func setMCPPreamble(sessionId: String, pendingText: String?, sent: Bool) throws {
+        try openedStore().setMCPPreamble(sessionId: sessionId, pendingText: pendingText, sent: sent)
+    }
+
     @discardableResult
     func updateHelperProcOffsets(
         sessionId: String,
@@ -153,6 +157,20 @@ actor ACPSessionPersistence {
     ) throws -> Bool {
         let store = try openedStore()
         let operation = { try store.setContextRecoveryPending(sessionId: sessionId, pending: pending) }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try operation()
+        return true
+    }
+
+    @discardableResult
+    func setMCPPreamble(
+        sessionId: String,
+        pendingText: String?,
+        sent: Bool,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.setMCPPreamble(sessionId: sessionId, pendingText: pendingText, sent: sent) }
         if let fence { return try store.withLeaseFence(fence, operation) != nil }
         try operation()
         return true

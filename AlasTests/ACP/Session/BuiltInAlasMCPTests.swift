@@ -60,4 +60,20 @@ struct BuiltInAlasMCPTests {
         #expect(split.kept.isEmpty)
         #expect(split.droppedStdio == ["alas"])
     }
+
+    @Test("injection marks delegated sessions")
+    func injectionMarksDelegated() throws {
+        let root = try #require(BuiltInAlasMCP.injection(
+            enabled: true, configuredServers: [],
+            binaryPath: "/bin/alas", socketPath: "/tmp/s.sock",
+            worktreePath: "/repos/proj/wt", sessionId: "s1"))
+        #expect(root.isDelegated == false)
+
+        let child = try #require(BuiltInAlasMCP.injection(
+            enabled: true, configuredServers: [],
+            binaryPath: "/bin/alas", socketPath: "/tmp/s.sock",
+            worktreePath: "/repos/proj/wt", sessionId: "s2",
+            parentSessionId: "s1"))
+        #expect(child.isDelegated == true)
+    }
 }

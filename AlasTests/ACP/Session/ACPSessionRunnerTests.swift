@@ -3014,6 +3014,73 @@ struct ACPSessionRunnerTests {
         #expect(session.titleSource == .manual)
     }
 
+    @Test("first prompt prepends pending MCP preamble wire-only and clears it")
+    func firstPromptPrependsPreamble() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.pendingMCPPreamble = "<alas-workspace-context>ctx</alas-workspace-context>"
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+
+        let ok = await withCheckedContinuation { c in
+            runner.send(text: "hello", attachments: []) { c.resume(returning: $0) }
+        }
+        #expect(ok == true)
+
+        let params = try #require(
+            mock.sent.first { $0.method == "session/prompt" }?.params as? ACPSessionPromptParams)
+        #expect(params.prompt.count == 2)
+        guard case let .text(first) = params.prompt[0] else {
+            Issue.record("expected leading text block")
+            return
+        }
+        #expect(first == "<alas-workspace-context>ctx</alas-workspace-context>")
+        guard case let .text(second) = params.prompt[1] else {
+            Issue.record("expected user text block")
+            return
+        }
+        #expect(second == "hello")
+
+        // Cleared + marked sent; transcript shows only the typed text.
+        #expect(runner.session.pendingMCPPreamble == nil)
+        #expect(runner.session.mcpPreambleSent == true)
+        #expect(runner.session.transcript.messages.contains {
+            if case .user(_, _, let text, _, _) = $0 {
+                return text.contains("alas-workspace-context")
+            }
+            return false
+        } == false)
+    }
+
+    @Test("second prompt does not re-send the MCP preamble")
+    func secondPromptOmitsPreamble() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.pendingMCPPreamble = "<ctx>"
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+
+        for text in ["one", "two"] {
+            _ = await withCheckedContinuation { c in
+                runner.send(text: text, attachments: []) { c.resume(returning: $0) }
+            }
+        }
+        let prompts = mock.sent.filter { $0.method == "session/prompt" }
+            .compactMap { $0.params as? ACPSessionPromptParams }
+        #expect(prompts.count == 2)
+        #expect(prompts[0].prompt.count == 2)
+        #expect(prompts[1].prompt.count == 1)
+    }
+
+    @Test("failed prompt keeps the MCP preamble pending")
+    func failedPromptKeepsPreamblePending() async throws {
+        let (runner, _) = try makeRunner() // no session/prompt script → send fails
+        runner.session.pendingMCPPreamble = "<ctx>"
+
+        let ok = await withCheckedContinuation { c in
+            runner.send(text: "hello", attachments: []) { c.resume(returning: $0) }
+        }
+        #expect(ok == false)
+        #expect(runner.session.pendingMCPPreamble == "<ctx>")
+        #expect(runner.session.mcpPreambleSent == false)
+    }
+
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 1_000_000_000,
         _ condition: @escaping @MainActor () -> Bool
