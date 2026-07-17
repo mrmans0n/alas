@@ -191,6 +191,31 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(spec.extraEnv["PATH"] != "/managed/bin:/usr/bin")
     }
 
+    @Test("fresh pi attach with CLI env active produces a CLI-mode preamble")
+    func freshPiAttachProducesCLIModePreamble() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        manager.alasCLIEnvProvider = { _, sessionId in
+            ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let preamble = try #require(session.pendingMCPPreamble)
+        #expect(preamble.contains("alas open"))
+        #expect(!preamble.contains("MCP server \"alas\""))
+    }
+
     @Test("Codex-style load response without session id restores normally")
     func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

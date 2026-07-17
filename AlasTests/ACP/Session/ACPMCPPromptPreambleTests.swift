@@ -63,4 +63,51 @@ struct ACPMCPPromptPreambleTests {
             "review_comment_add", "review_finish",
         ])
     }
+
+    @Test("cli mode swaps MCP wording for alas CLI commands")
+    func cliMode() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [],
+            mode: .cli(adapterInstalled: false)))
+        #expect(text.contains("alas open"))
+        #expect(text.contains("alas wt list"))
+        #expect(text.contains("alas review"))
+        #expect(text.contains("alas session"))
+        #expect(!text.contains("MCP server \"alas\""))
+        // no adapter → no tool-search hint
+        #expect(!text.contains("tool search"))
+    }
+
+    @Test("cli mode delegated variant restricts session commands")
+    func cliModeDelegated() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: true, userServerNames: [],
+            mode: .cli(adapterInstalled: false)))
+        #expect(text.contains("alas session send"))
+        #expect(!text.contains("alas session new"))
+        #expect(text.contains("delegated by a parent session"))
+    }
+
+    @Test("cli mode user servers depend on adapter state")
+    func cliModeUserServers() throws {
+        let installed = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            mode: .cli(adapterInstalled: true)))
+        #expect(installed.contains("mcp()"))
+        #expect(installed.contains("pi-mcp-adapter"))
+        #expect(installed.contains("linear"))
+
+        let missing = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            mode: .cli(adapterInstalled: false)))
+        #expect(missing.contains("cannot be reached"))
+        #expect(missing.contains("pi-mcp-adapter"))
+    }
+
+    @Test("default mode is unchanged mcp wording")
+    func defaultModeUnchanged() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: []))
+        #expect(text.contains("MCP server \"alas\""))
+    }
 }

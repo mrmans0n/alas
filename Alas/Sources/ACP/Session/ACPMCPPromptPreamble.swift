@@ -1,5 +1,18 @@
 import Foundation
 
+/// How the preamble should describe Alas tool access for this agent.
+///
+/// Most adapters honor the ACP `session/new` `mcpServers` payload, so the
+/// preamble describes the attached MCP tools (`.mcp`). Adapters that ignore
+/// MCP config entirely (`ACPMCPInjectionSupport.external`) get the `alas`
+/// CLI env injected into their process instead (see `AlasCLIEnvInjection`),
+/// so the preamble must point the agent at CLI commands rather than tool
+/// names.
+enum ACPMCPPreambleMode: Equatable {
+    case mcp
+    case cli(adapterInstalled: Bool)
+}
+
 /// Builds the one-time, wire-only context preamble injected into the first
 /// prompt of a freshly created ACP session. Modern agent harnesses defer MCP
 /// tools behind tool search, so the model never sees the attached tools
@@ -21,9 +34,30 @@ enum ACPMCPPromptPreamble {
     static func text(
         builtInInjected: Bool,
         isDelegated: Bool,
-        userServerNames: [String]
+        userServerNames: [String],
+        mode: ACPMCPPreambleMode = .mcp
     ) -> String? {
         guard builtInInjected || !userServerNames.isEmpty else { return nil }
+        switch mode {
+        case .mcp:
+            return mcpText(
+                builtInInjected: builtInInjected,
+                isDelegated: isDelegated,
+                userServerNames: userServerNames)
+        case .cli(let adapterInstalled):
+            return cliText(
+                builtInInjected: builtInInjected,
+                isDelegated: isDelegated,
+                userServerNames: userServerNames,
+                adapterInstalled: adapterInstalled)
+        }
+    }
+
+    private static func mcpText(
+        builtInInjected: Bool,
+        isDelegated: Bool,
+        userServerNames: [String]
+    ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
         lines.append(
@@ -53,6 +87,55 @@ enum ACPMCPPromptPreamble {
         if !userServerNames.isEmpty {
             lines.append("Additional MCP servers attached: "
                 + userServerNames.joined(separator: ", ") + ".")
+        }
+        lines.append("</alas-workspace-context>")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func cliText(
+        builtInInjected: Bool,
+        isDelegated: Bool,
+        userServerNames: [String],
+        adapterInstalled: Bool
+    ) -> String {
+        var lines: [String] = []
+        lines.append("<alas-workspace-context>")
+        var intro = "This session runs inside Alas, the user's macOS workspace app."
+        if adapterInstalled, !userServerNames.isEmpty {
+            intro += " MCP tools may be deferred behind tool search — they ARE "
+                + "available; use your tool discovery/search mechanism to load them."
+        }
+        lines.append(intro)
+        if builtInInjected {
+            let sessionCLI = isDelegated
+                ? "alas session send <session-id> <prompt>"
+                : "alas session list | alas session new --prompt <text> | alas session send <session-id> <prompt>"
+            var line = "Use the `alas` CLI via your shell tool to drive the Alas UI: "
+                + "`alas open <path>` reveals a file to the user, "
+                + "`alas notify <body>` posts a macOS notification, "
+                + "`alas wt list|switch|new|delete` manages worktrees, "
+                + "`alas review …` drives the review pane (comments/reply/resolve/finish), "
+                + "and `\(sessionCLI)` manages delegated sessions."
+            if isDelegated {
+                line += " This session was delegated by a parent session: it cannot "
+                    + "create descendants; return results or questions through "
+                    + "`alas session send`."
+            }
+            line += " Prefer these commands when the user asks to open/show files, "
+                + "manage worktrees, run or respond to reviews, or be notified."
+            lines.append(line)
+        }
+        if !userServerNames.isEmpty {
+            if adapterInstalled {
+                lines.append("Additional MCP servers are available through the "
+                    + "`mcp()` tool (pi-mcp-adapter): "
+                    + userServerNames.joined(separator: ", ") + ".")
+            } else {
+                lines.append("This project configures MCP servers ("
+                    + userServerNames.joined(separator: ", ")
+                    + ") that cannot be reached until the pi-mcp-adapter extension "
+                    + "is installed.")
+            }
         }
         lines.append("</alas-workspace-context>")
         return lines.joined(separator: "\n")

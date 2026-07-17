@@ -2235,12 +2235,19 @@ extension ACPSessionManager {
         // to decide whether the first-prompt preamble should mention the
         // CLI alongside any injected MCP servers.
         var cliEnvActive = false
+        // Set alongside `cliEnvActive`, from the merged launch spec's
+        // `ALAS_PARENT_SESSION_ID` (see `AlasCLIEnvInjection.environment`).
+        // Consumed by the CLI-mode preamble below to decide whether this is
+        // a delegated session (`launchSpec` itself is scoped to this
+        // `do` block, so its `extraEnv` is captured here for later use).
+        var cliParentSessionId: String?
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
             var launchSpec = await resolvedLaunchSpec(for: spec, host: host)
             if host == nil, let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId) {
                 launchSpec = launchSpec.mergingExtraEnv(cliEnv)
                 cliEnvActive = true
+                cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
             }
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
@@ -2272,9 +2279,9 @@ extension ACPSessionManager {
             await releaseWriterLease(sessionId: sessionId)
             return
         }
-        // TODO(pi-MCP-parity task 4): fold into the first-prompt preamble
-        // alongside injected MCP servers.
-        _ = cliEnvActive
+        // `cliEnvActive` / `cliParentSessionId` are consumed below, once we
+        // know whether this attach created a fresh remote session (the
+        // preamble is only sent once, on first prompt).
         // Collect a short tail of stderr so we can surface it when the
         // agent rejects initialize / new for protocol or auth reasons.
         let stderrBuffer = StderrBuffer()
@@ -2581,10 +2588,23 @@ extension ACPSessionManager {
             if createdFreshRemoteSession {
                 let userServerNames = wireMCPServers.map(\.name)
                     .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
+                let preambleMode: ACPMCPPreambleMode
+                if case .external = spec.mcpInjection {
+                    // Task 5 wires the pi-mcp-adapter inspector into
+                    // `session.mcpExternalStatus`; until then, assume the
+                    // adapter is not installed.
+                    let adapterInstalled = false
+                    preambleMode = .cli(adapterInstalled: adapterInstalled)
+                } else {
+                    preambleMode = .mcp
+                }
                 let preamble = ACPMCPPromptPreamble.text(
-                    builtInInjected: builtInMCP != nil,
-                    isDelegated: builtInMCP?.isDelegated == true,
-                    userServerNames: userServerNames
+                    builtInInjected: preambleMode == .mcp ? (builtInMCP != nil) : cliEnvActive,
+                    isDelegated: preambleMode == .mcp
+                        ? (builtInMCP?.isDelegated == true)
+                        : (cliParentSessionId != nil),
+                    userServerNames: userServerNames,
+                    mode: preambleMode
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble
