@@ -1558,6 +1558,7 @@ final class ACPSessionManager: ObservableObject {
         service: ACPBrokerServicing,
         launchSpec: ACPLaunchSpec,
         sessionId: ACPSession.ID,
+        session: ACPSession,
         environment: [String: String]
     ) async throws -> ACPConnection {
         let brokerId = ACPBrokerID(rawValue: persistedRows[sessionId]?.acpBrokerId ?? Self.defaultBrokerId(
@@ -1578,9 +1579,16 @@ final class ACPSessionManager: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.persistACPBrokerState(sessionId: sessionId, state: state)
                 }
+            },
+            onTurnStateChanged: { [weak self] turnState in
+                Task { @MainActor [weak self] in
+                    guard let session = self?.sessions[sessionId] else { return }
+                    Self.applyBrokerTurnState(turnState, to: session)
+                }
             }
         )
         try await client.start()
+        Self.applyBrokerTurnState(client.currentTurnState, to: session)
         return ACPConnection(client: client)
     }
 
@@ -1599,6 +1607,19 @@ final class ACPSessionManager: ObservableObject {
             return "startup:\(sessionId):\(method):\(remoteSessionId)"
         }
         return "startup:\(sessionId):\(method)"
+    }
+
+    private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
+        switch turnState {
+        case .sending, .cancelling:
+            session.transcript.streamingState = .sending
+        case .streaming:
+            session.transcript.streamingState = .streaming
+        case .awaitingInput:
+            session.transcript.streamingState = .awaitingInput
+        case .idle, .completed, .ambiguous, .unknown:
+            session.transcript.streamingState = .idle
+        }
     }
 
     private static func brokerCursor(from row: ACPSessionRow?) -> ACPBrokerEventCursor {
@@ -2383,6 +2404,7 @@ extension ACPSessionManager {
                     service: try await brokerServiceFactory(),
                     launchSpec: launchSpec,
                     sessionId: sessionId,
+                    session: session,
                     environment: agentEnvironment
                 )
             } else {

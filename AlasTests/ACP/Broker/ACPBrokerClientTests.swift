@@ -27,9 +27,9 @@ struct ACPBrokerClientTests {
         let service = MockBrokerService()
         let stateSink = DurableStateSink()
         await service.enqueueAttach(events: [])
-        let client = makeClient(service: service) { state in
+        let client = makeClient(service: service, onDurableStateChanged: { state in
             Task { await stateSink.append(state) }
-        }
+        })
 
         try await client.start()
 
@@ -209,9 +209,9 @@ struct ACPBrokerClientTests {
                 )
             )
         ])
-        let client = makeClient(service: service) { state in
+        let client = makeClient(service: service, onDurableStateChanged: { state in
             Task { await stateSink.append(state) }
-        }
+        })
         let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
         try await client.start()
 
@@ -638,7 +638,13 @@ struct ACPBrokerClientTests {
                 )
             )
         ], turnState: .completed)
-        let client = makeClient(service: service)
+        let turnStateSink = TurnStateSink()
+        let client = makeClient(
+            service: service,
+            onTurnStateChanged: { state in
+                Task { await turnStateSink.append(state) }
+            }
+        )
         let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
 
         try await client.start()
@@ -650,6 +656,7 @@ struct ACPBrokerClientTests {
             Issue.record("expected agent message chunk")
         }
         try await waitUntil { await service.attached.count == 3 }
+        try await waitUntil { await turnStateSink.records() == [.streaming, .completed] }
         try await Task.sleep(for: .milliseconds(120))
         #expect(await service.attached.count == 3)
     }
@@ -707,6 +714,7 @@ struct ACPBrokerClientTests {
         service: MockBrokerService,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
+        onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil,
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) -> ACPBrokerClient {
         ACPBrokerClient(
@@ -720,7 +728,8 @@ struct ACPBrokerClientTests {
             operationKeyPrefix: "op-prefix",
             initialBrokerGeneration: initialBrokerGeneration,
             initialAcknowledgedCursor: initialAcknowledgedCursor,
-            onDurableStateChanged: onDurableStateChanged
+            onDurableStateChanged: onDurableStateChanged,
+            onTurnStateChanged: onTurnStateChanged
         )
     }
 
@@ -769,6 +778,18 @@ private actor DurableStateSink {
 
     func hasLastRecord(after count: Int, matching expected: ACPBrokerDurableState) -> Bool {
         records.count == count + 1 && records.last == expected
+    }
+}
+
+private actor TurnStateSink {
+    private var recordedStates: [ACPBrokerTurnState] = []
+
+    func append(_ state: ACPBrokerTurnState) {
+        recordedStates.append(state)
+    }
+
+    func records() -> [ACPBrokerTurnState] {
+        recordedStates
     }
 }
 

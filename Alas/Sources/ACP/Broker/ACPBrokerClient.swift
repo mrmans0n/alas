@@ -30,6 +30,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let operationKeyPrefix: String
     private let initialBrokerGeneration: ACPBrokerGeneration?
     private let onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)?
+    private let onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)?
 
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
@@ -60,12 +61,19 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var unacknowledgedDurableEventCursors: Set<ACPBrokerEventCursor> = []
     private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
+    private var turnState: ACPBrokerTurnState = .idle
     private var activeTurnPollingTask: Task<Void, Never>?
 
     var yieldedUpdateCount: Int {
         stateLock.lock()
         defer { stateLock.unlock() }
         return _yieldedUpdateCount
+    }
+
+    var currentTurnState: ACPBrokerTurnState {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return turnState
     }
 
     init(
@@ -79,7 +87,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         operationKeyPrefix: String,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
-        onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
+        onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil,
+        onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil
     ) {
         self.service = service
         self.brokerId = brokerId
@@ -92,6 +101,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         self.initialBrokerGeneration = initialBrokerGeneration
         self.acknowledgedCursor = initialAcknowledgedCursor
         self.onDurableStateChanged = onDurableStateChanged
+        self.onTurnStateChanged = onTurnStateChanged
 
         var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
         incomingUpdates = AsyncStream { u = $0 }
@@ -338,6 +348,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             stateLock.lock()
             operationCompletionCursors[operationKey] = event.cursor
             stateLock.unlock()
+        case .turnStateChanged(let state):
+            setTurnState(state)
         default:
             break
         }
@@ -584,6 +596,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func setSnapshot(_ snapshot: ACPBrokerSnapshot) {
+        let changedTurnState: ACPBrokerTurnState?
         stateLock.lock()
         generation = snapshot.metadata.generation
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
@@ -597,11 +610,31 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 pendingOutboundRequestIds.remove(id)
             }
         }
+        if turnState != snapshot.turnState {
+            turnState = snapshot.turnState
+            changedTurnState = snapshot.turnState
+        } else {
+            changedTurnState = nil
+        }
         let state = durableStateLocked()
         stateLock.unlock()
         if let state {
             onDurableStateChanged?(state)
         }
+        if let changedTurnState {
+            onTurnStateChanged?(changedTurnState)
+        }
+    }
+
+    private func setTurnState(_ state: ACPBrokerTurnState) {
+        stateLock.lock()
+        guard turnState != state else {
+            stateLock.unlock()
+            return
+        }
+        turnState = state
+        stateLock.unlock()
+        onTurnStateChanged?(state)
     }
 
     private func currentGeneration() throws -> ACPBrokerGeneration {
