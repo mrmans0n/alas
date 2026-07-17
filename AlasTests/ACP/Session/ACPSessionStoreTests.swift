@@ -131,4 +131,37 @@ struct ACPSessionStoreSchemaTests {
         }
         #expect(text.value == "new owner")
     }
+
+    @Test("mcp preamble round-trips and survives upsert")
+    func mcpPreambleRoundTrip() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("store-preamble-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Defaults: nothing pending, not sent.
+        var row = try #require(try store.loadSession(id: "s"))
+        #expect(row.mcpPreamblePending == nil)
+        #expect(row.mcpPreambleSent == false)
+
+        try store.setMCPPreamble(sessionId: "s", pendingText: "<ctx>", sent: false)
+        row = try #require(try store.loadSession(id: "s"))
+        #expect(row.mcpPreamblePending == "<ctx>")
+        #expect(row.mcpPreambleSent == false)
+
+        // A runtime upsert must not clobber preamble state (mirrors
+        // context_recovery_pending semantics).
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t2",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        row = try #require(try store.loadSession(id: "s"))
+        #expect(row.mcpPreamblePending == "<ctx>")
+
+        try store.setMCPPreamble(sessionId: "s", pendingText: nil, sent: true)
+        row = try #require(try store.loadSession(id: "s"))
+        #expect(row.mcpPreamblePending == nil)
+        #expect(row.mcpPreambleSent == true)
+    }
 }
