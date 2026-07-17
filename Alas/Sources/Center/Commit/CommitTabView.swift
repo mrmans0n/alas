@@ -184,6 +184,7 @@ struct CommitTabView: View {
         activeReviewKey = nil
         activeReviewID = UUID()
         loadingReviewSession = false
+        headerExpanded = true
         defer {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
