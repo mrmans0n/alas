@@ -17,12 +17,15 @@ struct ACPMCPStatusState: Equatable {
     let isStale: Bool
     let rows: [Row]
     let preambleDetail: String?
+    let externalRows: [Row]?
+    let showsAdapterInstallAction: Bool
 
     init?(
         summary: MCPAttachmentSummary?,
         currentServers: [ProjectMCPServer],
         preamblePending: Bool = false,
-        preambleSent: Bool = false
+        preambleSent: Bool = false,
+        externalStatus: ACPMCPExternalStatus? = nil
     ) {
         guard let summary,
               !summary.statuses.isEmpty || !currentServers.isEmpty else {
@@ -41,6 +44,32 @@ struct ACPMCPStatusState: Equatable {
             preambleDetail = "Context preamble sent"
         } else {
             preambleDetail = nil
+        }
+
+        if let externalStatus {
+            let cliRow = Row(
+                id: "external-cli", name: "alas tools",
+                transport: "CLI",
+                detail: externalStatus.cliActive
+                    ? "via alas CLI (environment injected)"
+                    : "unavailable (Alas CLI not injected)",
+                isRequested: externalStatus.cliActive)
+            let adapterDetail: String
+            switch (externalStatus.adapterState, externalStatus.configOutcome) {
+            case (.installed, .refusedUnmanaged?): adapterDetail = "using your existing .pi/mcp.json"
+            case (.installed, _): adapterDetail = "via pi-mcp-adapter"
+            case (.missing, _), (.unknown, _): adapterDetail = "requires the pi-mcp-adapter extension"
+            }
+            let adapterRow = Row(
+                id: "external-adapter", name: "user MCP servers",
+                transport: "pi-mcp-adapter",
+                detail: adapterDetail,
+                isRequested: externalStatus.adapterState == .installed)
+            externalRows = [cliRow, adapterRow]
+            showsAdapterInstallAction = externalStatus.adapterState != .installed
+        } else {
+            externalRows = nil
+            showsAdapterInstallAction = false
         }
     }
 

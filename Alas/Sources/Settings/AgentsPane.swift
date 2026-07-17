@@ -6,6 +6,7 @@ struct AgentsPane: View {
     var onNavigate: (SettingsSection) -> Void = { _ in }
 
     @State private var editing: EditTarget?
+    @State private var piAdapterState: PiMCPAdapterInspector.State = .unknown
 
     /// The sheet's content depends on what was clicked: existing agent (by
     /// id) or a brand-new custom (`.new`).
@@ -72,10 +73,22 @@ struct AgentsPane: View {
                             onNavigate(.terminal)
                         }
                     }
+                    if piAdapterState != .installed {
+                        SettingsRow(name: "Pi MCP adapter",
+                                    desc: "Pi reaches MCP servers through the pi-mcp-adapter extension.") {
+                            AlasButton(title: "Install pi-mcp-adapter", style: .subtle) {
+                                Task {
+                                    _ = await state.installPiMCPAdapter()
+                                    piAdapterState = PiMCPAdapterInspector.state()
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+        .onAppear { piAdapterState = PiMCPAdapterInspector.state() }
         .sheet(item: $editing) { target in
             AgentEditView(
                 state: state,

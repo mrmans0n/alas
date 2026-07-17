@@ -4848,6 +4848,26 @@ final class AppState {
         return URL(fileURLWithPath: raw, relativeTo: worktreeURL).standardizedFileURL
     }
 
+    /// Runs `pi install npm:pi-mcp-adapter` (pi resolves its own package
+    /// management). Returns true when pi exits 0.
+    func installPiMCPAdapter() async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = ["pi", "install", "npm:pi-mcp-adapter"]
+                process.environment = ACPProcessEnvironment.augmented()
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    continuation.resume(returning: process.terminationStatus == 0)
+                } catch {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+
     /// Release the ACP session manager for the given worktree id.
     /// Called from `cleanupWorktreeState` when a worktree is
     /// removed/archived. Stops every attached runner (which cancels

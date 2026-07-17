@@ -79,4 +79,40 @@ struct ACPMCPStatusPolicyTests {
             summary: summary, currentServers: []))
         #expect(none.preambleDetail == nil)
     }
+
+    @Test("external status replaces rows and drives the install action")
+    func externalStatusRows() throws {
+        let summary = MCPAttachmentSummary(
+            statuses: [.init(id: "a", name: "alas", transport: .stdio, disposition: .requested)],
+            configurationFingerprint: "fp")
+
+        let installed = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(cliActive: true, adapterState: .installed,
+                                  configOutcome: .wrote, hint: "h")))
+        let rows = try #require(installed.externalRows)
+        #expect(rows.count == 2)
+        #expect(rows[0].detail == "via alas CLI (environment injected)")
+        #expect(rows[1].detail == "via pi-mcp-adapter")
+        #expect(installed.showsAdapterInstallAction == false)
+
+        let missing = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(cliActive: false, adapterState: .missing,
+                                  configOutcome: nil, hint: "h")))
+        let mrows = try #require(missing.externalRows)
+        #expect(mrows[0].detail == "unavailable (Alas CLI not injected)")
+        #expect(mrows[1].detail == "requires the pi-mcp-adapter extension")
+        #expect(missing.showsAdapterInstallAction == true)
+
+        let unmanaged = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(cliActive: true, adapterState: .installed,
+                                  configOutcome: .refusedUnmanaged, hint: "h")))
+        #expect(try #require(unmanaged.externalRows)[1].detail == "using your existing .pi/mcp.json")
+
+        // no external status → unchanged classic behavior
+        let classic = try #require(ACPMCPStatusState(summary: summary, currentServers: []))
+        #expect(classic.externalRows == nil)
+    }
 }

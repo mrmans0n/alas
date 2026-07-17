@@ -6,6 +6,7 @@ import SwiftUI
 struct ACPMCPStatusControl: View {
     @ObservedObject var session: ACPSession
     let currentServers: [ProjectMCPServer]
+    var onInstallPiMCPAdapter: (() async -> Bool)? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
 
@@ -14,7 +15,8 @@ struct ACPMCPStatusControl: View {
             summary: session.mcpAttachmentSummary,
             currentServers: currentServers,
             preamblePending: session.pendingMCPPreamble != nil,
-            preambleSent: session.mcpPreambleSent
+            preambleSent: session.mcpPreambleSent,
+            externalStatus: session.mcpExternalStatus
         )
     }
 
@@ -51,7 +53,7 @@ struct ACPMCPStatusControl: View {
             .help(status.accessibilitySummary)
             .accessibilityLabel(status.accessibilitySummary)
             .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-                ACPMCPStatusPopover(status: status)
+                ACPMCPStatusPopover(status: status, onInstallPiMCPAdapter: onInstallPiMCPAdapter)
             }
         }
     }
@@ -69,8 +71,12 @@ struct ACPMCPStatusControl: View {
 }
 
 private struct ACPMCPStatusPopover: View {
+    enum InstallState { case idle, running, done, failed }
+
     let status: ACPMCPStatusState
+    var onInstallPiMCPAdapter: (() async -> Bool)? = nil
     @Environment(\.theme) private var theme
+    @State private var installState: InstallState = .idle
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -103,7 +109,7 @@ private struct ACPMCPStatusPopover: View {
             Divider().background(theme.color("line"))
 
             VStack(spacing: 0) {
-                ForEach(status.rows) { row in
+                ForEach(status.externalRows ?? status.rows) { row in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: row.isRequested ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                             .font(.system(size: 11))
@@ -125,6 +131,10 @@ private struct ACPMCPStatusPopover: View {
                 }
             }
 
+            if status.showsAdapterInstallAction {
+                installActionRow
+            }
+
             if let detail = status.preambleDetail {
                 Divider().background(theme.color("line"))
                 HStack(spacing: 7) {
@@ -141,5 +151,39 @@ private struct ACPMCPStatusPopover: View {
         }
         .frame(width: 300)
         .background(theme.color("bg-1"))
+    }
+
+    @ViewBuilder
+    private var installActionRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch installState {
+            case .idle:
+                AlasButton(title: "Install pi-mcp-adapter", style: .subtle) {
+                    guard let onInstallPiMCPAdapter else { return }
+                    installState = .running
+                    Task {
+                        let success = await onInstallPiMCPAdapter()
+                        installState = success ? .done : .failed
+                    }
+                }
+            case .running:
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text("Installing pi-mcp-adapter…")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(theme.color("fg-muted"))
+            case .done:
+                Text("Installed ✓ — reconnect to apply")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("add"))
+            case .failed:
+                Text("Install failed — see pi output")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("warn"))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 }
