@@ -240,13 +240,16 @@ struct ACPBrokerClientTests {
                     adapterRequestId: .string("req-alpha"),
                     kind: .permission,
                     payload: .object([
-                        "sessionId": .string("remote-1"),
-                        "toolCall": .object(["toolCallId": .string("tool-1")]),
-                        "options": .array([
-                            .object([
-                                "optionId": .string("allow"),
-                                "name": .string("Allow"),
-                                "kind": .string("allow_once")
+                        "method": .string("session/request_permission"),
+                        "params": .object([
+                            "sessionId": .string("remote-1"),
+                            "toolCall": .object(["toolCallId": .string("tool-1")]),
+                            "options": .array([
+                                .object([
+                                    "optionId": .string("allow"),
+                                    "name": .string("Allow"),
+                                    "kind": .string("allow_once")
+                                ])
                             ])
                         ])
                     ])
@@ -265,6 +268,65 @@ struct ACPBrokerClientTests {
         let response = try await #require(service.responded.first)
         #expect(response.requestId == .string("req-alpha"))
         #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
+    }
+
+    @Test func promptResponseAckWaitsForEarlierStreamedUpdateAck() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("hello")
+                            ])
+                        ])
+                    ])
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: "op-prefix:1:session/prompt"),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            )
+        ])
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: false,
+            result: .object(["stopReason": .string("end_turn")])
+        ))
+        let client = makeClient(service: service)
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+        try await client.start()
+
+        let response = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
+        ))
+        let update = try await updateTask.value
+
+        response.acknowledgeDurableConsumption()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await service.acks.isEmpty)
+
+        update.durableConsumptionAcknowledgement?()
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [
+                ACPBrokerEventCursor(rawValue: 2),
+                ACPBrokerEventCursor(rawValue: 3)
+            ]
+        }
     }
 
     @Test func sendWaitsAcrossPendingResultAndReplaysPendingRequest() async throws {

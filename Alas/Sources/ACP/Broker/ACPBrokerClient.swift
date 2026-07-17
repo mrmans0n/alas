@@ -49,12 +49,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let stateLock = NSLock()
     private var generation: ACPBrokerGeneration?
     private var acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
-    private var latestCursor = ACPBrokerEventCursor(rawValue: 0)
     private var initializeResult: ACPBrokerJSONValue?
     private var remoteSessionResult: ACPBrokerJSONValue?
     private var nextOperationIndex = 0
     private var _yieldedUpdateCount = 0
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
+    private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
+    private var unacknowledgedDurableEventCursors: Set<ACPBrokerEventCursor> = []
+    private var deferredResponseAckCursors: Set<ACPBrokerEventCursor> = []
 
     var yieldedUpdateCount: Int {
         stateLock.lock()
@@ -152,11 +154,13 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 try await Task.sleep(for: .milliseconds(50))
                 continue
             }
-            let cursor = currentLatestCursor()
+            let cursor = currentOperationCompletionCursor(for: operationKey)
             return ACPResponse(
                 body: try (result.result ?? .null).data,
                 durableConsumptionAcknowledgement: { [weak self] in
-                    self?.ack(cursor: cursor)
+                    if let cursor {
+                        self?.ackResponse(cursor: cursor)
+                    }
                 }
             )
         }
@@ -235,15 +239,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func dispatch(_ event: ACPBrokerEvent) {
-        stateLock.lock()
-        latestCursor = max(latestCursor, event.cursor)
-        stateLock.unlock()
-
         switch event.kind {
         case .adapterNotification(let method, let params):
             dispatchAdapterNotification(method: method, params: params, cursor: event.cursor)
         case .pendingRequest(let request):
             dispatchPendingRequest(request, cursor: event.cursor)
+        case .operationCompleted(let operationKey, _):
+            stateLock.lock()
+            operationCompletionCursors[operationKey] = event.cursor
+            stateLock.unlock()
         default:
             break
         }
@@ -261,12 +265,13 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             stateLock.lock()
             _yieldedUpdateCount += 1
+            unacknowledgedDurableEventCursors.insert(cursor)
             stateLock.unlock()
             updatesCont.yield(.init(
                 sessionId: decoded.sessionId,
                 update: decoded.update,
                 durableConsumptionAcknowledgement: { [weak self] in
-                    self?.ack(cursor: cursor)
+                    self?.ackDurableEvent(cursor: cursor)
                 }
             ))
         case "elicitation/complete":
@@ -286,15 +291,18 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
 
         switch request.kind {
         case .permission:
-            if let params = try? JSONDecoder().decode(ACPPermissionRequestParams.self, from: request.payload.data) {
+            let payload = pendingRequestParamsPayload(request.payload)
+            if let params = try? JSONDecoder().decode(ACPPermissionRequestParams.self, from: payload.data) {
                 permsCont.yield((id, params))
             }
         case .question:
-            if let params = try? JSONDecoder().decode(ACPQuestionRequestParams.self, from: request.payload.data) {
+            let payload = pendingRequestParamsPayload(request.payload)
+            if let params = try? JSONDecoder().decode(ACPQuestionRequestParams.self, from: payload.data) {
                 questionsCont.yield(.init(id: id, params: params))
             }
         case .elicitation:
-            if let params = try? JSONDecoder().decode(ACPElicitationRequestParams.self, from: request.payload.data) {
+            let payload = pendingRequestParamsPayload(request.payload)
+            if let params = try? JSONDecoder().decode(ACPElicitationRequestParams.self, from: payload.data) {
                 elicitationsCont.yield(.init(id: id, params: params))
             }
         case .file:
@@ -302,6 +310,17 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         case .terminal:
             dispatchTerminalRequest(id: id, payload: request.payload)
         }
+    }
+
+    private func pendingRequestParamsPayload(_ payload: ACPBrokerJSONValue) -> ACPBrokerJSONValue {
+        guard
+            case .object(let object) = payload,
+            object["method"] != nil,
+            let params = object["params"]
+        else {
+            return payload
+        }
+        return params
     }
 
     private func dispatchFileRequest(id: JSONRPCID, payload: ACPBrokerJSONValue) {
@@ -425,6 +444,41 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             if let state {
                 self.onDurableStateChanged?(state)
             }
+            self.flushDeferredResponseAcks()
+        }
+    }
+
+    private func ackDurableEvent(cursor: ACPBrokerEventCursor) {
+        stateLock.lock()
+        unacknowledgedDurableEventCursors.remove(cursor)
+        stateLock.unlock()
+        ack(cursor: cursor)
+    }
+
+    private func ackResponse(cursor: ACPBrokerEventCursor) {
+        stateLock.lock()
+        let shouldDefer = unacknowledgedDurableEventCursors.contains(where: { $0 < cursor })
+        if shouldDefer {
+            deferredResponseAckCursors.insert(cursor)
+            stateLock.unlock()
+            return
+        }
+        stateLock.unlock()
+        ack(cursor: cursor)
+    }
+
+    private func flushDeferredResponseAcks() {
+        let ready: [ACPBrokerEventCursor]
+        stateLock.lock()
+        ready = deferredResponseAckCursors
+            .filter { cursor in !unacknowledgedDurableEventCursors.contains(where: { $0 < cursor }) }
+            .sorted()
+        for cursor in ready {
+            deferredResponseAckCursors.remove(cursor)
+        }
+        stateLock.unlock()
+        for cursor in ready {
+            ack(cursor: cursor)
         }
     }
 
@@ -432,7 +486,6 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         generation = snapshot.metadata.generation
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
-        latestCursor = max(latestCursor, snapshot.journalTail)
         initializeResult = snapshot.initializeResult ?? initializeResult
         remoteSessionResult = snapshot.remoteSessionResult ?? remoteSessionResult
         let state = durableStateLocked()
@@ -455,10 +508,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         return acknowledgedCursor
     }
 
-    private func currentLatestCursor() -> ACPBrokerEventCursor {
+    private func currentOperationCompletionCursor(for operationKey: ACPBrokerOperationKey) -> ACPBrokerEventCursor? {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return latestCursor
+        return operationCompletionCursors[operationKey]
     }
 
     private func nextOperationKey(method: String) -> ACPBrokerOperationKey {
