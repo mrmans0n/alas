@@ -37,9 +37,34 @@ struct ACPSessionStoreSchemaTests {
         let sessionColumns = try store.db.query("PRAGMA table_info(sessions)")
         #expect(sessionColumns.contains { ($0["name"] as? String) == "helper_proc_stdout_offset" })
         #expect(sessionColumns.contains { ($0["name"] as? String) == "helper_proc_stderr_offset" })
+        #expect(sessionColumns.contains { ($0["name"] as? String) == "acp_broker_id" })
+        #expect(sessionColumns.contains { ($0["name"] as? String) == "acp_broker_generation" })
+        #expect(sessionColumns.contains { ($0["name"] as? String) == "acp_broker_acknowledged_cursor" })
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
 
         _ = try ACPSessionStore(path: url.path)
+    }
+
+    @Test("migrates schema version 13 with broker state columns and index")
+    func migratesV13BrokerState() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")
+        do {
+            let store = try ACPSessionStore(path: url.path)
+            try store.db.exec("DROP INDEX IF EXISTS sessions_acp_broker_idx")
+            try store.db.exec("ALTER TABLE sessions DROP COLUMN acp_broker_id")
+            try store.db.exec("ALTER TABLE sessions DROP COLUMN acp_broker_generation")
+            try store.db.exec("ALTER TABLE sessions DROP COLUMN acp_broker_acknowledged_cursor")
+            try store.db.exec("UPDATE schema_version SET version = 13")
+        }
+
+        let store = try ACPSessionStore(path: url.path)
+        let columns = try store.db.query("PRAGMA table_info(sessions)")
+        #expect(columns.contains { ($0["name"] as? String) == "acp_broker_id" })
+        #expect(columns.contains { ($0["name"] as? String) == "acp_broker_generation" })
+        #expect(columns.contains { ($0["name"] as? String) == "acp_broker_acknowledged_cursor" })
+        let indexes = try store.db.query("PRAGMA index_list(sessions)")
+        #expect(indexes.contains { ($0["name"] as? String) == "sessions_acp_broker_idx" })
+        #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
     }
 
     @Test("migrates schema version 1 to current target")
