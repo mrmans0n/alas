@@ -437,4 +437,15 @@ struct ACPMessageListPaginationTests {
             isBackfillingOlderMessages: true
         ))
     }
+
+    @Test func rowFrameAnchorTrackingSkippedWhileFollowingTailOrRestoring() {
+        #expect(!ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: true, isRestoringTail: false, isBackfillingOlderMessages: false))
+        #expect(!ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: false, isRestoringTail: true, isBackfillingOlderMessages: false))
+        #expect(!ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: false, isRestoringTail: false, isBackfillingOlderMessages: true))
+        #expect(ACPMessageList.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: false, isRestoringTail: false, isBackfillingOlderMessages: false))
+    }
 }

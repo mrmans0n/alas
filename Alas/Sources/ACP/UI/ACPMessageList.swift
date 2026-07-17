@@ -445,8 +445,13 @@ struct ACPMessageList: View {
             scrollBook.pendingTailScrollTask?.cancel()
             scrollBook.pendingTailScrollTask = nil
             let lookup = visibleMessageLookup
+            // Tail-follow no longer maintains `latestTopVisibleAnchor` on every
+            // row callback (see `handleModernRowFrame`), so compute it here,
+            // lazily, only now that we actually need a pause anchor.
+            let pauseAnchor = latestTopVisibleAnchor.value
+                ?? Self.topVisibleAnchorID(in: modernRowFrameCache.frames)
             let anchor = Self.rememberedAnchorWhenPausingTailFollow(
-                latestTopVisibleAnchor: latestTopVisibleAnchor.value,
+                latestTopVisibleAnchor: pauseAnchor,
                 lookup: lookup,
                 allowFirstRenderedAnchorFallback: allowFirstRenderedAnchorFallback
             )
@@ -463,14 +468,20 @@ struct ACPMessageList: View {
 
     private func handleRowFramePreference(_ frames: [String: CGRect], proxy: ScrollViewProxy) {
         restoreRememberedAnchorIfNeeded(proxy: proxy)
+        // Same early-out as `handleModernRowFrame`: while following the tail,
+        // restoring, or backfilling older messages, the remainder of this
+        // method is discarded work.
+        guard Self.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoringTail: scrollBook.isRestoringTail,
+            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+        ) else { return }
         guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
         let anchorChanged = latestTopVisibleAnchor.value != anchor
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
         }
         let lookup = visibleMessageLookup
-        guard !scrollBook.isRestoringTail else { return }
-        guard !session.followsTranscriptTail else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
         let anchorIndexChanged = rememberedAnchor == anchor && scrollBook.latestRememberedScrollAnchorIndex != anchorIndex
@@ -492,14 +503,21 @@ struct ACPMessageList: View {
     private func handleModernRowFrame(id: String, frame: CGRect) {
         let lookup = visibleMessageLookup
         modernRowFrameCache.update(id: id, frame: frame, lookup: lookup)
+        // While following the tail (streaming), restoring, or backfilling
+        // older messages, the anchor bookkeeping below is discarded by the
+        // guards further down anyway — skip it entirely so every streamed
+        // row's geometry callback stays O(1) instead of paying an O(rows)
+        // lookup + min-scan that's thrown away.
+        guard Self.shouldTrackAnchorFromRowFrames(
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoringTail: scrollBook.isRestoringTail,
+            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+        ) else { return }
         guard let anchor = Self.topVisibleAnchorID(in: modernRowFrameCache.frames) else { return }
         let anchorChanged = latestTopVisibleAnchor.value != anchor
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
         }
-        guard !scrollBook.isRestoringTail else { return }
-        guard !session.followsTranscriptTail else { return }
-        guard !transcript.isBackfillingOlderMessages else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
         let anchorIndexChanged = rememberedAnchor == anchor && scrollBook.latestRememberedScrollAnchorIndex != anchorIndex
@@ -736,6 +754,19 @@ struct ACPMessageList: View {
     ) -> Bool {
         guard followsTranscriptTail else { return false }
         return abs(newWidth - previousWidth) > 0.5
+    }
+
+    /// Whether a row-frame callback should bother finding/remembering the
+    /// top-visible anchor at all. While following the tail (streaming),
+    /// restoring a programmatic scroll, or backfilling older messages, the
+    /// result is discarded by later guards anyway — skipping the lookup here
+    /// keeps every row's geometry callback O(1) instead of O(rows) per row.
+    nonisolated static func shouldTrackAnchorFromRowFrames(
+        followsTranscriptTail: Bool,
+        isRestoringTail: Bool,
+        isBackfillingOlderMessages: Bool
+    ) -> Bool {
+        !followsTranscriptTail && !isRestoringTail && !isBackfillingOlderMessages
     }
 
     nonisolated static func topVisibleAnchorID(in frames: [String: CGRect]) -> String? {
