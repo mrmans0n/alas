@@ -450,6 +450,16 @@ struct ACPMessageList: View {
             transcript.resetWindowToTail()
             onRememberScrollAnchor(nil, nil, true)
             scrollBook.latestRememberedScrollAnchorIndex = nil
+            // `latestTopVisibleAnchor` is only maintained while NOT following
+            // the tail (see `shouldTrackAnchorFromRowFrames`), so a value left
+            // over from a previous pause must not survive a resume: without
+            // this reset, the NEXT pause would reuse that stale anchor instead
+            // of falling through to a fresh computation from
+            // `modernRowFrameCache.frames`.
+            latestTopVisibleAnchor.value = Self.trackedAnchorAfterFollowsChange(
+                follows: true,
+                previousTrackedAnchor: latestTopVisibleAnchor.value
+            )
         } else {
             session.followsTranscriptTail = false
             scrollBook.pendingTailScrollTask?.cancel()
@@ -866,6 +876,19 @@ struct ACPMessageList: View {
             indexByStableId: indexByStableId,
             firstStableId: rows.first?.stableId
         )
+    }
+
+    /// The value `latestTopVisibleAnchor.value` should hold after a
+    /// tail-follow transition. Resuming (`follows == true`) always clears it:
+    /// the anchor-tracking row callbacks are skipped while following the
+    /// tail, so a value left over from before the resume is stale by
+    /// construction and must not be reused by a later pause. Pausing leaves
+    /// it untouched — the pause path computes its own anchor separately.
+    nonisolated static func trackedAnchorAfterFollowsChange(
+        follows: Bool,
+        previousTrackedAnchor: String?
+    ) -> String? {
+        follows ? nil : previousTrackedAnchor
     }
 
     nonisolated static func rememberedAnchorWhenPausingTailFollow(

@@ -228,6 +228,27 @@ struct ACPMessageListPaginationTests {
         #expect(lookup.firstStableId == "message-40")
     }
 
+    @Test("tracked anchor is cleared when tail-follow resumes so a later pause can't reuse a stale value")
+    func trackedAnchorResetsWhenTailFollowResumes() {
+        // Resuming clears whatever anchor a previous pause left behind, so
+        // the next pause is forced to recompute from the live frame cache
+        // instead of reusing a value that predates the resume.
+        #expect(ACPMessageList.trackedAnchorAfterFollowsChange(
+            follows: true,
+            previousTrackedAnchor: "message-40"
+        ) == nil)
+        #expect(ACPMessageList.trackedAnchorAfterFollowsChange(
+            follows: true,
+            previousTrackedAnchor: nil
+        ) == nil)
+        // Pausing doesn't touch the tracked anchor; the pause path computes
+        // its own anchor separately.
+        #expect(ACPMessageList.trackedAnchorAfterFollowsChange(
+            follows: false,
+            previousTrackedAnchor: "message-40"
+        ) == "message-40")
+    }
+
     @Test("tail pause anchor selection prefers sampled anchors before fallback")
     func tailPauseAnchorSelectionUsesSampledAnchorBeforeFallback() {
         let lookup = ACPMessageList.visibleMessageLookup(rows: [
