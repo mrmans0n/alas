@@ -2397,7 +2397,6 @@ extension ACPSessionManager {
         // a delegated session (`launchSpec` itself is scoped to this
         // `do` block, so its `extraEnv` is captured here for later use).
         var cliParentSessionId: String?
-        var effectiveLaunchSpec = spec
         let agentEnvironment: [String: String]
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
@@ -2407,7 +2406,6 @@ extension ACPSessionManager {
                 cliEnvActive = true
                 cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
             }
-            effectiveLaunchSpec = launchSpec
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
