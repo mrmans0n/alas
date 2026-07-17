@@ -855,6 +855,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
         var item = queue.remove(at: idx)
         item.status = .pending
+        if item.lastError != nil {
+            item.advanceBrokerOperationAttempt()
+        }
         item.lastError = nil
 
         let insertAt = protectedPrefixCount
@@ -876,6 +879,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if queue[idx].status == .sending { return }
         queue[idx].blocks = blocks
         queue[idx].draft = nil
+        queue[idx].advanceBrokerOperationAttempt()
     }
 
     /// Remove all `.pending` items; return the snapshot in original order so
@@ -910,10 +914,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Mark the head item `.sending`. Called by the flusher right before
     /// it spawns the prompt RPC. Clears any previous `lastError` so a
     /// retried item displays cleanly while in-flight.
-    func markQueueHeadSending() {
-        guard !queue.isEmpty, queue[0].status == .pending else { return }
+    @discardableResult
+    func markQueueHeadSending() -> String? {
+        guard !queue.isEmpty, queue[0].status == .pending else { return nil }
         queue[0].status = .sending
         queue[0].lastError = nil
+        return queue[0].brokerOperationKey
     }
 
     /// Pop the head only if it's currently `.sending`. Returns it. Used by

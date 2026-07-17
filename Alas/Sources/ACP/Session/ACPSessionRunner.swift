@@ -1325,9 +1325,14 @@ extension ACPSessionRunner {
               head.lastError == nil
         else { return }
         if case .needsAuth = session.setupState { return }
-        session.markQueueHeadSending()
+        let brokerOperationKey = session.markQueueHeadSending()
         persistQueue()
-        sendNow(blocks: head.blocks, queuedItemId: head.id, delegatedSource: head.delegatedSource)
+        sendNow(
+            blocks: head.blocks,
+            queuedItemId: head.id,
+            delegatedSource: head.delegatedSource,
+            brokerOperationKey: brokerOperationKey
+        )
     }
 
     /// User clicked the row-local "send now" affordance for a queued item.
@@ -1473,6 +1478,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         queuedItemId: UUID?,
         delegatedSource: ACPDelegatedPromptSource? = nil,
+        brokerOperationKey: String? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -1582,7 +1588,11 @@ extension ACPSessionRunner {
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
-                try await self.connection.prompt(sessionId: remoteId, blocks: wireBlocks)
+                try await self.connection.prompt(
+                    sessionId: remoteId,
+                    blocks: wireBlocks,
+                    brokerOperationKey: brokerOperationKey
+                )
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt

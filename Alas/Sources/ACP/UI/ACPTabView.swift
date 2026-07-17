@@ -426,6 +426,7 @@ private struct ACPSessionView: View {
             onQueueRetry: isMirror ? { _ in } : { id in
                 guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
                 session.queue[idx].lastError = nil
+                session.queue[idx].advanceBrokerOperationAttempt()
                 manager.persistQueue(for: session)
                 manager.runners[sessionId]?.flushQueueIfIdle()
             },

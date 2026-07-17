@@ -143,7 +143,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             return ACPResponse(body: try replayed.data)
         }
         let generation = try currentGeneration()
-        let operationKey = nextOperationKey(method: request.method)
+        let operationKey = request.brokerOperationKey.map(ACPBrokerOperationKey.init(rawValue:))
+            ?? nextOperationKey(method: request.method)
         let params = try ACPBrokerJSONValue(encodable: request.params)
         while true {
             let result = try await service.send(ACPBrokerSendParams(
@@ -240,16 +241,20 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             acknowledgedCursor: cursor
         ))
         setSnapshot(attached.snapshot)
+        let pendingRequestIds = Set(attached.snapshot.pendingRequests.map(\.requestId))
         for event in attached.events {
-            dispatch(event)
+            dispatch(event, pendingRequestIds: pendingRequestIds)
         }
     }
 
-    private func dispatch(_ event: ACPBrokerEvent) {
+    private func dispatch(_ event: ACPBrokerEvent, pendingRequestIds: Set<String>? = nil) {
         switch event.kind {
         case .adapterNotification(let method, let params):
             dispatchAdapterNotification(method: method, params: params, cursor: event.cursor)
         case .pendingRequest(let request):
+            if let pendingRequestIds, !pendingRequestIds.contains(request.requestId) {
+                return
+            }
             dispatchPendingRequest(request, cursor: event.cursor)
         case .operationCompleted(let operationKey, _):
             stateLock.lock()

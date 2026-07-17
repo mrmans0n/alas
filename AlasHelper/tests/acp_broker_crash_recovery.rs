@@ -365,15 +365,14 @@ fn pending_permission_returns_before_prompt_completion_and_can_resume() {
     );
     assert_eq!(response["ok"], true);
 
-    let completed = send(
+    let completed = drive_until_prompt_completed(
         &mut helper,
         "broker-pending",
         open["snapshot"]["metadata"]["generation"].clone(),
-        "session/prompt",
         "prompt-permission",
         json!({ "prompt": "needs permission" }),
     );
-    assert_eq!(completed["replayed"], false);
+    assert_eq!(completed["replayed"], true);
     assert_eq!(completed["result"]["stopReason"], "end_turn");
 }
 
@@ -533,7 +532,7 @@ fn drive_until_pending_request(
 ) -> Value {
     let mut acknowledged_cursor = 0;
     let mut last_attached = Value::Null;
-    for _ in 0..5 {
+    for _ in 0..20 {
         let progress = send(
             helper,
             broker_id,
@@ -570,8 +569,34 @@ fn drive_until_pending_request(
             );
             acknowledged_cursor = journal_tail;
         }
+        std::thread::sleep(Duration::from_millis(50));
     }
     panic!("timed out waiting for pending request: {last_attached}");
+}
+
+fn drive_until_prompt_completed(
+    helper: &mut Helper,
+    broker_id: &str,
+    generation: Value,
+    operation_key: &str,
+    params: Value,
+) -> Value {
+    for _ in 0..20 {
+        let result = send(
+            helper,
+            broker_id,
+            generation.clone(),
+            "session/prompt",
+            operation_key,
+            params.clone(),
+        );
+        if result.get("result").is_some() || result.get("error").is_some() {
+            return result;
+        }
+        assert_eq!(result["pending"], true, "{result}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for prompt completion");
 }
 
 fn attached_has_pending_request(attached: &Value) -> bool {

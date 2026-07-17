@@ -5,8 +5,13 @@ typealias ACPDurableConsumptionAcknowledgement = @Sendable () -> Void
 struct ACPRequest {
     let method: String
     let params: Encodable?
-    init(method: String, params: Encodable? = nil) { self.method = method
-    self.params = params }
+    let brokerOperationKey: String?
+
+    init(method: String, params: Encodable? = nil, brokerOperationKey: String? = nil) {
+        self.method = method
+        self.params = params
+        self.brokerOperationKey = brokerOperationKey
+    }
 }
 
 struct ACPResponse {

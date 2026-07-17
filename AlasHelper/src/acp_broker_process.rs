@@ -412,6 +412,8 @@ fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
 
 fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpSendParams = decode(params)?;
+    let method = params.method.clone();
+    let operation_key = params.operation_key.clone();
     let operation = {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
@@ -455,11 +457,14 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
             params.params,
         )?;
     }
-    wait_for_operation_or_pending_input(
-        runtime,
-        &params.operation_key,
-        Duration::from_secs(24 * 60 * 60),
-    )
+    if method == "session/prompt" {
+        return Ok(json!({
+            "requestId": operation.adapter_request_id,
+            "replayed": operation.replayed,
+            "pending": true
+        }));
+    }
+    wait_for_operation_or_pending_input(runtime, &operation_key, Duration::from_secs(24 * 60 * 60))
 }
 
 fn broker_notify(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {

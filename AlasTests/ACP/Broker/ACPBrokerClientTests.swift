@@ -87,6 +87,29 @@ struct ACPBrokerClientTests {
         ]))
     }
 
+    @Test func sendUsesExplicitBrokerOperationKeyWhenProvided() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        await service.enqueueAttach(events: [])
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: false,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: nil
+        ))
+        let client = makeClient(service: service)
+        try await client.start()
+
+        _ = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("queued")]),
+            brokerOperationKey: "queued-prompt:item-1:0:session/prompt"
+        ))
+
+        let sent = try await #require(service.sent.first)
+        #expect(sent.operationKey == ACPBrokerOperationKey(rawValue: "queued-prompt:item-1:0:session/prompt"))
+    }
+
     @Test func adoptedHandshakeAndRemoteSessionResultsAreReplayedFromSnapshot() async throws {
         let service = MockBrokerService()
         await service.setSnapshotResults(
@@ -386,6 +409,37 @@ struct ACPBrokerClientTests {
         #expect(await service.attached.count == 3)
     }
 
+    @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "99",
+                    adapterRequestId: .number(99),
+                    kind: .permission,
+                    payload: .object([
+                        "sessionId": .string("remote-1"),
+                        "toolCall": .object(["toolCallId": .string("tool-1")]),
+                        "options": .array([])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .pendingRequestResolved(
+                    requestId: "99",
+                    response: ACPBrokerRPCOutcome(result: .object(["outcome": .string("approved")]), error: nil)
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        #expect(client.hasPendingOutboundRequest(id: .number(99)) == false)
+    }
+
     @Test func notifyUsesBrokerNotificationPath() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -512,7 +566,13 @@ private actor MockBrokerService: ACPBrokerServicing {
         attached.append(params)
         let events = attachEvents.isEmpty ? [] : attachEvents.removeFirst()
         let tail = events.map(\.cursor).max() ?? params.acknowledgedCursor
-        return ACPBrokerAttachResult(snapshot: snapshot(journalTail: tail.rawValue), events: events)
+        return ACPBrokerAttachResult(
+            snapshot: snapshot(
+                journalTail: tail.rawValue,
+                pendingRequests: pendingRequests(from: events)
+            ),
+            events: events
+        )
     }
 
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
@@ -552,7 +612,10 @@ private actor MockBrokerService: ACPBrokerServicing {
         return ACPBrokerSimpleOK(ok: true)
     }
 
-    private func snapshot(journalTail: UInt64) -> ACPBrokerSnapshot {
+    private func snapshot(
+        journalTail: UInt64,
+        pendingRequests: [ACPBrokerPendingRequest] = []
+    ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
                 brokerId: ACPBrokerID(rawValue: "broker-1"),
@@ -569,8 +632,23 @@ private actor MockBrokerService: ACPBrokerServicing {
             turnState: .idle,
             acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0),
             journalTail: ACPBrokerEventCursor(rawValue: journalTail),
-            pendingRequests: [],
+            pendingRequests: pendingRequests,
             operations: []
         )
+    }
+
+    private func pendingRequests(from events: [ACPBrokerEvent]) -> [ACPBrokerPendingRequest] {
+        var pending: [String: ACPBrokerPendingRequest] = [:]
+        for event in events {
+            switch event.kind {
+            case .pendingRequest(let request):
+                pending[request.requestId] = request
+            case .pendingRequestResolved(let requestId, _):
+                pending.removeValue(forKey: requestId)
+            default:
+                break
+            }
+        }
+        return Array(pending.values)
     }
 }
