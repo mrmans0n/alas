@@ -308,6 +308,61 @@ struct ACPBrokerClientTests {
         #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
     }
 
+    @Test func pendingRequestAckWaitsForEarlierStreamedUpdateAck() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("hello")
+                            ])
+                        ])
+                    ])
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "99",
+                    adapterRequestId: .number(99),
+                    kind: .permission,
+                    payload: .object([
+                        "sessionId": .string("remote-1"),
+                        "toolCall": .object(["toolCallId": .string("tool-1")]),
+                        "options": .array([])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+        let permissionTask = Task { try await nextPermission(from: client.permissionRequests) }
+        try await client.start()
+
+        let update = try await updateTask.value
+        let permission = try await permissionTask.value
+        client.respondToPermission(id: permission.id, response: .init(outcome: .selected(optionId: "allow")))
+
+        try await waitUntil { await service.responded.count == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await service.acks.isEmpty)
+
+        update.durableConsumptionAcknowledgement?()
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [
+                ACPBrokerEventCursor(rawValue: 2),
+                ACPBrokerEventCursor(rawValue: 3)
+            ]
+        }
+    }
+
     @Test func promptResponseAckWaitsForEarlierStreamedUpdateAck() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])

@@ -57,7 +57,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
     private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
     private var unacknowledgedDurableEventCursors: Set<ACPBrokerEventCursor> = []
-    private var deferredResponseAckCursors: Set<ACPBrokerEventCursor> = []
+    private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
 
     var yieldedUpdateCount: Int {
         stateLock.lock()
@@ -437,7 +437,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         let cursor = pendingInboundCursors.removeValue(forKey: id)
         stateLock.unlock()
         if let cursor {
-            ack(cursor: cursor)
+            ackAfterEarlierDurableEvents(cursor: cursor)
         }
     }
 
@@ -460,7 +460,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             if let state {
                 self.onDurableStateChanged?(state)
             }
-            self.flushDeferredResponseAcks()
+            self.flushDeferredOrderedAcks()
         }
     }
 
@@ -472,10 +472,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func ackResponse(cursor: ACPBrokerEventCursor) {
+        ackAfterEarlierDurableEvents(cursor: cursor)
+    }
+
+    private func ackAfterEarlierDurableEvents(cursor: ACPBrokerEventCursor) {
         stateLock.lock()
         let shouldDefer = unacknowledgedDurableEventCursors.contains(where: { $0 < cursor })
         if shouldDefer {
-            deferredResponseAckCursors.insert(cursor)
+            deferredOrderedAckCursors.insert(cursor)
             stateLock.unlock()
             return
         }
@@ -483,14 +487,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         ack(cursor: cursor)
     }
 
-    private func flushDeferredResponseAcks() {
+    private func flushDeferredOrderedAcks() {
         let ready: [ACPBrokerEventCursor]
         stateLock.lock()
-        ready = deferredResponseAckCursors
+        ready = deferredOrderedAckCursors
             .filter { cursor in !unacknowledgedDurableEventCursors.contains(where: { $0 < cursor }) }
             .sorted()
         for cursor in ready {
-            deferredResponseAckCursors.remove(cursor)
+            deferredOrderedAckCursors.remove(cursor)
         }
         stateLock.unlock()
         for cursor in ready {

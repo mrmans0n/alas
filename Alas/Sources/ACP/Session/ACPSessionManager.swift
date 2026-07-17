@@ -1157,7 +1157,9 @@ final class ACPSessionManager: ObservableObject {
                 && row.acpBrokerGeneration == generation
             row.acpBrokerId = state.brokerId.rawValue
             row.acpBrokerGeneration = generation
-            row.acpBrokerAcknowledgedCursor = max(row.acpBrokerAcknowledgedCursor, acknowledgedCursor)
+            row.acpBrokerAcknowledgedCursor = matchesCurrentGeneration
+                ? max(row.acpBrokerAcknowledgedCursor, acknowledgedCursor)
+                : acknowledgedCursor
             persistedRows[sessionId] = row
             replaceRecentRow(row)
         } else {
