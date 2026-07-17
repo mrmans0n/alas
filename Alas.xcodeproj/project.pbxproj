@@ -183,6 +183,7 @@
 		250F0E2CB26CC16D2FFDB9DD /* DiffSelectableTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23FECFF5D8673A3A8E7A1431 /* DiffSelectableTextView.swift */; };
 		25311FAD068B5590F459CED9 /* ACPChatLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D8E02BB3FEB3C71AEEBBE6F /* ACPChatLayout.swift */; };
 		25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */; };
+		255B96A469DFFEA473CF1A42 /* AlasCLIEnvInjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 107D334C822CF40697E7F15B /* AlasCLIEnvInjection.swift */; };
 		255E9EAE89D521E08EB90918 /* JSONHookSettingsFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 137F79BD0DEB96B6F756ABD4 /* JSONHookSettingsFile.swift */; };
 		257D3CF69FE6A97D058FF959 /* RemoteRepoValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDE190423707662BDC8E6EA /* RemoteRepoValidator.swift */; };
 		2584552219DE6987E1E6AF36 /* AgentRunError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BF2F213480B30034B25B2B8 /* AgentRunError.swift */; };
@@ -908,6 +909,7 @@
 		B58BF89C3A788A31CBED2067 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = B3568F495249430FBBE2FCCF /* TreeSitterJavaScript */; };
 		B5E38A6134CDE9F8D5EA76D1 /* CompletionWindowControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C4AE9D01CA02A9689AAE8B /* CompletionWindowControllerTests.swift */; };
 		B614CD7F894DD6908C903254 /* InstallNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */; };
+		B647C09E6FFD4F2136E2E64F /* AlasCLIEnvInjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EA9CC6DA19BF2D0FD8FBDF3 /* AlasCLIEnvInjectionTests.swift */; };
 		B6580745C7EDF5AA65DB0A86 /* QueuedPromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC961032C642C166F17EFD99 /* QueuedPromptTests.swift */; };
 		B66EE6A2445C0DDA607788C2 /* GitIgnoreService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEA5E54A30636928F5D3B3E /* GitIgnoreService.swift */; };
 		B6713CE9BFA38B7F1D089E5A /* CopilotInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */; };
@@ -1387,6 +1389,7 @@
 		100091C8ABC3F3FA66C744E9 /* HoverHighlightFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverHighlightFeatureTests.swift; sourceTree = "<group>"; };
 		1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStoreTests.swift; sourceTree = "<group>"; };
 		10602801D3FA990E60CB072D /* ACPQueueHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPQueueHeader.swift; sourceTree = "<group>"; };
+		107D334C822CF40697E7F15B /* AlasCLIEnvInjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIEnvInjection.swift; sourceTree = "<group>"; };
 		10B3615A1591964AB1C9E524 /* RemoteHostCapabilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHostCapabilities.swift; sourceTree = "<group>"; };
 		10E10C6559E26691EC906737 /* ACPTerminalMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTerminalMessages.swift; sourceTree = "<group>"; };
 		11BA9F25CB0A6A2BFDB390EE /* ACPMockClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMockClientTests.swift; sourceTree = "<group>"; };
@@ -2000,6 +2003,7 @@
 		8DF79BBCD948528D655A9A81 /* RemoteHostRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHostRegistry.swift; sourceTree = "<group>"; };
 		8E3A9C194105E52A72293855 /* ProjectGitWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectGitWatcherTests.swift; sourceTree = "<group>"; };
 		8E8EB674A5221235F1C7594E /* SemanticVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticVersion.swift; sourceTree = "<group>"; };
+		8EA9CC6DA19BF2D0FD8FBDF3 /* AlasCLIEnvInjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIEnvInjectionTests.swift; sourceTree = "<group>"; };
 		8EC619ECA68DC50B9C56CC33 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		8EDED937A8E8340D6E685A6E /* GitNameValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitNameValidatorTests.swift; sourceTree = "<group>"; };
 		8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
@@ -3588,6 +3592,7 @@
 				38643438B0DF2F60F9B3B5AC /* ACPTranscriptChangeLog.swift */,
 				04B44F1DD775D2543439D508 /* ACPTranscriptMarkdown.swift */,
 				955B9084309744F3B9A44CBC /* ACPUserInput.swift */,
+				107D334C822CF40697E7F15B /* AlasCLIEnvInjection.swift */,
 				6B7BEEA16E15CB254BD84F5F /* BuiltInAlasMCP.swift */,
 				87F9063CCA0DA839EB342993 /* CursorModelVariants.swift */,
 				AA6486CAD3FE633F9B6F4ABF /* MCPAttachmentPlanner.swift */,
@@ -4173,6 +4178,7 @@
 				A5069EF396F2CB8E81B2AD11 /* ACPTranscriptMarkdownTests.swift */,
 				F84BC1A10866A165EA321719 /* ACPTranscriptTests.swift */,
 				7DCF803DF778CF9C06AC1579 /* ACPTranscriptWindowTests.swift */,
+				8EA9CC6DA19BF2D0FD8FBDF3 /* AlasCLIEnvInjectionTests.swift */,
 				FE7A4A7B920C0E748973F282 /* BuiltInAlasMCPTests.swift */,
 				336ADD8484D99054ADDBA588 /* CursorModelVariantsTests.swift */,
 				532AA1B8AD5E8139D2EEE948 /* MCPAttachmentPlannerTests.swift */,
@@ -5227,6 +5233,7 @@
 				8CAD455D39C888978F7E66EF /* AlasApplicationDelegate.swift in Sources */,
 				5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */,
 				6AFE04B669CA654D7733F97E /* AlasCLICommandRouter.swift in Sources */,
+				255B96A469DFFEA473CF1A42 /* AlasCLIEnvInjection.swift in Sources */,
 				29806D50EECB300991471A7C /* AlasCLIRequest.swift in Sources */,
 				DC8458FA4C5FCC854BB46B96 /* AlasCLIReviewTargetResolver.swift in Sources */,
 				00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */,
@@ -5898,6 +5905,7 @@
 				13E762EA8D84EFE6F0228806 /* AgentTerminalLaunchTests.swift in Sources */,
 				C653712419D5B5A78AA53E84 /* AgentsPaneTests.swift in Sources */,
 				026C8FB815E41D31C8E9421B /* AlasCLICommandRouterTests.swift in Sources */,
+				B647C09E6FFD4F2136E2E64F /* AlasCLIEnvInjectionTests.swift in Sources */,
 				8F4B6B83968BE4C1E6D0D912 /* AlasCLIRequestTests.swift in Sources */,
 				CEEDAC1603DF2F3BD9223238 /* AlasCLIReviewTargetResolverTests.swift in Sources */,
 				4780D23AF088EC5923A17102 /* AlasCLIWorktreeResolverTests.swift in Sources */,
