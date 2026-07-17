@@ -1278,7 +1278,16 @@ let second = true
         #expect(value == "kept")
     }
 
-    @Test func synchronizedRowHeightsResetPreviouslyPaddedRowsForRemeasurement() throws {
+    /// Regression test for a live-lock (beachball): a row whose target height
+    /// permanently differs from its natural height (e.g. its paired old/new
+    /// row wraps to a different line count) must keep its custom line-height
+    /// paragraph style untouched while some OTHER row's target changes.
+    /// Previously, any other row's target change unconditionally stripped
+    /// every already-padded row for "remeasurement", which reapplied the same
+    /// padding on the very next layout pass — an unbounded
+    /// apply/strip/reapply cycle that kept calling
+    /// `invalidateIntrinsicContentSize()` forever.
+    @Test func synchronizedRowHeightsKeepsStablePaddingWhileOtherRowsChange() throws {
         let theme = theme()
         let font = CenterTypography.resolveCodeFont(family: "", size: 13)
         let lines = [
@@ -1322,6 +1331,9 @@ let second = true
         let rowRects = codeView.diffRowRects()
         #expect(rowRects.count == 3)
 
+        // Row 0 permanently needs padding (its paired row on the other side
+        // is taller by a whole line) — its target height never changes
+        // across any of the following calls.
         let firstInflatedHeight = rowRects[0].height + 18
         scrollView.synchronizeRowHeights([
             firstInflatedHeight,
@@ -1334,17 +1346,20 @@ let second = true
         )
         #expect(paddedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
 
+        // Row 1's target changes; row 0's does not. Row 0's existing padding
+        // must be left alone, not stripped back to the base paragraph style.
         scrollView.synchronizeRowHeights([
             firstInflatedHeight,
             rowRects[1].height + 18,
             rowRects[2].height,
         ])
 
-        let restoredParagraph = try #require(
+        let unchangedParagraph = try #require(
             codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
         )
-        #expect(restoredParagraph.minimumLineHeight <= rowRects[0].height + 0.5)
+        #expect(unchangedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
 
+        // Settling further with the same heights must not disturb row 0 either.
         scrollView.layoutSubtreeIfNeeded()
         scrollView.synchronizeRowHeights([
             firstInflatedHeight,
@@ -1352,10 +1367,70 @@ let second = true
             rowRects[2].height,
         ])
 
-        let reappliedParagraph = try #require(
+        let stillUnchangedParagraph = try #require(
             codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
         )
-        #expect(reappliedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
+        #expect(stillUnchangedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
+    }
+
+    /// Regression test for the beachball: once row heights settle, calling
+    /// `synchronizeRowHeights` again with the identical target heights must be
+    /// a no-op that doesn't re-trigger a layout pass. If it did, the resulting
+    /// `invalidateIntrinsicContentSize()` would schedule another AppKit
+    /// layout, which re-enters this same synchronization and never converges
+    /// — pegging the main thread at 100% CPU (the live-lock this guards
+    /// against).
+    @Test func synchronizeRowHeightsIsNoOpOnceStable() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = [
+            "let first = true",
+            "let second = false",
+            "let third = true",
+        ]
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2", "3"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRects = codeView.diffRowRects()
+        #expect(rowRects.count == 3)
+
+        let heights = [rowRects[0].height + 18, rowRects[1].height, rowRects[2].height]
+        scrollView.synchronizeRowHeights(heights)
+        scrollView.layoutSubtreeIfNeeded()
+        #expect(scrollView.needsLayout == false)
+
+        scrollView.synchronizeRowHeights(heights)
+        #expect(scrollView.needsLayout == false)
     }
 
     @Test func gutterSelectionOutlineWrapsContiguousRows() {
