@@ -20,8 +20,6 @@ struct ACPBrokerDurableState: Equatable, Sendable {
 }
 
 final class ACPBrokerClient: ACPClient, @unchecked Sendable {
-    let advertisesTerminalCapability = false
-
     private let service: ACPBrokerServicing
     private let brokerId: ACPBrokerID
     private let sessionId: String

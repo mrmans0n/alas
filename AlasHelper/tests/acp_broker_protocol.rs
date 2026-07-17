@@ -329,6 +329,20 @@ fn pending_request_variants_are_snapshotted_and_answered_once() {
             .kind(),
         BrokerErrorKind::PendingRequestAlreadyResolved
     );
+    broker
+        .add_pending_request(
+            "permission",
+            json!("permission"),
+            PendingClientRequestKind::Permission,
+            json!({"requestId": "permission", "attempt": 2}),
+        )
+        .unwrap();
+    broker
+        .respond_to_pending_request(
+            "permission",
+            AdapterRPCOutcome::result(json!({"outcome": "approved-again"})),
+        )
+        .unwrap();
 
     let snapshot = broker.snapshot();
     assert_eq!(snapshot.pending_requests.len(), 4);

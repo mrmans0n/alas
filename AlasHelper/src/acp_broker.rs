@@ -467,12 +467,7 @@ impl ACPBrokerState {
                 "pending request already exists",
             ));
         }
-        if self.resolved_requests.contains(&request_id) {
-            return Err(BrokerError::new(
-                BrokerErrorKind::PendingRequestAlreadyResolved,
-                "pending request was already resolved",
-            ));
-        }
+        self.resolved_requests.remove(&request_id);
 
         let request = PendingClientRequest {
             request_id: request_id.clone(),
