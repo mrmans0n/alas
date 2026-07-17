@@ -93,6 +93,10 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var pendingMCPPreamble: String?
     /// Whether this session's MCP preamble was delivered in a prompt.
     @Published var mcpPreambleSent: Bool = false
+    /// Runtime-only status for adapters that ignore ACP MCP config
+    /// (`ACPMCPInjectionSupport.external`): how Alas tools and user MCP
+    /// servers actually reach this agent. Recomputed on every attach.
+    @Published var mcpExternalStatus: ACPMCPExternalStatus?
     /// Runtime-only auth method selected by the user in the sign-in banner.
     /// The next attach consumes it by calling ACP `authenticate` after
     /// initialize and before session creation/loading.

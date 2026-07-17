@@ -4789,12 +4789,63 @@ final class AppState {
                 basePATH: ACPProcessEnvironment.augmented()["PATH"]
             )
         }
+        mgr.externalMCPStatusProvider = { [weak self] worktreePath in
+            guard let self else { return (.unknown, nil) }
+            let adapterState = PiMCPAdapterInspector.state()
+            guard adapterState == .installed else { return (adapterState, nil) }
+            let servers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+            let fingerprint = MCPAttachmentPlanner.configurationFingerprint(for: servers)
+            let worktreeURL = URL(fileURLWithPath: worktreePath)
+            let configOutcome = try? PiMCPConfigWriter.sync(
+                worktreeURL: worktreeURL,
+                servers: servers,
+                fingerprint: fingerprint
+            )
+            if configOutcome == .wrote {
+                await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
+            }
+            return (adapterState, configOutcome)
+        }
         acpManagers[worktree.id] = mgr
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
         #endif
         return mgr
+    }
+
+    /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
+    /// `.pi/mcp.json` is first written, so the generated file never shows up
+    /// as untracked/dirty in the changes list. `GitIgnoreService.appendIgnore`
+    /// is idempotent (skips if the pattern already exists), so calling this
+    /// on every write is safe. Linked worktrees keep `info/exclude` outside
+    /// the working tree, so the path is resolved via
+    /// `git rev-parse --git-path` — same approach as
+    /// `RightPaneState.ignore(path:isDirectory:destination:)`. Best-effort:
+    /// failures are silently ignored (worst case `.pi/` shows as untracked).
+    private func excludePiDirectoryFromGit(worktreeURL: URL) async {
+        do {
+            let infoExcludeURL = try await resolveGitInfoExcludeURL(worktreeURL: worktreeURL)
+            _ = try GitIgnoreService.appendIgnore(
+                entryPath: ".pi",
+                isDirectory: true,
+                destination: .infoExclude,
+                repoURL: worktreeURL,
+                infoExcludeURL: infoExcludeURL
+            )
+        } catch {
+            // Non-fatal: the managed mcp.json still works, it just may show
+            // as untracked until the next successful attach retries this.
+        }
+    }
+
+    private func resolveGitInfoExcludeURL(worktreeURL: URL) async throws -> URL {
+        let result = try await Process.git(["rev-parse", "--git-path", "info/exclude"], cwd: worktreeURL)
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.hasPrefix("/") {
+            return URL(fileURLWithPath: raw)
+        }
+        return URL(fileURLWithPath: raw, relativeTo: worktreeURL).standardizedFileURL
     }
 
     /// Release the ACP session manager for the given worktree id.

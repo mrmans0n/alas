@@ -38,6 +38,12 @@ final class ACPSessionManager: ObservableObject {
         _ worktreePath: String,
         _ sessionId: ACPSession.ID
     ) async -> [String: String]?
+    /// For `.external` adapters (which ignore ACP MCP config), inspects the
+    /// agent-side adapter and syncs its managed config file. Called once per
+    /// attach, after the built-in MCP composition, so `attach` can populate
+    /// `session.mcpExternalStatus` before the first-prompt preamble is built.
+    typealias ExternalMCPStatusProvider = @MainActor (_ worktreePath: String) async
+        -> (adapterState: PiMCPAdapterInspector.State, configOutcome: PiMCPConfigWriter.Outcome?)
 
     let instanceId: String
     let pid: Int64
@@ -69,6 +75,11 @@ final class ACPSessionManager: ObservableObject {
     /// through every manager construction call site. Local sessions only;
     /// remote hosts skip it in `attach`.
     var alasCLIEnvProvider: AlasCLIEnvProvider?
+    /// Builds the `.external` adapter status (adapter inspection + managed
+    /// config sync) for a worktree path. Set post-init, mirroring
+    /// `alasCLIEnvProvider`, so AppState can wire it without threading it
+    /// through every manager construction call site.
+    var externalMCPStatusProvider: ExternalMCPStatusProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
@@ -2347,6 +2358,21 @@ extension ACPSessionManager {
                 statuses: plannedStatuses,
                 configurationFingerprint: mcpPlan.configurationFingerprint
             )
+            // `.external` adapters ignore the ACP MCP config above and need
+            // agent-side setup instead (config files, plugins). Recomputed on
+            // every attach so a freshly installed adapter or an edited
+            // server list is picked up on the next reconnect.
+            if case let .external(hint) = spec.mcpInjection {
+                let external = await externalMCPStatusProvider?(worktreePath)
+                session.mcpExternalStatus = ACPMCPExternalStatus(
+                    cliActive: cliEnvActive,
+                    adapterState: external?.adapterState ?? .unknown,
+                    configOutcome: external?.configOutcome,
+                    hint: hint
+                )
+            } else {
+                session.mcpExternalStatus = nil
+            }
             let mcpSplit = remoteHost.map { _ in
                 ACPRemoteMCPFilter.split(plannedWireServers)
             }
@@ -2590,10 +2616,7 @@ extension ACPSessionManager {
                     .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
                 let preambleMode: ACPMCPPreambleMode
                 if case .external = spec.mcpInjection {
-                    // Task 5 wires the pi-mcp-adapter inspector into
-                    // `session.mcpExternalStatus`; until then, assume the
-                    // adapter is not installed.
-                    let adapterInstalled = false
+                    let adapterInstalled = session.mcpExternalStatus?.adapterInstalled == true
                     preambleMode = .cli(adapterInstalled: adapterInstalled)
                 } else {
                     preambleMode = .mcp
