@@ -31,15 +31,9 @@ struct ACPMessageList: View {
     /// the row is gone or the payload is undecodable.
     let onLoadFullToolCallContent: (String) async -> String?
     @Environment(\.theme) private var theme
-    @State private var isRestoringTail = false
-    @State private var headFrame: CGRect = .zero
-    @State private var lastHeadStepAt: Date = .distantPast
-    @State private var lastTailStepAt: Date = .distantPast
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
-    @State private var latestRememberedScrollAnchorIndex: Int?
-    @State private var restoredRememberedAnchor: String?
-    @State private var pendingTailScrollTask: Task<Void, Never>?
+    @State private var scrollBook = ACPTranscriptScrollBookkeeping()
     // Geometry callbacks can run while AppKit is tracking a native menu. Keep
     // their per-row bookkeeping out of SwiftUI-observed value state: changing
     // a cached frame must not invalidate the entire lazy transcript list.
@@ -222,7 +216,7 @@ struct ACPMessageList: View {
                 }
                 .coordinateSpace(.named(scrollSpaceName))
                 .modifier(ACPTranscriptScrollTracking(
-                    isRestoring: { isRestoringTail },
+                    isRestoring: { scrollBook.isRestoringTail },
                     onResolveScrollView: { scrollViewRef.scrollView = $0 },
                     onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
                     onPaused: { setFollowsTranscriptTail(false) },
@@ -244,8 +238,8 @@ struct ACPMessageList: View {
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onDisappear {
-                    pendingTailScrollTask?.cancel()
-                    pendingTailScrollTask = nil
+                    scrollBook.pendingTailScrollTask?.cancel()
+                    scrollBook.pendingTailScrollTask = nil
                 }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
@@ -309,23 +303,23 @@ struct ACPMessageList: View {
 
     private func restoreRememberedAnchorIfNeeded(proxy: ScrollViewProxy) {
         guard !session.followsTranscriptTail else {
-            restoredRememberedAnchor = nil
+            scrollBook.restoredRememberedAnchor = nil
             return
         }
-        guard let anchor = rememberedScrollAnchor(), restoredRememberedAnchor != anchor else { return }
+        guard let anchor = rememberedScrollAnchor(), scrollBook.restoredRememberedAnchor != anchor else { return }
         guard visibleMessageLookup.contains(anchor) else { return }
-        isRestoringTail = true
+        scrollBook.isRestoringTail = true
         proxy.scrollTo(anchor, anchor: .top)
-        restoredRememberedAnchor = anchor
+        scrollBook.restoredRememberedAnchor = anchor
         DispatchQueue.main.async {
-            isRestoringTail = false
+            scrollBook.isRestoringTail = false
         }
     }
 
     private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
-        pendingTailScrollTask?.cancel()
-        pendingTailScrollTask = nil
-        isRestoringTail = true
+        scrollBook.pendingTailScrollTask?.cancel()
+        scrollBook.pendingTailScrollTask = nil
+        scrollBook.isRestoringTail = true
         let scroll = {
             proxy.scrollTo("__composer_spacer__", anchor: .bottom)
         }
@@ -337,7 +331,7 @@ struct ACPMessageList: View {
             scroll()
         }
         let releaseRestoring = {
-            isRestoringTail = false
+            scrollBook.isRestoringTail = false
         }
         if animated {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
@@ -351,18 +345,18 @@ struct ACPMessageList: View {
     }
 
     private func scheduleTailScroll(proxy: ScrollViewProxy, animated: Bool) {
-        guard Self.shouldScheduleTailScroll(hasPendingTailScroll: pendingTailScrollTask != nil) else {
+        guard Self.shouldScheduleTailScroll(hasPendingTailScroll: scrollBook.pendingTailScrollTask != nil) else {
             return
         }
-        pendingTailScrollTask?.cancel()
-        pendingTailScrollTask = Task { @MainActor in
+        scrollBook.pendingTailScrollTask?.cancel()
+        scrollBook.pendingTailScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled,
                   ACPMessageList.shouldRunScheduledTailScroll(
                     followsTranscriptTail: session.followsTranscriptTail
                   )
             else {
-                pendingTailScrollTask = nil
+                scrollBook.pendingTailScrollTask = nil
                 return
             }
             scrollToTail(proxy: proxy, animated: animated)
@@ -431,11 +425,11 @@ struct ACPMessageList: View {
             session.followsTranscriptTail = true
             transcript.resetWindowToTail()
             onRememberScrollAnchor(nil, nil, true)
-            latestRememberedScrollAnchorIndex = nil
+            scrollBook.latestRememberedScrollAnchorIndex = nil
         } else {
             session.followsTranscriptTail = false
-            pendingTailScrollTask?.cancel()
-            pendingTailScrollTask = nil
+            scrollBook.pendingTailScrollTask?.cancel()
+            scrollBook.pendingTailScrollTask = nil
             let lookup = visibleMessageLookup
             let anchor = Self.rememberedAnchorWhenPausingTailFollow(
                 latestTopVisibleAnchor: latestTopVisibleAnchor.value,
@@ -448,8 +442,8 @@ struct ACPMessageList: View {
                 anchorIndex,
                 false
             )
-            latestRememberedScrollAnchorIndex = anchorIndex
-            restoredRememberedAnchor = anchor
+            scrollBook.latestRememberedScrollAnchorIndex = anchorIndex
+            scrollBook.restoredRememberedAnchor = anchor
         }
     }
 
@@ -461,24 +455,24 @@ struct ACPMessageList: View {
             latestTopVisibleAnchor.value = anchor
         }
         let lookup = visibleMessageLookup
-        guard !isRestoringTail else { return }
+        guard !scrollBook.isRestoringTail else { return }
         guard !session.followsTranscriptTail else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
-        let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
+        let anchorIndexChanged = rememberedAnchor == anchor && scrollBook.latestRememberedScrollAnchorIndex != anchorIndex
         guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
         if !Self.shouldRememberVisibleAnchor(
             anchor,
             rememberedAnchor: rememberedAnchor,
-            restoredRememberedAnchor: restoredRememberedAnchor,
+            restoredRememberedAnchor: scrollBook.restoredRememberedAnchor,
             visibleMessageIds: lookup.ids,
             isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
         ) {
             return
         }
         onRememberScrollAnchor(anchor, anchorIndex, false)
-        latestRememberedScrollAnchorIndex = anchorIndex
-        restoredRememberedAnchor = anchor
+        scrollBook.latestRememberedScrollAnchorIndex = anchorIndex
+        scrollBook.restoredRememberedAnchor = anchor
     }
 
     private func handleModernRowFrame(id: String, frame: CGRect) {
@@ -489,16 +483,16 @@ struct ACPMessageList: View {
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
         }
-        guard !isRestoringTail else { return }
+        guard !scrollBook.isRestoringTail else { return }
         guard !session.followsTranscriptTail else { return }
         guard !transcript.isBackfillingOlderMessages else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
-        let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
+        let anchorIndexChanged = rememberedAnchor == anchor && scrollBook.latestRememberedScrollAnchorIndex != anchorIndex
         guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
         onRememberScrollAnchor(anchor, anchorIndex, false)
-        latestRememberedScrollAnchorIndex = anchorIndex
-        restoredRememberedAnchor = anchor
+        scrollBook.latestRememberedScrollAnchorIndex = anchorIndex
+        scrollBook.restoredRememberedAnchor = anchor
     }
 
     private func pauseTailFollowFromGeometry(newMinY: CGFloat) {
@@ -516,17 +510,17 @@ struct ACPMessageList: View {
         proxy: ScrollViewProxy,
         lookup: VisibleMessageLookup
     ) {
-        guard !isRestoringTail else { return }
+        guard !scrollBook.isRestoringTail else { return }
         guard transcript.visibleTailBound < transcript.messages.count else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastTailStepAt) > headStepDebounceInterval else { return }
-        lastTailStepAt = now
+        guard now.timeIntervalSince(scrollBook.lastTailStepAt) > headStepDebounceInterval else { return }
+        scrollBook.lastTailStepAt = now
         let anchorId = Self.anchorForTailForwardPreservation(
             latestTopVisibleAnchor: latestTopVisibleAnchor.value,
             lookup: lookup
         )
         let anchorIndex = lookup.transcriptIndex(for: anchorId)
-        isRestoringTail = true
+        scrollBook.isRestoringTail = true
         transcript.stepTailForward(preserving: anchorIndex)
         let updatedRows = Self.visibleRows(
             messages: transcript.messages,
@@ -543,7 +537,7 @@ struct ACPMessageList: View {
                 proxy.scrollTo(scrollTargetId, anchor: .top)
             }
             DispatchQueue.main.async {
-                isRestoringTail = false
+                scrollBook.isRestoringTail = false
             }
         }
     }
@@ -859,12 +853,11 @@ struct ACPMessageList: View {
     /// would still satisfy `minY < threshold`, defeating the window before the
     /// user scrolled.
     private func handleHeadFramePreference(_ frame: CGRect, proxy: ScrollViewProxy) {
-        headFrame = frame
         guard transcript.visibleHead > 0 else { return }
         guard frame.minY < headStepScrollThreshold, frame.maxY > 0 else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
-        lastHeadStepAt = now
+        guard now.timeIntervalSince(scrollBook.lastHeadStepAt) > headStepDebounceInterval else { return }
+        scrollBook.lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
     }
 
@@ -898,7 +891,7 @@ struct ACPMessageList: View {
             newOffsetY: newMinY,
             viewportHeight: viewportHeight,
             contentHeight: contentHeight,
-            isRestoring: isRestoringTail,
+            isRestoring: scrollBook.isRestoringTail,
             isUserDriven: isUserDriven
         )
         switch decision {
@@ -909,7 +902,7 @@ struct ACPMessageList: View {
                 proxy: proxy,
                 shouldPageHiddenTail: Self.shouldStepTailForwardFromBottomGeometry(
                     isUserDriven: isUserDriven,
-                    isRestoring: isRestoringTail,
+                    isRestoring: scrollBook.isRestoringTail,
                     previousMinY: previousMinY,
                     newMinY: newMinY,
                     visibleTail: transcript.visibleTailBound,
@@ -940,14 +933,14 @@ struct ACPMessageList: View {
         // settles; geometry alone must not page the transcript upward.
         guard Self.shouldStepHeadBackFromGeometry(
             visibleHead: transcript.visibleHead,
-            isRestoring: isRestoringTail,
+            isRestoring: scrollBook.isRestoringTail,
             isHeadPaginationDriven: isHeadPaginationDriven,
             newMinY: newMinY,
             threshold: headStepScrollThreshold
         ) else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
-        lastHeadStepAt = now
+        guard now.timeIntervalSince(scrollBook.lastHeadStepAt) > headStepDebounceInterval else { return }
+        scrollBook.lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
     }
 
@@ -973,13 +966,13 @@ struct ACPMessageList: View {
         // does not depend on net content-height changes when the bounded window
         // also trims newer rows from the bottom.
         let anchorId = visibleMessageLookup.firstStableId
-        isRestoringTail = true
+        scrollBook.isRestoringTail = true
         transcript.stepHeadBack()
         DispatchQueue.main.async {
             if let anchorId {
                 proxy.scrollTo(anchorId, anchor: .top)
             }
-            DispatchQueue.main.async { isRestoringTail = false }
+            DispatchQueue.main.async { scrollBook.isRestoringTail = false }
         }
     }
 
@@ -1044,6 +1037,21 @@ private final class ACPWeakScrollViewRef {
 
 private final class ACPMutableScrollAnchor {
     var value: String?
+}
+
+/// Non-observed bookkeeping for scroll/restore callbacks. These values are
+/// only read from callbacks (never from `body`), so keeping them in plain
+/// `@State` value storage would buy nothing except a full-list invalidation
+/// on every write — which is exactly the transaction-feedback edge behind
+/// the transcript live-lock. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md.
+@MainActor
+private final class ACPTranscriptScrollBookkeeping {
+    var isRestoringTail = false
+    var restoredRememberedAnchor: String?
+    var latestRememberedScrollAnchorIndex: Int?
+    var lastHeadStepAt: Date = .distantPast
+    var lastTailStepAt: Date = .distantPast
+    var pendingTailScrollTask: Task<Void, Never>?
 }
 
 /// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's
