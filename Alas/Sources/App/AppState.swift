@@ -4792,7 +4792,7 @@ final class AppState {
             )
         }
         mgr.externalMCPStatusProvider = { [weak self] worktreePath in
-            guard let self else { return (.unknown, nil, []) }
+            guard let self else { return (.unknown, nil, [], []) }
             let worktreeURL = URL(fileURLWithPath: worktreePath)
             let adapterState = PiMCPAdapterInspector.state(worktreeURL: worktreeURL)
             let project = self.projects.first(where: { $0.id == worktree.projectId })
@@ -4816,7 +4816,13 @@ final class AppState {
                 capabilities: ACPMCPServerCapabilities(http: true, sse: true)
             ))
             let userServerNames = plan.wireServers.map(\.name)
-            guard adapterState == .installed else { return (adapterState, nil, userServerNames) }
+            let skippedServerStatuses = plan.statuses.filter {
+                if case .skipped = $0.disposition { return true }
+                return false
+            }
+            guard adapterState == .installed else {
+                return (adapterState, nil, userServerNames, skippedServerStatuses)
+            }
             let fingerprint = MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: plan.wireServers)
             let configOutcome: PiMCPConfigWriter.Outcome
             do {
@@ -4831,7 +4837,7 @@ final class AppState {
             if Self.shouldExcludePiDirectory(after: configOutcome) {
                 await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
             }
-            return (adapterState, configOutcome, userServerNames)
+            return (adapterState, configOutcome, userServerNames, skippedServerStatuses)
         }
         acpManagers[worktree.id] = mgr
         acpHarnessBridge.attach(manager: mgr)

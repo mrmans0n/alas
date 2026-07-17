@@ -34,7 +34,7 @@ struct ACPMCPStatusState: Equatable {
 
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)
-        rows = summary.statuses.map(Self.row)
+        rows = summary.statuses.map { Self.row($0) }
 
         if preamblePending {
             preambleDetail = "Context preamble pending — sent with the next prompt"
@@ -83,11 +83,15 @@ struct ACPMCPStatusState: Equatable {
                 transport: "pi-mcp-adapter",
                 detail: adapterDetail,
                 isRequested: adapterIsRequested)
-            let rows = [cliRow, adapterRow]
+            let skippedRows = externalStatus.skippedServerStatuses.map {
+                Self.row($0, idPrefix: "external-skipped-")
+            }
+            let rows = [cliRow, adapterRow] + skippedRows
             externalRows = rows
             requestedCount = rows.count(where: \.isRequested)
             skippedCount = (cliRow.isRequested ? 0 : 1)
                 + (adapterCountsAsSkipped ? 1 : 0)
+                + skippedRows.count
             showsAdapterInstallAction = availability == .notInstalled
                 && externalStatus.canInstallAdapterLocally
         } else {
@@ -113,7 +117,7 @@ struct ACPMCPStatusState: Equatable {
         return parts.joined(separator: ", ")
     }
 
-    private static func row(_ status: MCPAttachmentServerStatus) -> Row {
+    private static func row(_ status: MCPAttachmentServerStatus, idPrefix: String = "") -> Row {
         let transport: String
         switch status.transport {
         case .stdio: transport = "stdio"
@@ -124,7 +128,7 @@ struct ACPMCPStatusState: Equatable {
         switch status.disposition {
         case .requested:
             return .init(
-                id: status.id,
+                id: idPrefix + status.id,
                 name: status.name,
                 transport: transport,
                 detail: "Requested",
@@ -132,7 +136,7 @@ struct ACPMCPStatusState: Equatable {
             )
         case let .skipped(reason):
             return .init(
-                id: status.id,
+                id: idPrefix + status.id,
                 name: status.name,
                 transport: transport,
                 detail: skipDetail(reason),

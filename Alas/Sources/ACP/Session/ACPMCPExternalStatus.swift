@@ -28,6 +28,8 @@ struct ACPMCPExternalStatus: Equatable {
     /// resolved regardless of adapter/config state so the preamble can name
     /// them even when they are not (yet) reachable.
     let userServerNames: [String]
+    /// Project MCP servers skipped by the external adapter's own planning pass.
+    let skippedServerStatuses: [MCPAttachmentServerStatus]
     /// True when the current host can run the local remediation action for a
     /// missing adapter. Remote worktrees must not offer the local install button.
     let canInstallAdapterLocally: Bool
@@ -38,6 +40,7 @@ struct ACPMCPExternalStatus: Equatable {
         configOutcome: PiMCPConfigWriter.Outcome?,
         hint: String,
         userServerNames: [String],
+        skippedServerStatuses: [MCPAttachmentServerStatus] = [],
         canInstallAdapterLocally: Bool = true
     ) {
         self.cliActive = cliActive
@@ -45,6 +48,7 @@ struct ACPMCPExternalStatus: Equatable {
         self.configOutcome = configOutcome
         self.hint = hint
         self.userServerNames = userServerNames
+        self.skippedServerStatuses = skippedServerStatuses
         self.canInstallAdapterLocally = canInstallAdapterLocally
     }
 

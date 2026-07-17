@@ -46,6 +46,18 @@ struct PiMCPConfigWriterTests {
         #expect(try PiMCPConfigWriter.sync(worktreeURL: wt, servers: servers, fingerprint: "fp2") == .wrote)
     }
 
+    @Test("rewrites managed configs through a private temp file")
+    func rewriteLeavesNoTempFiles() throws {
+        let wt = try makeWorktree()
+        _ = try PiMCPConfigWriter.sync(worktreeURL: wt, servers: servers, fingerprint: "fp1")
+        #expect(try PiMCPConfigWriter.sync(worktreeURL: wt, servers: servers, fingerprint: "fp2") == .wrote)
+        let dir = wt.appendingPathComponent(".pi", isDirectory: true)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(entries == ["mcp.json"])
+        let attrs = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("mcp.json").path)
+        #expect((attrs[.posixPermissions] as? NSNumber)?.uint16Value == 0o600)
+    }
+
     @Test("resolved wire fingerprint changes when interpolated values change")
     func resolvedWireFingerprintFreshness() throws {
         let wt = try makeWorktree()

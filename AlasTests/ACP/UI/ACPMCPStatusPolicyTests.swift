@@ -120,6 +120,22 @@ struct ACPMCPStatusPolicyTests {
         #expect(remoteRows[1].detail == "requires the pi-mcp-adapter extension")
         #expect(remoteNotInstalled.showsAdapterInstallAction == false)
 
+        let skippedExternal = try #require(ACPMCPStatusState(
+            summary: summary, currentServers: [],
+            externalStatus: .init(
+                cliActive: true, adapterState: .installed, configOutcome: .noServers,
+                hint: "h", userServerNames: [],
+                skippedServerStatuses: [
+                    .init(
+                        id: "bad-token", name: "linear", transport: .stdio,
+                        disposition: .skipped(.missingVariable("LINEAR_TOKEN")))
+                ])))
+        let skippedRows = try #require(skippedExternal.externalRows)
+        #expect(skippedRows.map(\.id).contains("external-skipped-bad-token"))
+        #expect(skippedRows.map(\.detail).contains("Skipped: missing LINEAR_TOKEN"))
+        #expect(skippedExternal.requestedCount == 1)
+        #expect(skippedExternal.skippedCount == 1)
+
         let noServers = try #require(ACPMCPStatusState(
             summary: summary, currentServers: [],
             externalStatus: .init(cliActive: true, adapterState: .missing,

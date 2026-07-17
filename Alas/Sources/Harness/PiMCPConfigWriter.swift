@@ -57,16 +57,18 @@ enum PiMCPConfigWriter {
         ]
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .prettyPrinted])
-        // Create the file with 0600 *before* any token-bearing content is
-        // written, so there is never a window where a world/group-readable
-        // file holds MCP server tokens. A non-atomic write into an
-        // already-created file truncates in place and does not reset the
-        // mode bits picked at creation; the trailing `setAttributes` call
-        // re-asserts 0600 defensively in case that assumption ever changes.
-        guard FileManager.default.createFile(atPath: fileURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+        let tempURL = dir.appendingPathComponent(".mcp.json.\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        guard FileManager.default.createFile(atPath: tempURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        try data.write(to: fileURL)
+        try data.write(to: tempURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tempURL.path)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tempURL)
+        } else {
+            try FileManager.default.moveItem(at: tempURL, to: fileURL)
+        }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
         return .wrote
     }

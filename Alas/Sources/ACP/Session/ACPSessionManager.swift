@@ -46,7 +46,8 @@ final class ACPSessionManager: ObservableObject {
         -> (
             adapterState: PiMCPAdapterInspector.State,
             configOutcome: PiMCPConfigWriter.Outcome?,
-            userServerNames: [String]
+            userServerNames: [String],
+            skippedServerStatuses: [MCPAttachmentServerStatus]
         )
 
     let instanceId: String
@@ -2376,7 +2377,8 @@ extension ACPSessionManager {
                         adapterState: external?.adapterState ?? .unknown,
                         configOutcome: external?.configOutcome,
                         hint: hint,
-                        userServerNames: external?.userServerNames ?? []
+                        userServerNames: external?.userServerNames ?? [],
+                        skippedServerStatuses: external?.skippedServerStatuses ?? []
                     )
                 } else {
                     // Remote pi session: the worktree lives on the remote host, so
@@ -2389,6 +2391,10 @@ extension ACPSessionManager {
                         configOutcome: nil,
                         hint: hint,
                         userServerNames: mcpPlan.statuses.map(\.name),
+                        skippedServerStatuses: mcpPlan.statuses.filter {
+                            if case .skipped = $0.disposition { return true }
+                            return false
+                        },
                         canInstallAdapterLocally: false
                     )
                 }
