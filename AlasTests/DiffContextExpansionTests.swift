@@ -119,12 +119,10 @@ struct DiffContextExpansionTests {
 
         let key = DiffContextExpansionKey.shared(upperGroupID: groups[0].id, lowerGroupID: groups[1].id)
         let firstBridge = try #require(expanded[0].rows.compactMap(\.contextExpansion).first { $0.key == key && $0.edge == .top })
-        let allBridge = try #require(expanded[0].rows.compactMap(\.contextExpansion).first { $0.key == key && $0.edge == nil })
         let secondBridge = expanded[1].rows.first?.contextExpansion
         #expect(firstBridge.key == key)
         #expect(firstBridge.edge == .top)
-        #expect(allBridge.key == key)
-        #expect(allBridge.edge == nil)
+        #expect(expanded[0].rows.compactMap(\.contextExpansion).filter { $0.key == key }.map(\.edge) == [.top])
         #expect(secondBridge?.key == key)
         #expect(secondBridge?.edge == .bottom)
         #expect(expanded[0].sharedContextAfter == nil)
@@ -147,8 +145,8 @@ struct DiffContextExpansionTests {
         let upperExpansionRows = expanded[0].rows.compactMap(\.contextExpansion).filter { $0.key == key }
         let lowerExpansionRows = expanded[1].rows.compactMap(\.contextExpansion).filter { $0.key == key }
 
-        #expect(upperExpansionRows.map(\.edge) == [.top, nil])
-        #expect(upperExpansionRows.map(\.remainingLineCount) == [0, 0])
+        #expect(upperExpansionRows.map(\.edge) == [.top])
+        #expect(upperExpansionRows.map(\.remainingLineCount) == [0])
         #expect(lowerExpansionRows.map(\.edge) == [.bottom])
     }
 

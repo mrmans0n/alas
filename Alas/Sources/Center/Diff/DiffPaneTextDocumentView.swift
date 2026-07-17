@@ -997,6 +997,11 @@ final class DiffPaneCodeTextView: NSTextView {
         let firstLineFragmentRects: [NSRect]
     }
 
+    private struct ExpansionTarget: Equatable {
+        let row: Int
+        let action: DiffPaneTextDocumentBuilder.ContextExpansionAction
+    }
+
     static func placeholderHatchRect(in rowRect: NSRect) -> NSRect {
         rowRect.insetBy(dx: 0, dy: 1)
     }
@@ -1029,13 +1034,13 @@ final class DiffPaneCodeTextView: NSTextView {
     private var lspController: DiffPaneLSPController?
     private var cachedRowGeometry: RowGeometry?
     private var rowGeometryComputationCount = 0
-    private var hoverExpansionRow: Int? {
-        didSet { if hoverExpansionRow != oldValue { needsDisplay = true } }
+    private var hoverExpansionTarget: ExpansionTarget? {
+        didSet { if hoverExpansionTarget != oldValue { needsDisplay = true } }
     }
-    private var pressedExpansionRow: Int? {
-        didSet { if pressedExpansionRow != oldValue { needsDisplay = true } }
+    private var pressedExpansionTarget: ExpansionTarget? {
+        didSet { if pressedExpansionTarget != oldValue { needsDisplay = true } }
     }
-    private var armedExpansionRow: Int?
+    private var armedExpansionTarget: ExpansionTarget?
     private var armedExpansionOptionKey = false
     /// Whether we last forced the pointing-hand cursor, so it can be restored to
     /// the default when the mouse leaves the view.
@@ -1190,7 +1195,7 @@ final class DiffPaneCodeTextView: NSTextView {
         super.mouseMoved(with: event)
         let point = convert(event.locationInWindow, from: nil)
         hoverHandler?(point)
-        hoverExpansionRow = expansionRow(at: point)
+        hoverExpansionTarget = expansionTarget(at: point)
         // `super.mouseMoved` re-asserts the text view's I-beam on every move and
         // wins the ordering against `cursorUpdate`, so re-apply the pointer here
         // (unconditionally, no cached-state guard) after super has run.
@@ -1198,7 +1203,7 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     private func applyPointerCursorIfNeeded(at point: NSPoint) {
-        if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
+        if shouldUsePointingHandCursor(at: point) {
             NSCursor.pointingHand.set()
             didSetPointerCursor = true
         } else {
@@ -1208,10 +1213,10 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let row = expansionRow(at: point) {
-            armedExpansionRow = row
+        if let target = expansionTarget(at: point) {
+            armedExpansionTarget = target
             armedExpansionOptionKey = event.modifierFlags.contains(.option)
-            pressedExpansionRow = row
+            pressedExpansionTarget = target
             return
         }
         if event.modifierFlags.contains(.command), let commandClickHandler {
@@ -1229,26 +1234,26 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let armed = armedExpansionRow else {
+        guard let armed = armedExpansionTarget else {
             super.mouseDragged(with: event)
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        pressedExpansionRow = expansionRow(at: point) == armed ? armed : nil
+        pressedExpansionTarget = expansionTarget(at: point) == armed ? armed : nil
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let armed = armedExpansionRow else {
+        guard let armed = armedExpansionTarget else {
             super.mouseUp(with: event)
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        let releasedInside = expansionRow(at: point) == armed
+        let releasedInside = expansionTarget(at: point) == armed
         let optionKey = armedExpansionOptionKey
-        pressedExpansionRow = nil
-        armedExpansionRow = nil
-        if releasedInside, let request = expansionRequest(atRow: armed) {
-            invokeExpansion(request: request, optionKey: optionKey)
+        pressedExpansionTarget = nil
+        armedExpansionTarget = nil
+        if releasedInside {
+            invokeExpansion(action: armed.action, optionKey: optionKey)
         }
     }
 
@@ -1259,7 +1264,7 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        hoverExpansionRow = nil
+        hoverExpansionTarget = nil
         // Restore the default cursor when leaving the view, otherwise a pointing
         // hand set over an expandable/source row can linger over the surrounding
         // non-interactive chrome until the next cursor update.
@@ -1543,7 +1548,7 @@ final class DiffPaneCodeTextView: NSTextView {
         // `addCursorRect`/`resetCursorRects` mechanism. Override it here so
         // expandable-context and reviewable source rows show the pointer instead.
         let point = convert(event.locationInWindow, from: nil)
-        if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
+        if shouldUsePointingHandCursor(at: point) {
             NSCursor.pointingHand.set()
             didSetPointerCursor = true
         } else {
@@ -1552,46 +1557,64 @@ final class DiffPaneCodeTextView: NSTextView {
         }
     }
 
+    private func shouldUsePointingHandCursor(at point: NSPoint) -> Bool {
+        if expansionTarget(at: point) != nil {
+            return true
+        }
+        guard let row = reviewLineRow(at: point) else { return false }
+        return rowShouldUsePointingHandCursor(row)
+    }
+
     private func rowShouldUsePointingHandCursor(_ row: Int) -> Bool {
         guard lineMetadata.indices.contains(row) else { return false }
         let metadata = lineMetadata[row]
-        return metadata.expansionKey != nil || metadata.sourceLine != nil
+        return metadata.sourceLine != nil
     }
 
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {
-        guard let request = expansionRequest(atRow: row) else { return }
-        invokeExpansion(request: request, optionKey: optionKey)
+        guard let action = expansionActions(atRow: row).first else { return }
+        invokeExpansion(action: action, optionKey: optionKey)
     }
 
-    /// Row index of the expandable-context button under `point`, if any.
-    private func expansionRow(at point: NSPoint) -> Int? {
+    private func expansionTarget(at point: NSPoint) -> ExpansionTarget? {
         let rowRects = diffRowRects()
-        guard let row = rowRects.binarySearchRow(containing: point),
-              expansionRequest(atRow: row) != nil
-        else { return nil }
-        return row
-    }
-
-    private func expansionRequest(atRow row: Int) -> (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?)? {
-        guard lineMetadata.indices.contains(row),
-              let key = lineMetadata[row].expansionKey
-        else { return nil }
-        return (key, lineMetadata[row].expansionEdge)
-    }
-
-    private func invokeExpansion(request: (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?), optionKey: Bool) {
-        let mode = expansionMode(for: request, optionKey: optionKey)
-        contextExpansionHandler(request.key, mode, request.edge)
-    }
-
-    private func expansionMode(
-        for request: (key: DiffContextExpansionKey, edge: DiffContextExpansionEdge?),
-        optionKey: Bool
-    ) -> DiffContextExpansionMode {
-        if optionKey || (request.key.isShared && request.edge == nil) {
-            return .all
+        guard let row = rowRects.binarySearchRow(containing: point) else { return nil }
+        let rowRect = rowRects[row]
+        for action in expansionActions(atRow: row) {
+            guard let pillRect = expansionPillRect(action: action, rowRect: rowRect) else { continue }
+            if pillRect.contains(point) {
+                return ExpansionTarget(row: row, action: action)
+            }
         }
-        return .chunk(size: diffContextExpansionChunkSize)
+        return nil
+    }
+
+    private func expansionActions(atRow row: Int) -> [DiffPaneTextDocumentBuilder.ContextExpansionAction] {
+        guard lineMetadata.indices.contains(row) else { return [] }
+        let metadata = lineMetadata[row]
+        if !metadata.expansionActions.isEmpty {
+            return metadata.expansionActions
+        }
+        guard let key = metadata.expansionKey else { return [] }
+        let mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = key.isShared && metadata.expansionEdge == nil ? .all : .chunk
+        return [
+            DiffPaneTextDocumentBuilder.ContextExpansionAction(
+                key: key,
+                boundary: metadata.expansionBoundary ?? key.boundary,
+                edge: metadata.expansionEdge,
+                mode: mode,
+                range: metadata.range
+            ),
+        ]
+    }
+
+    private func invokeExpansion(
+        action: DiffPaneTextDocumentBuilder.ContextExpansionAction,
+        optionKey: Bool
+    ) {
+        let actionMode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = optionKey ? .all : action.mode
+        let mode: DiffContextExpansionMode = actionMode == .all ? .all : .chunk(size: diffContextExpansionChunkSize)
+        contextExpansionHandler(action.key, mode, action.edge)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
@@ -1755,49 +1778,75 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     private func drawExpandableContextPill(row: Int, in rowRect: NSRect, theme: Theme) {
-        guard lineMetadata.indices.contains(row),
-              let layoutManager,
-              let textContainer
-        else {
-            return
-        }
-
-        let range = lineMetadata[row].range
-        guard range.length > 0 else { return }
-
-        // In split mode the opposite column keeps the expandable-context metadata
-        // on a blank " " placeholder. Only the column holding the real label
-        // should render the button, so skip rows whose text is empty.
-        let label = (string as NSString).substring(with: range)
-        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-
-        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-        guard glyphRange.length > 0 else { return }
-
-        let textRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-        guard !textRect.isEmpty else { return }
+        let actions = expansionActions(atRow: row)
+        guard !actions.isEmpty else { return }
 
         // Split panes can synchronize a row to be taller than its first text
         // fragment. Keep the pill attached to the fragment where the label is
         // drawn instead of centering it in the full synchronized row.
         // The chevron is drawn here (not baked into the text) so the backing
         // string stays a plain label for selection/copy.
-        let chevronGap: CGFloat = 5
         let tint = NSColor(theme.color("seg-pill-active-fg"))
-        let chevronImage = Self.expandChevronImage(
-            boundary: lineMetadata[row].expansionBoundary,
-            font: font,
-            color: tint
-        )
-        let chevronSize = chevronImage?.size ?? .zero
-        let chevronLeftX = textRect.minX - chevronGap - chevronSize.width
+        for action in actions {
+            guard let pillRect = expansionPillRect(action: action, rowRect: rowRect) else { continue }
+            let target = ExpansionTarget(row: row, action: action)
+            let alpha = Self.expandPillFillAlpha(
+                hovered: hoverExpansionTarget == target,
+                pressed: pressedExpansionTarget == target
+            )
+            let path = NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6)
+            NSColor(theme.color("accent")).withAlphaComponent(alpha).setFill()
+            path.fill()
 
-        let firstLineRect = firstLineFragmentRect(
-            for: range,
-            layoutManager: layoutManager,
-            origin: textContainerOrigin
+            guard
+                let chevronImage = Self.expandChevronImage(
+                    boundary: action.boundary,
+                    font: font,
+                    color: tint
+                ),
+                let chevronRect = expansionChevronRect(action: action, rowRect: rowRect)
+            else {
+                continue
+            }
+            chevronImage.draw(in: chevronRect)
+        }
+    }
+
+    private func expansionPillRect(
+        action: DiffPaneTextDocumentBuilder.ContextExpansionAction,
+        rowRect: NSRect
+    ) -> NSRect? {
+        guard let textRect = expansionActionTextRect(action) else { return nil }
+        let chevronGap: CGFloat = 5
+        let chevronSize = Self.expandChevronImage(
+            boundary: action.boundary,
+            font: font,
+            color: .textColor
+        )?.size ?? .zero
+        let firstLineRect = expansionActionFirstLineRect(action)
+        return Self.expandPillRect(
+            textRect: textRect,
+            firstLineRect: firstLineRect,
+            rowRect: rowRect,
+            chevronSize: chevronSize,
+            chevronGap: chevronGap
         )
+    }
+
+    private func expansionChevronRect(
+        action: DiffPaneTextDocumentBuilder.ContextExpansionAction,
+        rowRect: NSRect
+    ) -> NSRect? {
+        guard let textRect = expansionActionTextRect(action) else { return nil }
+        let chevronGap: CGFloat = 5
+        let chevronImage = Self.expandChevronImage(
+            boundary: action.boundary,
+            font: font,
+            color: .textColor
+        )
+        guard let chevronImage else { return nil }
+        let chevronSize = chevronImage.size
+        let firstLineRect = expansionActionFirstLineRect(action)
         let pillRect = Self.expandPillRect(
             textRect: textRect,
             firstLineRect: firstLineRect,
@@ -1805,22 +1854,46 @@ final class DiffPaneCodeTextView: NSTextView {
             chevronSize: chevronSize,
             chevronGap: chevronGap
         )
-        let alpha = Self.expandPillFillAlpha(
-            hovered: hoverExpansionRow == row,
-            pressed: pressedExpansionRow == row
+        return Self.expandChevronRect(
+            chevronLeftX: textRect.minX - chevronGap - chevronSize.width,
+            chevronSize: chevronSize,
+            pillRect: pillRect
         )
-        let path = NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6)
-        NSColor(theme.color("accent")).withAlphaComponent(alpha).setFill()
-        path.fill()
+    }
 
-        if let chevronImage {
-            let chevronRect = Self.expandChevronRect(
-                chevronLeftX: chevronLeftX,
-                chevronSize: chevronSize,
-                pillRect: pillRect
-            )
-            chevronImage.draw(in: chevronRect)
+    private func expansionActionTextRect(
+        _ action: DiffPaneTextDocumentBuilder.ContextExpansionAction
+    ) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        let textLength = (string as NSString).length
+        guard action.range.location >= 0,
+              action.range.length > 0,
+              action.range.location < textLength,
+              action.range.length <= textLength - action.range.location
+        else {
+            return nil
         }
+
+        let label = (string as NSString).substring(with: action.range)
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: action.range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+
+        let textRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        return textRect.isEmpty ? nil : textRect
+    }
+
+    private func expansionActionFirstLineRect(
+        _ action: DiffPaneTextDocumentBuilder.ContextExpansionAction
+    ) -> NSRect {
+        guard let layoutManager else { return .zero }
+        return firstLineFragmentRect(
+            for: action.range,
+            layoutManager: layoutManager,
+            origin: textContainerOrigin
+        )
     }
 
     private static func expandChevronImage(
