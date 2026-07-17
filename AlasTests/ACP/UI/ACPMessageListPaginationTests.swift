@@ -194,9 +194,10 @@ struct ACPMessageListPaginationTests {
         ])
         let cache = ACPRowFrameCache()
         let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let windowKey = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
 
-        #expect(cache.update(id: "message-40", frame: frame, lookup: lookup))
-        #expect(!cache.update(id: "message-40", frame: frame, lookup: lookup))
+        #expect(cache.update(id: "message-40", frame: frame, lookup: lookup, windowKey: windowKey))
+        #expect(!cache.update(id: "message-40", frame: frame, lookup: lookup, windowKey: windowKey))
         #expect(cache.frames == ["message-40": frame])
     }
 
@@ -208,11 +209,57 @@ struct ACPMessageListPaginationTests {
             (index: 40, stableId: "message-40")
         ])
         let emptyLookup = ACPMessageList.visibleMessageLookup(rows: [])
+        let originalWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
+        let movedWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 0)
 
-        #expect(cache.update(id: "message-40", frame: frame, lookup: originalLookup))
-        #expect(cache.update(id: "message-40", frame: frame, lookup: emptyLookup))
-        #expect(!cache.update(id: "message-40", frame: frame, lookup: emptyLookup))
+        #expect(cache.update(id: "message-40", frame: frame, lookup: originalLookup, windowKey: originalWindow))
+        // Window moved (tail bound changed): the stale scan should run once
+        // here and evict "message-40", which the new lookup no longer contains.
+        #expect(cache.update(id: "message-40", frame: frame, lookup: emptyLookup, windowKey: movedWindow))
+        #expect(!cache.update(id: "message-40", frame: frame, lookup: emptyLookup, windowKey: movedWindow))
         #expect(cache.frames.isEmpty)
+    }
+
+    @Test("modern row-frame cache skips the stale-entry scan while the window key is unchanged")
+    func modernRowFrameCacheSkipsStaleScanForUnchangedWindow() {
+        let cache = ACPRowFrameCache()
+        let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let windowKey = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
+        // The lookup no longer contains "message-40", but the window key is
+        // identical to the one already recorded by the cache's first update
+        // below, so the stale scan must not run again and evict it.
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 41, stableId: "message-41")
+        ])
+
+        #expect(cache.update(id: "message-40", frame: frame, lookup: ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40")
+        ]), windowKey: windowKey))
+        // Same window key as above: even though "message-40" is stale
+        // relative to `lookup`, the cleanup scan already ran for this window
+        // and must not run again, so "message-40" survives this call.
+        #expect(cache.update(id: "message-41", frame: frame, lookup: lookup, windowKey: windowKey))
+        #expect(cache.frames["message-40"] == frame)
+        #expect(cache.frames["message-41"] == frame)
+    }
+
+    @Test("modern row-frame cache runs the stale-entry scan again once the window key changes")
+    func modernRowFrameCacheRerunsStaleScanWhenWindowChanges() {
+        let cache = ACPRowFrameCache()
+        let frame = CGRect(x: 0, y: 16, width: 100, height: 80)
+        let firstWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 0, tail: 90)
+        let secondWindow = ACPRowFrameCache.WindowKey(generation: 1, head: 1, tail: 91)
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 41, stableId: "message-41")
+        ])
+
+        #expect(cache.update(id: "message-40", frame: frame, lookup: ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40")
+        ]), windowKey: firstWindow))
+        // Different window key: the scan must run and evict "message-40",
+        // which `lookup` no longer contains.
+        #expect(cache.update(id: "message-41", frame: frame, lookup: lookup, windowKey: secondWindow))
+        #expect(cache.frames == ["message-41": frame])
     }
 
     @Test("visible message lookup records ids and transcript indices")

@@ -522,7 +522,20 @@ struct ACPMessageList: View {
 
     private func handleModernRowFrame(id: String, frame: CGRect) {
         let lookup = visibleMessageLookup
-        modernRowFrameCache.update(id: id, frame: frame, lookup: lookup)
+        // `windowKey` gates `ACPRowFrameCache`'s stale-entry scan to only run
+        // when the render window has actually moved since the last cleanup
+        // (see `ACPRowFrameCache.update`), so this call is O(1) per row on
+        // every callback except the first one after the window shifts.
+        modernRowFrameCache.update(
+            id: id,
+            frame: frame,
+            lookup: lookup,
+            windowKey: ACPRowFrameCache.WindowKey(
+                generation: transcript.messagesGeneration,
+                head: transcript.visibleHead,
+                tail: transcript.visibleTailBound
+            )
+        )
         // While following the tail (streaming), restoring, or backfilling
         // older messages, the anchor bookkeeping below is discarded by the
         // guards further down anyway — skip it entirely so every streamed
@@ -1261,21 +1274,46 @@ private final class ACPTranscriptScrollBookkeeping {
 /// open `NSMenu`), so assigning a dictionary held in `@State` here would
 /// invalidate the full list for every callback.
 final class ACPRowFrameCache {
+    /// Same shape/idiom as `ACPVisibleRowsCache.Key`: identifies the render
+    /// window a row-frame report belongs to. Kept as its own type (rather
+    /// than sharing that private type) since the two caches are otherwise
+    /// independent.
+    struct WindowKey: Equatable {
+        let generation: UInt64
+        let head: Int
+        let tail: Int
+    }
+
     private(set) var frames: [String: CGRect] = [:]
+    /// The window key the stale-entry scan below last ran against. `nil`
+    /// until the first `update` call, guaranteeing that call always cleans.
+    private var lastCleanedWindowKey: WindowKey?
 
     /// Returns whether the cached frame set changed. Keeping stable reports as
     /// no-ops prevents needless work even outside nested menu tracking loops.
+    ///
+    /// The stale-key scan below is O(rows) — it used to run unconditionally
+    /// on every call, which made a full layout pass (up to
+    /// `ACPTranscript.maxVisibleRows` per-row callbacks) O(rows²). It only
+    /// needs to run once per render window: `lookup` (and therefore which
+    /// keys are stale) only changes when the window moves, so `windowKey`
+    /// lets every row after the first in a pass skip straight to the O(1)
+    /// single-entry update below.
     @discardableResult
     func update(
         id: String,
         frame: CGRect,
-        lookup: ACPMessageList.VisibleMessageLookup
+        lookup: ACPMessageList.VisibleMessageLookup,
+        windowKey: WindowKey
     ) -> Bool {
         var changed = false
-        let staleIDs = frames.keys.filter { !lookup.contains($0) }
-        for staleID in staleIDs {
-            frames.removeValue(forKey: staleID)
-            changed = true
+        if lastCleanedWindowKey != windowKey {
+            let staleIDs = frames.keys.filter { !lookup.contains($0) }
+            for staleID in staleIDs {
+                frames.removeValue(forKey: staleID)
+                changed = true
+            }
+            lastCleanedWindowKey = windowKey
         }
 
         if lookup.contains(id), frame.height > 0, frame.maxY > 0 {
