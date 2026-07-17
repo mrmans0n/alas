@@ -82,6 +82,7 @@ protocol ACPClient: AnyObject {
     /// Terminal requests (`terminal/create`, `terminal/output`,
     /// `terminal/wait_for_exit`, `terminal/kill`, `terminal/release`).
     var terminalRequests: AsyncStream<ACPTerminalRequest> { get }
+    var advertisesTerminalCapability: Bool { get }
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse)
@@ -98,6 +99,8 @@ protocol ACPClient: AnyObject {
 }
 
 extension ACPClient {
+    var advertisesTerminalCapability: Bool { true }
+
     var elicitationRequests: AsyncStream<ACPElicitationRequest> {
         AsyncStream { $0.finish() }
     }

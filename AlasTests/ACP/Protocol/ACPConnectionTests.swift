@@ -66,6 +66,25 @@ struct ACPConnectionTests {
         #expect(initialized.mcpCapabilities == .init(http: true, sse: true))
     }
 
+    @Test("initialize can suppress terminal capability")
+    func initializeSuppressesTerminalCapability() async throws {
+        let mock = ACPMockClient()
+        mock.advertisesTerminalCapability = false
+        mock.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+
+        let conn = ACPConnection(client: mock)
+        try await conn.initialize()
+
+        let params = try #require(mock.sent.first?.params as? ACPInitializeParams)
+        #expect(params.clientCapabilities.terminal == false)
+    }
+
     @Test("loadSession sends session/load with cwd and remote session id")
     func loadSessionRPC() async throws {
         let mock = ACPMockClient()

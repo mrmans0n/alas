@@ -75,6 +75,8 @@ struct Runtime {
 struct RuntimeState {
     broker: ACPBrokerState,
     pending_methods: HashMap<u64, PendingOperation>,
+    adapter_process_group_id: Option<u32>,
+    adapter_exited: bool,
     closing: bool,
 }
 
@@ -164,12 +166,15 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
         .stderr
         .take()
         .ok_or_else(|| broker_error(-32071, "adapter stderr unavailable"))?;
+    let adapter_process_group_id = adapter_process_group_id(&child);
 
     let runtime = Runtime {
         state: Arc::new((
             Mutex::new(RuntimeState {
                 broker: ACPBrokerState::new(metadata),
                 pending_methods: HashMap::new(),
+                adapter_process_group_id,
+                adapter_exited: false,
                 closing: false,
             }),
             Condvar::new(),
@@ -522,9 +527,17 @@ fn broker_ack(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrok
 
 fn broker_close(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpCloseParams = decode(params)?;
-    let mut state = lock_runtime(runtime);
-    ensure_generation(&state, params.generation)?;
-    state.closing = true;
+    let adapter_process_group_id = {
+        let mut state = lock_runtime(runtime);
+        ensure_generation(&state, params.generation)?;
+        state.closing = true;
+        if state.adapter_exited {
+            None
+        } else {
+            state.adapter_process_group_id
+        }
+    };
+    terminate_adapter_process_group(runtime, adapter_process_group_id);
     Ok(json!({ "ok": true }))
 }
 
@@ -552,6 +565,7 @@ fn spawn_waiter(runtime: Runtime, mut child: std::process::Child) {
         let _ = child.wait();
         let (lock, condvar) = &*runtime.state;
         let mut state = lock.lock().expect("broker state poisoned");
+        state.adapter_exited = true;
         if !state.closing {
             let _ = state.broker.set_turn_state(BrokerTurnState::Ambiguous);
             complete_pending_operations_after_adapter_exit(&mut state);
@@ -1052,6 +1066,56 @@ fn current_process_group_id(pid: u32) -> Option<u32> {
 fn current_process_group_id(_pid: u32) -> Option<u32> {
     None
 }
+
+#[cfg(unix)]
+fn adapter_process_group_id(child: &std::process::Child) -> Option<u32> {
+    Some(child.id())
+}
+
+#[cfg(not(unix))]
+fn adapter_process_group_id(_child: &std::process::Child) -> Option<u32> {
+    None
+}
+
+fn terminate_adapter_process_group(runtime: &Runtime, process_group_id: Option<u32>) {
+    let Some(process_group_id) = process_group_id else {
+        return;
+    };
+    signal_process_group(process_group_id, 15);
+    if wait_for_adapter_exit(runtime, Duration::from_millis(500)) {
+        return;
+    }
+    signal_process_group(process_group_id, 9);
+    let _ = wait_for_adapter_exit(runtime, Duration::from_secs(2));
+}
+
+fn wait_for_adapter_exit(runtime: &Runtime, timeout: Duration) -> bool {
+    let (lock, condvar) = &*runtime.state;
+    let mut state = lock.lock().expect("broker state poisoned");
+    let deadline = std::time::Instant::now() + timeout;
+    while !state.adapter_exited {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let (next_state, _) = condvar
+            .wait_timeout(state, deadline.saturating_duration_since(now))
+            .expect("broker state poisoned");
+        state = next_state;
+    }
+    state.adapter_exited
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group_id: u32, signal: i32) {
+    unsafe {
+        let _ = libc_kill(-(process_group_id as i32), signal);
+        let _ = libc_kill(process_group_id as i32, signal);
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_process_group(_process_group_id: u32, _signal: i32) {}
 
 #[cfg(unix)]
 unsafe extern "C" {

@@ -26,7 +26,7 @@ final class ACPConnection: @unchecked Sendable {
                                 protocolVersion: ACPProtocolVersion.current,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
-                                    terminal: true)))
+                                    terminal: client.advertisesTerminalCapability)))
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)

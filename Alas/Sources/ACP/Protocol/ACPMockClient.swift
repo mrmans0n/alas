@@ -1,6 +1,8 @@
 import Foundation
 
 final class ACPMockClient: ACPClient, @unchecked Sendable {
+    var advertisesTerminalCapability = true
+
     private(set) var sent: [ACPRequest] = []
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
