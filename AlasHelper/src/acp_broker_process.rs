@@ -283,7 +283,11 @@ fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpCloseParams = decode(params)?;
     let dir = broker_dir(params.broker_id.as_str())?;
     if broker_is_running(&dir) {
-        let _ = send_ipc(&dir, "close", json!({}));
+        send_ipc(
+            &dir,
+            "close",
+            serde_json::to_value(&params).expect("close params serialize"),
+        )?;
     }
     remove_broker_dir(&dir)?;
     Ok(json!({ "ok": true }))
@@ -395,10 +399,7 @@ fn handle_ipc_request(
         "notify" => broker_notify(runtime, request.params),
         "respond" => broker_respond(runtime, request.params),
         "ack" => broker_ack(runtime, request.params),
-        "close" => {
-            lock_runtime(runtime).closing = true;
-            Ok(json!({ "ok": true }))
-        }
+        "close" => broker_close(runtime, request.params),
         _ => Err(broker_error(
             -32601,
             format!("broker method not found: {}", request.method),
@@ -520,6 +521,14 @@ fn broker_ack(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrok
     let mut state = lock_runtime(runtime);
     ensure_generation(&state, params.generation)?;
     state.broker.ack(params.cursor).map_err(domain_error)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn broker_close(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
+    let params: AcpCloseParams = decode(params)?;
+    let mut state = lock_runtime(runtime);
+    ensure_generation(&state, params.generation)?;
+    state.closing = true;
     Ok(json!({ "ok": true }))
 }
 

@@ -251,6 +251,20 @@ struct ACPBrokerClientTests {
         #expect(await finishedTask.value == true)
     }
 
+    @Test func shutdownClosesBrokerGeneration() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        let client = makeClient(service: service)
+        try await client.start()
+
+        await client.shutdown()
+
+        let close = try await #require(service.closed.first)
+        #expect(close.brokerId == ACPBrokerID(rawValue: "broker-1"))
+        #expect(close.generation == ACPBrokerGeneration(rawValue: 7))
+        #expect(await service.detached.isEmpty)
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

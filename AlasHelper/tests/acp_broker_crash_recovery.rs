@@ -35,6 +35,14 @@ impl Helper {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
+        let response = self.raw_request(method, params);
+        if response.get("error").is_some() {
+            panic!("helper error for {method}: {response}");
+        }
+        response["result"].clone()
+    }
+
+    fn raw_request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         writeln!(
@@ -53,11 +61,7 @@ impl Helper {
         self.stdout
             .read_line(&mut line)
             .expect("read helper response");
-        let response: Value = serde_json::from_str(&line).expect("helper response JSON");
-        if response.get("error").is_some() {
-            panic!("helper error for {method}: {response}");
-        }
-        response["result"].clone()
+        serde_json::from_str(&line).expect("helper response JSON")
     }
 
     fn write_request_without_reading(&mut self, method: &str, params: Value) {
@@ -127,6 +131,36 @@ fn open_list_and_close_broker_without_persisting_env_values() {
     let close = helper2.request(
         "acp/close",
         json!({ "brokerId": "broker-open", "generation": generation }),
+    );
+    assert_eq!(close["ok"], true);
+}
+
+#[test]
+fn close_rejects_stale_generation_without_removing_broker() {
+    let fixture = Fixture::new("close-stale-generation");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-close-stale", 0));
+    let generation = open["snapshot"]["metadata"]["generation"]
+        .as_u64()
+        .expect("generation");
+
+    let stale = helper.raw_request(
+        "acp/close",
+        json!({ "brokerId": "broker-close-stale", "generation": generation + 1 }),
+    );
+    assert!(
+        stale["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("broker generation mismatch")),
+        "stale close response: {stale}"
+    );
+
+    let list = helper.request("acp/list", json!({}));
+    assert_eq!(list["brokers"].as_array().unwrap().len(), 1);
+
+    let close = helper.request(
+        "acp/close",
+        json!({ "brokerId": "broker-close-stale", "generation": generation }),
     );
     assert_eq!(close["ok"], true);
 }

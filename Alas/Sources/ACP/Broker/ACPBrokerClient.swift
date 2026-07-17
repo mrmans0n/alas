@@ -227,7 +227,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     func shutdown() async {
         cancelActiveTurnPolling()
         if let generation = try? currentGeneration() {
-            _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
+            _ = try? await service.close(ACPBrokerCloseParams(brokerId: brokerId, generation: generation))
         }
         finishStreams()
     }
