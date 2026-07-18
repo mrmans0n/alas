@@ -121,7 +121,7 @@ final class ACPTerminalHost: ObservableObject {
     }
 
     var retainedByteEstimate: UInt64 {
-        terminals.values.reduce(0) { $0 &+ UInt64($1.buffer.count) }
+        terminals.values.reduce(0) { $0 &+ UInt64($1.retainedByteCount) }
     }
 
     func updateContext(sessionCwd: String, sessionEnv: [String: String], sessionRemoteHost: String? = nil) {

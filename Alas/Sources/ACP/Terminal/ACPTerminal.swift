@@ -4,14 +4,23 @@ import Combine
 
 /// Wraps one agent-spawned subprocess. Owns the merged stdout+stderr
 /// rolling buffer (capped at 1 MiB), captures the exit status, and
-/// publishes a "buffer changed" signal so UI subscribers can re-render
-/// the live tail without polling.
+/// publishes a display-rate-limited terminal tail for the transcript UI.
 @MainActor
 final class ACPTerminal: ObservableObject {
-    /// 1 MiB internal cap. Independent from the agent-supplied
-    /// `outputByteLimit`, which only governs what we return via
-    /// `terminal/output` — never how much we keep around for the UI.
+    /// 1 MiB protocol-output cap. Independent from the agent-supplied
+    /// `outputByteLimit`; the transcript UI keeps its own smaller tail.
     static let internalBufferCap = 1 << 20
+    /// The transcript row is at most 300 points tall. Retaining a 64 KiB
+    /// parsed display tail gives users ample scrollback without laying out
+    /// the entire protocol buffer on every refresh.
+    nonisolated static let displayByteLimit = 64 << 10
+    nonisolated static let displayRefreshMinInterval: TimeInterval = 1.0 / 30.0
+
+    enum DisplayRefreshAction: Equatable {
+        case publishNow
+        case scheduleDrain(after: TimeInterval)
+        case drop
+    }
 
     let id: String
     let createdAt: Date
@@ -19,9 +28,20 @@ final class ACPTerminal: ObservableObject {
     private let normalizesCRLF: Bool
 
     @Published private(set) var cwd: String?
-    @Published private(set) var buffer: Data = Data()
-    @Published private(set) var truncated: Bool = false
+    /// Full protocol buffer. This is intentionally not `@Published`: raw pipe
+    /// chunks must not invalidate SwiftUI. `displayRevision` below is the
+    /// coalesced UI signal.
+    var buffer: Data { Data(bufferStorage[bufferStart...]) }
+    var retainedByteCount: Int { bufferStorage.count - bufferStart }
+    private var bufferStorage = Data()
+    private var bufferStart = 0
+    private(set) var truncated: Bool = false
     @Published private(set) var exitStatus: ACPTerminalExitStatus?
+    @Published private(set) var displayRevision: UInt64 = 0
+    private(set) var displayRuns: [AttributedRun] = []
+    private var displayTail: ANSITailBuffer
+    private var lastDisplayPublish = -Double.greatestFiniteMagnitude
+    private var displayDrain: Task<Void, Never>?
     /// Flipped by `release()`. The host uses this to reject further
     /// `terminal/*` protocol calls against this id while still letting
     /// the UI render the retained buffer.
@@ -77,6 +97,7 @@ final class ACPTerminal: ObservableObject {
         self.createdAt = Date()
         self.cwd = cwd
         self.normalizesCRLF = normalizesCRLF
+        self.displayTail = ANSITailBuffer(byteLimit: Self.displayByteLimit)
         // Cap against the internal buffer so an agent can't ask us to
         // return more than we ever retain. Floor at 1 so callers that
         // pass 0 or negative don't trip divide-by-zero / nonsense math
@@ -139,6 +160,7 @@ final class ACPTerminal: ObservableObject {
         self.cwd = cwd
         self.outputByteLimit = max(1, min(outputByteLimit, Self.internalBufferCap))
         self.normalizesCRLF = false
+        self.displayTail = ANSITailBuffer(byteLimit: Self.displayByteLimit)
         self.process = nil
         self.pipe = nil
     }
@@ -431,7 +453,9 @@ final class ACPTerminal: ObservableObject {
     func appendMetadataOutput(_ data: Data, replace: Bool) {
         guard !isProcessBacked else { return }
         if replace {
-            buffer.removeAll(keepingCapacity: true)
+            bufferStorage.removeAll(keepingCapacity: true)
+            bufferStart = 0
+            displayTail.reset()
             truncated = false
         }
         appendChunk(data)
@@ -443,6 +467,7 @@ final class ACPTerminal: ObservableObject {
             exitStatus = status
             return
         }
+        publishDisplayNow()
         exitStatus = status
         onExit?()
         let waiters = exitWaiters
@@ -459,10 +484,11 @@ final class ACPTerminal: ObservableObject {
     ///    multibyte codepoints aren't split mid-sequence.
     func snapshot(byteLimit: Int) -> (text: String, truncated: Bool) {
         let limit = max(1, min(byteLimit, Self.internalBufferCap))
-        let didTruncate = buffer.count > limit
+        let retained = buffer
+        let didTruncate = retained.count > limit
         let slice: Data
         if didTruncate {
-            let all = [UInt8](buffer)
+            let all = [UInt8](retained)
             var start = all.count - limit
             // Lookback for an unterminated CSI escape. CSI param bytes
             // are 0x30..0x3F; finals are 0x40..0x7E. If we find an ESC
@@ -492,7 +518,7 @@ final class ACPTerminal: ObservableObject {
             }
             slice = Data(all[start ..< all.count])
         } else {
-            slice = buffer
+            slice = retained
         }
         // Strip ANSI for the JSON response (agents shouldn't see escape codes).
         var stream = ANSIStream()
@@ -528,17 +554,19 @@ final class ACPTerminal: ObservableObject {
     }
 
     private func appendChunk(_ chunk: Data) {
-        buffer.append(chunk)
-        if buffer.count > Self.internalBufferCap {
-            let drop = buffer.count - Self.internalBufferCap
-            buffer.removeFirst(drop)
+        displayTail.feed(chunk)
+        bufferStorage.append(chunk)
+        if retainedByteCount > Self.internalBufferCap {
+            let drop = retainedByteCount - Self.internalBufferCap
+            bufferStart += drop
             // The bulk drop may have landed mid-codepoint. Advance the
             // start past any leading UTF-8 continuation bytes so the
             // buffer always begins on a valid character boundary —
             // snapshot/output paths can then trust the invariant even
             // when no further truncation is needed at read time.
-            while let first = buffer.first, (first & 0xC0) == 0x80 {
-                buffer.removeFirst(1)
+            while bufferStart < bufferStorage.count,
+                  (bufferStorage[bufferStart] & 0xC0) == 0x80 {
+                bufferStart += 1
             }
             // The drop may have ALSO landed mid-ANSI-escape. Unlike
             // snapshot, we can't look backwards for the ESC byte (it
@@ -549,14 +577,23 @@ final class ACPTerminal: ObservableObject {
             // short window. Cursor-move finals are intentionally NOT
             // included to avoid eating bytes like `12A` in real text.
             stripLeadingPartialSGR()
-            truncated = true
+            if !truncated { truncated = true }
+
+            // Advance a logical start for each chunk, then compact only after
+            // a full cap's worth of discarded storage has accumulated. This
+            // amortizes the 1 MiB copy instead of memmoving it per pipe chunk.
+            if bufferStart >= Self.internalBufferCap {
+                bufferStorage = Data(bufferStorage[bufferStart...])
+                bufferStart = 0
+            }
         }
+        noteDisplayChange()
     }
 
     private func stripLeadingPartialSGR() {
         var n = 0
-        while n < min(buffer.count, 16) {
-            let b = buffer[buffer.startIndex + n]
+        while n < min(retainedByteCount, 16) {
+            let b = bufferStorage[bufferStart + n]
             if (b >= 0x30 && b <= 0x3F) {  // CSI param byte
                 n += 1
                 continue
@@ -568,7 +605,47 @@ final class ACPTerminal: ObservableObject {
             n = 0
             break
         }
-        if n > 0 { buffer.removeFirst(n) }
+        if n > 0 { bufferStart += n }
+    }
+
+    nonisolated static func displayRefreshAction(
+        elapsedSincePublish: TimeInterval,
+        hasPendingDrain: Bool,
+        minInterval: TimeInterval = displayRefreshMinInterval
+    ) -> DisplayRefreshAction {
+        if hasPendingDrain { return .drop }
+        if elapsedSincePublish >= minInterval { return .publishNow }
+        return .scheduleDrain(after: minInterval - elapsedSincePublish)
+    }
+
+    private func noteDisplayChange() {
+        let now = ProcessInfo.processInfo.systemUptime
+        switch Self.displayRefreshAction(
+            elapsedSincePublish: now - lastDisplayPublish,
+            hasPendingDrain: displayDrain != nil
+        ) {
+        case .publishNow:
+            publishDisplayNow(at: now)
+        case .scheduleDrain(let delay):
+            displayDrain = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !Task.isCancelled else { return }
+                self.displayDrain = nil
+                self.publishDisplayNow()
+            }
+        case .drop:
+            break
+        }
+    }
+
+    private func publishDisplayNow(
+        at now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
+        displayDrain?.cancel()
+        displayDrain = nil
+        lastDisplayPublish = now
+        displayRuns = displayTail.runs
+        displayRevision &+= 1
     }
 
     private func handleExit(status: ACPTerminalExitStatus) async {
@@ -594,6 +671,7 @@ final class ACPTerminal: ObservableObject {
             try? await Task.sleep(for: .milliseconds(50))
         }
         pipe.fileHandleForReading.readabilityHandler = nil
+        publishDisplayNow()
         exitStatus = status
         onExit?()
         let waiters = exitWaiters

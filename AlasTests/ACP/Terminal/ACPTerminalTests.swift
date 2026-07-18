@@ -340,6 +340,36 @@ struct ACPTerminalTests {
         #expect(footprintGrowth < 32 * 1024 * 1024)
     }
 
+    @Test("display refresh action coalesces chunks to display rate")
+    func displayRefreshActionCoalesces() {
+        typealias T = ACPTerminal
+        #expect(T.displayRefreshAction(elapsedSincePublish: 1, hasPendingDrain: false) == .publishNow)
+        #expect(T.displayRefreshAction(elapsedSincePublish: 0.01, hasPendingDrain: false)
+            == .scheduleDrain(after: T.displayRefreshMinInterval - 0.01))
+        #expect(T.displayRefreshAction(elapsedSincePublish: 1, hasPendingDrain: true) == .drop)
+    }
+
+    @Test("metadata output publishes a coalesced trailing display update")
+    func metadataOutputCoalescesDisplayUpdates() async throws {
+        let t = ACPTerminal(metadataId: "display", cwd: nil)
+        t.appendMetadataOutput(Data("first".utf8), replace: false)
+        let firstRevision = t.displayRevision
+        #expect(firstRevision == 1)
+        #expect(t.displayRuns.map(\.text).joined() == "first")
+
+        for _ in 0..<20 {
+            t.appendMetadataOutput(Data("x".utf8), replace: false)
+        }
+        #expect(t.displayRevision == firstRevision)
+
+        let deadline = Date().addingTimeInterval(1)
+        while t.displayRevision == firstRevision, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(t.displayRevision == firstRevision &+ 1)
+        #expect(t.displayRuns.map(\.text).joined() == "first" + String(repeating: "x", count: 20))
+    }
+
     @Test("descendant cleanup snapshots and validates off the main actor")
     func descendantCleanupRunsOffMainActor() throws {
         let source = try acpTerminalSource()

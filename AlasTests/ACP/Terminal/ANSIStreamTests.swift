@@ -137,4 +137,44 @@ struct ANSIStreamTests {
         let e = runs.first { $0.text == "é" }
         #expect(e?.attributes.foreground == .red)
     }
+
+    @Test("incremental tail preserves parser state across chunks")
+    func incrementalTailPreservesState() {
+        var tail = ANSITailBuffer(byteLimit: 1024)
+        tail.feed(Data("\u{1B}[3".utf8))
+        tail.feed(Data("1mred".utf8))
+
+        #expect(tail.runs.map(\.text).joined() == "red")
+        #expect(tail.runs.allSatisfy { $0.attributes.foreground == .red })
+    }
+
+    @Test("incremental tail applies carriage-return redraw across chunks")
+    func incrementalTailCarriageReturnAcrossChunks() {
+        var tail = ANSITailBuffer(byteLimit: 1024)
+        tail.feed(Data("complete\nprogress 10%".utf8))
+        tail.feed(Data("\rprogress 90%".utf8))
+
+        #expect(tail.runs.map(\.text).joined() == "complete\nprogress 90%")
+    }
+
+    @Test("incremental tail stays within its byte limit")
+    func incrementalTailIsBounded() {
+        var tail = ANSITailBuffer(byteLimit: 8)
+        tail.feed(Data("1234\n".utf8))
+        tail.feed(Data("567890".utf8))
+
+        #expect(tail.retainedByteCount <= 8)
+        #expect(tail.runs.map(\.text).joined() == "4\n567890")
+    }
+
+    @Test("incremental tail truncation keeps a UTF-8 boundary")
+    func incrementalTailUTF8Boundary() {
+        var tail = ANSITailBuffer(byteLimit: 9)
+        tail.feed(Data("x🎉🎉🎉".utf8))
+        let text = tail.runs.map(\.text).joined()
+
+        #expect(tail.retainedByteCount <= 9)
+        #expect(text == "🎉🎉")
+        #expect(!text.contains("\u{FFFD}"))
+    }
 }
