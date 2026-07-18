@@ -25,17 +25,138 @@ enum ANSIColor: Equatable {
     case rgb(red: Int, green: Int, blue: Int)
 }
 
+/// Bounded, incrementally parsed ANSI output for live terminal rendering.
+/// The parser consumes each pipe byte exactly once while this buffer retains
+/// only the tail that can reasonably be displayed in the transcript row.
+struct ANSITailBuffer {
+    private var stream = ANSIStream()
+    private var output: ANSIOutputBuffer
+
+    init(byteLimit: Int) {
+        output = ANSIOutputBuffer(byteLimit: max(1, byteLimit))
+    }
+
+    var runs: [AttributedRun] { output.runs }
+    var retainedByteCount: Int { output.retainedByteCount }
+
+    mutating func feed(_ data: Data) {
+        output.apply(stream.feedEvents(data))
+    }
+
+    mutating func reset() {
+        stream = ANSIStream()
+        output.reset()
+    }
+}
+
+private enum ANSIStreamEvent {
+    case text(AttributedRun)
+    case carriageReturn
+}
+
+/// Applies parser events to rendered runs. Keeping this separate from the
+/// byte parser lets `ANSIStream.feed` preserve its snapshot API while the live
+/// terminal tail keeps state across chunks, including CR progress redraws.
+private struct ANSIOutputBuffer {
+    let byteLimit: Int
+    private(set) var runs: [AttributedRun] = []
+    private(set) var retainedByteCount = 0
+    private var currentLineStart = 0
+
+    init(byteLimit: Int) {
+        self.byteLimit = byteLimit
+    }
+
+    mutating func reset() {
+        runs.removeAll(keepingCapacity: true)
+        retainedByteCount = 0
+        currentLineStart = 0
+    }
+
+    mutating func apply(_ events: [ANSIStreamEvent]) {
+        for event in events {
+            switch event {
+            case .text(let run):
+                append(run)
+            case .carriageReturn:
+                guard currentLineStart < runs.count else { continue }
+                for run in runs[currentLineStart...] {
+                    retainedByteCount -= run.text.utf8.count
+                }
+                runs.removeSubrange(currentLineStart...)
+            }
+        }
+        trimToByteLimit()
+    }
+
+    private mutating func append(_ run: AttributedRun) {
+        guard !run.text.isEmpty else { return }
+        retainedByteCount += run.text.utf8.count
+
+        // Do not merge the first run after a newline into the preceding run.
+        // A later carriage return must be able to discard only the current
+        // logical line, even when both lines share identical attributes.
+        if currentLineStart < runs.count,
+           runs.last?.attributes == run.attributes {
+            runs[runs.count - 1].text.append(run.text)
+        } else {
+            runs.append(run)
+        }
+
+        if run.text.last == "\n" {
+            currentLineStart = runs.count
+        }
+    }
+
+    private mutating func trimToByteLimit() {
+        let excess = retainedByteCount - byteLimit
+        guard excess > 0 else { return }
+
+        var bytesToDrop = excess
+        var fullRunsToDrop = 0
+        while fullRunsToDrop < runs.count {
+            let runBytes = runs[fullRunsToDrop].text.utf8.count
+            if runBytes > bytesToDrop { break }
+            bytesToDrop -= runBytes
+            retainedByteCount -= runBytes
+            fullRunsToDrop += 1
+        }
+
+        if fullRunsToDrop > 0 {
+            runs.removeSubrange(0..<fullRunsToDrop)
+            currentLineStart = max(0, currentLineStart - fullRunsToDrop)
+        }
+
+        guard bytesToDrop > 0, !runs.isEmpty else { return }
+        let bytes = Array(runs[0].text.utf8)
+        var start = min(bytesToDrop, bytes.count)
+        while start < bytes.count, (bytes[start] & 0xC0) == 0x80 {
+            start += 1
+        }
+        runs[0].text = String(decoding: bytes[start...], as: UTF8.self)
+        retainedByteCount -= start
+        if runs[0].text.isEmpty {
+            runs.removeFirst()
+            currentLineStart = max(0, currentLineStart - 1)
+        }
+    }
+}
+
 /// Stateful byte-stream parser. Caller feeds raw bytes from a process
 /// pipe and receives runs of styled text. Maintains parser state
 /// across calls so that escape sequences split mid-stream still
 /// decode correctly.
 struct ANSIStream {
-    private enum State { case text, esc, csiParams, oscString, oscST }
+    private enum State { case text, esc, csiParams, csiDiscard, oscString, oscST }
+    /// CSI parameter strings are normally tiny. Malformed streams may never
+    /// send a final byte, so bound retained parser state independently from
+    /// the rendered tail and discard the rest of an oversized sequence.
+    private static let maxCSIParameterBytes = 64
 
     private var state: State = .text
     private var attributes = ANSIAttributes()
     private var currentLine: String = ""
-    private var emitted: [AttributedRun] = []
+    private var events: [ANSIStreamEvent] = []
     private var paramBuf: String = ""
     /// Bytes accepted in `.text` state, decoded as UTF-8 in batches at
     /// safe boundaries. Multibyte sequences (è, emoji, etc.) would
@@ -43,19 +164,14 @@ struct ANSIStream {
     /// sequence split across two `feed()` calls stays here until the
     /// continuation bytes arrive.
     private var textBytes: [UInt8] = []
-    /// Index in `emitted` where the current logical line started. A CR
-    /// (line restart) discards everything from this point onward —
-    /// covers the case where a colored progress line was already split
-    /// into runs by an SGR change before the CR arrives.
-    private var emittedLineStart: Int = 0
-
     mutating func feed(_ data: Data) -> [AttributedRun] {
-        emitted.removeAll(keepingCapacity: true)
-        // `emittedLineStart` indexes into `emitted`. Each feed returns a
-        // fresh `emitted` array, so the marker must reset to 0 — runs
-        // emitted in earlier feeds have already been handed off to the
-        // caller, and CR can only truncate what's in the current batch.
-        emittedLineStart = 0
+        var output = ANSIOutputBuffer(byteLimit: .max)
+        output.apply(feedEvents(data))
+        return output.runs
+    }
+
+    fileprivate mutating func feedEvents(_ data: Data) -> [ANSIStreamEvent] {
+        events.removeAll(keepingCapacity: true)
         let bytes = [UInt8](data)
         var i = 0
         while i < bytes.count {
@@ -67,6 +183,8 @@ struct ANSIStream {
                 handleEscByte(b)
             case .csiParams:
                 handleCsiParamByte(b)
+            case .csiDiscard:
+                handleCsiDiscardByte(b)
             case .oscString:
                 handleOscByte(b)
             case .oscST:
@@ -75,7 +193,7 @@ struct ANSIStream {
             i += 1
         }
         flushCurrentLine()
-        return emitted
+        return events
     }
 
     private mutating func handleTextByte(_ b: UInt8) {
@@ -85,23 +203,15 @@ struct ANSIStream {
             flushCurrentLine()
             state = .esc
         case 0x0D:                      // CR — line restart
-            // Drop the partially-buffered tail AND any colored runs the
-            // SGR path already emitted for this line. Without the
-            // emitted-run truncation, `\u{1B}[31m10%\r\u{1B}[32m20%`
-            // would leave the red `10%` behind alongside the new green
-            // `20%` instead of overwriting it.
-            textBytes.removeAll(keepingCapacity: true)
-            currentLine.removeAll(keepingCapacity: true)
-            if emittedLineStart < emitted.count {
-                emitted.removeSubrange(emittedLineStart ..< emitted.count)
-            }
+            flushTextBytes()
+            flushCurrentLine()
+            events.append(.carriageReturn)
         case 0x07, 0x08:                // BEL, BS — drop
             return
         case 0x0A:                      // LF — keep, commit line, advance marker
             textBytes.append(b)
             flushTextBytes()
             flushCurrentLine()
-            emittedLineStart = emitted.count
         case 0x09, 0x20 ... 0x7E:       // TAB, printable ASCII
             textBytes.append(b)
         default:                        // UTF-8 lead / continuation byte
@@ -166,7 +276,12 @@ struct ANSIStream {
         // compatibility; final byte is 0x40..0x7E.
         switch b {
         case 0x30...0x3F:               // param
-            paramBuf.append(Character(UnicodeScalar(b)))
+            if paramBuf.utf8.count < Self.maxCSIParameterBytes {
+                paramBuf.append(Character(UnicodeScalar(b)))
+            } else {
+                paramBuf.removeAll(keepingCapacity: true)
+                state = .csiDiscard
+            }
         case 0x40...0x7E:               // final
             if b == 0x6D {              // 'm' → SGR
                 applySGR(paramBuf)
@@ -177,6 +292,14 @@ struct ANSIStream {
         default:
             // 0x20..0x2F intermediates: accept and continue.
             break
+        }
+    }
+
+    private mutating func handleCsiDiscardByte(_ b: UInt8) {
+        // Ignore an oversized malformed CSI until its final byte. This keeps
+        // parser memory bounded while resynchronizing before ordinary text.
+        if b >= 0x40, b <= 0x7E {
+            state = .text
         }
     }
 
@@ -203,7 +326,7 @@ struct ANSIStream {
     private mutating func flushCurrentLine() {
         flushTextBytes()
         if !currentLine.isEmpty {
-            emitted.append(AttributedRun(text: currentLine, attributes: attributes))
+            events.append(.text(AttributedRun(text: currentLine, attributes: attributes)))
             currentLine.removeAll(keepingCapacity: true)
         }
     }

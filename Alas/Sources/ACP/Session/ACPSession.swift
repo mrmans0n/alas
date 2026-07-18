@@ -1163,7 +1163,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if replace { return true }
         if replayCreatedMetadataTerminalIds.contains(terminalId) { return true }
         if let terminal = terminalHost.terminal(id: terminalId),
-           !terminal.buffer.isEmpty || terminal.exitStatus != nil {
+           terminal.retainedByteCount > 0 || terminal.exitStatus != nil {
             return false
         }
         replayCreatedMetadataTerminalIds.insert(terminalId)

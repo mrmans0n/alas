@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Bottom-anchored live tail of a single ACP terminal. Subscribed via
-/// `@ObservedObject` so it re-renders on every buffer flush. Max
-/// height is 300 px; the user can scroll up to see earlier output.
+/// Bottom-anchored live tail of a single ACP terminal. Raw pipe chunks are
+/// parsed incrementally by `ACPTerminal`; this view receives a bounded tail
+/// at display rate. Max height is 300 px.
 struct ACPTerminalTailView: View {
     let terminalId: String
     let host: ACPTerminalHost
@@ -36,7 +36,7 @@ private struct TerminalLiveBody: View {
                         .id("BOTTOM")
                 }
                 .frame(maxHeight: 300)
-                .onChange(of: terminal.buffer) { _, _ in
+                .onChange(of: terminal.displayRevision) { _, _ in
                     proxy.scrollTo("BOTTOM", anchor: .bottom)
                 }
             }
@@ -48,24 +48,29 @@ private struct TerminalLiveBody: View {
     }
 
     private func parsedAttributed() -> AttributedString {
-        var stream = ANSIStream()
-        let runs = stream.feed(terminal.buffer)
-        var out = AttributedString()
-        for run in runs {
-            var s = AttributedString(run.text)
-            s.font = .system(size: 11.5, design: .monospaced)
+        let runs = terminal.displayRuns
+        var out = AttributedString(runs.lazy.map(\.text).joined())
+        var lowerBound = out.startIndex
+        for run in runs where !run.text.isEmpty {
+            let upperBound = out.characters.index(lowerBound, offsetBy: run.text.count)
+            var font = Font.system(size: 11.5, design: .monospaced)
+            if run.attributes.bold {
+                font = .system(size: 11.5, weight: .bold, design: .monospaced)
+            }
+            if run.attributes.italic { font = font.italic() }
+            out[lowerBound..<upperBound].font = font
             if let c = run.attributes.foreground.swiftUIColor(theme: theme) {
-                s.foregroundColor = c
+                out[lowerBound..<upperBound].foregroundColor = c
             } else {
-                s.foregroundColor = theme.color("fg-muted")
+                out[lowerBound..<upperBound].foregroundColor = theme.color("fg-muted")
             }
             if let bg = run.attributes.background.swiftUIColor(theme: theme) {
-                s.backgroundColor = bg
+                out[lowerBound..<upperBound].backgroundColor = bg
             }
-            if run.attributes.bold { s.font = .system(size: 11.5, weight: .bold, design: .monospaced) }
-            if run.attributes.italic { s.font = (s.font ?? .system(size: 11.5, design: .monospaced)).italic() }
-            if run.attributes.underline { s.underlineStyle = .single }
-            out += s
+            if run.attributes.underline {
+                out[lowerBound..<upperBound].underlineStyle = .single
+            }
+            lowerBound = upperBound
         }
         return out
     }
