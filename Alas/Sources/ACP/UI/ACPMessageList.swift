@@ -66,6 +66,7 @@ struct ACPMessageList: View {
     /// constant here is safe even with multiple transcript lists mounted at
     /// once (e.g. across windows).
     private static let scrollSpaceName = "acp-message-list"
+    private static let contentShrinkBookmarkResetDebounceNanoseconds: UInt64 = 50_000_000
 
     /// Window-sliced, plan-filtered list of rows to render. The slice
     /// bounds first-paint cost on long transcripts (`visibleHead` is
@@ -259,6 +260,10 @@ struct ACPMessageList: View {
                 .onDisappear {
                     scrollBook.pendingTailScrollTask?.cancel()
                     scrollBook.pendingTailScrollTask = nil
+                    scrollBook.pendingContentGrowthTailRestore = nil
+                    scrollBook.pendingContentShrinkResetTask?.cancel()
+                    scrollBook.pendingContentShrinkResetTask = nil
+                    scrollBook.contentShrinkBookmarkResetState = .none
                 }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
@@ -336,13 +341,15 @@ struct ACPMessageList: View {
         }
     }
 
-    private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
+    @discardableResult
+    private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) -> Bool {
+        let pendingContentGrowthTailRestore = scrollBook.pendingContentGrowthTailRestore
         scrollBook.pendingTailScrollTask?.cancel()
         scrollBook.pendingTailScrollTask = nil
         let distance = scrollBook.lastScrollProbe.map {
             max(0, $0.contentHeight - $0.viewportHeight - $0.minY)
         }
-        guard Self.shouldPerformTailScroll(distanceFromBottom: distance) else { return }
+        guard Self.shouldPerformTailScroll(distanceFromBottom: distance) else { return false }
         scrollBook.isRestoringTail = true
         let scroll = {
             proxy.scrollTo("__composer_spacer__", anchor: .bottom)
@@ -366,13 +373,49 @@ struct ACPMessageList: View {
                 releaseRestoring()
             }
         }
+        if let pendingContentGrowthTailRestore {
+            scrollBook.lastContentGrowthTailRestoreSourceHeight = pendingContentGrowthTailRestore.sourceHeight
+            scrollBook.lastContentGrowthTailRestoreHeight = pendingContentGrowthTailRestore.targetHeight
+            scrollBook.contentShrinkBookmarkResetState = Self.contentShrinkBookmarkResetStateAfterScheduledTailScroll(
+                didScroll: true,
+                hasContentGrowthRestore: true,
+                currentState: scrollBook.contentShrinkBookmarkResetState
+            )
+            scrollBook.pendingContentGrowthTailRestore = nil
+        }
+        return true
     }
 
-    private func scheduleTailScroll(proxy: ScrollViewProxy, animated: Bool) {
+    private func scheduleTailScroll(
+        proxy: ScrollViewProxy,
+        animated: Bool,
+        contentGrowthRestore: ACPContentGrowthTailRestore? = nil
+    ) {
+        if Self.shouldStoreContentGrowthRestoreBeforeCoalescing(
+            hasPendingTailScroll: scrollBook.pendingTailScrollTask != nil,
+            hasContentGrowthRestore: contentGrowthRestore != nil
+        ) {
+            scrollBook.pendingContentGrowthTailRestore = Self.mergedContentGrowthTailRestore(
+                existing: scrollBook.pendingContentGrowthTailRestore,
+                new: contentGrowthRestore
+            )
+            scrollBook.pendingContentShrinkResetTask?.cancel()
+            scrollBook.pendingContentShrinkResetTask = nil
+        }
         guard Self.shouldScheduleTailScroll(hasPendingTailScroll: scrollBook.pendingTailScrollTask != nil) else {
             return
         }
         scrollBook.pendingTailScrollTask?.cancel()
+        if contentGrowthRestore != nil {
+            scrollBook.pendingContentShrinkResetTask?.cancel()
+            scrollBook.pendingContentShrinkResetTask = nil
+        }
+        scrollBook.pendingContentGrowthTailRestore = Self.mergedContentGrowthTailRestore(
+            existing: scrollBook.pendingContentGrowthTailRestore,
+            new: contentGrowthRestore
+        )
+        scrollBook.pendingTailScrollGeneration &+= 1
+        let scheduledGeneration = scrollBook.pendingTailScrollGeneration
         scrollBook.pendingTailScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled,
@@ -380,10 +423,33 @@ struct ACPMessageList: View {
                     followsTranscriptTail: session.followsTranscriptTail
                   )
             else {
-                scrollBook.pendingTailScrollTask = nil
+                if ACPMessageList.shouldClearScheduledTailScrollBookkeeping(
+                    scheduledGeneration: scheduledGeneration,
+                    currentGeneration: scrollBook.pendingTailScrollGeneration
+                ) {
+                    scrollBook.pendingTailScrollTask = nil
+                    scrollBook.pendingContentGrowthTailRestore = nil
+                }
                 return
             }
-            scrollToTail(proxy: proxy, animated: animated)
+            let pendingContentGrowthTailRestore = scrollBook.pendingContentGrowthTailRestore
+            let didScroll = scrollToTail(proxy: proxy, animated: animated)
+            if didScroll, let pendingContentGrowthTailRestore {
+                scrollBook.lastContentGrowthTailRestoreSourceHeight = pendingContentGrowthTailRestore.sourceHeight
+                scrollBook.lastContentGrowthTailRestoreHeight = pendingContentGrowthTailRestore.targetHeight
+            }
+            scrollBook.contentShrinkBookmarkResetState = ACPMessageList.contentShrinkBookmarkResetStateAfterScheduledTailScroll(
+                didScroll: didScroll,
+                hasContentGrowthRestore: pendingContentGrowthTailRestore != nil,
+                currentState: scrollBook.contentShrinkBookmarkResetState
+            )
+            if ACPMessageList.shouldClearScheduledTailScrollBookkeeping(
+                scheduledGeneration: scheduledGeneration,
+                currentGeneration: scrollBook.pendingTailScrollGeneration
+            ) {
+                scrollBook.pendingTailScrollTask = nil
+                scrollBook.pendingContentGrowthTailRestore = nil
+            }
         }
     }
 
@@ -464,6 +530,12 @@ struct ACPMessageList: View {
             session.followsTranscriptTail = false
             scrollBook.pendingTailScrollTask?.cancel()
             scrollBook.pendingTailScrollTask = nil
+            scrollBook.pendingContentGrowthTailRestore = nil
+            scrollBook.pendingContentShrinkResetTask?.cancel()
+            scrollBook.pendingContentShrinkResetTask = nil
+            scrollBook.contentShrinkBookmarkResetState = .none
+            scrollBook.lastContentGrowthTailRestoreSourceHeight = nil
+            scrollBook.lastContentGrowthTailRestoreHeight = nil
             let lookup = visibleMessageLookup
             // Tail-follow no longer maintains `latestTopVisibleAnchor` on every
             // row callback (see `handleModernRowFrame`), so compute it here,
@@ -757,15 +829,75 @@ struct ACPMessageList: View {
         viewportHeight: CGFloat,
         newMinY: CGFloat,
         followsTranscriptTail: Bool,
-        isRestoring: Bool
+        isRestoring: Bool,
+        contentShrinkBookmarkResetState: ACPContentShrinkBookmarkResetState = .none,
+        lastRestoreSourceContentHeight: CGFloat? = nil,
+        lastRestoredContentHeight: CGFloat? = nil
     ) -> Bool {
         guard !isRestoring else { return false }
         guard followsTranscriptTail else { return false }
         guard newContentHeight > previousContentHeight + ACPScrollDirectionClassifier.upwardEpsilon else {
             return false
         }
+        if let lastRestoreSourceContentHeight,
+           let lastRestoredContentHeight,
+           abs(previousContentHeight - lastRestoreSourceContentHeight) <= ACPScrollDirectionClassifier.bottomTolerance,
+           newContentHeight <= lastRestoredContentHeight + ACPScrollDirectionClassifier.bottomTolerance {
+            guard contentShrinkBookmarkResetState == .verified else {
+                return false
+            }
+        }
         let distanceFromBottom = max(0, newContentHeight - viewportHeight - newMinY)
         return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
+    }
+
+    nonisolated static func shouldResetContentGrowthTailRestoreAfterShrink(
+        previousContentHeight: CGFloat,
+        newContentHeight: CGFloat,
+        viewportHeight: CGFloat,
+        newMinY: CGFloat,
+        followsTranscriptTail: Bool,
+        isRestoring: Bool,
+        hasPendingTailScroll: Bool,
+        lastRestoredContentHeight: CGFloat?
+    ) -> Bool {
+        guard followsTranscriptTail else { return false }
+        guard !hasPendingTailScroll else { return false }
+        guard let lastRestoredContentHeight else { return false }
+        guard previousContentHeight > newContentHeight + ACPScrollDirectionClassifier.bottomTolerance else {
+            return false
+        }
+        guard newContentHeight < lastRestoredContentHeight - ACPScrollDirectionClassifier.bottomTolerance else {
+            return false
+        }
+        let distanceFromBottom = max(0, newContentHeight - viewportHeight - newMinY)
+        return distanceFromBottom <= ACPScrollDirectionClassifier.bottomTolerance
+    }
+
+    nonisolated static func shouldApplyDeferredContentShrinkBookmarkReset(
+        expectedContentHeight: CGFloat,
+        latestContentHeight: CGFloat,
+        latestViewportHeight: CGFloat,
+        latestMinY: CGFloat,
+        followsTranscriptTail: Bool,
+        isRestoring: Bool,
+        hasPendingTailScroll: Bool
+    ) -> Bool {
+        guard followsTranscriptTail else { return false }
+        guard !hasPendingTailScroll else { return false }
+        guard abs(latestContentHeight - expectedContentHeight) <= ACPScrollDirectionClassifier.bottomTolerance else {
+            return false
+        }
+        let distanceFromBottom = max(0, latestContentHeight - latestViewportHeight - latestMinY)
+        return distanceFromBottom <= ACPScrollDirectionClassifier.bottomTolerance
+    }
+
+    nonisolated static func shouldUseScrollProbeForDeferredShrinkReset(
+        latestProbeGeneration: UInt64,
+        scheduledProbeGeneration: UInt64,
+        didDebounce: Bool
+    ) -> Bool {
+        didDebounce || latestProbeGeneration > scheduledProbeGeneration
     }
 
     /// Whether `scrollToTail` should actually issue `proxy.scrollTo`. A
@@ -804,6 +936,48 @@ struct ACPMessageList: View {
 
     nonisolated static func shouldScheduleTailScroll(hasPendingTailScroll: Bool) -> Bool {
         !hasPendingTailScroll
+    }
+
+    nonisolated static func shouldStoreContentGrowthRestoreBeforeCoalescing(
+        hasPendingTailScroll: Bool,
+        hasContentGrowthRestore: Bool
+    ) -> Bool {
+        hasPendingTailScroll && hasContentGrowthRestore
+    }
+
+    nonisolated static func mergedContentGrowthTailRestore(
+        existing: ACPContentGrowthTailRestore?,
+        new: ACPContentGrowthTailRestore?
+    ) -> ACPContentGrowthTailRestore? {
+        guard let new else { return nil }
+        guard let existing else { return new }
+        return ACPContentGrowthTailRestore(
+            sourceHeight: min(existing.sourceHeight, new.sourceHeight),
+            targetHeight: max(existing.targetHeight, new.targetHeight)
+        )
+    }
+
+    nonisolated static func shouldClearScheduledTailScrollBookkeeping(
+        scheduledGeneration: UInt64,
+        currentGeneration: UInt64
+    ) -> Bool {
+        scheduledGeneration == currentGeneration
+    }
+
+    nonisolated static func shouldClearContentShrinkResetBookkeeping(
+        scheduledGeneration: UInt64,
+        currentGeneration: UInt64
+    ) -> Bool {
+        scheduledGeneration == currentGeneration
+    }
+
+    nonisolated static func contentShrinkBookmarkResetStateAfterScheduledTailScroll(
+        didScroll: Bool,
+        hasContentGrowthRestore: Bool,
+        currentState: ACPContentShrinkBookmarkResetState
+    ) -> ACPContentShrinkBookmarkResetState {
+        guard didScroll, hasContentGrowthRestore else { return currentState }
+        return .none
     }
 
     nonisolated static func shouldRestoreTailAfterViewportWidthChange(
@@ -994,8 +1168,13 @@ struct ACPMessageList: View {
     ) {
         // Always current for `scrollToTail`'s idempotency check below, even
         // when none of the branches in this function fire.
+        scrollBook.scrollGeometryGeneration &+= 1
         scrollBook.lastScrollProbe = ACPScrollProbe(
-            minY: newMinY, viewportHeight: viewportHeight, contentHeight: contentHeight)
+            generation: scrollBook.scrollGeometryGeneration,
+            minY: newMinY,
+            viewportHeight: viewportHeight,
+            contentHeight: contentHeight
+        )
         // Tail-follow pause/resume — reuse the shared classifier so the rules
         // match the legacy observer exactly. `NSApp.currentEvent` reports the
         // most recently processed event, not necessarily the cause of this
@@ -1039,19 +1218,32 @@ struct ACPMessageList: View {
             )
         case .noChange: break
         }
+        scheduleContentShrinkBookmarkResetIfNeeded(
+            previousContentHeight: previousContentHeight,
+            contentHeight: contentHeight,
+            viewportHeight: viewportHeight,
+            newMinY: newMinY
+        )
         if Self.shouldRestoreTailAfterContentGrowth(
             previousContentHeight: previousContentHeight,
             newContentHeight: contentHeight,
             viewportHeight: viewportHeight,
             newMinY: newMinY,
             followsTranscriptTail: session.followsTranscriptTail,
-            isRestoring: scrollBook.isRestoringTail
+            isRestoring: scrollBook.isRestoringTail,
+            contentShrinkBookmarkResetState: scrollBook.contentShrinkBookmarkResetState,
+            lastRestoreSourceContentHeight: scrollBook.lastContentGrowthTailRestoreSourceHeight,
+            lastRestoredContentHeight: scrollBook.lastContentGrowthTailRestoreHeight
         ) {
             scheduleTailScroll(
                 proxy: proxy,
                 animated: Self.shouldAnimateTailScroll(
                     trigger: .contentGrowth,
                     streamingState: session.transcript.streamingState
+                ),
+                contentGrowthRestore: ACPContentGrowthTailRestore(
+                    sourceHeight: previousContentHeight,
+                    targetHeight: contentHeight
                 )
             )
             return
@@ -1071,6 +1263,95 @@ struct ACPMessageList: View {
         guard now.timeIntervalSince(scrollBook.lastHeadStepAt) > headStepDebounceInterval else { return }
         scrollBook.lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
+    }
+
+    private func scheduleContentShrinkBookmarkResetIfNeeded(
+        previousContentHeight: CGFloat,
+        contentHeight: CGFloat,
+        viewportHeight: CGFloat,
+        newMinY: CGFloat
+    ) {
+        guard Self.shouldResetContentGrowthTailRestoreAfterShrink(
+            previousContentHeight: previousContentHeight,
+            newContentHeight: contentHeight,
+            viewportHeight: viewportHeight,
+            newMinY: newMinY,
+            followsTranscriptTail: session.followsTranscriptTail,
+            isRestoring: scrollBook.isRestoringTail,
+            hasPendingTailScroll: scrollBook.pendingTailScrollTask != nil,
+            lastRestoredContentHeight: scrollBook.lastContentGrowthTailRestoreHeight
+        ) else { return }
+
+        scrollBook.pendingContentShrinkResetTask?.cancel()
+        scrollBook.contentShrinkBookmarkResetState = .pending
+        scrollBook.pendingContentShrinkResetGeneration &+= 1
+        let scheduledGeneration = scrollBook.pendingContentShrinkResetGeneration
+        let scheduledProbeGeneration = scrollBook.scrollGeometryGeneration
+        scrollBook.pendingContentShrinkResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.contentShrinkBookmarkResetDebounceNanoseconds)
+            defer {
+                if ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+                    scheduledGeneration: scheduledGeneration,
+                    currentGeneration: scrollBook.pendingContentShrinkResetGeneration
+                ) {
+                    scrollBook.pendingContentShrinkResetTask = nil
+                }
+            }
+            guard !Task.isCancelled else {
+                if ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+                    scheduledGeneration: scheduledGeneration,
+                    currentGeneration: scrollBook.pendingContentShrinkResetGeneration
+                ) {
+                    scrollBook.contentShrinkBookmarkResetState = .none
+                }
+                return
+            }
+            guard let latestProbe = scrollBook.lastScrollProbe else {
+                if ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+                    scheduledGeneration: scheduledGeneration,
+                    currentGeneration: scrollBook.pendingContentShrinkResetGeneration
+                ) {
+                    scrollBook.contentShrinkBookmarkResetState = .none
+                }
+                return
+            }
+            guard Self.shouldUseScrollProbeForDeferredShrinkReset(
+                latestProbeGeneration: latestProbe.generation,
+                scheduledProbeGeneration: scheduledProbeGeneration,
+                didDebounce: true
+            ) else {
+                if ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+                    scheduledGeneration: scheduledGeneration,
+                    currentGeneration: scrollBook.pendingContentShrinkResetGeneration
+                ) {
+                    scrollBook.contentShrinkBookmarkResetState = .none
+                }
+                return
+            }
+            guard Self.shouldApplyDeferredContentShrinkBookmarkReset(
+                expectedContentHeight: contentHeight,
+                latestContentHeight: latestProbe.contentHeight,
+                latestViewportHeight: latestProbe.viewportHeight,
+                latestMinY: latestProbe.minY,
+                followsTranscriptTail: session.followsTranscriptTail,
+                isRestoring: scrollBook.isRestoringTail,
+                hasPendingTailScroll: scrollBook.pendingTailScrollTask != nil
+            ) else {
+                if ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+                    scheduledGeneration: scheduledGeneration,
+                    currentGeneration: scrollBook.pendingContentShrinkResetGeneration
+                ) {
+                    scrollBook.contentShrinkBookmarkResetState = .none
+                }
+                return
+            }
+            if ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+                scheduledGeneration: scheduledGeneration,
+                currentGeneration: scrollBook.pendingContentShrinkResetGeneration
+            ) {
+                scrollBook.contentShrinkBookmarkResetState = .verified
+            }
+        }
     }
 
     nonisolated static func shouldStepHeadBackFromGeometry(
@@ -1260,6 +1541,17 @@ private final class ACPMutableScrollAnchor {
     var value: String?
 }
 
+struct ACPContentGrowthTailRestore: Equatable {
+    let sourceHeight: CGFloat
+    let targetHeight: CGFloat
+}
+
+enum ACPContentShrinkBookmarkResetState {
+    case none
+    case pending
+    case verified
+}
+
 /// Non-observed bookkeeping for scroll/restore callbacks. These values are
 /// only read from callbacks (never from `body`), so keeping them in plain
 /// `@State` value storage would buy nothing except a full-list invalidation
@@ -1273,12 +1565,25 @@ private final class ACPTranscriptScrollBookkeeping {
     var lastHeadStepAt: Date = .distantPast
     var lastTailStepAt: Date = .distantPast
     var pendingTailScrollTask: Task<Void, Never>?
+    var pendingTailScrollGeneration: UInt64 = 0
+    var pendingContentGrowthTailRestore: ACPContentGrowthTailRestore?
+    var pendingContentShrinkResetTask: Task<Void, Never>?
+    var pendingContentShrinkResetGeneration: UInt64 = 0
+    var contentShrinkBookmarkResetState: ACPContentShrinkBookmarkResetState = .none
+    var scrollGeometryGeneration: UInt64 = 0
     /// Most recent modern-path scroll geometry, refreshed on every
     /// `handleScrollGeometry` call. Lets programmatic scrolls (`scrollToTail`)
     /// check whether the viewport is already at rest before issuing another
     /// `proxy.scrollTo`, so a redundant scroll doesn't retrigger the geometry
     /// callback that scheduled it.
     var lastScrollProbe: ACPScrollProbe?
+    /// Highest content height that has already scheduled an automatic tail
+    /// restore from the content-growth path. Lazy stack estimates can
+    /// oscillate between two heights; remembering the restored height makes
+    /// that path converge instead of scheduling again on every low-to-high
+    /// estimate flip.
+    var lastContentGrowthTailRestoreSourceHeight: CGFloat?
+    var lastContentGrowthTailRestoreHeight: CGFloat?
 }
 
 /// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's
@@ -1436,6 +1741,7 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
         if #available(macOS 15, *) {
             content.onScrollGeometryChange(for: ACPScrollProbe.self) { geo in
                 ACPScrollProbe(
+                    generation: 0,
                     minY: geo.visibleRect.minY,
                     viewportHeight: geo.visibleRect.height,
                     contentHeight: geo.contentSize.height)
@@ -1462,6 +1768,7 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
 /// macOS 15 availability — the `ScrollGeometry` reference is confined to the
 /// `#available` branch above.
 private struct ACPScrollProbe: Equatable {
+    var generation: UInt64
     var minY: CGFloat
     var viewportHeight: CGFloat
     var contentHeight: CGFloat
