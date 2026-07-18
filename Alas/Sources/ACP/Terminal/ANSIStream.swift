@@ -147,7 +147,11 @@ private struct ANSIOutputBuffer {
 /// across calls so that escape sequences split mid-stream still
 /// decode correctly.
 struct ANSIStream {
-    private enum State { case text, esc, csiParams, oscString, oscST }
+    private enum State { case text, esc, csiParams, csiDiscard, oscString, oscST }
+    /// CSI parameter strings are normally tiny. Malformed streams may never
+    /// send a final byte, so bound retained parser state independently from
+    /// the rendered tail and discard the rest of an oversized sequence.
+    private static let maxCSIParameterBytes = 64
 
     private var state: State = .text
     private var attributes = ANSIAttributes()
@@ -179,6 +183,8 @@ struct ANSIStream {
                 handleEscByte(b)
             case .csiParams:
                 handleCsiParamByte(b)
+            case .csiDiscard:
+                handleCsiDiscardByte(b)
             case .oscString:
                 handleOscByte(b)
             case .oscST:
@@ -270,7 +276,12 @@ struct ANSIStream {
         // compatibility; final byte is 0x40..0x7E.
         switch b {
         case 0x30...0x3F:               // param
-            paramBuf.append(Character(UnicodeScalar(b)))
+            if paramBuf.utf8.count < Self.maxCSIParameterBytes {
+                paramBuf.append(Character(UnicodeScalar(b)))
+            } else {
+                paramBuf.removeAll(keepingCapacity: true)
+                state = .csiDiscard
+            }
         case 0x40...0x7E:               // final
             if b == 0x6D {              // 'm' → SGR
                 applySGR(paramBuf)
@@ -281,6 +292,14 @@ struct ANSIStream {
         default:
             // 0x20..0x2F intermediates: accept and continue.
             break
+        }
+    }
+
+    private mutating func handleCsiDiscardByte(_ b: UInt8) {
+        // Ignore an oversized malformed CSI until its final byte. This keeps
+        // parser memory bounded while resynchronizing before ordinary text.
+        if b >= 0x40, b <= 0x7E {
+            state = .text
         }
     }
 

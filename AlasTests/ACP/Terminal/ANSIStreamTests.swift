@@ -177,4 +177,17 @@ struct ANSIStreamTests {
         #expect(text == "🎉🎉")
         #expect(!text.contains("\u{FFFD}"))
     }
+
+    @Test("incremental parser bounds an unterminated CSI parameter string")
+    func incrementalTailBoundsMalformedCSI() {
+        var tail = ANSITailBuffer(byteLimit: 1024)
+        tail.feed(Data("\u{1B}[".utf8))
+        for _ in 0..<20 {
+            tail.feed(Data(String(repeating: "1;", count: 100).utf8))
+        }
+        tail.feed(Data("mvisible".utf8))
+
+        #expect(tail.runs.map(\.text).joined() == "visible")
+        #expect(tail.runs.allSatisfy { $0.attributes == .default })
+    }
 }
