@@ -40,13 +40,44 @@ extension CodeHostCommandRunning {
 
 struct ProcessCodeHostCommandRunner: CodeHostCommandRunning {
     func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
-        try await Process.run(
-            "/usr/bin/env",
-            args: [executable] + args,
-            cwd: cwd,
-            env: Process.gitEnv(),
+        let invocation = CodeHostCommandInvocation.build(
+            executable: executable,
+            args: args,
+            cwd: cwd
+        )
+        return try await Process.run(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env,
             stdin: stdin
         )
+    }
+}
+
+struct CodeHostCommandInvocation: Equatable {
+    let executable: String
+    let args: [String]
+    let cwd: URL?
+    let env: [String: String]?
+
+    static func build(executable: String, args: [String], cwd: URL?) -> Self {
+        guard let cwd,
+              let host = RemoteHostRegistry.shared.host(forPath: cwd.path)
+        else {
+            return Self(
+                executable: "/usr/bin/env",
+                args: [executable] + args,
+                cwd: cwd,
+                env: Process.gitEnv()
+            )
+        }
+
+        let command = (["env", "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C", executable] + args)
+            .map(SSHCommand.shellQuote)
+            .joined(separator: " ")
+        let remote = RemoteExec.invocation(host: host, cwd: cwd.path, command: command)
+        return Self(executable: remote.executable, args: remote.args, cwd: nil, env: nil)
     }
 }
 
@@ -54,7 +85,7 @@ protocol CodeHostProvider: Sendable {
     var kind: CodeHostKind { get }
     var capabilities: CodeHostProviderCapabilities { get }
 
-    func isAvailable() async -> Bool
+    func isAvailable(cwd: URL) async -> Bool
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool
     func currentReviewRequest(
         remote: CodeHostRemote,

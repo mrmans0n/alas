@@ -16,9 +16,9 @@ struct GitLabCLIProvider: CodeHostProvider {
         self.runner = runner
     }
 
-    func isAvailable() async -> Bool {
+    func isAvailable(cwd: URL) async -> Bool {
         do {
-            let result = try await runner.run("glab", args: ["--version"], cwd: nil)
+            let result = try await runner.run("glab", args: ["--version"], cwd: cwd)
             return result.exitCode == 0
         } catch {
             return false

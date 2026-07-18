@@ -203,7 +203,7 @@ struct ReviewSessionLoaderTests {
         let kind: CodeHostKind = .github
         let diff: String
 
-        func isAvailable() async -> Bool { true }
+        func isAvailable(cwd: URL) async -> Bool { true }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
         func currentReviewRequest(
             remote: CodeHostRemote,

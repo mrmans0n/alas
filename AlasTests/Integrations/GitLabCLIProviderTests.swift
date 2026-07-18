@@ -12,10 +12,10 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 1, stdout: "", stderr: "missing"),
         ])
 
-        #expect(await GitLabCLIProvider(runner: successRunner).isAvailable())
-        #expect(await GitLabCLIProvider(runner: failureRunner).isAvailable() == false)
+        #expect(await GitLabCLIProvider(runner: successRunner).isAvailable(cwd: Self.cwd))
+        #expect(await GitLabCLIProvider(runner: failureRunner).isAvailable(cwd: Self.cwd) == false)
         #expect(await successRunner.commands == [
-            FakeRunner.Command(executable: "glab", args: ["--version"], cwd: nil),
+            FakeRunner.Command(executable: "glab", args: ["--version"], cwd: Self.cwd),
         ])
     }
 

@@ -1620,7 +1620,7 @@ struct ReviewSessionTabViewTests {
         let kind: CodeHostKind
         let result: ProviderReviewPublishResult
 
-        func isAvailable() async -> Bool { true }
+        func isAvailable(cwd: URL) async -> Bool { true }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
         func currentReviewRequest(
             remote: CodeHostRemote,
@@ -1710,7 +1710,7 @@ struct ReviewSessionTabViewTests {
             return recordedPublishRequests
         }
 
-        func isAvailable() async -> Bool { true }
+        func isAvailable(cwd: URL) async -> Bool { true }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
         func currentReviewRequest(
             remote: CodeHostRemote,
