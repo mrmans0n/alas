@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-07-18
+
+### 🐛 Fixes
+
+- Restore code-host authentication for SSH workspaces (#830).
+- Preserve ACP brokers across helper restarts (#831).
+- Show a loading screen instead of a disconnected flash during remote web startup (#832).
+
 ## [0.11.6] - 2026-07-18
 
 ### 🐛 Fixes
