@@ -18,6 +18,10 @@ let pairingPromise = null;
 let pairingController = null;
 const initialReconnectDelay = 1500;
 const maxReconnectDelay = 30000;
+let everConnected = false;      // has any onopen fired this page load? separates "loading" from "disconnected"
+let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
+let escalated = false;          // true once the grace window elapsed and the alarming gate is showing
+const GRACE_MS = 5000;          // total not-connected budget before escalating "Connecting…" → "Can't reach Alas"
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
@@ -41,15 +45,52 @@ const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the se
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
 function setStatus(s, state) { const e = $("status"); e.textContent = s; e.dataset.state = state || "connecting"; }
 function showGate(title, msg, retry) {
+  $("gate").classList.remove("connecting");   // default to the plain (alarming/pairing) look
   $("gate-title").textContent = title;
   $("gate-msg").textContent = msg;
   $("gate-retry").classList.toggle("hidden", !retry);
   $("gate").classList.remove("hidden");
 }
-function hideGate() { $("gate").classList.add("hidden"); }
+function hideGate() {
+  $("gate").classList.add("hidden");
+  $("gate").classList.remove("connecting");
+}
 
 function showUnreachableGate() {
   showGate("Can't reach Alas", "Make sure your Mac is awake, Alas is running, and this device is on the same Wi-Fi or tailnet.", true);
+}
+
+// Neutral loading overlay shown while we're still trying to reach the Mac for
+// the first time. Reuses the gate DOM; the `connecting` class swaps the icon
+// for a spinner (see style.css) and there is no "Try again" button.
+function showConnectingGate() {
+  showGate("Connecting…", "Reaching your Mac…", false);
+  $("gate").classList.add("connecting");
+}
+
+// Single continuous-not-connected timer: armed once and NOT reset per retry, so
+// the grace period is a total budget across attempts rather than per-attempt.
+function armEscalation() {
+  if (escalationTimer || escalated) return;   // don't re-arm while pending, or after we've already escalated
+  escalationTimer = setTimeout(() => {
+    escalationTimer = null;
+    escalated = true;
+    showUnreachableGate();
+  }, GRACE_MS);
+}
+function clearEscalation() {
+  if (escalationTimer) {
+    clearTimeout(escalationTimer);
+    escalationTimer = null;
+  }
+  escalated = false;
+}
+
+// Pure: what should a socket close reflect, given whether we ever connected?
+//   "loading"      → still on initial load: show the neutral Connecting overlay
+//   "reconnecting" → mid-session drop: keep the transcript, just flag the chip
+function closeState(everConnectedFlag) {
+  return everConnectedFlag ? "reconnecting" : "loading";
 }
 
 function scheduleReconnect() {
@@ -72,7 +113,10 @@ function retryConnection() {
     pairingPromise = null;
   }
   reconnectDelay = initialReconnectDelay;
-  setStatus("Connecting...", "connecting");
+  clearEscalation();               // start a fresh grace budget for the manual retry
+  setStatus("Connecting…", "connecting");
+  showConnectingGate();
+  armEscalation();
   connect();
 }
 
@@ -125,8 +169,9 @@ async function connect() {
     token = await ensureToken();
   } catch (err) {
     if (attempt !== connectAttempt) return;
-    if (err && err.message === "net") scheduleReconnect();
-    return;   // no code/token yet (or pairing failed); status is set — wait for the user
+    if (err && err.message === "net") { scheduleReconnect(); return; }   // keep escalation armed; retrying
+    clearEscalation();   // pairing / no-token is a user-action state, not an outage — cancel the doom timer
+    return;              // status/gate already set by ensureToken — wait for the user
   }
   if (attempt !== connectAttempt) return;
   if (ws) { try { ws.close(); } catch (_) {} }   // drop any prior (possibly half-open) socket
@@ -135,6 +180,8 @@ async function connect() {
   ws = socket;
   socket.onopen = () => {
     if (socket !== ws) return;
+    everConnected = true;
+    clearEscalation();
     setStatus("Connected", "ok");
     hideGate();
     if (reconnectTimer) {
@@ -152,9 +199,20 @@ async function connect() {
   };
   socket.onclose = () => {
     if (socket !== ws) return;
-    setStatus("Reconnecting...", "bad");
     failCreateOnDisconnect();
-    showUnreachableGate();
+    if (closeState(everConnected) === "loading") {
+      // Initial load still in progress — keep the neutral loading overlay up
+      // instead of flashing the alarming "Can't reach Alas" screen. Once we've
+      // escalated, leave the alarming gate up rather than flapping back to it.
+      if (!escalated) {
+        setStatus("Connecting…", "connecting");
+        showConnectingGate();
+      }
+    } else {
+      // Mid-session drop — keep the transcript visible; only the chip changes.
+      setStatus("Reconnecting…", "bad");
+    }
+    armEscalation();     // no-op if already armed → grace stays a total budget
     scheduleReconnect();
   };
   socket.onmessage = (e) => {
@@ -2266,4 +2324,7 @@ if (vp) {
   syncViewport();
 }
 
+setStatus("Connecting…", "connecting");
+showConnectingGate();
+armEscalation();
 connect();

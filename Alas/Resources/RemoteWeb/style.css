@@ -190,6 +190,20 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 #gate-retry { margin-top: 18px; padding: 11px 20px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 10px; background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--fg); font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 #gate-retry:active { background: color-mix(in oklab, var(--accent) 26%, transparent); }
 
+/* Connecting variant: swap the ⚠ glyph for a spinner while we're still loading. */
+#gate.connecting .gate-icon {
+  box-sizing: border-box;
+  font-size: 0;                 /* hide the ⚠ glyph */
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  border: 3px solid var(--bg-4);
+  border-top-color: var(--accent);
+  animation: gate-spin 0.8s linear infinite;
+}
+@keyframes gate-spin { to { transform: rotate(360deg); } }
+
 /* Bottom sheets (permission / question) */
 .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 10; }
 .sheet-card { background: var(--bg-2); width: 100%; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; border-top: 0.5px solid var(--line); }
