@@ -295,7 +295,7 @@ final class ACPSession: ObservableObject, Identifiable {
         // of the user message instead of being dropped. The runner persists
         // from the pre-call message count, so the flushed rows are saved too.
         _ = flushPendingReplayCandidates()
-        transcript.messages.append(.user(
+        transcript.appendMessage(.user(
             id: UUID(),
             messageId: nil,
             text: text,
@@ -414,7 +414,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 Self.extractTerminalIds(items),
                 Self.extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
             let rawOutputAssets = Self.extractRawOutputAssets(payload.rawOutput)
-            transcript.messages.append(.toolCall(.init(
+            transcript.appendMessage(.toolCall(.init(
                 toolCallId: payload.toolCallId,
                 title: payload.title,
                 kind: payload.kind,
@@ -451,14 +451,12 @@ final class ACPSession: ObservableObject, Identifiable {
             // the current turn (i.e. sits after the latest user prompt).
             // Otherwise append a fresh plan so the previous turn's plan
             // stays at its original position and the new one is current.
-            let lastUserIdx = transcript.messages.lastIndex { if case .user = $0 { return true } else { return false } } ?? -1
-            let currentTurnPlanIdx = transcript.messages.lastIndex { if case .plan = $0 { return true } else { return false } }
-                .flatMap { $0 > lastUserIdx ? $0 : nil }
-            if let i = currentTurnPlanIdx, case .plan(let existingId, _) = transcript.messages[i] {
-                transcript.messages[i] = .plan(id: existingId, items)
+            if let i = transcript.currentPlanMessageIndex,
+               case .plan(let existingId, _) = transcript.messages[i] {
+                transcript.replaceMessage(at: i, with: .plan(id: existingId, items))
                 return [i]
             } else {
-                transcript.messages.append(.plan(id: UUID(), items))
+                transcript.appendMessage(.plan(id: UUID(), items))
                 didAppendTranscriptMessage()
                 transcript.completedOutputBoundaryMessageIds.removeAll()
                 return [transcript.messages.count - 1]
@@ -530,7 +528,7 @@ final class ACPSession: ObservableObject, Identifiable {
             case .user:
                 continue
             }
-            transcript.messages.append(message)
+            transcript.appendMessage(message)
             didAppendTranscriptMessage()
             indices.insert(transcript.messages.count - 1)
         }
@@ -699,7 +697,7 @@ final class ACPSession: ObservableObject, Identifiable {
         // A system notice closes the current output run; materialise any held
         // replay candidate first so it keeps its place ahead of the notice.
         flushPendingReplayCandidates()
-        transcript.messages.append(.systemNotice(id: UUID(), text: text))
+        transcript.appendMessage(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
     }
 
@@ -710,13 +708,13 @@ final class ACPSession: ObservableObject, Identifiable {
         // candidate first so text that arrived before the edit stays ahead of
         // it. This path does not flow through `apply`, so it must flush here.
         flushPendingReplayCandidates()
-        transcript.messages.append(.fileEdit(id: UUID(), edit))
+        transcript.appendMessage(.fileEdit(id: UUID(), edit))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
     func replaceTranscriptMessages(_ messages: [ACPMessage]) {
-        transcript.messages = messagesPreservingToolCallContentRevisions(messages)
+        transcript.replaceMessages(with: messagesPreservingToolCallContentRevisions(messages))
         rebuildToolCallIndices()
     }
 
@@ -750,7 +748,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// pre-tail messages after the UI has already painted the tail.
     func prependTranscriptMessages(_ older: [ACPMessage]) {
         guard !older.isEmpty else { return }
-        transcript.messages.insert(contentsOf: older, at: 0)
+        transcript.prependMessages(older)
         // Rebuild tool-call indices because every prior entry's index just
         // shifted by `older.count`. Cheaper than offsetting in place: the
         // cache is dictionary-typed, so a full rebuild is O(N) and avoids
@@ -972,7 +970,7 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .toolCall(var tc) = transcript.messages[i],
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"
-                transcript.messages[i] = .toolCall(tc)
+                transcript.replaceMessage(at: i, with: .toolCall(tc))
                 changed.append(i)
             }
         }
@@ -1579,12 +1577,12 @@ final class ACPSession: ObservableObject, Identifiable {
                 || isReconciledEchoChunk {
                 return i
             }
-            transcript.messages[i] = .user(
+            transcript.replaceMessage(at: i, with: .user(
                 id: id,
                 messageId: existingMessageId,
                 text: mergedText,
                 attachments: mergedAttachments,
-                delegatedSource: delegatedSource)
+                delegatedSource: delegatedSource))
             if let existingMessageId {
                 liveUserChunkMessageIds.insert(existingMessageId)
             }
@@ -1596,12 +1594,12 @@ final class ACPSession: ObservableObject, Identifiable {
            case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
             if existingMessageId == nil {
                 if let messageId {
-                    transcript.messages[i] = .user(
+                    transcript.replaceMessage(at: i, with: .user(
                         id: id,
                         messageId: messageId,
                         text: text,
                         attachments: Self.mergingAttachments(attachments, newAttachments),
-                        delegatedSource: delegatedSource)
+                        delegatedSource: delegatedSource))
                     reconciledLocalUserPromptMessageIds.insert(messageId)
                     transcript.noteStreamingChange(at: i)
                 } else {
@@ -1619,12 +1617,12 @@ final class ACPSession: ObservableObject, Identifiable {
             if text == mergedText && attachments == mergedAttachments {
                 return i
             }
-            transcript.messages[i] = .user(
+            transcript.replaceMessage(at: i, with: .user(
                 id: id,
                 messageId: existingMessageId,
                 text: mergedText,
                 attachments: mergedAttachments,
-                delegatedSource: delegatedSource)
+                delegatedSource: delegatedSource))
             transcript.noteStreamingChange(at: i)
             return i
         }
@@ -1643,7 +1641,7 @@ final class ACPSession: ObservableObject, Identifiable {
             // replayed user chunk never materialises a still-buffered chunk.
             flushedReplayIndices = flushPendingReplayCandidates()
             let id = UUID()
-            transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
+            transcript.appendMessage(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
             if let messageId {
                 liveUserChunkMessageIds.insert(messageId)
             } else {
@@ -1658,7 +1656,7 @@ final class ACPSession: ObservableObject, Identifiable {
         // candidates first so they keep their place ahead of the prompt.
         flushedReplayIndices = flushPendingReplayCandidates()
         let id = UUID()
-        transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
+        transcript.appendMessage(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
         if let messageId {
             liveUserChunkMessageIds.insert(messageId)
         } else {
@@ -1775,10 +1773,10 @@ final class ACPSession: ObservableObject, Identifiable {
         switch transcript.messages[i] {
         case .agent(let id, _, let buf):
             buf.append(suffix)
-            transcript.messages[i] = .agent(id: id, messageId: messageId, buf)
+            transcript.replaceMessage(at: i, with: .agent(id: id, messageId: messageId, buf))
         case .thought(let id, _, let buf):
             buf.append(suffix)
-            transcript.messages[i] = .thought(id: id, messageId: messageId, buf)
+            transcript.replaceMessage(at: i, with: .thought(id: id, messageId: messageId, buf))
         default:
             return nil
         }
@@ -1896,7 +1894,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if replayKind == .agent {
             flushedReplayIndices.formUnion(flushPendingReplayCandidates(kinds: [.thought]))
         }
-        transcript.messages.append(makeNew(newMessageText))
+        transcript.appendMessage(makeNew(newMessageText))
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }
@@ -1988,7 +1986,7 @@ final class ACPSession: ObservableObject, Identifiable {
            case .toolCall(var tc) = transcript.messages[i],
            tc.toolCallId == id {
             mutate(&tc)
-            transcript.messages[i] = .toolCall(tc)
+            transcript.replaceMessage(at: i, with: .toolCall(tc))
             return i
         }
 
@@ -1996,7 +1994,7 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .toolCall(var tc) = transcript.messages[i], tc.toolCallId == id {
                 toolCallIndices[id] = i
                 mutate(&tc)
-                transcript.messages[i] = .toolCall(tc)
+                transcript.replaceMessage(at: i, with: .toolCall(tc))
                 return i
             }
         }

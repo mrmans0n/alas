@@ -11,10 +11,23 @@ final class ACPTranscript: ObservableObject {
     @Published var messages: [ACPMessage] = [] {
         didSet {
             messagesGeneration &+= 1
-            refreshPlanCaches()
+            updatePlanCaches(for: pendingMessagesMutation)
+            pendingMessagesMutation = nil
             recordMessagesDiff(old: oldValue)
         }
     }
+    private enum MessagesMutation {
+        case append(ACPMessage)
+        case replace(index: Int, old: ACPMessage, new: ACPMessage)
+        case prepend(count: Int)
+        case planNeutral
+    }
+    private var pendingMessagesMutation: MessagesMutation?
+    private var latestPlanMessageIndex: Int?
+    private var latestUserMessageIndex: Int?
+    #if DEBUG
+    private(set) var planCacheRebuildCountForTests = 0
+    #endif
     /// Bumped on every `messages` array mutation. Non-published: consumed by
     /// value caches (visible-rows lookup) that must invalidate when the array
     /// changes, without adding another objectWillChange source.
@@ -123,22 +136,115 @@ final class ACPTranscript: ObservableObject {
         streamingTickDrain = nil
     }
 
-    private func refreshPlanCaches() {
-        var newCurrentPlan: [ACPMessage.PlanItem]?
-        for m in messages.reversed() {
-            if case .user = m { break }
-            if case .plan(_, let items) = m {
-                newCurrentPlan = items
-                break
-            }
-        }
+    // MARK: - Incremental plan caches
 
-        var newLatestPlan: [ACPMessage.PlanItem]?
-        for m in messages.reversed() {
-            if case .plan(_, let items) = m {
-                newLatestPlan = items.isEmpty ? nil : items
+    /// Production mutation entry points carry enough context for plan caches
+    /// to update in O(1). Direct `messages` assignments remain supported for
+    /// restore/test call sites and safely rebuild both indices once.
+    var currentPlanMessageIndex: Int? {
+        guard let latestPlanMessageIndex,
+              latestPlanMessageIndex > (latestUserMessageIndex ?? -1) else {
+            return nil
+        }
+        return latestPlanMessageIndex
+    }
+
+    func appendMessage(_ message: ACPMessage) {
+        pendingMessagesMutation = .append(message)
+        messages.append(message)
+    }
+
+    func replaceMessage(at index: Int, with message: ACPMessage) {
+        let old = messages[index]
+        pendingMessagesMutation = .replace(index: index, old: old, new: message)
+        messages[index] = message
+    }
+
+    func replaceMessages(with newMessages: [ACPMessage]) {
+        messages = newMessages
+    }
+
+    func prependMessages(_ older: [ACPMessage]) {
+        guard !older.isEmpty else { return }
+        pendingMessagesMutation = .prepend(count: older.count)
+        messages.insert(contentsOf: older, at: 0)
+    }
+
+    private func updatePlanCaches(for mutation: MessagesMutation?) {
+        switch mutation {
+        case .append(let message):
+            let index = messages.count - 1
+            if case .user = message {
+                latestUserMessageIndex = index
+            } else if case .plan = message {
+                latestPlanMessageIndex = index
+            }
+            publishPlanCaches()
+        case .replace(let index, let old, let new):
+            switch (old, new) {
+            case (.user, .user):
+                break
+            case (.plan, .plan):
+                if index == latestPlanMessageIndex {
+                    publishPlanCaches()
+                }
+            case (.user, _), (_, .user), (.plan, _), (_, .plan):
+                rebuildPlanCaches()
+            default:
                 break
             }
+        case .prepend(let count):
+            latestPlanMessageIndex = latestPlanMessageIndex.map { $0 + count }
+            latestUserMessageIndex = latestUserMessageIndex.map { $0 + count }
+            if latestPlanMessageIndex == nil {
+                latestPlanMessageIndex = messages[..<count].lastIndex {
+                    if case .plan = $0 { return true }
+                    return false
+                }
+            }
+            if latestUserMessageIndex == nil {
+                latestUserMessageIndex = messages[..<count].lastIndex {
+                    if case .user = $0 { return true }
+                    return false
+                }
+            }
+            publishPlanCaches()
+        case .planNeutral:
+            break
+        case nil:
+            rebuildPlanCaches()
+        }
+    }
+
+    private func rebuildPlanCaches() {
+        #if DEBUG
+        planCacheRebuildCountForTests += 1
+        #endif
+        latestPlanMessageIndex = messages.lastIndex {
+            if case .plan = $0 { return true }
+            return false
+        }
+        latestUserMessageIndex = messages.lastIndex {
+            if case .user = $0 { return true }
+            return false
+        }
+        publishPlanCaches()
+    }
+
+    private func publishPlanCaches() {
+        let newCurrentPlan: [ACPMessage.PlanItem]?
+        if let index = currentPlanMessageIndex,
+           case .plan(_, let items) = messages[index] {
+            newCurrentPlan = items
+        } else {
+            newCurrentPlan = nil
+        }
+        let newLatestPlan: [ACPMessage.PlanItem]?
+        if let index = latestPlanMessageIndex,
+           case .plan(_, let items) = messages[index] {
+            newLatestPlan = items.isEmpty ? nil : items
+        } else {
+            newLatestPlan = nil
         }
         if currentPlan != newCurrentPlan {
             currentPlan = newCurrentPlan
@@ -306,9 +412,7 @@ final class ACPTranscript: ObservableObject {
         guard insertedCount > 0 else { return }
         let shiftedHead = max(0, min(visibleHead + insertedCount, messages.count))
         let shiftedTail = visibleTail.map { max(shiftedHead, min($0 + insertedCount, messages.count)) }
-        for i in 0..<shiftedHead {
-            trimHiddenMessage(at: i)
-        }
+        trimHiddenMessages(in: [0..<shiftedHead])
         visibleHead = shiftedHead
         visibleTail = shiftedTail
     }
@@ -322,29 +426,41 @@ final class ACPTranscript: ObservableObject {
         let clampedTail = newTail.map { max(clampedHead, min($0, messages.count)) }
         let normalizedTail = clampedTail
         guard clampedHead != visibleHead || normalizedTail != visibleTail else { return }
+        var rangesToTrim: [Range<Int>] = []
         if clampedHead > visibleHead {
-            for i in visibleHead..<clampedHead {
-                trimHiddenMessage(at: i)
-            }
+            rangesToTrim.append(visibleHead..<clampedHead)
         }
         let oldTail = visibleTailBound
         let newTail = normalizedTail ?? messages.count
         if newTail < oldTail {
-            for i in newTail..<oldTail {
-                trimHiddenMessage(at: i)
-            }
+            rangesToTrim.append(newTail..<oldTail)
         }
+        trimHiddenMessages(in: rangesToTrim)
         visibleHead = clampedHead
         visibleTail = normalizedTail
     }
 
-    private func trimHiddenMessage(at index: Int) {
-        markdownCaches.removeValue(forKey: messages[index].stableId)
-        if case .toolCall(var tc) = messages[index] {
-            if tc.status != "in_progress", tc.status != "pending" {
-                tc.truncateForOffWindow()
-                messages[index] = .toolCall(tc)
+    private func trimHiddenMessages(in ranges: [Range<Int>]) {
+        guard !ranges.isEmpty else { return }
+        var updatedMessages = messages
+        var didChangeMessages = false
+        for range in ranges {
+            for index in range {
+                markdownCaches.removeValue(forKey: updatedMessages[index].stableId)
+                if case .toolCall(var tc) = updatedMessages[index],
+                   tc.status != "in_progress", tc.status != "pending" {
+                    let revision = tc.contentRevision
+                    tc.truncateForOffWindow()
+                    if tc.contentRevision != revision {
+                        updatedMessages[index] = .toolCall(tc)
+                        didChangeMessages = true
+                    }
+                }
             }
+        }
+        if didChangeMessages {
+            pendingMessagesMutation = .planNeutral
+            messages = updatedMessages
         }
     }
 
