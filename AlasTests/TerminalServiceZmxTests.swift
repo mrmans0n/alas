@@ -24,6 +24,44 @@ private final class RecordingRunner: @unchecked Sendable {
     }
 }
 
+private final class SlowListRunner: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var calls: [RecordingRunner.Call] = []
+    private let listDelay: TimeInterval
+    private let listResult: SubprocessRunner.Result
+
+    init(listDelay: TimeInterval, listResult: SubprocessRunner.Result) {
+        self.listDelay = listDelay
+        self.listResult = listResult
+    }
+
+    func runner() -> SubprocessRunner {
+        SubprocessRunner { exe, args, _, _ in
+            self.lock.lock()
+            self.calls.append(RecordingRunner.Call(executable: exe, args: args))
+            self.lock.unlock()
+
+            if args == ["ls"] {
+                Thread.sleep(forTimeInterval: self.listDelay)
+                return self.listResult
+            }
+            return SubprocessRunner.Result(exitCode: 0, stdout: "", stderr: "")
+        }
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls.count
+    }
+
+    var callArgs: [[String]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls.map(\.args)
+    }
+}
+
 private func makeZmxEnv(available: Bool = true) -> ZmxEnv {
     ZmxEnv(
         binaryURL: available
@@ -398,12 +436,62 @@ struct TerminalServiceZmxTests {
         ])
         await waitForCalls(recorder, count: 2) { $0.calls.count }
         #expect(recorder.calls.map(\.args) == [
-            ["ls"],
             [
                 "kill",
                 ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-A"),
             ],
+            ["ls"],
         ])
+    }
+
+    @Test
+    func terminateAllDoesNotBlockCallerWhileResolvingAdditionalLegacySessions() async {
+        let runner = SlowListRunner(
+            listDelay: 0.35,
+            listResult: .init(
+                exitCode: 0,
+                stdout: """
+                  name=alas-leaf-persisted-A\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/repo\tcmd=/bin/zsh -l
+                  name=alas-leaf-persisted-B\tpid=2\tclients=0\tcreated=1\tstart_dir=/tmp/repo/subdir\tcmd=/bin/zsh -l
+
+                """,
+                stderr: ""
+            )
+        )
+        let client = ZmxClient(env: makeZmxEnv(available: true), runner: runner.runner())
+        let service = TerminalService(zmxClient: client)
+
+        let started = Date()
+        service.terminateAll(additionalSessions: [
+            TerminalSessionIdentity(worktreeId: "/tmp/wt", projectPath: "/tmp/repo", leafId: "leaf-persisted-A"),
+            TerminalSessionIdentity(worktreeId: "/tmp/wt", projectPath: "/tmp/repo", leafId: "leaf-persisted-B"),
+        ])
+        let elapsed = Date().timeIntervalSince(started)
+
+        #expect(elapsed < 0.15)
+
+        await waitForCalls(runner, count: 1, timeout: 0.15) { $0.callCount }
+        let expectedFirstKills = Set([
+            [
+                "kill",
+                ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "leaf-persisted-A"),
+            ],
+            [
+                "kill",
+                ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "leaf-persisted-B"),
+            ],
+        ])
+        #expect(runner.callArgs.first.map { expectedFirstKills.contains($0) } == true)
+
+        await waitForCalls(runner, count: 5, timeout: 2.0) { $0.callCount }
+        #expect(runner.callArgs.filter { $0 == ["ls"] }.count == 1)
+        #expect(Set(runner.callArgs) == Set([
+            ["ls"],
+            ["kill", ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "leaf-persisted-A")],
+            ["kill", "alas-leaf-persisted-A"],
+            ["kill", ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "leaf-persisted-B")],
+            ["kill", "alas-leaf-persisted-B"],
+        ]))
     }
 
     // MARK: sweepOrphans — boot-time cleanup
