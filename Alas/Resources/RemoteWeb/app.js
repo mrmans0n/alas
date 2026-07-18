@@ -20,6 +20,7 @@ const initialReconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let everConnected = false;      // has any onopen fired this page load? separates "loading" from "disconnected"
 let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
+let escalated = false;          // true once the grace window elapsed and the alarming gate is showing
 const GRACE_MS = 5000;          // total not-connected budget before escalating "Connecting…" → "Can't reach Alas"
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
@@ -70,9 +71,10 @@ function showConnectingGate() {
 // Single continuous-not-connected timer: armed once and NOT reset per retry, so
 // the grace period is a total budget across attempts rather than per-attempt.
 function armEscalation() {
-  if (escalationTimer) return;
+  if (escalationTimer || escalated) return;   // don't re-arm while pending, or after we've already escalated
   escalationTimer = setTimeout(() => {
     escalationTimer = null;
+    escalated = true;
     showUnreachableGate();
   }, GRACE_MS);
 }
@@ -81,6 +83,7 @@ function clearEscalation() {
     clearTimeout(escalationTimer);
     escalationTimer = null;
   }
+  escalated = false;
 }
 
 // Pure: what should a socket close reflect, given whether we ever connected?
@@ -199,12 +202,15 @@ async function connect() {
     failCreateOnDisconnect();
     if (closeState(everConnected) === "loading") {
       // Initial load still in progress — keep the neutral loading overlay up
-      // instead of flashing the alarming "Can't reach Alas" screen.
-      setStatus("Connecting…", "connecting");
-      showConnectingGate();
+      // instead of flashing the alarming "Can't reach Alas" screen. Once we've
+      // escalated, leave the alarming gate up rather than flapping back to it.
+      if (!escalated) {
+        setStatus("Connecting…", "connecting");
+        showConnectingGate();
+      }
     } else {
       // Mid-session drop — keep the transcript visible; only the chip changes.
-      setStatus("Reconnecting...", "bad");
+      setStatus("Reconnecting…", "bad");
     }
     armEscalation();     // no-op if already armed → grace stays a total budget
     scheduleReconnect();
