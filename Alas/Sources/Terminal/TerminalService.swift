@@ -319,25 +319,58 @@ final class TerminalService {
         }
         let client = zmxClient
         for session in additionalSessions {
-            let names = Self.sessionNamesForCleanup(
-                worktreeId: session.worktreeId,
-                projectPath: session.projectPath,
-                leafId: session.leafId,
-                zmxClient: client
-            )
+            let scoped = ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.leafId)
             if let host = Self.remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath) {
-                remoteNamesByHost[host, default: []].formUnion(names)
+                remoteNamesByHost[host, default: []].insert(scoped)
             } else {
-                localNames.formUnion(names)
+                localNames.insert(scoped)
             }
         }
         dispatchTrackedKill {
             for name in localNames {
                 client.killSession(name: name)
             }
+            let localAdditionalSessions = additionalSessions.filter {
+                Self.remoteHostForCleanup(worktreeId: $0.worktreeId, projectPath: $0.projectPath) == nil
+            }
+            let localLegacySessionInfos = localAdditionalSessions.isEmpty ? [] : client.listSessionInfos()
+            for session in localAdditionalSessions {
+                let scoped = ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.leafId)
+                let legacyNames = Self.sessionNamesForCleanup(
+                    worktreeId: session.worktreeId,
+                    projectPath: session.projectPath,
+                    leafId: session.leafId,
+                    legacySessionInfos: localLegacySessionInfos
+                ).filter { $0 != scoped }
+                guard !legacyNames.isEmpty else { continue }
+                for name in legacyNames {
+                    client.killSession(name: name)
+                }
+            }
             for (host, names) in remoteNamesByHost {
                 for name in names {
                     await Self.killRemoteSession(host: host, name: name)
+                }
+            }
+            let remoteAdditionalSessionsByHost = Dictionary(grouping: additionalSessions.compactMap { session -> (String, TerminalSessionIdentity)? in
+                guard let host = Self.remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath) else {
+                    return nil
+                }
+                return (host, session)
+            }, by: \.0)
+            for (host, pairs) in remoteAdditionalSessionsByHost {
+                let remoteSessionInfos = await Self.remoteSessionInfos(host: host)
+                for (_, session) in pairs {
+                    let scoped = ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.leafId)
+                    let legacyNames = Self.sessionNamesForCleanup(
+                        worktreeId: session.worktreeId,
+                        projectPath: session.projectPath,
+                        leafId: session.leafId,
+                        legacySessionInfos: remoteSessionInfos
+                    ).filter { $0 != scoped }
+                    for name in legacyNames {
+                        await Self.killRemoteSession(host: host, name: name)
+                    }
                 }
             }
         }
@@ -385,6 +418,18 @@ final class TerminalService {
             command: RemoteTerminalScript.zmxBatchCommand(["kill", name]),
             timeout: 10
         )
+    }
+
+    nonisolated static func remoteSessionInfos(host: String) async -> [ZmxSessionInfo] {
+        guard let result = try? await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: RemoteTerminalScript.zmxBatchCommand(["ls"]),
+            timeout: 10
+        ), result.exitCode == 0 else {
+            return []
+        }
+        return ZmxClient.parseSessionInfos(result.stdout)
     }
 
     nonisolated static func remoteHostForCleanup(worktreeId: String, projectPath: String?) -> String? {
@@ -608,10 +653,24 @@ final class TerminalService {
         leafId: String,
         zmxClient: ZmxClient
     ) -> [String] {
+        sessionNamesForCleanup(
+            worktreeId: worktreeId,
+            projectPath: projectPath,
+            leafId: leafId,
+            legacySessionInfos: zmxClient.listSessionInfos()
+        )
+    }
+
+    nonisolated private static func sessionNamesForCleanup(
+        worktreeId: String,
+        projectPath: String?,
+        leafId: String,
+        legacySessionInfos: [ZmxSessionInfo]
+    ) -> [String] {
         let scoped = ZmxSessionName.derive(worktreeId: worktreeId, leafId: leafId)
         let legacy = ZmxSessionName.legacy(leafId: leafId)
         let roots = [worktreeId] + (projectPath.map { [$0] } ?? [])
-        guard legacySessionBelongsToKnownRoot(legacy, roots: roots, zmxClient: zmxClient) else {
+        guard legacySessionBelongsToKnownRoot(legacy, roots: roots, sessionInfos: legacySessionInfos) else {
             return [scoped]
         }
         return [scoped, legacy]

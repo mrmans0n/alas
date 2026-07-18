@@ -121,7 +121,11 @@ final class ZmxClient: Sendable {
             }
             return []
         }
-        return result.stdout
+        return Self.parseSessionInfos(result.stdout)
+    }
+
+    static func parseSessionInfos(_ stdout: String) -> [ZmxSessionInfo] {
+        stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
             .compactMap { parseSessionInfoLine(String($0)) }
     }
@@ -144,7 +148,7 @@ final class ZmxClient: Sendable {
         return inherited
     }
 
-    private func parseSessionInfoLine(_ line: String) -> ZmxSessionInfo? {
+    private static func parseSessionInfoLine(_ line: String) -> ZmxSessionInfo? {
         let fields = line
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: "\t", omittingEmptySubsequences: true)
