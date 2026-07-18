@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -26,6 +27,39 @@ struct ACPSessionToolCallTruncationTests {
         } else {
             Issue.record("expected toolCall at index 0")
         }
+    }
+
+    @Test("setVisibleHead batches completed tool-call truncations into one messages update")
+    func batchesCompletedTruncations() {
+        let t = ACPTranscript()
+        for index in 0..<5 {
+            let toolCall = ACPMessage.ToolCall(
+                toolCallId: "tc\(index)",
+                title: "read",
+                status: "completed",
+                content: bigContent(),
+                preview: "aaa…",
+                locations: []
+            )
+            t.appendMessage(.toolCall(toolCall))
+        }
+        t.appendMessage(.systemNotice(id: UUID(), text: "later"))
+        var messagesUpdateCount = 0
+        let cancellable = t.$messages.dropFirst().sink { _ in
+            messagesUpdateCount += 1
+        }
+
+        t.setVisibleHead(5)
+
+        #expect(messagesUpdateCount == 1)
+        for index in 0..<5 {
+            guard case .toolCall(let toolCall) = t.messages[index] else {
+                Issue.record("expected toolCall at index \(index)")
+                continue
+            }
+            #expect(toolCall.isContentTruncated)
+        }
+        cancellable.cancel()
     }
 
     @Test("prepending hidden older messages truncates completed tool calls")

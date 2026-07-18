@@ -119,4 +119,36 @@ struct ACPTranscriptCurrentPlanTests {
         }
         #expect(session.transcript.currentPlan == [ACPMessage.PlanItem(content: "step", status: "in_progress")])
     }
+
+    @Test("production tool-call updates do not rebuild plan caches")
+    func toolCallUpdatesDoNotRebuildPlanCaches() {
+        let transcript = ACPTranscript()
+        let planItems = [ACPMessage.PlanItem(content: "step", status: "in_progress")]
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "tool",
+            title: "Read",
+            status: "in_progress",
+            content: "",
+            preview: "",
+            locations: []
+        )
+        transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "go", attachments: []),
+            .plan(id: UUID(), planItems),
+            .toolCall(toolCall)
+        ])
+        let rebuildCount = transcript.planCacheRebuildCountForTests
+
+        for update in 0..<100 {
+            toolCall.content = "update \(update)"
+            transcript.replaceMessage(at: 2, with: .toolCall(toolCall))
+        }
+
+        let updatedPlanItems = [ACPMessage.PlanItem(content: "step", status: "completed")]
+        transcript.replaceMessage(at: 1, with: .plan(id: UUID(), updatedPlanItems))
+
+        #expect(transcript.planCacheRebuildCountForTests == rebuildCount)
+        #expect(transcript.currentPlan == updatedPlanItems)
+        #expect(transcript.latestPlan == updatedPlanItems)
+    }
 }
