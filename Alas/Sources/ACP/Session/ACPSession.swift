@@ -197,8 +197,6 @@ final class ACPSession: ObservableObject, Identifiable {
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = []
     @Published var steerUndo: SteerUndoState?
-    private var toolCallIndices: [String: Int] = [:]
-
     struct SteerUndoState: Equatable {
         /// Unique per-snapshot id used by SwiftUI for view diffing — letting
         /// us reset the 5s timer-task whenever a new steer happens before
@@ -363,7 +361,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 text: txt,
                 messageId: chunk.messageId,
                 replayKind: .agent,
-                locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
+                locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
                 adoptContinuation: { candidate in
@@ -393,7 +391,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 text: txt,
                 messageId: chunk.messageId,
                 replayKind: .thought,
-                locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
+                locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
                 adoptContinuation: { candidate in
@@ -715,7 +713,6 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func replaceTranscriptMessages(_ messages: [ACPMessage]) {
         transcript.replaceMessages(with: messagesPreservingToolCallContentRevisions(messages))
-        rebuildToolCallIndices()
     }
 
     private func messagesPreservingToolCallContentRevisions(_ messages: [ACPMessage]) -> [ACPMessage] {
@@ -749,11 +746,6 @@ final class ACPSession: ObservableObject, Identifiable {
     func prependTranscriptMessages(_ older: [ACPMessage]) {
         guard !older.isEmpty else { return }
         transcript.prependMessages(older)
-        // Rebuild tool-call indices because every prior entry's index just
-        // shifted by `older.count`. Cheaper than offsetting in place: the
-        // cache is dictionary-typed, so a full rebuild is O(N) and avoids
-        // any chance of drift if a streaming update lands mid-shift.
-        rebuildToolCallIndices()
         // Keep the visible window anchored to the tail the user is already
         // looking at while trimming newly-hidden historical tool output.
         transcript.shiftVisibleHeadAfterPrepending(older.count)
@@ -1536,21 +1528,8 @@ final class ACPSession: ObservableObject, Identifiable {
         case thought
     }
 
-    private func messageIndex(messageId: String, kind: TextMessageKind) -> Int? {
-        transcript.messages.firstIndex { message in
-            switch (kind, message) {
-            case (.user, .user(_, let existing, _, _, _)),
-                 (.agent, .agent(_, let existing, _)),
-                 (.thought, .thought(_, let existing, _)):
-                return existing == messageId
-            default:
-                return false
-            }
-        }
-    }
-
     private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {
-        let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
+        let located = messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
@@ -1981,31 +1960,14 @@ final class ACPSession: ObservableObject, Identifiable {
     }
     /// Returns the index of the matching tool call, or nil if no match.
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) -> Int? {
-        if let i = toolCallIndices[id],
-           transcript.messages.indices.contains(i),
-           case .toolCall(var tc) = transcript.messages[i],
-           tc.toolCallId == id {
-            mutate(&tc)
-            transcript.replaceMessage(at: i, with: .toolCall(tc))
-            return i
-        }
-
-        for i in transcript.messages.indices {
-            if case .toolCall(var tc) = transcript.messages[i], tc.toolCallId == id {
-                toolCallIndices[id] = i
-                mutate(&tc)
-                transcript.replaceMessage(at: i, with: .toolCall(tc))
-                return i
-            }
-        }
-        return nil
+        guard let i = transcript.toolCallIndex(toolCallId: id),
+              case .toolCall(var toolCall) = transcript.messages[i] else { return nil }
+        mutate(&toolCall)
+        transcript.replaceMessage(at: i, with: .toolCall(toolCall))
+        return i
     }
 
     private func didAppendTranscriptMessage() {
-        let index = transcript.messages.count - 1
-        if case .toolCall(let tc) = transcript.messages[index] {
-            toolCallIndices[tc.toolCallId] = index
-        }
         advanceRenderWindowIfFollowingTail()
     }
 
@@ -2014,15 +1976,6 @@ final class ACPSession: ObservableObject, Identifiable {
         contextRecoveryExpiryTask?.cancel()
         contextRecoveryExpiryTask = nil
         contextRecoveryStatus = nil
-    }
-
-    private func rebuildToolCallIndices() {
-        toolCallIndices.removeAll(keepingCapacity: true)
-        for i in transcript.messages.indices {
-            if case .toolCall(let tc) = transcript.messages[i] {
-                toolCallIndices[tc.toolCallId] = i
-            }
-        }
     }
 
     private func advanceRenderWindowIfFollowingTail() {

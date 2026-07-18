@@ -465,12 +465,7 @@ final class ACPSessionRunner {
         switch update {
         case .agentMessageChunk(let chunk):
             if let messageId = chunk.messageId,
-               let index = messages.firstIndex(where: { message in
-                   if case .agent(_, let id, _) = message {
-                       return id == messageId
-                   }
-                   return false
-               }) {
+               let index = session.transcript.messageIndex(messageId: messageId, kind: .agent) {
                 return [index]
             }
             return messages.indices.reversed().first { index in
@@ -481,12 +476,7 @@ final class ACPSessionRunner {
             }.map { [$0] } ?? []
         case .agentThoughtChunk(let chunk):
             if let messageId = chunk.messageId,
-               let index = messages.firstIndex(where: { message in
-                   if case .thought(_, let id, _) = message {
-                       return id == messageId
-                   }
-                   return false
-               }) {
+               let index = session.transcript.messageIndex(messageId: messageId, kind: .thought) {
                 return [index]
             }
             return messages.indices.reversed().first { index in
@@ -496,12 +486,7 @@ final class ACPSessionRunner {
                 return false
             }.map { [$0] } ?? []
         case .toolCallUpdate(let update):
-            return messages.firstIndex { message in
-                if case .toolCall(let toolCall) = message {
-                    return toolCall.toolCallId == update.toolCallId
-                }
-                return false
-            }.map { [$0] } ?? []
+            return session.transcript.toolCallIndex(toolCallId: update.toolCallId).map { [$0] } ?? []
         case .toolCall, .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
