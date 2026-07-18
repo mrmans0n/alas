@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-07-18
+
+### 🐛 Fixes
+
+- Throttle streaming text row publishes to display rate in ACP transcripts (#838).
+- Bound live terminal tail rendering for ACP sessions (#839).
+- Cache ACP transcript plans incrementally (#840).
+- Avoid blocking terminate-all flows on `zmx ls` (#841).
+
+### 🏗️ Internal
+
+- Refresh README feature list and adopt the agent-loop tagline (#833).
+
 ## [0.11.7] - 2026-07-18
 
 ### 🐛 Fixes
