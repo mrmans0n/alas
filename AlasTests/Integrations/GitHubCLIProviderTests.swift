@@ -178,10 +178,10 @@ struct GitHubCLIProviderTests {
             ProcessResult(exitCode: 1, stdout: "", stderr: "missing"),
         ])
 
-        #expect(await GitHubCLIProvider(runner: successRunner).isAvailable())
-        #expect(await GitHubCLIProvider(runner: failureRunner).isAvailable() == false)
+        #expect(await GitHubCLIProvider(runner: successRunner).isAvailable(cwd: Self.cwd))
+        #expect(await GitHubCLIProvider(runner: failureRunner).isAvailable(cwd: Self.cwd) == false)
         #expect(await successRunner.commands == [
-            FakeRunner.Command(executable: "gh", args: ["--version"], cwd: nil),
+            FakeRunner.Command(executable: "gh", args: ["--version"], cwd: Self.cwd),
         ])
     }
 

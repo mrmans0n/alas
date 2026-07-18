@@ -264,7 +264,7 @@ final class ReviewLoopState {
             return
         }
 
-        let providerAvailable = await provider.isAvailable()
+        let providerAvailable = await provider.isAvailable(cwd: worktreePath)
         guard isCurrentRefresh(generation) else { return }
         guard providerAvailable else {
             snapshot = ReviewLoopSnapshot(

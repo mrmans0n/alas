@@ -1214,7 +1214,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         self.rerunError = rerunError
     }
 
-    func isAvailable() async -> Bool {
+    func isAvailable(cwd: URL) async -> Bool {
         available
     }
 

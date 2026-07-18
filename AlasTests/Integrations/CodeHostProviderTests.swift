@@ -55,6 +55,31 @@ struct CodeHostProviderTests {
         #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "/custom/provider/bin:/usr/bin:/bin")
     }
 
+    @Test func commandInvocationRoutesRemoteWorkspaceThroughSSH() throws {
+        let cwd = URL(fileURLWithPath: "/srv/alas-code-host-invocation-test")
+        RemoteHostRegistry.shared.register(root: cwd.path, host: "code-host-devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: cwd.path) }
+
+        let invocation = CodeHostCommandInvocation.build(
+            executable: "gh",
+            args: ["auth", "status", "--hostname", "github.com"],
+            cwd: cwd
+        )
+
+        #expect(invocation.executable == SSHCommand.executable)
+        #expect(invocation.cwd == nil)
+        #expect(invocation.env == nil)
+        #expect(invocation.args.contains("code-host-devbox"))
+        let script = try #require(invocation.args.last)
+        let command = [
+            "env", "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C",
+            "gh", "auth", "status", "--hostname", "github.com",
+        ]
+            .map(SSHCommand.shellQuote)
+            .joined(separator: " ")
+        #expect(script == SSHCommand.remoteScript(cwd: cwd.path, command: command))
+    }
+
     @Test func defaultEvidenceMethodsUseSummaryData() async throws {
         let remote = CodeHostRemote(
             kind: .github,
@@ -203,7 +228,7 @@ struct CodeHostProviderTests {
         let kind: CodeHostKind
         let capabilities: CodeHostProviderCapabilities = .readOnly
 
-        func isAvailable() async -> Bool {
+        func isAvailable(cwd: URL) async -> Bool {
             true
         }
 

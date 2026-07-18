@@ -257,7 +257,7 @@ struct ReviewRequestDiffLoaderTests {
 private struct FakeDiffProvider: CodeHostProvider {
     let diff: String
     var kind: CodeHostKind = .github
-    func isAvailable() async -> Bool { true }
+    func isAvailable(cwd: URL) async -> Bool { true }
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
     func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL) async throws -> ReviewRequest? { nil }
     func createReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, title: String, body: String, isDraft: Bool, cwd: URL) async throws -> URL { URL(fileURLWithPath: "/tmp/pr") }
