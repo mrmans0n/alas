@@ -6,6 +6,11 @@ enum JSONRPCFraming {
     case newline         // ACP-style one-JSON-object-per-line
 }
 
+enum JSONRPCProcessTerminationScope: Equatable {
+    case processOnly
+    case processTree
+}
+
 protocol JSONRPCStdioTransporting: AnyObject, Sendable {
     var incoming: AsyncStream<JSONRPCStdioTransport.Incoming> { get }
     var requestIDPrefix: String? { get }
@@ -51,6 +56,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     private let stdout = Pipe()
     private let stderr = Pipe()
     private let framing: JSONRPCFraming
+    private let terminationScope: JSONRPCProcessTerminationScope
     private var contentLengthFramer = JSONRPCFramer()
     private var newlineFramer = JSONRPCNewlineFramer()
     private let lock = NSLock()
@@ -77,9 +83,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         arguments: [String],
         environment: [String: String]?,
         framing: JSONRPCFraming = .contentLength,
-        replaceEnv: Bool = false
+        replaceEnv: Bool = false,
+        terminationScope: JSONRPCProcessTerminationScope = .processTree
     ) {
         self.framing = framing
+        self.terminationScope = terminationScope
         var cont: AsyncStream<Incoming>.Continuation!
         self.incoming = AsyncStream { c in cont = c }
         self.continuation = cont
@@ -127,7 +135,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         process.terminationHandler = { [weak self] p in
             guard let self else { return }
             let pid = p.processIdentifier
-            if pid > 0 {
+            if self.terminationScope == .processTree, pid > 0 {
                 // Last chance to reach same-group descendants that were
                 // spawned after the most recent tracker tick. Later shutdown
                 // paths avoid group signaling once the root pid can be stale.
@@ -140,13 +148,16 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             self.lock.unlock()
             self.refreshLock.unlock()
             self.cancelDescendantForkObservers()
-            for d in Self.currentlyMatching(cachedTargets) {
-                _ = Darwin.kill(d.pid, SIGTERM)
+            if self.terminationScope == .processTree {
+                for d in Self.currentlyMatching(cachedTargets) {
+                    _ = Darwin.kill(d.pid, SIGTERM)
+                }
             }
             self.continuation?.yield(.exited(p.terminationStatus))
             self.continuation?.finish()
         }
         try process.run()
+        guard terminationScope == .processTree else { return }
         // Move the child into its own process group so signals from
         // `terminate()` can be delivered to the whole tree via
         // `kill(-pid, …)`. Foundation's Process doesn't expose
@@ -183,6 +194,13 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         let targets = orphanedDescendants
         lock.unlock()
         refreshLock.unlock()
+
+        guard terminationScope == .processTree else {
+            if process.isRunning {
+                process.terminate()
+            }
+            return
+        }
 
         if rootAlive {
             // Root is still alive: a process-group signal reaches the

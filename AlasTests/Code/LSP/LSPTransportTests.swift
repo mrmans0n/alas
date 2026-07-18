@@ -87,6 +87,15 @@ struct ProcessTransportTerminationTests {
         #expect(source.serializesRootExitWithDescendantRefresh())
     }
 
+    @Test("Local ACP helper termination preserves detached broker supervisors")
+    func localACPHelperPreservesBrokerSupervisors() throws {
+        let transportSource = try source(named: "JSONRPC/JSONRPCStdioTransport.swift")
+        let brokerSource = try source(named: "ACP/Broker/LocalACPBrokerService.swift")
+
+        #expect(transportSource.contains("terminationScope == .processTree"))
+        #expect(brokerSource.contains("terminationScope: .processOnly"))
+    }
+
     private func source(named path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

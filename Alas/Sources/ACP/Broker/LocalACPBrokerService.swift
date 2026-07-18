@@ -37,7 +37,8 @@ actor LocalACPBrokerService {
                     executable: binary,
                     arguments: ["serve"],
                     environment: nil,
-                    framing: .newline
+                    framing: .newline,
+                    terminationScope: .processOnly
                 )
             }
         )
