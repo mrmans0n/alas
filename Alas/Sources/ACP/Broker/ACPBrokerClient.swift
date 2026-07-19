@@ -242,8 +242,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         // cursor) even though the caller never received the result — and
         // the queued-send retry path reuses the same operationKey on
         // non-JSONRPC failures, expecting the broker to still have it
-        // cached. The only path allowed to ack is the one below that
-        // actually hands a response back, via `durableConsumptionAcknowledgement`.
+        // cached. Two paths actually ack a cursor now: the success return
+        // below, via `durableConsumptionAcknowledgement`, once the caller
+        // consumes it; and the terminal-JSON-RPC-error branch below, which
+        // acks immediately — unlike an incidental local failure, a
+        // `result.error` IS this operationKey's final outcome, so no
+        // retry with the same key is coming to ack it later.
         beginAwaitingOperationCompletion(operationKey)
         defer {
             endAwaitingOperationCompletion(operationKey)
@@ -260,6 +264,22 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             try await attachAndReplay()
             if let error = result.error {
                 clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
+                // A terminal JSON-RPC error IS this operationKey's final,
+                // authoritative outcome — unlike an incidental failure
+                // elsewhere in this call (the case the surrounding defer
+                // deliberately no longer acks for, see above), there is no
+                // successful result a caller could still receive for this
+                // operationKey, so nothing else will ever call
+                // `ackResponse` for it. The `attachAndReplay()` just above
+                // may have already dispatched this exact completion (with
+                // its error outcome) and, since this call registered
+                // interest before the RPC, protected its cursor — ack it
+                // now or it stays "unacknowledged" forever, deferring every
+                // later durable event behind a completion nobody is coming
+                // back for.
+                if let cursor = currentOperationCompletionCursor(for: operationKey) {
+                    ackResponse(cursor: cursor)
+                }
                 throw ACPClientError.jsonrpc(error)
             }
             if result.pending == true && result.result == nil {

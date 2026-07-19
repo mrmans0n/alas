@@ -1249,6 +1249,55 @@ struct ACPBrokerClientTests {
         }
     }
 
+    // Regression (code review on #853, P1, fifth finding): the flip side
+    // of the fix above. A terminal JSON-RPC error (`result.error`) IS this
+    // operationKey's final, authoritative outcome — unlike an incidental
+    // local failure elsewhere in the call, no retry with the same key is
+    // coming back to ack it. `attachAndReplay()` right before the error
+    // check can have already dispatched (and, since this call registered
+    // interest first, protected) that exact completion's cursor; if send()
+    // just throws without acking it, it stays "unacknowledged" forever and
+    // every later durable event defers behind it, so the broker cursor
+    // never advances again after this failure.
+    @Test func sendAcksCompletionOnTerminalJSONRPCError() async throws {
+        let service = MockBrokerService()
+        let operationKey = "queued-prompt:test:0:session/prompt"
+        await service.enqueueAttach(events: [])
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: false,
+            error: JSONRPCError(code: -32000, message: "boom", data: nil)
+        ))
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: operationKey),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: nil,
+                        error: JSONRPCError(code: -32000, message: "boom", data: nil)
+                    )
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+        await #expect(throws: (any Error).self) {
+            _ = try await client.send(ACPRequest(
+                method: "session/prompt",
+                params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+                brokerOperationKey: operationKey
+            ))
+        }
+
+        // Must not be stuck deferring behind an errored operation nobody
+        // is coming back for.
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)]
+        }
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
