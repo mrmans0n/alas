@@ -11,7 +11,7 @@ private final class RecordingGGRunner: GGCommandRunning, @unchecked Sendable {
     private(set) var lastCwd: URL?
     private(set) var calls: [[String]] = []
 
-    init(stdout: String = "", exitCode: Int32 = 0, stderr: String = "", syncHelpStdout: String = "--jsonl") {
+    init(stdout: String = "", exitCode: Int32 = 0, stderr: String = "", syncHelpStdout: String = "--json --stream") {
         self.stdout = stdout
         self.exitCode = exitCode
         self.stderr = stderr
@@ -52,7 +52,7 @@ struct GGServiceActionsTests {
             .prCreated(position: 1, prNumber: 7, prURL: "https://x/pull/7", draft: false),
             .summary,
         ])
-        #expect(runner.lastArgs == ["sync", "--jsonl"])
+        #expect(runner.lastArgs == ["sync", "--json", "--stream"])
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
     }
 
