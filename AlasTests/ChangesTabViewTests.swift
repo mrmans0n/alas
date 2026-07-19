@@ -19,4 +19,39 @@ struct ChangesTabViewTests {
             pausedGGOperation: nil
         ))
     }
+
+    @Test func changesPreparationCardHiddenWhenGGDrawerIsActive() {
+        #expect(ChangesTabView.shouldShowChangesPreparationCard(
+            preparationIsVisible: true,
+            ggDrawerIsActive: false
+        ))
+        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
+            preparationIsVisible: true,
+            ggDrawerIsActive: true
+        ))
+        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
+            preparationIsVisible: false,
+            ggDrawerIsActive: false
+        ))
+    }
+
+    @Test func ggDrawerActiveForStackOrPausedOperation() {
+        #expect(!ChangesTabView.shouldShowGGDrawer(stack: nil, pausedGGOperation: nil))
+        #expect(ChangesTabView.shouldShowGGDrawer(
+            stack: GGStack(
+                name: "feat",
+                base: "main",
+                totalCommits: 0,
+                syncedCommits: 0,
+                currentPosition: nil,
+                behindBase: nil,
+                entries: []
+            ),
+            pausedGGOperation: nil
+        ))
+        #expect(ChangesTabView.shouldShowGGDrawer(
+            stack: nil,
+            pausedGGOperation: GGPausedOperation(pausedBy: .sync)
+        ))
+    }
 }

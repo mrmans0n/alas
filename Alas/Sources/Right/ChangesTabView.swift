@@ -39,7 +39,7 @@ struct ChangesTabView: View {
             ScrollView {
                 scrollContent
             }
-            if rps.ggStack != nil || rps.ggActionState.pausedOperation != nil {
+            if isGGDrawerActive {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
                 ReviewLoopDrawer(
@@ -49,6 +49,10 @@ struct ChangesTabView: View {
                 )
             }
         }
+    }
+
+    private var isGGDrawerActive: Bool {
+        Self.shouldShowGGDrawer(stack: rps.ggStack, pausedGGOperation: rps.ggActionState.pausedOperation)
     }
 
     private var scrollContent: some View {
@@ -95,7 +99,10 @@ struct ChangesTabView: View {
                 onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
-            if preparationModel.isVisible {
+            if Self.shouldShowChangesPreparationCard(
+                preparationIsVisible: preparationModel.isVisible,
+                ggDrawerIsActive: isGGDrawerActive
+            ) {
                 ChangesPreparationCard(
                     model: preparationModel,
                     onReviewChanges: openReviewChangesTab,
@@ -228,6 +235,17 @@ struct ChangesTabView: View {
         pausedGGOperation: GGPausedOperation?
     ) -> Bool {
         mergeOperation != nil && pausedGGOperation == nil
+    }
+
+    static func shouldShowGGDrawer(stack: GGStack?, pausedGGOperation: GGPausedOperation?) -> Bool {
+        stack != nil || pausedGGOperation != nil
+    }
+
+    static func shouldShowChangesPreparationCard(
+        preparationIsVisible: Bool,
+        ggDrawerIsActive: Bool
+    ) -> Bool {
+        preparationIsVisible && !ggDrawerIsActive
     }
 
     private var hasDraftTab: Bool {
