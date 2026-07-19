@@ -264,7 +264,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func shutdown() async {
-        cancelBackgroundPolling()
+        await cancelBackgroundPollingAndAwait()
         if let generation = try? currentGeneration() {
             _ = try? await service.close(ACPBrokerCloseParams(brokerId: brokerId, generation: generation))
         }
@@ -272,7 +272,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func detach() async {
-        cancelBackgroundPolling()
+        await cancelBackgroundPollingAndAwait()
         if let generation = try? currentGeneration() {
             _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
         }
@@ -363,12 +363,39 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             : backgroundPollIdleIntervalNanoseconds
     }
 
+    /// Requests cancellation without waiting for the current iteration to
+    /// unwind. Safe to call from *inside* the poller's own task (the
+    /// `adapter/exit` handler runs synchronously as part of
+    /// `runBackgroundPolling()`'s own `attachAndReplay()` call) — unlike
+    /// `cancelBackgroundPollingAndAwait()`, this never awaits the task it
+    /// just cancelled, so it can't deadlock on itself.
     private func cancelBackgroundPolling() {
+        _ = requestBackgroundPollingCancellation()
+    }
+
+    /// Cancels and waits for the poller to fully unwind before returning.
+    /// `Task.cancel()` alone doesn't help here: the poller's underlying
+    /// `attachAndReplay()` awaits a helper RPC that isn't cancellation-aware,
+    /// so a cancelled-but-in-flight iteration still runs to completion and
+    /// dispatches whatever it received (`onTurnStateChanged`/
+    /// `onDurableStateChanged` are plain closures, not gated by
+    /// `finishStreams()`'s stream-`finish()` calls). Without awaiting it
+    /// here, `shutdown()`/`detach()` could return while that dispatch is
+    /// still racing to land, delivering updates for a connection the app
+    /// already believes is torn down. Only safe to call from a task other
+    /// than the poller's own (`shutdown()`/`detach()` always are) — awaiting
+    /// the poller from within itself would hang forever.
+    private func cancelBackgroundPollingAndAwait() async {
+        await requestBackgroundPollingCancellation()?.value
+    }
+
+    private func requestBackgroundPollingCancellation() -> Task<Void, Never>? {
         stateLock.lock()
         let task = backgroundPollingTask
         backgroundPollingTask = nil
         stateLock.unlock()
         task?.cancel()
+        return task
     }
 
     private func clearBackgroundPollingTask() {

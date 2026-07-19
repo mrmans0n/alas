@@ -839,6 +839,45 @@ struct ACPBrokerClientTests {
         await client.shutdown()
     }
 
+    // Regression (code review on #853): `shutdown()`/`detach()` only marked
+    // the background poller's task cancelled without waiting for it to
+    // unwind. `Task.cancel()` doesn't abort an in-flight, non-cancellation-
+    // aware RPC await, so a poll iteration already inside `attachAndReplay()`
+    // ran to completion and dispatched its results — including firing
+    // `onTurnStateChanged`, a plain closure unaffected by `finishStreams()` —
+    // after `shutdown()` had already returned to its caller, who by then
+    // believes the connection is fully torn down. `shutdown()`/`detach()`
+    // must not return before that in-flight dispatch has landed.
+    @Test func shutdownAwaitsInFlightPollBeforeReturning() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [], turnState: .idle)
+        await service.enqueueAttach(
+            events: [],
+            turnState: .streaming,
+            // Stands in for a slow, non-cancellation-aware helper RPC that's
+            // still in flight when shutdown() fires.
+            delayNanoseconds: 150_000_000
+        )
+        let recorder = SyncTurnStateRecorder()
+        let client = makeClient(
+            service: service,
+            backgroundPollIdleIntervalNanoseconds: 20_000_000,
+            onTurnStateChanged: { state in recorder.append(state) }
+        )
+
+        try await client.start()
+        // The idle-rate poll's second attach() call should be in flight
+        // (sleeping inside the mock) by now, but not yet resolved.
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(recorder.records().isEmpty)
+
+        await client.shutdown()
+
+        // If shutdown() returned before the in-flight iteration's dispatch
+        // landed, this would still be empty here.
+        #expect(recorder.records() == [.streaming])
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -990,6 +1029,30 @@ private actor TurnStateSink {
     }
 }
 
+/// Records synchronously, unlike `TurnStateSink` (an actor, so callers hop
+/// through a detached `Task` to append — fine for `waitUntil`-style polling,
+/// but useless for proving something happened-before a specific instant, since
+/// the detached `Task` may not have run yet even after that instant passes).
+/// `onTurnStateChanged` is invoked synchronously from within the broker
+/// client's own async context, so a plain lock-protected recorder lets a test
+/// assert exactly what's landed by the time a specific `await` returns.
+private final class SyncTurnStateRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedStates: [ACPBrokerTurnState] = []
+
+    func append(_ state: ACPBrokerTurnState) {
+        lock.lock()
+        recordedStates.append(state)
+        lock.unlock()
+    }
+
+    func records() -> [ACPBrokerTurnState] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedStates
+    }
+}
+
 private actor MockBrokerService: ACPBrokerServicing {
     var opened: [ACPBrokerOpenParams] = []
     var attached: [ACPBrokerAttachParams] = []
@@ -1010,14 +1073,16 @@ private actor MockBrokerService: ACPBrokerServicing {
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
-        turnState: ACPBrokerTurnState = .idle
+        turnState: ACPBrokerTurnState = .idle,
+        delayNanoseconds: UInt64 = 0
     ) {
         attachReplies.append(AttachReply(
             events: events,
             snapshotPendingRequests: snapshotPendingRequests,
             snapshotJournalTail: snapshotJournalTail,
             snapshotOperations: snapshotOperations,
-            turnState: turnState
+            turnState: turnState,
+            delayNanoseconds: delayNanoseconds
         ))
     }
 
@@ -1045,6 +1110,21 @@ private actor MockBrokerService: ACPBrokerServicing {
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
         attached.append(params)
         let reply = attachReplies.isEmpty ? AttachReply(events: []) : attachReplies.removeFirst()
+        if reply.delayNanoseconds > 0 {
+            // `Task.sleep` honors cooperative cancellation, which would
+            // defeat the point of this delay: it exists to stand in for a
+            // real helper RPC (`withCheckedThrowingContinuation`-based, not
+            // cancellation-aware), so the caller's task being cancelled
+            // must NOT cut this short — a `DispatchQueue` timer behind a
+            // raw continuation genuinely can't be cancelled from here.
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().asyncAfter(
+                    deadline: .now() + .nanoseconds(Int(reply.delayNanoseconds))
+                ) {
+                    continuation.resume()
+                }
+            }
+        }
         let events = reply.events
         let tail = reply.snapshotJournalTail ?? events.map(\.cursor).max() ?? params.acknowledgedCursor
         return ACPBrokerAttachResult(
@@ -1145,19 +1225,22 @@ private actor MockBrokerService: ACPBrokerServicing {
         let snapshotJournalTail: ACPBrokerEventCursor?
         let snapshotOperations: [ACPBrokerOperationSnapshot]
         let turnState: ACPBrokerTurnState
+        let delayNanoseconds: UInt64
 
         init(
             events: [ACPBrokerEvent],
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
-            turnState: ACPBrokerTurnState = .idle
+            turnState: ACPBrokerTurnState = .idle,
+            delayNanoseconds: UInt64 = 0
         ) {
             self.events = events
             self.snapshotPendingRequests = snapshotPendingRequests
             self.snapshotJournalTail = snapshotJournalTail
             self.snapshotOperations = snapshotOperations
             self.turnState = turnState
+            self.delayNanoseconds = delayNanoseconds
         }
     }
 }
