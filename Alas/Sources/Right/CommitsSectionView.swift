@@ -111,7 +111,7 @@ struct CommitsSectionView: View {
             }
         } header: {
             SectionHeader(
-                title: ggStack.map { "Stack · \($0.name)" } ?? "Commits",
+                title: Self.sectionTitle(ggStack: ggStack, commitsEmpty: commits.isEmpty),
                 count: totalCount,
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
@@ -150,6 +150,17 @@ struct CommitsSectionView: View {
     private var totalCount: Int? {
         let n = commits.count + olderCommits.count
         return n == 0 ? nil : n
+    }
+
+    /// `ggStack` can be loaded (feeding the sidebar badge) while `commits`
+    /// — the section's *display* list, filtered by the user's comparison
+    /// mode — is empty: e.g. a fully-synced stack under "Branch upstream"
+    /// mode, where the list is `@{u}..HEAD`. Rows only render when
+    /// `commits` is non-empty, so a "Stack · …" header over the generic
+    /// empty placeholder would promise content that isn't there — fall
+    /// back to the plain title instead.
+    static func sectionTitle(ggStack: GGStack?, commitsEmpty: Bool) -> String {
+        (commitsEmpty ? nil : ggStack).map { "Stack · \($0.name)" } ?? "Commits"
     }
 
     @ViewBuilder
