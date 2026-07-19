@@ -62,6 +62,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
     private var turnState: ACPBrokerTurnState = .idle
+    private var isTerminated = false
     private var backgroundPollingTask: Task<Void, Never>?
     private let backgroundPollActiveIntervalNanoseconds: UInt64
     private let backgroundPollIdleIntervalNanoseconds: UInt64
@@ -279,6 +280,20 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func finishStreams() {
+        // Marks the connection as permanently done. Every path that ends
+        // streaming (explicit shutdown/detach, an `adapter/exit` replayed
+        // mid-`attachAndReplay`, or the poll loop's own error handler) routes
+        // through here, so this is the one place that reliably knows the
+        // connection is dead — including the startup-exit ordering where
+        // `attachAndReplay()` inside `start()` replays `adapter/exit` and
+        // calls this *before* `start()` reaches `startBackgroundPolling()`.
+        // Without this flag, `startBackgroundPolling()` would still create a
+        // fresh poller for the already-dead connection, since the exit
+        // handler's own `cancelBackgroundPolling()` call has nothing to
+        // cancel yet at that point.
+        stateLock.lock()
+        isTerminated = true
+        stateLock.unlock()
         updatesCont.finish()
         permsCont.finish()
         questionsCont.finish()
@@ -315,7 +330,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     /// while a loop is already running is a no-op.
     private func startBackgroundPolling() {
         stateLock.lock()
-        if backgroundPollingTask != nil {
+        if isTerminated || backgroundPollingTask != nil {
             stateLock.unlock()
             return
         }

@@ -280,6 +280,34 @@ struct ACPBrokerClientTests {
         #expect(await finishedTask.value == true)
     }
 
+    // Regression (code review on #853): `start()` called `startBackgroundPolling()`
+    // unconditionally after its initial `attachAndReplay()`, even when that
+    // same replay already delivered `adapter/exit` and finished the streams.
+    // The exit handler's own `cancelBackgroundPolling()` had nothing to
+    // cancel yet at that point (the poller didn't exist), so the very next
+    // line created a fresh poller for an already-dead connection — leaking
+    // it and its idle-rate `attach` traffic forever, since nothing else was
+    // going to call `shutdown()`/`detach()` on a connection that failed
+    // before ever being handed to a runner.
+    @Test func startupExitDoesNotLeaveBackgroundPollerRunning() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "adapter/exit",
+                    params: .object(["unexpected": .bool(true)])
+                )
+            )
+        ])
+        let client = makeClient(service: service, backgroundPollIdleIntervalNanoseconds: 20_000_000)
+
+        try await client.start()
+        try await Task.sleep(for: .milliseconds(80))
+
+        #expect(await service.attached.count == 1)
+    }
+
     @Test func shutdownClosesBrokerGeneration() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
