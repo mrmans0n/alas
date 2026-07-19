@@ -18,13 +18,19 @@ enum GGSyncEvent: Equatable {
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return nil }
 
-        let event = object["event"] as? String ?? (object["entries"] == nil ? "" : "summary")
+        let eventObject: [String: Any]
+        if object["event"] == nil, let sync = object["sync"] as? [String: Any] {
+            eventObject = sync
+        } else {
+            eventObject = object
+        }
+        let event = object["event"] as? String ?? (eventObject["entries"] == nil ? "" : "summary")
         guard !event.isEmpty else { return nil }
-        func int(_ key: String) -> Int? { object[key] as? Int }
+        func int(_ key: String) -> Int? { eventObject[key] as? Int }
         func message(default fallback: String) -> String {
-            if let message = object["message"] as? String, !message.isEmpty { return message }
-            if let error = object["error"] as? String, !error.isEmpty { return error }
-            if let error = object["error"], !(error is NSNull) { return String(describing: error) }
+            if let message = eventObject["message"] as? String, !message.isEmpty { return message }
+            if let error = eventObject["error"] as? String, !error.isEmpty { return error }
+            if let error = eventObject["error"], !(error is NSNull) { return String(describing: error) }
             return fallback
         }
         switch event {
@@ -32,7 +38,7 @@ enum GGSyncEvent: Equatable {
             guard let total = int("total_entries") else { return nil }
             return .start(totalEntries: total)
         case "entry_started":
-            guard let pos = int("position"), let title = object["title"] as? String else { return nil }
+            guard let pos = int("position"), let title = eventObject["title"] as? String else { return nil }
             return .entryStarted(position: pos, title: title)
         case "push_started":
             guard let pos = int("position") else { return nil }
@@ -45,11 +51,11 @@ enum GGSyncEvent: Equatable {
             return .prCreated(
                 position: pos,
                 prNumber: number,
-                prURL: object["pr_url"] as? String,
-                draft: object["draft"] as? Bool ?? false
+                prURL: eventObject["pr_url"] as? String,
+                draft: eventObject["draft"] as? Bool ?? false
             )
         case "summary":
-            if let entries = object["entries"] as? [[String: Any]] {
+            if let entries = eventObject["entries"] as? [[String: Any]] {
                 for entry in entries {
                     if let error = entry["error"], !(error is NSNull) {
                         let prefix = (entry["position"] as? Int).map { "[\($0)] " } ?? ""

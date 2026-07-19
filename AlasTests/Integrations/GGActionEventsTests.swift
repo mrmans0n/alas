@@ -22,6 +22,8 @@ struct GGActionEventsTests {
             == .error(message: "push failed"))
         #expect(GGSyncEvent.parse(line: #"{"event":"summary","entries":[{"position":2,"error":"PR failed"}]}"#)
             == .error(message: "[2] PR failed"))
+        #expect(GGSyncEvent.parse(line: #"{"version":1,"sync":{"entries":[{"position":3,"error":"push failed"}]}}"#)
+            == .error(message: "[3] push failed"))
     }
 
     @Test func skipsBlankUnknownAndMalformedLines() {

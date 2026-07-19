@@ -305,7 +305,7 @@ struct GGService {
     /// Lands ready entries (bottom-up). `until` lands up to a target
     /// (position/GG-ID/SHA); nil lands all currently-approved entries.
     func land(worktreePath: String, until: String?) async throws -> GGLandResult {
-        let args: [String] = until.map { ["land", "--until", $0, "--json"] } ?? ["land", "--all", "--json"]
+        let args: [String] = until.map { ["land", "--until", $0, "--json", "--no-clean"] } ?? ["land", "--all", "--json", "--no-clean"]
         let result = try await runChecked(args: args, worktreePath: worktreePath)
         return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
     }

@@ -71,7 +71,7 @@ struct GGServiceActionsTests {
 
     @Test func syncFallbackSurfacesJSONSummaryErrors() async throws {
         let runner = RecordingGGRunner(
-            stdout: #"{"event":"summary","entries":[{"position":1,"error":"push failed"}]}"#,
+            stdout: #"{"version":1,"sync":{"entries":[{"position":1,"error":"push failed"}]}}"#,
             syncHelpStdout: "--json"
         )
         let service = GGService(runner: runner)
@@ -90,7 +90,7 @@ struct GGServiceActionsTests {
         )
         let result = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: nil)
         #expect(result.landed == [GGLandedEntry(position: 1, prNumber: 9)])
-        #expect(runner.lastArgs == ["land", "--all", "--json"])
+        #expect(runner.lastArgs == ["land", "--all", "--json", "--no-clean"])
     }
 
     @Test func landUntilSendsUntilTarget() async throws {
@@ -98,7 +98,7 @@ struct GGServiceActionsTests {
             stdout: #"{"version":1,"land":{"stack":"s","base":"main","landed":[]}}"#
         )
         _ = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: "c-abc")
-        #expect(runner.lastArgs == ["land", "--until", "c-abc", "--json"])
+        #expect(runner.lastArgs == ["land", "--until", "c-abc", "--json", "--no-clean"])
     }
 
     @Test func landMapsExit127ToCliMissing() async {
