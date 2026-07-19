@@ -33,9 +33,9 @@ private final class ThrowingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
 private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
-            return ProcessResult(exitCode: 0, stdout: "--json --stream", stderr: "")
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
         }
-        if args == ["sync", "--json", "--stream"], let cwd {
+        if args == ["sync", "--jsonl"], let cwd {
             try FileManager.default.createDirectory(
                 at: cwd.appendingPathComponent(".git/rebase-merge"),
                 withIntermediateDirectories: true

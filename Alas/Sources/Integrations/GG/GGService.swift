@@ -6,7 +6,7 @@ import Observation
 /// tests can fake CLI output. Local-only in phase 1 (no SSH rewrite).
 protocol GGCommandRunning: Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult
-/// Streams stdout lines as they arrive (for `gg sync --json --stream`). Finishes
+/// Streams stdout lines as they arrive (for `gg sync --jsonl`). Finishes
     /// with `.commandFailed`/`.cliMissing` on a non-zero exit.
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error>
 }
@@ -321,15 +321,15 @@ struct GGService {
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8)).stack
     }
 
-    /// Streams sync events when `gg sync --json --stream` is supported; older gg
+    /// Streams sync events when `gg sync --jsonl` is supported; older gg
     /// builds fall back to `--json` and yield a summary event on success.
     func sync(worktreePath: String) -> AsyncThrowingStream<GGSyncEvent, Error> {
         return AsyncThrowingStream { continuation in
             Task {
                 do {
-                    if await syncSupportsJSONStream() {
+                    if await syncSupportsJSONL() {
                         let lines = runner.runStreaming(
-                            args: ["sync", "--json", "--stream"],
+                            args: ["sync", "--jsonl"],
                             cwd: URL(fileURLWithPath: worktreePath)
                         )
                         for try await line in lines {
@@ -362,11 +362,11 @@ struct GGService {
         _ = try await runChecked(args: ["clean", "--all"], worktreePath: worktreePath)
     }
 
-    private func syncSupportsJSONStream() async -> Bool {
+    private func syncSupportsJSONL() async -> Bool {
         guard let result = try? await runner.run(args: ["sync", "--help"], cwd: nil),
               result.exitCode == 0
         else { return false }
-        return result.stdout.contains("--json") && result.stdout.contains("--stream")
+        return result.stdout.contains("--jsonl")
     }
 
     func continueOp(worktreePath: String) async throws {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// A single streamed event from `gg sync --json --stream`. Parsed per line;
+/// A single streamed event from `gg sync --jsonl`. Parsed per line;
 /// unknown/blank/malformed lines yield nil and are skipped (tolerant, like
 /// the phase-1 stack models).
 enum GGSyncEvent: Equatable {
