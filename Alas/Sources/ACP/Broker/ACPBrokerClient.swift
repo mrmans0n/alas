@@ -62,10 +62,26 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
     private var turnState: ACPBrokerTurnState = .idle
-    private var activeTurnPollingTask: Task<Void, Never>?
+    private var backgroundPollingTask: Task<Void, Never>?
+    private let backgroundPollActiveIntervalNanoseconds: UInt64
+    private let backgroundPollIdleIntervalNanoseconds: UInt64
     private var lastQueuedDurableState: ACPBrokerDurableState?
     private var pendingDurableStates: [ACPBrokerDurableState] = []
     private var isDrainingDurableStates = false
+
+    /// Interval used while `turnState` needs active polling (sending,
+    /// streaming, awaiting input, cancelling).
+    static let defaultBackgroundPollActiveIntervalNanoseconds: UInt64 = 50_000_000
+    /// Interval used otherwise. The broker is pull-only: `attachAndReplay`
+    /// only runs from `start()`, from `send()`/`notify()`, and from this
+    /// background loop. A turn the agent resumes on its own — an SDK-queued
+    /// follow-up message, a stop-hook continuation, a `/loop`-style wakeup —
+    /// produces events with nobody pulling them, because nothing in Alas
+    /// issued the RPC that would trigger a pull. Without this idle-rate
+    /// poll, those events sit in the broker's durable log until the next
+    /// user prompt replays the whole backlog at once — the transcript
+    /// looks frozen for however long the agent kept going on its own.
+    static let defaultBackgroundPollIdleIntervalNanoseconds: UInt64 = 2_000_000_000
 
     var yieldedUpdateCount: Int {
         stateLock.lock()
@@ -90,6 +106,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         operationKeyPrefix: String,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
+        backgroundPollActiveIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollActiveIntervalNanoseconds,
+        backgroundPollIdleIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollIdleIntervalNanoseconds,
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil,
         onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil
     ) {
@@ -103,6 +121,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         self.operationKeyPrefix = operationKeyPrefix
         self.initialBrokerGeneration = initialBrokerGeneration
         self.acknowledgedCursor = initialAcknowledgedCursor
+        self.backgroundPollActiveIntervalNanoseconds = backgroundPollActiveIntervalNanoseconds
+        self.backgroundPollIdleIntervalNanoseconds = backgroundPollIdleIntervalNanoseconds
         self.onDurableStateChanged = onDurableStateChanged
         self.onTurnStateChanged = onTurnStateChanged
 
@@ -150,10 +170,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             resetAcknowledgedCursor()
         }
         setSnapshot(opened.snapshot)
-        let snapshot = try await attachAndReplay()
-        if opened.adopted {
-            startActiveTurnPollingIfNeeded(snapshot: snapshot)
-        }
+        _ = try await attachAndReplay()
+        startBackgroundPolling()
         return opened
     }
 
@@ -245,7 +263,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func shutdown() async {
-        cancelActiveTurnPolling()
+        cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.close(ACPBrokerCloseParams(brokerId: brokerId, generation: generation))
         }
@@ -253,7 +271,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func detach() async {
-        cancelActiveTurnPolling()
+        cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
         }
@@ -290,28 +308,31 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         return attached.snapshot
     }
 
-    private func startActiveTurnPollingIfNeeded(snapshot: ACPBrokerSnapshot) {
-        guard snapshot.turnState.needsActiveTurnPolling else { return }
+    /// Runs for the whole connection lifetime (`start()` through
+    /// `shutdown()`/`detach()`), not just while a turn is active — see the
+    /// doc comment on `defaultBackgroundPollIdleIntervalNanoseconds` for why
+    /// a poll-only-while-active loop isn't enough. Idempotent: a second call
+    /// while a loop is already running is a no-op.
+    private func startBackgroundPolling() {
         stateLock.lock()
-        if activeTurnPollingTask != nil {
+        if backgroundPollingTask != nil {
             stateLock.unlock()
             return
         }
-        activeTurnPollingTask = Task { [weak self] in
-            await self?.pollActiveTurn()
+        backgroundPollingTask = Task { [weak self] in
+            await self?.runBackgroundPolling()
         }
         stateLock.unlock()
     }
 
-    private func pollActiveTurn() async {
-        defer { clearActiveTurnPollingTask() }
+    private func runBackgroundPolling() async {
+        defer { clearBackgroundPollingTask() }
         while !Task.isCancelled {
             do {
-                try await Task.sleep(for: .milliseconds(50))
-                let snapshot = try await attachAndReplay()
-                if !snapshot.turnState.needsActiveTurnPolling {
-                    return
-                }
+                try await Task.sleep(nanoseconds: currentBackgroundPollIntervalNanoseconds())
+                _ = try await attachAndReplay()
+            } catch is CancellationError {
+                return
             } catch {
                 finishStreams()
                 return
@@ -319,17 +340,25 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         }
     }
 
-    private func cancelActiveTurnPolling() {
+    private func currentBackgroundPollIntervalNanoseconds() -> UInt64 {
         stateLock.lock()
-        let task = activeTurnPollingTask
-        activeTurnPollingTask = nil
+        defer { stateLock.unlock() }
+        return turnState.needsActiveTurnPolling
+            ? backgroundPollActiveIntervalNanoseconds
+            : backgroundPollIdleIntervalNanoseconds
+    }
+
+    private func cancelBackgroundPolling() {
+        stateLock.lock()
+        let task = backgroundPollingTask
+        backgroundPollingTask = nil
         stateLock.unlock()
         task?.cancel()
     }
 
-    private func clearActiveTurnPollingTask() {
+    private func clearBackgroundPollingTask() {
         stateLock.lock()
-        activeTurnPollingTask = nil
+        backgroundPollingTask = nil
         stateLock.unlock()
     }
 
@@ -387,7 +416,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 elicitationCompletionsCont.yield(decoded)
             }
         case "adapter/exit":
-            cancelActiveTurnPolling()
+            cancelBackgroundPolling()
             finishStreams()
         default:
             break

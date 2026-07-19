@@ -745,8 +745,70 @@ struct ACPBrokerClientTests {
         }
         try await waitUntil { await service.attached.count == 3 }
         try await waitUntil { await turnStateSink.records() == [.streaming, .completed] }
+        // Background polling never stops outright once the turn completes
+        // (see `backgroundPollingDiscoversSelfContinuedTurnWithoutAnySend`),
+        // but it drops to the idle-rate interval, which comfortably outlasts
+        // this window — so no further attach call lands within it.
         try await Task.sleep(for: .milliseconds(120))
         #expect(await service.attached.count == 3)
+        await client.shutdown()
+    }
+
+    // Regression: the broker is pull-only, and until this fix
+    // `startActiveTurnPollingIfNeeded` only ever ran once, from an
+    // *adopted* `start()`. A freshly-opened session (the common case) that
+    // goes idle after its first exchange had nothing left pulling —  an SDK
+    // that resumed itself (queued follow-up, stop-hook continuation, a
+    // `/loop`-style wakeup) with no further `send()`/`notify()` from Alas
+    // would stream events into the broker's durable log with nobody
+    // watching, and the transcript looked frozen until the next user
+    // prompt replayed the whole backlog. This exercises the idle-rate
+    // background poll picking up that self-started turn on its own.
+    @Test func backgroundPollingDiscoversSelfContinuedTurnWithoutAnySend() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [], turnState: .idle)
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("still working")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ], turnState: .streaming)
+        let turnStateSink = TurnStateSink()
+        let client = makeClient(
+            service: service,
+            // Small override so the test doesn't wait out the production
+            // 2s idle interval; still comfortably below the default 50ms
+            // active interval the client switches to once it observes
+            // `.streaming`, so there's no race with a follow-up poll.
+            backgroundPollIdleIntervalNanoseconds: 20_000_000,
+            onTurnStateChanged: { state in
+                Task { await turnStateSink.append(state) }
+            }
+        )
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+
+        try await client.start()
+
+        let update = try await updateTask.value
+        if case .agentMessageChunk(let chunk) = update.update {
+            #expect(chunk.content == .text("still working"))
+        } else {
+            Issue.record("expected agent message chunk")
+        }
+        try await waitUntil { await turnStateSink.records() == [.streaming] }
+        await client.shutdown()
     }
 
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
@@ -802,6 +864,7 @@ struct ACPBrokerClientTests {
         service: MockBrokerService,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
+        backgroundPollIdleIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollIdleIntervalNanoseconds,
         onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil,
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
     ) -> ACPBrokerClient {
@@ -816,6 +879,7 @@ struct ACPBrokerClientTests {
             operationKeyPrefix: "op-prefix",
             initialBrokerGeneration: initialBrokerGeneration,
             initialAcknowledgedCursor: initialAcknowledgedCursor,
+            backgroundPollIdleIntervalNanoseconds: backgroundPollIdleIntervalNanoseconds,
             onDurableStateChanged: onDurableStateChanged,
             onTurnStateChanged: onTurnStateChanged
         )
