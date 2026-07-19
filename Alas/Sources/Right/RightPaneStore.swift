@@ -150,6 +150,21 @@ final class RightPaneStore {
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
             }
+            new.ggGateProvider = { [weak self] in
+                guard let app = self?.appState else { return false }
+                guard app.config.changes.stackedDiffsEnabled,
+                      GGAvailability.shared.isInstalled,
+                      let project = app.projectsManager.projects.first(
+                        where: { $0.id == worktree.projectId }
+                      )
+                else { return false }
+                return GGStackGate.projectEnabled(
+                    masterEnabled: true,
+                    ggInstalled: true,
+                    mode: project.ggMode,
+                    repoPath: project.path
+                )
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in

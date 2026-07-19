@@ -530,6 +530,13 @@ final class AppState {
         // hasn't finished by the first git command, gitEnv() falls back to the
         // process PATH (same behaviour as before).
         ShellEnvResolver.shared.resolve()
+
+        // Probe gg CLI availability once at startup so the stacked-diffs
+        // gate (RightPaneStore.ggGateProvider) has an answer by the time
+        // the first right pane activates.
+        Task { @MainActor in
+            await GGAvailability.shared.probe()
+        }
     }
 
     /// All worktree IDs currently known to the projects manager (including

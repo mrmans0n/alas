@@ -100,6 +100,19 @@ final class RightPaneState {
     var hasMoreOlder: Bool = true
     var isLoadingOlder: Bool = false
 
+    /// Current gg stack for this worktree's branch; nil when gating fails
+    /// or the branch is not a stack. Loaded during performRefresh.
+    var ggStack: GGStack? = nil
+    /// Injected by RightPaneStore — resolves gates 1–3 (master toggle,
+    /// gg installed, per-project mode) against app-level state.
+    var ggGateProvider: (@MainActor () -> Bool)? = nil
+    var ggService = GGService()
+    /// SHA-set key of the last commits list gg was queried for. `gg ls
+    /// --json` hits the forge API (best-effort PR-state refresh), and
+    /// performRefresh fires continuously from the file watcher — so only
+    /// re-query gg when the commit set actually changed.
+    private var ggStackCommitsKey: String? = nil
+
     // Sync-nudge state. All fields are in-memory only; nothing is
     // persisted to AppConfig. Two independent conditions:
     //   - behindBase: HEAD is behind the trunk base (origin/main).
@@ -673,6 +686,7 @@ final class RightPaneState {
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             if self.commits != commits { self.commits = commits }
+            await refreshGGStack()
             if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
             let commitRemote = CodeHostRemoteDetector.detect(
@@ -748,6 +762,33 @@ final class RightPaneState {
             // `self.changes` at its last successful value, which presented as
             // an empty Changes pane when the very first refresh failed.
             logger.error("refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @MainActor
+    private func refreshGGStack() async {
+        let gated = ggGateProvider?() ?? false
+        guard gated, GGStackGate.isStackShaped(commits: commits) else {
+            ggStackCommitsKey = nil
+            if ggStack != nil { ggStack = nil }
+            if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
+                GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+            }
+            return
+        }
+        // `gg ls --json` reaches out to gh/glab for PR state — skip when
+        // the commit set is unchanged since the last query. PR-state churn
+        // from the outside world refreshes on the next commits change (a
+        // manual-refresh hook can come with the phase-2 drawer).
+        let key = commits.map(\.sha).joined(separator: "|")
+        guard key != ggStackCommitsKey else { return }
+        // Failure degrades to the plain commits section, never an error UI.
+        let stack = try? await ggService.currentStack(worktreePath: worktree.path.path)
+        ggStackCommitsKey = key
+        if ggStack != stack { ggStack = stack }
+        let summary = stack?.summary
+        if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
         }
     }
 
