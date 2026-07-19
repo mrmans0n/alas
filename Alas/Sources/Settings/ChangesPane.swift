@@ -201,7 +201,7 @@ struct ChangesPane: View {
             HStack(spacing: 8) {
                 Text(message)
                     .font(.system(size: 11))
-                    .foregroundColor(theme.color("warning"))
+                    .foregroundColor(theme.color("warn"))
                     .lineLimit(2)
                 AlasButton(title: "Retry", style: .normal) { ggInstall.install() }
             }
