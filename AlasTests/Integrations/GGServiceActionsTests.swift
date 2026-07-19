@@ -57,7 +57,7 @@ struct GGServiceActionsTests {
     }
 
     @Test func syncFallsBackToJSONWhenJSONLIsUnsupported() async throws {
-        let runner = RecordingGGRunner(stdout: #"{"version":1}"#, syncHelpStdout: "--json")
+        let runner = RecordingGGRunner(stdout: #"{"event":"summary","entries":[]}"#, syncHelpStdout: "--json")
         let service = GGService(runner: runner)
 
         var events: [GGSyncEvent] = []
@@ -67,6 +67,21 @@ struct GGServiceActionsTests {
 
         #expect(events == [.summary])
         #expect(runner.calls == [["sync", "--help"], ["sync", "--json", "--no-rebase-check"]])
+    }
+
+    @Test func syncFallbackSurfacesJSONSummaryErrors() async throws {
+        let runner = RecordingGGRunner(
+            stdout: #"{"event":"summary","entries":[{"position":1,"error":"push failed"}]}"#,
+            syncHelpStdout: "--json"
+        )
+        let service = GGService(runner: runner)
+
+        var events: [GGSyncEvent] = []
+        for try await event in service.sync(worktreePath: "/tmp/wt") {
+            events.append(event)
+        }
+
+        #expect(events == [.error(message: "[1] push failed")])
     }
 
     @Test func landAllSendsAllFlagAndDecodes() async throws {

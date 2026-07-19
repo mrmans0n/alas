@@ -15,11 +15,18 @@ enum GGSyncEvent: Equatable {
     static func parse(line: String) -> GGSyncEvent? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
-              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let event = object["event"] as? String
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return nil }
 
+        let event = object["event"] as? String ?? (object["entries"] == nil ? "" : "summary")
+        guard !event.isEmpty else { return nil }
         func int(_ key: String) -> Int? { object[key] as? Int }
+        func message(default fallback: String) -> String {
+            if let message = object["message"] as? String, !message.isEmpty { return message }
+            if let error = object["error"] as? String, !error.isEmpty { return error }
+            if let error = object["error"], !(error is NSNull) { return String(describing: error) }
+            return fallback
+        }
         switch event {
         case "start":
             guard let total = int("total_entries") else { return nil }
@@ -42,10 +49,21 @@ enum GGSyncEvent: Equatable {
                 draft: object["draft"] as? Bool ?? false
             )
         case "summary":
+            if let entries = object["entries"] as? [[String: Any]] {
+                for entry in entries {
+                    if let error = entry["error"], !(error is NSNull) {
+                        let prefix = (entry["position"] as? Int).map { "[\($0)] " } ?? ""
+                        return .error(message: prefix + String(describing: error))
+                    }
+                }
+            }
             return .summary
         case "error":
-            return .error(message: object["message"] as? String ?? "gg reported an error")
+            return .error(message: message(default: "gg reported an error"))
         default:
+            if event.hasSuffix("_error") {
+                return .error(message: message(default: "gg reported \(event)"))
+            }
             return nil
         }
     }
@@ -61,6 +79,12 @@ struct GGLandResult: Equatable {
     }
 
     static func decode(fromJSON data: Data) throws -> GGLandResult {
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let land = object["land"] as? [String: Any],
+           let error = land["error"], !(error is NSNull)
+        {
+            throw GGServiceError.commandFailed(stderr: String(describing: error))
+        }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         do {

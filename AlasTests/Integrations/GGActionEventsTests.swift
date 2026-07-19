@@ -18,6 +18,10 @@ struct GGActionEventsTests {
             == .summary)
         #expect(GGSyncEvent.parse(line: #"{"event":"error","message":"boom"}"#)
             == .error(message: "boom"))
+        #expect(GGSyncEvent.parse(line: #"{"event":"push_error","position":1,"message":"push failed"}"#)
+            == .error(message: "push failed"))
+        #expect(GGSyncEvent.parse(line: #"{"event":"summary","entries":[{"position":2,"error":"PR failed"}]}"#)
+            == .error(message: "[2] PR failed"))
     }
 
     @Test func skipsBlankUnknownAndMalformedLines() {
@@ -40,6 +44,13 @@ struct GGActionEventsTests {
     @Test func decodesLandResultWithEmptyLanded() throws {
         let json = #"{"version":1,"land":{"stack":"s","base":"main","landed":[]}}"#
         #expect(try GGLandResult.decode(fromJSON: Data(json.utf8)).landed.isEmpty)
+    }
+
+    @Test func landDecodeThrowsWhenJSONContainsError() {
+        let json = #"{"version":1,"land":{"stack":"s","base":"main","landed":[],"error":"not approved"}}"#
+        #expect(throws: GGServiceError.commandFailed(stderr: "not approved")) {
+            _ = try GGLandResult.decode(fromJSON: Data(json.utf8))
+        }
     }
 
     @Test func landDecodeThrowsMalformedOnGarbage() {

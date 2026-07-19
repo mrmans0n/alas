@@ -288,11 +288,11 @@ struct GGService {
                             if let event = GGSyncEvent.parse(line: line) { continuation.yield(event) }
                         }
                     } else {
-                        _ = try await runChecked(
+                        let result = try await runChecked(
                             args: ["sync", "--json", "--no-rebase-check"],
                             worktreePath: worktreePath
                         )
-                        continuation.yield(.summary)
+                        continuation.yield(GGSyncEvent.parse(line: result.stdout) ?? .summary)
                     }
                     continuation.finish()
                 } catch {
