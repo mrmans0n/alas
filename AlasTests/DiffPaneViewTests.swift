@@ -8,6 +8,20 @@ import Testing
 struct DiffPaneViewTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func diffRowRectsReturnOnlyIndicesIntersectingDirtyVerticalRange() {
+        let rows = [
+            NSRect(x: 0, y: 0, width: 100, height: 10),
+            NSRect(x: 0, y: 10, width: 100, height: 10),
+            NSRect(x: 0, y: 20, width: 100, height: 10),
+            NSRect(x: 0, y: 30, width: 100, height: 10),
+        ]
+
+        #expect(rows.indicesIntersecting(NSRect(x: 0, y: 10, width: 100, height: 10)) == 1..<2)
+        #expect(rows.indicesIntersecting(NSRect(x: 0, y: 9, width: 100, height: 12)) == 0..<3)
+        #expect(rows.indicesIntersecting(NSRect(x: 0, y: 40, width: 100, height: 10)).isEmpty)
+        #expect([NSRect]().indicesIntersecting(.zero).isEmpty)
+    }
+
     private func model() -> DiffDisplayModel {
         DiffDisplayModelBuilder.build(
             diff: parsedDiff(),
@@ -3729,6 +3743,226 @@ let second = true
         #expect(codeView.rowGeometryComputationCountForTesting == 2)
     }
 
+    @Test func identicalDiffDocumentContainerUpdateDoesNotRequestLayout() throws {
+        let group = try #require(model().groups.first)
+        let container = DiffPaneTextDocumentContainerView(
+            frame: NSRect(x: 0, y: 0, width: 700, height: 300)
+        )
+
+        func update() {
+            container.update(
+                group: group,
+                expandedCollapsedRowIDs: [],
+                layoutMode: .stacked,
+                wrapLines: true,
+                showWhitespace: false,
+                fileExtension: "swift",
+                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                theme: theme(),
+                lspContext: nil
+            )
+        }
+
+        update()
+        container.layoutSubtreeIfNeeded()
+        #expect(!container.needsLayout)
+
+        let codeView = try #require(allSubviews(of: container)
+            .compactMap { $0 as? DiffPaneCodeTextView }
+            .first(where: isEffectivelyVisible))
+        _ = codeView.diffRowRects()
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+
+        update()
+
+        #expect(!container.needsLayout)
+        container.layoutSubtreeIfNeeded()
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
+    }
+
+    @Test func stableWidthLayoutAppliesTextLayoutConfigurationOnce() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: true)
+
+        scrollView.layout()
+        scrollView.layout()
+        scrollView.layout()
+
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == 1)
+    }
+
+    @Test func stableLayoutDoesNotReassignHorizontalScrollerVisibility() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: true)
+        let visibilityChangesAfterUpdate = scrollView.horizontalScrollerVisibilityChangeCountForTesting
+
+        scrollView.layout()
+        scrollView.layout()
+        scrollView.layout()
+
+        #expect(scrollView.horizontalScrollerVisibilityChangeCountForTesting == visibilityChangesAfterUpdate)
+    }
+
+    @Test func unwrappedOuterWidthChangeKeepsFixedTextLayoutConfiguration() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: false)
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let textViewWidth = codeView.frame.width
+
+        scrollView.setFrameSize(NSSize(width: 280, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.frame.width == textViewWidth)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
+        #expect(scrollView.hasHorizontalScroller)
+    }
+
+    @Test func unwrappedPresentationWidthChangeRecomputesRowGeometryOnce() throws {
+        let scrollView = makeTextScrollView(
+            width: 220,
+            wraps: false,
+            lines: ["let value = 1", "return value"]
+        )
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let textViewWidth = codeView.frame.width
+
+        scrollView.setFrameSize(NSSize(width: 280, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(codeView.frame.width > textViewWidth + 0.5)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations + 1)
+        let rowRect = try #require(codeView.diffRowRects().first)
+        let firstLineFragmentRect = try #require(codeView.diffFirstLineFragmentRects().first)
+        let presentationWidth = presentationGeometryWidth(of: codeView)
+        #expect(abs(rowRect.width - presentationWidth) < 0.001)
+        #expect(abs(firstLineFragmentRect.width - presentationWidth) < 0.001)
+    }
+
+    @Test func changingFromWrappedToUnwrappedReconfiguresLayoutAndScrollerOnce() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: true)
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let visibilityChanges = scrollView.horizontalScrollerVisibilityChangeCountForTesting
+
+        updateLongTextScrollView(scrollView, wraps: false)
+        scrollView.layout()
+        scrollView.layout()
+
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications + 1)
+        #expect(scrollView.horizontalScrollerVisibilityChangeCountForTesting == visibilityChanges + 1)
+        #expect(scrollView.hasHorizontalScroller)
+        let rowRect = try #require(codeView.diffRowRects().first)
+        let firstLineFragmentRect = try #require(codeView.diffFirstLineFragmentRects().first)
+        let presentationWidth = presentationGeometryWidth(of: codeView)
+        #expect(abs(rowRect.width - presentationWidth) < 0.001)
+        #expect(abs(firstLineFragmentRect.width - presentationWidth) < 0.001)
+    }
+
+    @Test func cumulativeUnwrappedWidthChangeRecomputesGeometryFromCachedPresentationWidth() throws {
+        let scrollView = makeTextScrollView(
+            width: 220,
+            wraps: false,
+            lines: ["let value = 1", "return value"]
+        )
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let presentationWidth = codeView.frame.width
+
+        scrollView.setFrameSize(NSSize(width: 220.3, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+        let subToleranceWidth = codeView.frame.width
+
+        #expect(subToleranceWidth > presentationWidth)
+        #expect(subToleranceWidth <= presentationWidth + 0.5)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
+
+        scrollView.setFrameSize(NSSize(width: 220.6, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(codeView.frame.width > presentationWidth + 0.5)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations + 1)
+        let rowRect = try #require(codeView.diffRowRects().first)
+        #expect(abs(rowRect.width - presentationGeometryWidth(of: codeView)) < 0.001)
+    }
+
+    @Test func subHalfPointOuterWidthChangeKeepsAppliedConfigurationAndRowGeometry() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: true)
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let contentWidth = scrollView.contentView.bounds.width
+        // Exercise the scroll view's frame assignment rather than incidental clip-view autoresizing.
+        codeView.autoresizingMask = []
+
+        scrollView.setFrameSize(NSSize(width: 220.3, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(scrollView.contentView.bounds.width > contentWidth)
+        #expect(abs(codeView.frame.width - scrollView.contentView.bounds.width) < 0.001)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
+    }
+
+    @Test func cumulativeWidthChangeUsesLastAppliedConfigurationAndRecomputesGeometryOnce() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: true)
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let contentWidth = scrollView.contentView.bounds.width
+
+        scrollView.setFrameSize(NSSize(width: 220.3, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+        scrollView.setFrameSize(NSSize(width: 220.6, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(scrollView.contentView.bounds.width > contentWidth + 0.5)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications + 1)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations + 1)
+    }
+
+    @Test func heightOnlyOuterResizeKeepsWidthDependentLayoutCaches() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: true)
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let textViewWidth = codeView.frame.width
+
+        scrollView.setFrameSize(NSSize(width: 220, height: 180))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(codeView.frame.width == textViewWidth)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
+    }
+
     @Test func diffPaneLineNumberRulerCachesMappedRowGeometryForVisibleLookups() throws {
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         let lines = (1...80).map { "let value\($0) = \($0)" }
@@ -4111,6 +4345,71 @@ let second = true
 
         textView.mouseExited(with: exitEvent)
         #expect(NSCursor.current != NSCursor.pointingHand)
+    }
+
+    private func makeLongTextScrollView(width: CGFloat, height: CGFloat = 120, wraps: Bool) -> DiffPaneTextScrollView {
+        makeTextScrollView(
+            width: width,
+            height: height,
+            wraps: wraps,
+            lines: [
+                "let firstValue = service.fetchAnIntentionallyLongValueForWrappedLayoutTesting()",
+                "let secondValue = service.fetchAnotherIntentionallyLongValueForWrappedLayoutTesting()",
+            ]
+        )
+    }
+
+    private func presentationGeometryWidth(of codeView: DiffPaneCodeTextView) -> CGFloat {
+        max(codeView.bounds.width, codeView.visibleRect.width)
+    }
+
+    private func updateLongTextScrollView(_ scrollView: DiffPaneTextScrollView, wraps: Bool) {
+        updateTextScrollView(
+            scrollView,
+            wraps: wraps,
+            lines: [
+                "let firstValue = service.fetchAnIntentionallyLongValueForWrappedLayoutTesting()",
+                "let secondValue = service.fetchAnotherIntentionallyLongValueForWrappedLayoutTesting()",
+            ]
+        )
+    }
+
+    private func makeTextScrollView(
+        width: CGFloat,
+        height: CGFloat = 120,
+        wraps: Bool,
+        lines: [String]
+    ) -> DiffPaneTextScrollView {
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        updateTextScrollView(scrollView, wraps: wraps, lines: lines)
+        return scrollView
+    }
+
+    private func updateTextScrollView(_ scrollView: DiffPaneTextScrollView, wraps: Bool, lines: [String]) {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: text, attributes: [.font: font]),
+            lines: metadata
+        )
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2"],
+            wraps: wraps,
+            font: font,
+            theme: theme(),
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
     }
 
     private func makeDiffPaneCodeTextView(string: String, metadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []) -> DiffPaneCodeTextView {
