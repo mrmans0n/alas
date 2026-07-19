@@ -98,11 +98,13 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var worktreeDefaultLauncherMode: AppConfig.LauncherMode?
     /// SSH destination when this project lives on another machine.
     var host: String?
+    /// Per-project stacked-diffs (gg) mode. Defaults to `.auto`.
+    var ggMode: GGProjectMode = .auto
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host, ggMode
     }
 
     init(
@@ -160,6 +162,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
         host = try? c.decode(String.self, forKey: .host)
+        ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
     }
 
     func encode(to encoder: Encoder) throws {
@@ -178,5 +181,6 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encodeIfPresent(worktreeOpenAfterCreate, forKey: .worktreeOpenAfterCreate)
         try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
         try c.encodeIfPresent(host, forKey: .host)
+        try c.encode(ggMode, forKey: .ggMode)
     }
 }

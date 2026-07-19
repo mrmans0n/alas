@@ -158,6 +158,13 @@ final class ProjectsManager {
         }
     }
 
+    /// Sets the per-project stacked-diffs mode. Callers persist via
+    /// `AppState.saveProjects()`.
+    func setGGMode(projectId: String, mode: GGProjectMode) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].ggMode = mode
+    }
+
     func reorderProject(fromIndex: Int, toIndex: Int) {
         guard projects.indices.contains(fromIndex),
               projects.indices.contains(toIndex),

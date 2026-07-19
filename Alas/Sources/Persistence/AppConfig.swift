@@ -325,11 +325,14 @@ struct AppConfig: Codable, Equatable {
         var diffLayoutMode: DiffLayoutMode
         var diffWrapLines: Bool
         var diffShowWhitespace: Bool
+        /// Master switch for the gg stacked-diffs integration. On by
+        /// default — without gg installed the later gates hide all UI.
+        var stackedDiffsEnabled: Bool = true
 
         enum CodingKeys: String, CodingKey {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
                  mergeSingleResolvePrompt, comparisonMode,
-                 diffLayoutMode, diffWrapLines, diffShowWhitespace
+                 diffLayoutMode, diffWrapLines, diffShowWhitespace, stackedDiffsEnabled
         }
     }
 
@@ -700,6 +703,8 @@ extension AppConfig {
                 diffWrapLines: diffWrapLines,
                 diffShowWhitespace: diffShowWhitespace
             )
+            changes.stackedDiffsEnabled =
+                (try? changesContainer.decode(Bool.self, forKey: .stackedDiffsEnabled)) ?? true
         } else {
             changes = Changes(
                 aiToolId: "none",
