@@ -3750,6 +3750,19 @@ let second = true
         #expect(scrollView.horizontalScrollerVisibilityChangeCountForTesting == visibilityChangesAfterUpdate)
     }
 
+    @Test func unwrappedOuterWidthChangeKeepsFixedTextLayoutConfiguration() throws {
+        let scrollView = makeLongTextScrollView(width: 220, wraps: false)
+        scrollView.layout()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+
+        scrollView.setFrameSize(NSSize(width: 280, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(scrollView.hasHorizontalScroller)
+    }
+
     @Test func changingFromWrappedToUnwrappedReconfiguresLayoutAndScrollerOnce() throws {
         let scrollView = makeLongTextScrollView(width: 220, wraps: true)
         scrollView.layout()
@@ -3773,12 +3786,15 @@ let second = true
         let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
         let geometryComputations = codeView.rowGeometryComputationCountForTesting
         let contentWidth = scrollView.contentView.bounds.width
+        // Exercise the scroll view's frame assignment rather than incidental clip-view autoresizing.
+        codeView.autoresizingMask = []
 
         scrollView.setFrameSize(NSSize(width: 220.3, height: 120))
         scrollView.needsLayout = true
         scrollView.layout()
 
         #expect(scrollView.contentView.bounds.width > contentWidth)
+        #expect(abs(codeView.frame.width - scrollView.contentView.bounds.width) < 0.001)
         #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
         #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
     }
