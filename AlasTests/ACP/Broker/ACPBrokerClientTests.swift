@@ -1091,6 +1091,84 @@ struct ACPBrokerClientTests {
         }
     }
 
+    // Regression (code review on #853, P1, third finding): a queued prompt
+    // that was `.sending` when the app last quit gets reset to `.pending`
+    // on restore but reuses the same `brokerOperationKey` — the broker may
+    // have already completed it before the crash. `start()`'s own initial
+    // replay can reveal that completion before the queue flusher (which
+    // only runs once `start()` returns and the runner registers) ever
+    // calls `send()` for it again, so with no live call yet, the "only
+    // protect if awaited" fix above would leave it unprotected — exactly
+    // like the abandoned-operation case, but this one WILL be retried.
+    // `preRegisterAwaitedOperationKeys` closes that gap by registering
+    // interest before `start()` runs at all.
+    @Test func preRegisteredOperationKeyProtectsCompletionReplayedDuringStart() async throws {
+        let service = MockBrokerService()
+        let operationKey = "queued-prompt:test-uuid:0:session/prompt"
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: operationKey),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("hello")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+        client.preRegisterAwaitedOperationKeys([operationKey])
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+
+        try await client.start()
+        let update = try await updateTask.value
+        update.durableConsumptionAcknowledgement?()
+
+        // Must defer: pre-registration protects this completion even
+        // though no live send() call has run in this process yet.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await service.acks.isEmpty)
+
+        // The queue flusher's retry finally catches up.
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: false,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: false
+        ))
+        await service.enqueueAttach(events: [], turnState: .idle)
+        let response = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+            brokerOperationKey: operationKey
+        ))
+        response.acknowledgeDurableConsumption()
+
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [
+                ACPBrokerEventCursor(rawValue: 2),
+                ACPBrokerEventCursor(rawValue: 3)
+            ]
+        }
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

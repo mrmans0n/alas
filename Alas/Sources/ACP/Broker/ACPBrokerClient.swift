@@ -160,6 +160,33 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         terminalsCont = t
     }
 
+    /// Pre-registers operationKeys the caller still expects a result for,
+    /// so `start()`'s own initial replay protects their completion cursors
+    /// even though no live `send()` call has happened yet in this process.
+    /// Must be called before `start()`.
+    ///
+    /// Needed for a queued prompt that was `.sending` when the app last
+    /// quit: restoring the queue resets it to `.pending`, but reuses the
+    /// same `brokerOperationKey` (see `QueuedPrompt.normalizedAfterRestore()`
+    /// / `brokerOperationKey`), and the broker may have already completed
+    /// it before the crash. The app's queue flusher is guard-enforced to
+    /// only retry it after `start()` returns and the runner registers —
+    /// but `start()`'s own replay can reveal that completion first, and
+    /// without this, nothing protects its cursor in the gap: a later
+    /// durable event could be acked past it before the flusher's retry
+    /// ever calls `send()` for it. Callers pass every `brokerOperationKey`
+    /// in the session's restored queue (not just `.pending` ones);
+    /// pre-registering a key the broker never actually completed an
+    /// operation for is inert — `dispatch()` only consults this set when it
+    /// sees a matching `.operationCompleted` event.
+    func preRegisterAwaitedOperationKeys(_ operationKeys: some Sequence<String>) {
+        stateLock.lock()
+        for key in operationKeys {
+            awaitedOperationKeyRefCounts[ACPBrokerOperationKey(rawValue: key), default: 0] += 1
+        }
+        stateLock.unlock()
+    }
+
     @discardableResult
     func start() async throws -> ACPBrokerOpenResult {
         let opened = try await service.open(ACPBrokerOpenParams(
