@@ -1590,6 +1590,15 @@ final class ACPSessionManager: ObservableObject {
                 }
             }
         )
+        // The restored queue may still hold a `.pending` item that was
+        // `.sending` when the app last quit (see `QueuedPrompt.
+        // normalizedAfterRestore()`) — its `brokerOperationKey` didn't
+        // change, and the broker may have already completed it before the
+        // crash. Register it before start() so that replay can't have its
+        // completion cursor acked past before the queue flusher (which only
+        // runs once this function returns and the runner is registered)
+        // gets a chance to claim it.
+        client.preRegisterAwaitedOperationKeys(session.queue.map(\.brokerOperationKey))
         try await client.start()
         Self.applyBrokerTurnState(client.currentTurnState, to: session)
         return ACPConnection(client: client)
