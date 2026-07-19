@@ -77,6 +77,28 @@ struct GGCommandRunningStreamingTests {
     /// on stderr" finding: without draining stderr incrementally, the
     /// child's `write()` blocks once the pipe fills, it never exits, and
     /// this test times out.
+    /// `process.terminationHandler` and the stdout/stderr readability
+    /// handlers are two independent async dispatch mechanisms with no
+    /// ordering guarantee between them. A trailing unterminated line only
+    /// gets flushed from `LineBuffer` on EOF — if the termination handler
+    /// finished the continuation before that EOF flush happened, `c` would
+    /// be silently dropped (`yield` is a documented no-op after `finish()`).
+    /// Writing the last line with no trailing newline immediately before
+    /// `exit 0` (no delay) is the most race-prone shape: it maximizes the
+    /// chance the child has already exited by the time the readability
+    /// handler gets scheduled to drain the final chunk.
+    @Test func trailingUnterminatedLineSurvivesTerminationRace() async throws {
+        let script = "printf 'a\\nb\\nc'; exit 0"
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", script],
+            cwd: nil,
+            env: nil
+        )
+        let lines = try await collectWithTimeout(stream)
+        #expect(lines == ["a", "b", "c"])
+    }
+
     @Test func largeStderrDoesNotDeadlockChildExit() async throws {
         // ~200KB of stderr output, comfortably over the OS pipe buffer.
         // `head`'s own stdout (not `yes`'s) is redirected to stderr so the

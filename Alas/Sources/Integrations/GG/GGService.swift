@@ -77,11 +77,23 @@ struct ProcessGGCommandRunner: GGCommandRunning {
 
             let buffer = LineBuffer()
             let stderrAccum = StderrAccumulator()
+            // `terminationHandler` and these readability handlers are two
+            // independent dispatch mechanisms with no ordering guarantee
+            // between them: the child exiting does not imply the kernel has
+            // already delivered the final EOF read to our handlers. Without
+            // an explicit latch, `terminationHandler` can call
+            // `continuation.finish()` before the stdout handler has flushed
+            // `LineBuffer`'s trailing partial line (or before stderr has
+            // appended its last chunk) — `finish()` makes any later `yield`
+            // a silent no-op, so that last line is dropped, not delayed.
+            // Mirrors `Process+Git.swift`'s `ByteAccumulator` EOF latch.
+            let stdoutEOF = EOFLatch()
             outPipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 if data.isEmpty {
                     handle.readabilityHandler = nil
                     if let tail = buffer.flush() { continuation.yield(tail) }
+                    stdoutEOF.markClosed()
                 } else {
                     let chunk = String(decoding: data, as: UTF8.self)
                     for line in buffer.feed(chunk) { continuation.yield(line) }
@@ -96,19 +108,29 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 let data = handle.availableData
                 if data.isEmpty {
                     handle.readabilityHandler = nil
+                    stderrAccum.markClosed()
                 } else {
                     stderrAccum.append(data)
                 }
             }
             process.terminationHandler = { proc in
-                if proc.terminationStatus == 0 {
-                    continuation.finish()
-                } else if proc.terminationStatus == 127 {
-                    continuation.finish(throwing: GGServiceError.cliMissing)
-                } else {
-                    continuation.finish(throwing: GGServiceError.commandFailed(
-                        stderr: stderrAccum.text().trimmingCharacters(in: .whitespacesAndNewlines)
-                    ))
+                let status = proc.terminationStatus
+                Task {
+                    // Bound the wait the same way `Process+Git.swift` does:
+                    // a stuck handler (e.g. a wedged dispatch queue) must
+                    // not hang the stream forever.
+                    async let outClosed = stdoutEOF.waitForClose(timeoutNanoseconds: 2_000_000_000)
+                    async let errClosed = stderrAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+                    _ = await (outClosed, errClosed)
+                    if status == 0 {
+                        continuation.finish()
+                    } else if status == 127 {
+                        continuation.finish(throwing: GGServiceError.cliMissing)
+                    } else {
+                        continuation.finish(throwing: GGServiceError.commandFailed(
+                            stderr: stderrAccum.text().trimmingCharacters(in: .whitespacesAndNewlines)
+                        ))
+                    }
                 }
             }
             do {
@@ -136,18 +158,74 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 }
 
+/// EOF latch for a `FileHandle.readabilityHandler`: `markClosed()` from the
+/// handler's EOF branch (empty `availableData`), `waitForClose(timeoutNanoseconds:)`
+/// from an awaiter that must not proceed until EOF has actually been
+/// observed. Latches `closed` so a waiter arriving after EOF (handler raced
+/// ahead) returns immediately, and bounds the wait with a timeout so a
+/// stuck handler can't hang the caller forever. Mirrors `Process+Git.swift`'s
+/// `ByteAccumulator` (kept separate here since that type is file-private).
+private final class EOFLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var closed = false
+    private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+
+    func markClosed() {
+        lock.lock()
+        let conts = Array(waiters.values)
+        waiters = [:]
+        closed = true
+        lock.unlock()
+        for c in conts { c.resume(returning: true) }
+    }
+
+    func waitForClose(timeoutNanoseconds: UInt64) async -> Bool {
+        await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            lock.lock()
+            if closed {
+                lock.unlock()
+                cont.resume(returning: true)
+                return
+            }
+            let id = UUID()
+            waiters[id] = cont
+            lock.unlock()
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                self.resumeTimedOutWaiter(id: id)
+            }
+        }
+    }
+
+    private func resumeTimedOutWaiter(id: UUID) {
+        lock.lock()
+        guard let cont = waiters.removeValue(forKey: id) else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        cont.resume(returning: false)
+    }
+}
+
 /// Thread-safe accumulator for stderr bytes read incrementally off a
-/// readability handler. Mirrors `Process+Git.swift`'s `ByteAccumulator`
-/// (kept separate here since that type is file-private and this call site
-/// only needs the final text, not EOF-latching).
+/// readability handler, composed with an `EOFLatch` so callers can wait
+/// until the handler has actually observed EOF before reading `text()`.
 private final class StderrAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
+    private let eof = EOFLatch()
 
     func append(_ chunk: Data) {
         lock.lock()
         data.append(chunk)
         lock.unlock()
+    }
+
+    func markClosed() { eof.markClosed() }
+
+    func waitForClose(timeoutNanoseconds: UInt64) async -> Bool {
+        await eof.waitForClose(timeoutNanoseconds: timeoutNanoseconds)
     }
 
     func text() -> String {
