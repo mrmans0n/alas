@@ -377,4 +377,24 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
         #expect(state.ggActionState.pausedOperation == nil)
     }
+
+    @Test func thrownRefreshKeepsPausedOperationWhenGitProbeIsPaused() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-paused-throw-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git/rebase-merge"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let wt = Worktree(
+            id: Worktree.makeId(path: dir), projectId: "p", name: "feature",
+            branch: "feature", path: dir, status: .clean, lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: ThrowingFakeGGRunner())
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggActionState.pausedOperation != nil)
+    }
 }

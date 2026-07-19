@@ -8,7 +8,10 @@ struct GGStackDrawer: View {
     @State private var expanded = false
 
     private var model: GGStackReadinessModel? {
-        rps.ggStack.map { GGStackReadinessModel.make(stack: $0, action: rps.ggActionState) }
+        if let stack = rps.ggStack {
+            return GGStackReadinessModel.make(stack: stack, action: rps.ggActionState)
+        }
+        return GGStackReadinessModel.makePausedFallback(action: rps.ggActionState)
     }
 
     var body: some View {

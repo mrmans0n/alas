@@ -45,7 +45,7 @@ struct GGServiceActionsTests {
             .prCreated(position: 1, prNumber: 7, prURL: "https://x/pull/7", draft: false),
             .summary,
         ])
-        #expect(runner.lastArgs == ["sync", "--jsonl"])
+        #expect(runner.lastArgs == ["sync", "--jsonl", "--no-rebase-check"])
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
     }
 
@@ -84,7 +84,7 @@ struct GGServiceActionsTests {
         let runner = RecordingGGRunner(stdout: "ok")
         let service = GGService(runner: runner)
         try await service.clean(worktreePath: "/tmp/wt")
-        #expect(runner.lastArgs == ["clean"])
+        #expect(runner.lastArgs == ["clean", "--all"])
         try await service.continueOp(worktreePath: "/tmp/wt")
         #expect(runner.lastArgs == ["continue"])
         try await service.abortOp(worktreePath: "/tmp/wt")

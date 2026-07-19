@@ -275,7 +275,10 @@ struct GGService {
 
     /// Streams `gg sync --jsonl` events. Non-`GGSyncEvent` lines are skipped.
     func sync(worktreePath: String) -> AsyncThrowingStream<GGSyncEvent, Error> {
-        let lines = runner.runStreaming(args: ["sync", "--jsonl"], cwd: URL(fileURLWithPath: worktreePath))
+        let lines = runner.runStreaming(
+            args: ["sync", "--jsonl", "--no-rebase-check"],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
         return AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -299,7 +302,7 @@ struct GGService {
     }
 
     func clean(worktreePath: String) async throws {
-        _ = try await runChecked(args: ["clean"], worktreePath: worktreePath)
+        _ = try await runChecked(args: ["clean", "--all"], worktreePath: worktreePath)
     }
 
     func continueOp(worktreePath: String) async throws {

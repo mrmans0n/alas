@@ -70,6 +70,15 @@ struct GGStackReadinessModelTests {
         #expect(model.actions.map(\.kind) == [.continueOp, .abortOp])
     }
 
+    @Test func pausedFallbackOffersContinueAbortWithoutStack() {
+        let action = GGStackActionState()
+        action.setPaused(GGPausedOperation(pausedBy: .sync))
+        let model = GGStackReadinessModel.makePausedFallback(action: action)
+        #expect(model?.isPaused == true)
+        #expect(model?.summaryChip == "paused")
+        #expect(model?.actions.map(\.kind) == [.continueOp, .abortOp])
+    }
+
     @Test func inFlightActionMarksButtonAndDisablesOthers() {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)

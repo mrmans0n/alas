@@ -39,7 +39,7 @@ struct ChangesTabView: View {
             ScrollView {
                 scrollContent
             }
-            if rps.ggStack != nil {
+            if rps.ggStack != nil || rps.ggActionState.pausedOperation != nil {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
                 ReviewLoopDrawer(

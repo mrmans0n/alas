@@ -84,6 +84,27 @@ struct GGStackReadinessModel: Equatable {
         )
     }
 
+    @MainActor
+    static func makePausedFallback(action: GGStackActionState) -> GGStackReadinessModel? {
+        guard action.pausedOperation != nil else { return nil }
+        let inFlight = action.inFlightAction
+        let busy = inFlight != nil
+        let syncIsRelevant = inFlight == .sync || action.pausedOperation?.pausedBy == .sync
+        return GGStackReadinessModel(
+            title: "Stack operation",
+            summaryChip: "paused",
+            facts: [],
+            actions: [
+                Action(kind: .continueOp, title: "Continue", isEnabled: !busy,
+                       isInFlight: inFlight == .continueOp, emphasis: .primary),
+                Action(kind: .abortOp, title: "Abort", isEnabled: !busy,
+                       isInFlight: inFlight == .abortOp, emphasis: .normal),
+            ],
+            progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
+            isPaused: true
+        )
+    }
+
     private static func progressRows(from events: [GGSyncEvent]) -> [String] {
         events.compactMap { event in
             switch event {
