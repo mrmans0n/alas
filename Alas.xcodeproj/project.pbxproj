@@ -866,6 +866,7 @@
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		AA6F188E5E31B83D45380279 /* SSHCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90A3C6694C4027DE1A26EC59 /* SSHCommandTests.swift */; };
 		AA8FEF94B861001AB643E005 /* FontFamilyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */; };
+		AB3BD2843C0923FD0E30458C /* CommitsSectionTitleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5B0671AB91057B6B196EBD /* CommitsSectionTitleTests.swift */; };
 		AB4B19ECC0C3D7242ECD42C6 /* DiffReviewInlineFeedbackActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8B46B2287CA16E683490301 /* DiffReviewInlineFeedbackActions.swift */; };
 		AB81A1DA27A87F7C7E49D9CF /* ACPPlanChecklist.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF02DDF9183C6C8D28EC68C0 /* ACPPlanChecklist.swift */; };
 		AB8B755B315E94BDF0BD937B /* TreeSitterRust in Frameworks */ = {isa = PBXBuildFile; productRef = 8007CCE96A65B912CE519EF0 /* TreeSitterRust */; };
@@ -2355,6 +2356,7 @@
 		CE2AD8D0539591C434F51418 /* ACPAuthNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAuthNudgeBanner.swift; sourceTree = "<group>"; };
 		CE3FA58107EA372581313A5F /* MergeView3WayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeView3WayLayoutTests.swift; sourceTree = "<group>"; };
 		CE47FEB79311AC99E61C3AF6 /* MergeResultPaneRenderPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeResultPaneRenderPlanTests.swift; sourceTree = "<group>"; };
+		CE5B0671AB91057B6B196EBD /* CommitsSectionTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsSectionTitleTests.swift; sourceTree = "<group>"; };
 		CE6CCD7F7273667B5D67F821 /* SearchScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScope.swift; sourceTree = "<group>"; };
 		CEA8BA11A167DA43E22E7D2D /* SpacesManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpacesManagerTests.swift; sourceTree = "<group>"; };
 		CEC2AE8D8A358AC0F83252CD /* OpenCodeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInstaller.swift; sourceTree = "<group>"; };
@@ -2891,6 +2893,7 @@
 				6D46BDE72E52818061452ECB /* CommitRowTests.swift */,
 				576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */,
 				8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */,
+				CE5B0671AB91057B6B196EBD /* CommitsSectionTitleTests.swift */,
 				A2FC38CF24F011448A3705F9 /* CommitTabStateTests.swift */,
 				AB3DAB779A962AC2092A2879 /* CommitTabViewTests.swift */,
 				A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */,
@@ -6094,6 +6097,7 @@
 				575A4296D86E77D00A1E66A7 /* CommitTabViewTests.swift in Sources */,
 				17BC1BC2D81DED8B5D31DF3C /* CommitsAheadTests.swift in Sources */,
 				4781661414034F09EA02E0BC /* CommitsOlderTests.swift in Sources */,
+				AB3BD2843C0923FD0E30458C /* CommitsSectionTitleTests.swift in Sources */,
 				6E52521BCD52ED8DB496E74B /* CompletionDocumentationRendererTests.swift in Sources */,
 				DEC1744FA9C8A26294FF0671 /* CompletionEngineTests.swift in Sources */,
 				CDE156FA8E19E85437E79908 /* CompletionFeatureTests.swift in Sources */,
