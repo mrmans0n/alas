@@ -250,15 +250,25 @@ enum ACPMessage: Equatable {
         /// until then `appliedStrippedRaw` stays empty.
         var appliedOpeningFenceUnterminated: Bool = false
         /// In-memory-only cache of the previous content items array, used
-        /// to verify that the first `appliedItemCount` items are unchanged
+        /// to verify that the first `appliedItemCount` items' STRUCTURED
+        /// content (images, resource-links, terminals, diffs) is unchanged
         /// before taking the suffix-only fast path. `flatten` ignores
-        /// images/resource-links/terminals, so equal flattened text does
-        /// NOT imply the structured items are the same — an in-place
-        /// replacement (e.g. `[text, image(old)]` -> `[text, image(new)]`)
-        /// would otherwise skip `extractAssets`/`extractTerminalIds`. COW
-        /// keeps the storage cost minimal; the prefix comparison is
-        /// O(appliedItemCount) which is bounded by the items count.
+        /// those item kinds, so equal flattened text does NOT imply the
+        /// structured items are the same — an in-place replacement (e.g.
+        /// `[text, image(old)]` -> `[text, image(new)]`) would otherwise
+        /// skip `extractAssets`/`extractTerminalIds`. Only structured
+        /// items are compared; text items are allowed to grow in place
+        /// (the common cumulative shape `[text("a")]` -> `[text("ab")]`)
+        /// so the suffix path still fires. COW keeps storage cheap.
         var appliedItemsSnapshot: [ACPToolCallContent] = []
+        /// In-memory-only flag: whether `stripWrappingFence` actually
+        /// stripped an opening fence line from `appliedRawContent`. The
+        /// trailing-fence strip in `stripTrailingFenceLine` must only
+        /// run when an opening fence was recognized — ordinary tool
+        /// output whose final line happens to be `` ``` `` must NOT be
+        /// dropped. Mirrors `stripWrappingFence`'s `isOpeningFence`
+        /// guard.
+        var appliedOpeningFenceStripped: Bool = false
 
         /// Replace `content` with its first `truncatedTailBytes` characters
         /// and mark the message as truncated. No-op if already truncated.
@@ -278,6 +288,7 @@ enum ACPMessage: Equatable {
             appliedStrippedRaw = ""
             appliedOpeningFenceUnterminated = false
             appliedItemsSnapshot = []
+            appliedOpeningFenceStripped = false
         }
 
         init(toolCallId: String, title: String, kind: String? = nil,

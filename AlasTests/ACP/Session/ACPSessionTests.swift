@@ -3170,4 +3170,49 @@ struct ACPSessionTests {
             #expect(tc.terminalIds == ["t1"], "terminalIds=\(tc.terminalIds)")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("streamed toolCallUpdate does not strip a trailing fence line when there is no opening fence")
+    func toolCallUpdateStreamingNoOpeningFenceKeepsTrailingFenceLine() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-no-opening-fence", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: ordinary log output (no opening fence).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-no-opening-fence", status: "in_progress",
+            content: [.content(.text("log line\n```"))])))
+        // Final chunk: the log grows, ending with a line of three
+        // backticks that is NOT a closing fence (there was no opening
+        // fence). The suffix path must NOT strip the trailing "```".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-no-opening-fence", status: "completed",
+            content: [.content(.text("log line\n```\nmore output"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "log line\n```\nmore output")
+            #expect(tc.preview == "log line")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed single text item growing takes the suffix path (regression)")
+    func toolCallUpdateStreamingSingleTextItemGrowingTakesSuffixPath() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-growing-text", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Adapter sends a single text content item that grows on each
+        // update (the common cumulative shape). The suffix-only fast path
+        // must fire on each update; this is a regression test for the
+        // `prefixItemsUnchanged` guard which previously compared text
+        // items element-wise and forced a full reprocess every update.
+        let chunks = ["a", "ab", "abc", "abcdef", "abcdefghij"]
+        for chunk in chunks {
+            session.apply(.toolCallUpdate(.init(
+                toolCallId: "tc-growing-text", status: "in_progress",
+                content: [.content(.text(chunk))])))
+        }
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "abcdefghij")
+            #expect(tc.preview == "abcdefghij")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

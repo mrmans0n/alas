@@ -715,7 +715,11 @@ final class ACPSession: ObservableObject, Identifiable {
                 suffix: suffix,
                 openingFenceUnterminated: tc.appliedOpeningFenceUnterminated)
             let newStripped: String
-            if isFinal {
+            if isFinal && tc.appliedOpeningFenceStripped {
+                // Only strip a trailing fence line when an opening fence
+                // was actually recognized. Ordinary tool output whose
+                // final line happens to be "```" must NOT be dropped —
+                // `stripWrappingFence` guards the same way.
                 newStripped = Self.stripTrailingFenceLine(newStrippedRaw)
             } else {
                 newStripped = newStrippedRaw
@@ -813,19 +817,26 @@ final class ACPSession: ObservableObject, Identifiable {
         tc.appliedStrippedRaw = strippedRaw
         tc.appliedOpeningFenceUnterminated = Self.openingFenceUnterminated(
             raw: raw, strippedRaw: strippedRaw)
+        // Track whether an opening fence was actually stripped: the
+        // suffix path's trailing-fence strip must only run when the
+        // opening fence was recognized.
+        let firstLine = raw.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? raw
+        tc.appliedOpeningFenceStripped = Self.isOpeningFence(firstLine)
         tc.appliedItemsSnapshot = items
     }
 
-    /// Whether the first `count` items of `items` match the first
-    /// `count` items of `snapshot`. Used to guard the suffix-only fast
-    /// path: `flatten` ignores images/resource-links/terminals, so equal
-    /// flattened text does NOT imply the structured items are the same.
-    /// An in-place replacement (e.g. `[text, image(old)]` ->
-    /// `[text, image(new)]`) or an insertion before the suffix
-    /// (`[text("run")]` -> `[terminal("t1"), text("running")]`) would
-    /// otherwise skip `extractAssets`/`extractTerminalIds` for the
-    /// changed items. Cost is O(count) — bounded by the previous item
-    /// count, which is small for typical adapter snapshots.
+    /// Whether the first `count` items of `items` have the same
+    /// STRUCTURED content (images, resource-links, terminals, diffs) as
+    /// the first `count` items of `snapshot`. Text items are NOT compared
+    /// element-wise: in the common cumulative streaming shape the single
+    /// text item grows in place (`[text("a")]` -> `[text("ab")]`), and
+    /// comparing it would force a full reprocess on every update,
+    /// defeating the suffix-only fast path. Since `flatten` ignores
+    /// non-text items, equal flattened text plus equal structured items
+    /// guarantees the items array is consistent with the previous apply.
+    /// An in-place image replacement (image(old) -> image(new)) or a
+    /// terminal inserted before the text both change a structured item
+    /// and are detected here. Cost is O(count).
     private static func prefixItemsUnchanged(
         items: [ACPToolCallContent],
         snapshot: [ACPToolCallContent],
@@ -836,9 +847,44 @@ final class ACPSession: ObservableObject, Identifiable {
             return false
         }
         for i in 0..<count {
-            if items[i] != snapshot[i] { return false }
+            if !Self.structuredContentEqual(items[i], snapshot[i]) {
+                return false
+            }
         }
         return true
+    }
+
+    /// Whether two `ACPToolCallContent` items have the same structured
+    /// payload. Text items are treated as equal (the text is allowed to
+    /// grow — the flattened-raw prefix check guards the text content).
+    /// Images, resource-links, resources, terminals, and diffs are
+    /// compared exactly — a change to any of those must force a full
+    /// reprocess so `extractAssets`/`extractTerminalIds` re-scan.
+    private static func structuredContentEqual(
+        _ lhs: ACPToolCallContent,
+        _ rhs: ACPToolCallContent
+    ) -> Bool {
+        switch (lhs, rhs) {
+        case (.content(.text), .content(.text)):
+            return true
+        case (.terminal(let a), .terminal(let b)):
+            return a == b
+        case (.diff(let p1, let o1, let n1), .diff(let p2, let o2, let n2)):
+            return p1 == p2 && o1 == o2 && n1 == n2
+        case (.content(.image(let d1, let u1, let m1)),
+              .content(.image(let d2, let u2, let m2))):
+            return d1 == d2 && u1 == u2 && m1 == m2
+        case (.content(.resourceLink(let u1, let n1)),
+              .content(.resourceLink(let u2, let n2))):
+            return u1 == u2 && n1 == n2
+        case (.content(.resource(let u1, let m1, _)),
+              .content(.resource(let u2, let m2, _))):
+            return u1 == u2 && m1 == m2
+        case (.unknown, .unknown):
+            return true
+        default:
+            return false
+        }
     }
 
     /// Whether the first line of `strippedRaw` is complete — i.e. the
