@@ -118,4 +118,19 @@ struct GGStackReadinessModelTests {
         #expect(!model.progressRows.isEmpty)
         #expect(model.progressRows.contains { $0.contains("7") })
     }
+
+    @Test func progressRowsClearedWhenDifferentActionSucceedsSync() {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.start(totalEntries: 1))
+        action.appendSyncEvent(.pushStarted(position: 1))
+        action.appendSyncEvent(.prCreated(position: 1, prNumber: 7, prURL: nil, draft: false))
+        action.endAction(.sync)
+        // Simulates the leak scenario: sync finished without clearSyncProgress()
+        // being called, then an unrelated action starts.
+        _ = action.beginAction(.land)
+        let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: .open)]), action: action)
+        #expect(!action.syncProgress.isEmpty)
+        #expect(model.progressRows.isEmpty)
+    }
 }

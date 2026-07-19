@@ -73,12 +73,13 @@ struct GGStackReadinessModel: Equatable {
             ]
         }
 
+        let syncIsRelevant = inFlight == .sync || action.pausedOperation?.pausedBy == .sync
         return GGStackReadinessModel(
             title: "Stack · \(stack.name)",
             summaryChip: summaryChip,
             facts: facts,
             actions: actions,
-            progressRows: progressRows(from: action.syncProgress),
+            progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
             isPaused: isPaused
         )
     }
