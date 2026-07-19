@@ -111,7 +111,9 @@ final class RightPaneState {
     /// --json` hits the forge API (best-effort PR-state refresh), and
     /// performRefresh fires continuously from the file watcher — so only
     /// re-query gg when the commit set actually changed.
-    private var ggStackCommitsKey: String? = nil
+    // Exposed (not `private`) so tests can seed/inspect it via `@testable
+    // import` without a real git repo driving `refresh()`.
+    var ggStackCommitsKey: String? = nil
 
     // Sync-nudge state. All fields are in-memory only; nothing is
     // persisted to AppConfig. Two independent conditions:
@@ -765,8 +767,10 @@ final class RightPaneState {
         }
     }
 
+    // Not `private` so tests can call it directly against injected
+    // `commits` / `ggService` without needing a real git repo + watcher.
     @MainActor
-    private func refreshGGStack() async {
+    func refreshGGStack() async {
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: commits) else {
             ggStackCommitsKey = nil
