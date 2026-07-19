@@ -27,10 +27,18 @@ enum GGSyncEvent: Equatable {
         let event = object["event"] as? String ?? (eventObject["entries"] == nil ? "" : "summary")
         guard !event.isEmpty else { return nil }
         func int(_ key: String) -> Int? { eventObject[key] as? Int }
+        func message(from error: Any?) -> String? {
+            guard let error, !(error is NSNull) else { return nil }
+            if let string = error as? String, !string.isEmpty { return string }
+            if let object = error as? [String: Any] {
+                if let message = object["message"] as? String, !message.isEmpty { return message }
+                if let nested = message(from: object["error"]) { return nested }
+            }
+            return String(describing: error)
+        }
         func message(default fallback: String) -> String {
             if let message = eventObject["message"] as? String, !message.isEmpty { return message }
-            if let error = eventObject["error"] as? String, !error.isEmpty { return error }
-            if let error = eventObject["error"], !(error is NSNull) { return String(describing: error) }
+            if let error = message(from: eventObject["error"]) { return error }
             return fallback
         }
         switch event {
@@ -57,9 +65,9 @@ enum GGSyncEvent: Equatable {
         case "summary":
             if let entries = eventObject["entries"] as? [[String: Any]] {
                 for entry in entries {
-                    if let error = entry["error"], !(error is NSNull) {
+                    if let error = message(from: entry["error"]) {
                         let prefix = (entry["position"] as? Int).map { "[\($0)] " } ?? ""
-                        return .error(message: prefix + String(describing: error))
+                        return .error(message: prefix + error)
                     }
                 }
             }
@@ -75,6 +83,43 @@ enum GGSyncEvent: Equatable {
     }
 }
 
+enum GGActionErrorMessage {
+    static func parse(fromJSON data: Data) -> String? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        if let line = String(data: data, encoding: .utf8),
+           case .error(let message) = GGSyncEvent.parse(line: line)
+        {
+            return message
+        }
+        return parse(from: object)
+    }
+
+    static func parse(from object: [String: Any]) -> String? {
+        if let message = message(from: object["error"]) { return message }
+        if let land = object["land"] as? [String: Any], let message = parse(from: land) { return message }
+        if let sync = object["sync"] as? [String: Any], let message = parse(from: sync) { return message }
+        if let entries = object["entries"] as? [[String: Any]] {
+            for entry in entries {
+                if let message = message(from: entry["error"]) {
+                    let prefix = (entry["position"] as? Int).map { "[\($0)] " } ?? ""
+                    return prefix + message
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func message(from error: Any?) -> String? {
+        guard let error, !(error is NSNull) else { return nil }
+        if let string = error as? String, !string.isEmpty { return string }
+        if let object = error as? [String: Any] {
+            if let message = object["message"] as? String, !message.isEmpty { return message }
+            if let nested = message(from: object["error"]) { return nested }
+        }
+        return String(describing: error)
+    }
+}
+
 /// Decoded result of `gg land … --json`.
 struct GGLandResult: Equatable {
     let landed: [GGLandedEntry]
@@ -85,11 +130,8 @@ struct GGLandResult: Equatable {
     }
 
     static func decode(fromJSON data: Data) throws -> GGLandResult {
-        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-           let land = object["land"] as? [String: Any],
-           let error = land["error"], !(error is NSNull)
-        {
-            throw GGServiceError.commandFailed(stderr: String(describing: error))
+        if let message = GGActionErrorMessage.parse(fromJSON: data) {
+            throw GGServiceError.commandFailed(stderr: message)
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

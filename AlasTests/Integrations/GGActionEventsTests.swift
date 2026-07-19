@@ -55,6 +55,12 @@ struct GGActionEventsTests {
         }
     }
 
+    @Test func extractsActionErrorMessagesFromNestedJSON() {
+        #expect(GGActionErrorMessage.parse(fromJSON: Data(#"{"error":{"message":"top failure"}}"#.utf8)) == "top failure")
+        #expect(GGActionErrorMessage.parse(fromJSON: Data(#"{"land":{"error":{"message":"land blocked"}}}"#.utf8)) == "land blocked")
+        #expect(GGActionErrorMessage.parse(fromJSON: Data(#"{"sync":{"entries":[{"position":4,"error":{"message":"push blocked"}}]}}"#.utf8)) == "[4] push blocked")
+    }
+
     @Test func landDecodeThrowsMalformedOnGarbage() {
         #expect(throws: GGServiceError.self) {
             _ = try GGLandResult.decode(fromJSON: Data("nonsense".utf8))

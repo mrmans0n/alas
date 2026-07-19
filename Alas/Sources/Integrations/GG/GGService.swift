@@ -266,6 +266,9 @@ struct GGService {
         }
         guard result.exitCode == 0 else {
             if result.exitCode == 127 { throw GGServiceError.cliMissing }
+            if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
+                throw GGServiceError.commandFailed(stderr: message)
+            }
             throw GGServiceError.commandFailed(
                 stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             )
@@ -346,6 +349,9 @@ struct GGService {
         }
         guard result.exitCode == 0 else {
             if result.exitCode == 127 { throw GGServiceError.cliMissing }
+            if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
+                throw GGServiceError.commandFailed(stderr: message)
+            }
             throw GGServiceError.commandFailed(
                 stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             )

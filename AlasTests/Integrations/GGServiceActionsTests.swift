@@ -115,6 +115,29 @@ struct GGServiceActionsTests {
         }
     }
 
+    @Test func landMapsNonzeroJSONStdoutToCommandFailed() async {
+        let runner = RecordingGGRunner(
+            stdout: #"{"version":1,"land":{"landed":[],"error":{"message":"not approved"}}}"#,
+            exitCode: 1
+        )
+        await #expect(throws: GGServiceError.commandFailed(stderr: "not approved")) {
+            _ = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: nil)
+        }
+    }
+
+    @Test func syncFallbackMapsNonzeroJSONStdoutToCommandFailed() async {
+        let runner = RecordingGGRunner(
+            stdout: #"{"version":1,"sync":{"entries":[{"position":2,"error":{"message":"push rejected"}}]}}"#,
+            exitCode: 1,
+            syncHelpStdout: "--json"
+        )
+        let service = GGService(runner: runner)
+
+        await #expect(throws: GGServiceError.commandFailed(stderr: "[2] push rejected")) {
+            for try await _ in service.sync(worktreePath: "/tmp/wt") {}
+        }
+    }
+
     @Test func cleanContinueAbortCheckoutSendExpectedArgs() async throws {
         let runner = RecordingGGRunner(stdout: "ok")
         let service = GGService(runner: runner)

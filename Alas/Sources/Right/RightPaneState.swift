@@ -1016,9 +1016,9 @@ final class RightPaneState {
                     if case .error(let message) = event { ggActionState.setError(message) }
                 }
             } catch let error as GGServiceError {
-                ggActionState.setError(error.userMessage)
+                if ggActionState.lastError == nil { ggActionState.setError(error.userMessage) }
             } catch {
-                ggActionState.setError(error.localizedDescription)
+                if ggActionState.lastError == nil { ggActionState.setError(error.localizedDescription) }
             }
         }
     }
