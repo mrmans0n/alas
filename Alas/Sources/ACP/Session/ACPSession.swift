@@ -695,6 +695,7 @@ final class ACPSession: ObservableObject, Identifiable {
            !tc.appliedIsFinal,
            items.count >= tc.appliedItemCount,
            prefixItemsUnchanged,
+           !metadataChanged,
            !Self.previousRawWasPartialFence(prev) {
             // Suffix-only fast path. The new flattened raw is the previous
             // one with `suffix` appended; `appliedStrippedRaw` is the body

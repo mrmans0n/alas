@@ -3414,4 +3414,41 @@ struct ACPSessionTests {
             #expect(tc2.terminalIds.contains("m2"), "after second: \(tc2.terminalIds)")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("toolCallUpdate suffix path with metadata change falls to full reprocess")
+    func toolCallUpdateSuffixPathWithMetadataChangeFallsToFullReprocess() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-suffix-meta", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + metadata terminal m1.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-suffix-meta", status: "in_progress",
+            content: [.content(.text("run"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m1"),
+                    "data": AnyCodable("out\n")
+                ])
+            ]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.terminalIds == ["m1"], "after first: \(tc1.terminalIds)")
+        }
+        // Second update: text grows (suffix path) AND metadata changes to
+        // terminal m2. The suffix path must fall to full reprocess so
+        // `tc.terminalIds` is rebuilt from the current metadata.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-suffix-meta", status: "completed",
+            content: [.content(.text("running"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m2"),
+                    "data": AnyCodable("more\n")
+                ])
+            ]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "running")
+            #expect(tc2.terminalIds.contains("m2"), "after second: \(tc2.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
 }
