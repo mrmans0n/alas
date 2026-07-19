@@ -794,17 +794,25 @@ final class RightPaneState {
         // manual-refresh hook can come with the phase-2 drawer).
         let key = commits.map(\.sha).joined(separator: "|")
         guard key != ggStackCommitsKey else { return }
-        // Failure degrades to the plain commits section, never an error UI.
-        let stack = try? await ggService.currentStack(worktreePath: worktree.path.path)
-        // A newer refresh superseded this one — its own `refreshGGStack` call
-        // will write the current state; writing here would race it with a
-        // stale result.
-        if Task.isCancelled { return }
-        ggStackCommitsKey = key
-        if ggStack != stack { ggStack = stack }
-        let summary = stack?.summary
-        if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
-            GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
+        do {
+            let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
+            // A newer refresh superseded this one — its own `refreshGGStack`
+            // call will write the current state; writing here would race it
+            // with a stale result.
+            if Task.isCancelled { return }
+            ggStackCommitsKey = key
+            if ggStack != stack { ggStack = stack }
+            let summary = stack?.summary
+            if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
+                GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
+            }
+        } catch {
+            // A transient gg/provider failure (gh/glab auth hiccup, network
+            // blip, etc.) must not poison the commits-key cache — leave it
+            // untouched so the next refresh retries instead of being skipped
+            // by the unchanged-key guard above. Whatever was already
+            // rendered (nil on first load, last-good stack on a later
+            // refresh) stays as-is; never surface an error UI.
         }
     }
 

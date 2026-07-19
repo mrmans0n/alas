@@ -19,6 +19,17 @@ private final class CountingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
     }
 }
 
+/// Always throws, simulating a transient gg/provider failure (e.g. a gh/glab
+/// auth hiccup) rather than a real "not a stack" result.
+private final class ThrowingFakeGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var callCount = 0
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        callCount += 1
+        throw GGServiceError.commandFailed(stderr: "boom")
+    }
+}
+
 @MainActor
 struct RightPaneGGStackTests {
     private func makeWorktree() -> Worktree {
@@ -129,5 +140,28 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggStack == nil)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+    }
+
+    /// A thrown gg failure must not cache the commits key — otherwise a
+    /// transient error (auth hiccup, network blip) permanently skips retries
+    /// for that commit set via the unchanged-key guard, even after the
+    /// underlying problem clears up.
+    @Test func transientFailureDoesNotPoisonCommitsKeyCache() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let runner = ThrowingFakeGGRunner()
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.commits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(runner.callCount == 1)
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+
+        // Same commit set again — since the key was never cached, this must
+        // retry rather than being skipped by the unchanged-key guard.
+        await state.refreshGGStack()
+        #expect(runner.callCount == 2)
     }
 }

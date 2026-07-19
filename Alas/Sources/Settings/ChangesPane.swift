@@ -120,7 +120,15 @@ struct ChangesPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
-        .task { await GGAvailability.shared.probe() }
+        .task {
+            // Wait for the login-shell PATH first, same as the startup probe
+            // in AppState — otherwise opening Settings early (e.g. right
+            // after a Finder/Dock launch) can win the race and cache a
+            // Homebrew-only `gg` as missing before PATH resolution finishes,
+            // since this is a non-force probe and `hasProbed` latches.
+            await ShellEnvResolver.shared.waitUntilResolved()
+            await GGAvailability.shared.probe()
+        }
         .onChange(of: ggInstall.phase) { _, newPhase in
             // Right-pane states that already evaluated the gate while gg was
             // absent are otherwise never asked to re-check it, so an install
