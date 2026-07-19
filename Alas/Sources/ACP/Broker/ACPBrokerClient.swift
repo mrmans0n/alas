@@ -63,6 +63,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
     private var turnState: ACPBrokerTurnState = .idle
     private var activeTurnPollingTask: Task<Void, Never>?
+    private var lastQueuedDurableState: ACPBrokerDurableState?
+    private var pendingDurableStates: [ACPBrokerDurableState] = []
+    private var isDrainingDurableStates = false
 
     var yieldedUpdateCount: Int {
         stateLock.lock()
@@ -551,10 +554,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             self.stateLock.lock()
             self.acknowledgedCursor = max(self.acknowledgedCursor, cursor)
-            let state = self.durableStateLocked()
+            let shouldDrainDurableStates = self.enqueueDurableStateLocked()
             self.stateLock.unlock()
-            if let state {
-                self.onDurableStateChanged?(state)
+            if shouldDrainDurableStates {
+                self.drainDurableStateCallbacks()
             }
             self.flushDeferredOrderedAcks()
         }
@@ -628,10 +631,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         } else {
             changedTurnState = nil
         }
-        let state = durableStateLocked()
+        let shouldDrainDurableStates = enqueueDurableStateLocked()
         stateLock.unlock()
-        if let state {
-            onDurableStateChanged?(state)
+        if shouldDrainDurableStates {
+            drainDurableStateCallbacks()
         }
         if let changedTurnState {
             onTurnStateChanged?(changedTurnState)
@@ -666,6 +669,34 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
         stateLock.unlock()
+    }
+
+    private func enqueueDurableStateLocked() -> Bool {
+        guard let state = durableStateLocked(),
+              state != lastQueuedDurableState else {
+            return false
+        }
+        lastQueuedDurableState = state
+        pendingDurableStates.append(state)
+        guard !isDrainingDurableStates else {
+            return false
+        }
+        isDrainingDurableStates = true
+        return true
+    }
+
+    private func drainDurableStateCallbacks() {
+        while true {
+            stateLock.lock()
+            guard !pendingDurableStates.isEmpty else {
+                isDrainingDurableStates = false
+                stateLock.unlock()
+                return
+            }
+            let state = pendingDurableStates.removeFirst()
+            stateLock.unlock()
+            onDurableStateChanged?(state)
+        }
     }
 
     private func currentOperationCompletionCursor(for operationKey: ACPBrokerOperationKey) -> ACPBrokerEventCursor? {

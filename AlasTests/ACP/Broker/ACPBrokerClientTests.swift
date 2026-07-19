@@ -50,22 +50,23 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 4))
     }
 
-    @Test func startPublishesDurableStateFromBrokerSnapshots() async throws {
+    @Test func identicalStartupSnapshotsPublishDurableStateOnce() async throws {
         let service = MockBrokerService()
-        let stateSink = DurableStateSink()
+        let recorder = DurableStateRecorder()
         await service.enqueueAttach(events: [])
         let client = makeClient(service: service, onDurableStateChanged: { state in
-            Task { await stateSink.append(state) }
+            recorder.append(state)
         })
 
         try await client.start()
 
-        try await waitUntil { await stateSink.recordCount() >= 2 }
-        let lastRecord = await stateSink.lastRecord()
-        let last = try #require(lastRecord)
-        #expect(last.brokerId == ACPBrokerID(rawValue: "broker-1"))
-        #expect(last.generation == ACPBrokerGeneration(rawValue: 7))
-        #expect(last.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+        #expect(recorder.records() == [
+            ACPBrokerDurableState(
+                brokerId: ACPBrokerID(rawValue: "broker-1"),
+                generation: ACPBrokerGeneration(rawValue: 7),
+                acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0)
+            )
+        ])
     }
 
     @Test func startResetsInitialCursorWhenBrokerGenerationChanges() async throws {
@@ -865,6 +866,23 @@ private actor DurableStateSink {
 
     func hasLastRecord(after count: Int, matching expected: ACPBrokerDurableState) -> Bool {
         records.count == count + 1 && records.last == expected
+    }
+}
+
+private final class DurableStateRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedStates: [ACPBrokerDurableState] = []
+
+    func append(_ state: ACPBrokerDurableState) {
+        lock.lock()
+        recordedStates.append(state)
+        lock.unlock()
+    }
+
+    func records() -> [ACPBrokerDurableState] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedStates
     }
 }
 
