@@ -878,6 +878,58 @@ struct ACPBrokerClientTests {
         #expect(recorder.records() == [.streaming])
     }
 
+    // Regression (code review on #853): a foreground send()/notify() can
+    // observe adapter/exit and cancel the background poller while the
+    // poller's OWN attach() call is already independently in flight. The
+    // cancel doesn't stop that non-cancellation-aware call from resolving
+    // later with a stale, pre-exit snapshot; without a termination gate on
+    // applying it, that stale snapshot would fire onTurnStateChanged after
+    // the connection is already torn down.
+    @Test func staleInFlightPollResultIsDroppedAfterConcurrentExit() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [], turnState: .idle)
+        await service.enqueueAttach(
+            events: [],
+            turnState: .streaming,
+            delayNanoseconds: 200_000_000
+        )
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
+            replayed: false,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: nil
+        ))
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: "adapter/exit",
+                    params: .object(["unexpected": .bool(true)])
+                )
+            )
+        ])
+        let recorder = SyncTurnStateRecorder()
+        let client = makeClient(
+            service: service,
+            backgroundPollIdleIntervalNanoseconds: 20_000_000,
+            onTurnStateChanged: { state in recorder.append(state) }
+        )
+
+        try await client.start()
+        // Let the poller's second attach() begin and enter its 200ms delay
+        // before the foreground send() observes the exit.
+        try await Task.sleep(for: .milliseconds(60))
+        _ = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
+        ))
+        // Outlast the poller's delayed response (resolves ~200ms after it
+        // started, i.e. ~220ms after start()).
+        try await Task.sleep(for: .milliseconds(250))
+
+        #expect(recorder.records().isEmpty)
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

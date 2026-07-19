@@ -312,6 +312,23 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             generation: generation,
             acknowledgedCursor: cursor
         ))
+        // The connection may have ended (`adapter/exit`, `shutdown()`,
+        // `detach()`) while this specific `service.attach()` call was in
+        // flight on some OTHER task — the helper RPC isn't cancellation-
+        // aware, so e.g. a foreground `send()` that just observed the exit
+        // (and cancelled the background poller) can't stop the poller's own
+        // already-in-flight call from resolving with a stale, pre-exit
+        // snapshot. Applying it now would fire `onTurnStateChanged` /
+        // `onDurableStateChanged` — plain closures, not gated by
+        // `finishStreams()`'s stream `finish()` calls — with stale data for
+        // a connection every caller already believes is torn down
+        // (`ACPSessionManager`'s handler mutates the session and can flip a
+        // disconnected session's streaming state back to live). Once
+        // terminated, no attach response may be applied, no matter which
+        // task's in-flight call it arrives from.
+        guard !isConnectionTerminated() else {
+            return attached.snapshot
+        }
         setSnapshot(attached.snapshot)
         let pendingRequestIds = Set(attached.snapshot.pendingRequests.map(\.requestId))
         for event in attached.events {
@@ -321,6 +338,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             dispatchPendingRequest(request, cursor: attached.snapshot.acknowledgedCursor)
         }
         return attached.snapshot
+    }
+
+    private func isConnectionTerminated() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return isTerminated
     }
 
     /// Runs for the whole connection lifetime (`start()` through
