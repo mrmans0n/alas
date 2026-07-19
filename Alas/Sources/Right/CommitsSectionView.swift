@@ -99,6 +99,8 @@ struct CommitsSectionView: View {
     let onSelectBaseBranch: (String) -> Void
     let onOpenBaseBranchSelector: () -> Void
     let rps: RightPaneState
+    let ggStack: GGStack?
+    let stackCodeHostKind: CodeHostKind?
 
     @Environment(\.theme) private var theme
 
@@ -109,7 +111,7 @@ struct CommitsSectionView: View {
             }
         } header: {
             SectionHeader(
-                title: "Commits",
+                title: Self.sectionTitle(ggStack: ggStack, commitsEmpty: commits.isEmpty),
                 count: totalCount,
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
@@ -150,6 +152,17 @@ struct CommitsSectionView: View {
         return n == 0 ? nil : n
     }
 
+    /// `ggStack` can be loaded (feeding the sidebar badge) while `commits`
+    /// — the section's *display* list, filtered by the user's comparison
+    /// mode — is empty: e.g. a fully-synced stack under "Branch upstream"
+    /// mode, where the list is `@{u}..HEAD`. Rows only render when
+    /// `commits` is non-empty, so a "Stack · …" header over the generic
+    /// empty placeholder would promise content that isn't there — fall
+    /// back to the plain title instead.
+    static func sectionTitle(ggStack: GGStack?, commitsEmpty: Bool) -> String {
+        (commitsEmpty ? nil : ggStack).map { "Stack · \($0.name)" } ?? "Commits"
+    }
+
     @ViewBuilder
     private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
@@ -165,7 +178,9 @@ struct CommitsSectionView: View {
                     onEdit: { onEdit(commit) },
                     onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-                    onRevert: { rps.runRevert(sha: commit.sha) }
+                    onRevert: { rps.runRevert(sha: commit.sha) },
+                    stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
+                    codeHostKind: stackCodeHostKind
                 )
             }
         } else if olderCommits.isEmpty {

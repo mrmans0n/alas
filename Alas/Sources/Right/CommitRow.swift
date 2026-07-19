@@ -17,6 +17,9 @@ struct CommitRow: View {
     var onReview: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
     var onRevert: (() -> Void)? = nil
+    /// Stack entry for this commit when the branch is a gg stack.
+    var stackEntry: GGStackEntry? = nil
+    var codeHostKind: CodeHostKind? = nil
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -38,6 +41,15 @@ struct CommitRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .opacity(stackEntry?.prState == .merged ? 0.55 : 1)
+        .background(alignment: .leading) {
+            if stackEntry?.isCurrent == true {
+                Rectangle()
+                    .fill(theme.color("accent"))
+                    .frame(width: 2)
+                    .cornerRadius(1)
+            }
+        }
         .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
             ForEach(Self.leadingContextMenuActions(canEdit: onEdit != nil, canReview: onReview != nil), id: \.self) { action in
@@ -149,6 +161,15 @@ struct CommitRow: View {
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(2)
+            if let stackEntry {
+                Spacer(minLength: 4)
+                if stackEntry.prNumber != nil {
+                    GGCIDot(status: stackEntry.ciStatus)
+                }
+                if let chip = GGStackChipModel.model(for: stackEntry, kind: codeHostKind) {
+                    GGStackChip(model: chip)
+                }
+            }
             Spacer(minLength: 0)
         }
     }

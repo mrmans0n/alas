@@ -204,7 +204,9 @@ struct ChangesTabView: View {
                     rps.selectBaseBranch(branch)
                 },
                 onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
-                rps: rps
+                rps: rps,
+                ggStack: rps.ggStack,
+                stackCodeHostKind: rps.commitRemote?.kind
             )
         }
     }

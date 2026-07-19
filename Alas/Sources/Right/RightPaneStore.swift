@@ -150,6 +150,22 @@ final class RightPaneStore {
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
             }
+            new.ggGateProvider = { [weak self] in
+                guard let app = self?.appState else { return false }
+                guard app.config.changes.stackedDiffsEnabled,
+                      GGAvailability.shared.isInstalled,
+                      let project = app.projectsManager.projects.first(
+                        where: { $0.id == worktree.projectId }
+                      )
+                else { return false }
+                return GGStackGate.projectEnabled(
+                    masterEnabled: true,
+                    ggInstalled: true,
+                    mode: project.ggMode,
+                    repoPath: project.path,
+                    isRemoteProject: project.host != nil
+                )
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in
@@ -241,6 +257,15 @@ final class RightPaneStore {
 
     func invalidateSnapshot(worktreeId: String) {
         states[worktreeId]?.markSnapshotUnknown()
+    }
+
+    /// Re-evaluate the gg gate across all cached right-pane states after a
+    /// stacked-diffs config change in Settings (master toggle or a
+    /// project's ggMode), so stale stack styling and the sidebar badge
+    /// clear/reload immediately instead of waiting for the next
+    /// watcher-driven refresh.
+    func reevaluateGGGates() {
+        for state in states.values { state.reevaluateGGGate() }
     }
 
     func commitEditorComparisonRef(worktreeId: String) -> String? {

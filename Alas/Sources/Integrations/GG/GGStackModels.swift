@@ -1,0 +1,135 @@
+import Foundation
+
+/// Errors from the gg CLI integration. Mirrors `CodeHostProviderError`
+/// shape but scoped to the gg tool, which is not a forge provider.
+enum GGServiceError: Error, Equatable {
+    case cliMissing
+    case commandFailed(stderr: String)
+    case malformedOutput(String)
+    case unsupportedSchema(Int)
+}
+
+/// Decoded envelope of `gg ls --json` / `gg log --json`. When the current
+/// branch is a stack, gg emits `{"version":1,"stack":{...}}`; off-stack it
+/// emits an all-stacks shape with no `stack` key, which decodes here as
+/// `stack == nil`.
+struct GGStackSnapshot: Decodable, Equatable {
+    static let supportedSchemaVersion = 1
+    let version: Int
+    let stack: GGStack?
+
+    static func decode(fromJSON data: Data) throws -> GGStackSnapshot {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let snapshot: GGStackSnapshot
+        do {
+            snapshot = try decoder.decode(GGStackSnapshot.self, from: data)
+        } catch {
+            throw GGServiceError.malformedOutput(String(describing: error))
+        }
+        guard snapshot.version <= supportedSchemaVersion else {
+            throw GGServiceError.unsupportedSchema(snapshot.version)
+        }
+        return snapshot
+    }
+}
+
+struct GGStack: Decodable, Equatable {
+    let name: String
+    let base: String
+    let totalCommits: Int
+    let syncedCommits: Int
+    let currentPosition: Int?
+    let behindBase: Int?
+    let entries: [GGStackEntry]
+
+    var summary: GGStackSummary {
+        GGStackSummary(
+            merged: entries.filter { $0.prState == .merged }.count,
+            total: totalCommits
+        )
+    }
+
+    /// gg reports abbreviated SHAs; Alas commit lists carry full 40-char
+    /// SHAs. Match on whichever is the prefix of the other.
+    func entry(matchingCommitSHA sha: String) -> GGStackEntry? {
+        entries.first { sha.hasPrefix($0.sha) || $0.sha.hasPrefix(sha) }
+    }
+}
+
+enum GGPRState: String, Equatable {
+    case open, merged, closed, draft
+}
+
+enum GGCIStatus: String, Equatable {
+    case pending, running, success, failed, canceled, unknown
+}
+
+struct GGStackEntry: Decodable, Equatable, Identifiable {
+    /// Stable identity across rebases/amends: the GG-ID trailer when
+    /// present, the (rewriting) SHA otherwise.
+    var id: String { ggId ?? sha }
+    let position: Int
+    let sha: String
+    let title: String
+    let ggId: String?
+    let ggParent: String?
+    let prNumber: Int?
+    let prState: GGPRState?
+    let approved: Bool
+    let ciStatus: GGCIStatus?
+    let isCurrent: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case position, sha, title, ggId, ggParent, prNumber, prState,
+             approved, ciStatus, isCurrent
+    }
+
+    init(
+        position: Int,
+        sha: String,
+        title: String,
+        ggId: String? = nil,
+        ggParent: String? = nil,
+        prNumber: Int? = nil,
+        prState: GGPRState? = nil,
+        approved: Bool = false,
+        ciStatus: GGCIStatus? = nil,
+        isCurrent: Bool = false
+    ) {
+        self.position = position
+        self.sha = sha
+        self.title = title
+        self.ggId = ggId
+        self.ggParent = ggParent
+        self.prNumber = prNumber
+        self.prState = prState
+        self.approved = approved
+        self.ciStatus = ciStatus
+        self.isCurrent = isCurrent
+    }
+
+    // Tolerant decode: unknown enum strings and future fields must not
+    // fail the whole snapshot — fall back per-field instead.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        position = try c.decode(Int.self, forKey: .position)
+        sha = try c.decode(String.self, forKey: .sha)
+        title = try c.decode(String.self, forKey: .title)
+        ggId = try? c.decode(String.self, forKey: .ggId)
+        ggParent = try? c.decode(String.self, forKey: .ggParent)
+        prNumber = try? c.decode(Int.self, forKey: .prNumber)
+        prState = (try? c.decode(String.self, forKey: .prState))
+            .flatMap(GGPRState.init(rawValue:))
+        approved = (try? c.decode(Bool.self, forKey: .approved)) ?? false
+        ciStatus = (try? c.decode(String.self, forKey: .ciStatus))
+            .flatMap(GGCIStatus.init(rawValue:))
+        isCurrent = (try? c.decode(Bool.self, forKey: .isCurrent)) ?? false
+    }
+}
+
+/// Compact merged/total pair for the sidebar worktree badge.
+struct GGStackSummary: Equatable {
+    let merged: Int
+    let total: Int
+}
