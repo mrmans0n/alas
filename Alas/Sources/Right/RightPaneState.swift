@@ -903,7 +903,8 @@ final class RightPaneState {
     /// Dispatches a stack-drawer action kind to its gg mutation. `.land`
     /// stages a confirmation (see `requestGGLand`/`performGGLand`) rather
     /// than mutating directly, and `.checkout` is dispatched directly by the
-    /// entry menu (Task 9) instead of going through this dispatcher.
+    /// entry menu (Task 9) via `requestGGCheckout` instead of going through
+    /// this dispatcher.
     @MainActor
     func onGGStackAction(_ kind: GGStackActionKind, appState: AppState) {
         switch kind {
@@ -924,6 +925,14 @@ final class RightPaneState {
 
     func requestGGLand(_ request: GGLandRequest) { pendingGGLand = request }
     func cancelGGLand() { pendingGGLand = nil }
+
+    /// Checks out a stack entry (`gg mv <target>`), routed through
+    /// `runGGSimpleAction` so it gets the same busy-gating, error-surfacing,
+    /// and post-action refresh as every other gg mutation.
+    @MainActor
+    func requestGGCheckout(target: String) {
+        runGGSimpleAction(.checkout) { try await self.ggService.checkout(worktreePath: self.worktree.path.path, target: target) }
+    }
 
     /// Pure landability check used both to stage the confirmation and to
     /// re-verify against a freshly re-fetched stack before mutating.

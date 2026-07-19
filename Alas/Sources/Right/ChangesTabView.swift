@@ -216,13 +216,7 @@ struct ChangesTabView: View {
                     NSWorkspace.shared.open(url)
                 },
                 onGGLandUntil: { entry in rps.requestGGLand(.until(entryId: entry.id, title: entry.title)) },
-                onGGCheckout: { entry in
-                    Task { @MainActor in
-                        try? await rps.ggService.checkout(worktreePath: rps.worktree.path.path, target: entry.id)
-                        await rps.refresh()
-                        _ = rps.reevaluateGGGate()
-                    }
-                }
+                onGGCheckout: { entry in rps.requestGGCheckout(target: entry.id) }
             )
         }
     }
