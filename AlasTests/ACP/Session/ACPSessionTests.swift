@@ -3373,4 +3373,45 @@ struct ACPSessionTests {
             #expect(tc.preview == "`cmd` ran successfully")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("toolCallUpdate with same text but changed metadata terminal id reprocesses")
+    func toolCallUpdateSameTextChangedMetadataTerminalReprocesses() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-meta-term", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + metadata terminal m1.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-meta-term", status: "in_progress",
+            content: [.content(.text("running"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m1"),
+                    "data": AnyCodable("out\n")
+                ])
+            ]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.terminalIds == ["m1"], "after first: \(tc1.terminalIds)")
+        }
+        // Second update: same text + same status, but metadata changed to
+        // terminal m2. The identical-text fast path must fall to full
+        // reprocess so `tc.terminalIds` is rebuilt from the current metadata
+        // (adding m2, keeping m1 via merge — matching legacy semantics).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-meta-term", status: "in_progress",
+            content: [.content(.text("running"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m2"),
+                    "data": AnyCodable("more\n")
+                ])
+            ]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            // The metadata's terminal_output_delta was overwritten by
+            // mergeMetadata, so the rebuilt terminalIds contains m2 (the
+            // current metadata terminal). This matches the legacy
+            // full-reprocess semantics.
+            #expect(tc2.terminalIds.contains("m2"), "after second: \(tc2.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

@@ -620,6 +620,7 @@ final class ACPSession: ObservableObject, Identifiable {
             isFinal: Self.isFinalStatus(payload.status),
             rawOutputAssets: rawOutputAssets,
             rawOutputChanged: payload.rawOutput != nil,
+            metadataChanged: payload.metadata != nil,
             to: &tc)
     }
 
@@ -656,6 +657,7 @@ final class ACPSession: ObservableObject, Identifiable {
         isFinal: Bool,
         rawOutputAssets: [ACPMessage.ToolCallAsset],
         rawOutputChanged: Bool,
+        metadataChanged: Bool,
         to tc: inout ACPMessage.ToolCall
     ) {
         let raw = Self.flatten(items)
@@ -663,23 +665,21 @@ final class ACPSession: ObservableObject, Identifiable {
             items: items, snapshot: tc.appliedItemsSnapshot, count: tc.appliedItemCount)
         if let prev = tc.appliedRawContent, raw == prev,
            items.count == tc.appliedItemCount, prefixItemsUnchanged {
-            if isFinal == tc.appliedIsFinal && !rawOutputChanged && rawOutputAssets.isEmpty {
+            if isFinal == tc.appliedIsFinal && !rawOutputChanged && rawOutputAssets.isEmpty && !metadataChanged {
                 // Content unchanged, item count unchanged, prefix items
-                // unchanged, same isFinal, AND rawOutput did not change —
-                // nothing to do for the content body. `rawOutputChanged`
-                // guards the case where the update carried a new
-                // `rawOutput` that produced no image assets but replaced
-                // an earlier image-producing rawOutput: the caller already
-                // updated `tc.rawOutput` and merged (empty) rawOutputAssets,
-                // but the old image is still in `tc.assets`. Full reprocess
-                // rebuilds `tc.assets` from content + the new rawOutput,
-                // dropping the stale image.
+                // unchanged, same isFinal, no rawOutput change, AND no
+                // metadata change — nothing to do for the content body.
+                // `rawOutputChanged` / `metadataChanged` guard the cases
+                // where the update carried a new `rawOutput` or `_meta`
+                // that changed terminal ids / assets even though the
+                // flattened text is identical: the caller already merged
+                // the new values, but the old terminal ids / stale image
+                // are still in `tc.terminalIds` / `tc.assets`. Full
+                // reprocess rebuilds from the current content + metadata
+                // + rawOutput, matching the legacy semantics.
                 // Item-count + prefix-items guards: `flatten` ignores
                 // images/resource-links/terminals, so equal flattened text
-                // does NOT imply the structured items are the same —
-                // an added screenshot (count grows) or an in-place
-                // replacement (count same, item differs) would otherwise
-                // skip `extractAssets`/`extractTerminalIds`.
+                // does NOT imply the structured items are the same.
                 return
             }
             // Same content but `isFinal` flipped (e.g. status transitioned to
@@ -1099,6 +1099,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 isFinal: Self.isFinalStatus(tc.status),
                 rawOutputAssets: rawOutputAssets,
                 rawOutputChanged: update.rawOutput != nil,
+                metadataChanged: update.metadata != nil,
                 to: &tc)
         }
     }
