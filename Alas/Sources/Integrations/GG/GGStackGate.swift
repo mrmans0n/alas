@@ -17,12 +17,45 @@ enum GGStackGate {
         return FileManager.default.fileExists(atPath: path)
     }
 
+    /// True when a git rebase/merge/cherry-pick/revert is in progress in the
+    /// worktree — i.e. a gg `sync`/`land` paused on a conflict. `gg ls
+    /// --json` cannot report this, so the drawer's Continue/Abort state is
+    /// driven by this cheap filesystem probe and self-corrects each refresh.
+    /// Uses `worktreeGitDir`, not `commonGitDir`: these markers are written
+    /// to the private per-worktree git dir, not the dir shared across
+    /// worktrees.
+    static func operationInProgress(repoPath: String) -> Bool {
+        guard let gitDir = worktreeGitDir(repoPath: repoPath) else { return false }
+        let markers = ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]
+        return markers.contains {
+            FileManager.default.fileExists(atPath: (gitDir as NSString).appendingPathComponent($0))
+        }
+    }
+
     /// Resolves the shared git directory for `repoPath`: itself when `.git`
     /// is a real directory (primary checkout), or — for a linked worktree,
     /// where `.git` is a file pointing at a private per-worktree dir under
     /// `<commondir>/worktrees/<name>` — the directory named by that private
     /// dir's `commondir` file.
     private static func commonGitDir(repoPath: String) -> String? {
+        guard let gitDir = worktreeGitDir(repoPath: repoPath) else { return nil }
+        let commondirFile = (gitDir as NSString).appendingPathComponent("commondir")
+        guard let commondirContents = try? String(contentsOfFile: commondirFile, encoding: .utf8) else {
+            return gitDir
+        }
+        let relativeCommonDir = commondirContents.trimmingCharacters(in: .whitespacesAndNewlines)
+        return resolvedPath(relativeCommonDir, relativeTo: gitDir)
+    }
+
+    /// Resolves the *private*, per-checkout git directory for `repoPath`:
+    /// itself when `.git` is a real directory (primary checkout — there is
+    /// no separate private dir; the checkout's own `.git` holds all local
+    /// state), or — for a linked worktree — the directory named by the
+    /// `.git` file's `gitdir:` line, *without* following it on to the
+    /// shared `commondir`. This is where git actually writes per-worktree
+    /// state such as a paused `rebase-merge`, unlike `commonGitDir`, which
+    /// resolves through to the dir shared across all worktrees.
+    private static func worktreeGitDir(repoPath: String) -> String? {
         let dotGitPath = (repoPath as NSString).appendingPathComponent(".git")
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dotGitPath, isDirectory: &isDirectory) else {
@@ -38,13 +71,7 @@ enum GGStackGate {
             return nil
         }
         let rawPath = gitdirLine.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
-        let privateGitDir = resolvedPath(rawPath, relativeTo: repoPath)
-        let commondirFile = (privateGitDir as NSString).appendingPathComponent("commondir")
-        guard let commondirContents = try? String(contentsOfFile: commondirFile, encoding: .utf8) else {
-            return privateGitDir
-        }
-        let relativeCommonDir = commondirContents.trimmingCharacters(in: .whitespacesAndNewlines)
-        return resolvedPath(relativeCommonDir, relativeTo: privateGitDir)
+        return resolvedPath(rawPath, relativeTo: repoPath)
     }
 
     private static func resolvedPath(_ path: String, relativeTo base: String) -> String {
