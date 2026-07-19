@@ -62,7 +62,9 @@ struct ChangesTabView: View {
                 .padding(.top, 6)
             }
 
-            if let op = rps.mergeOp.current {
+            if let op = rps.mergeOp.current,
+               Self.shouldShowGenericOperationCard(mergeOperation: op, pausedGGOperation: rps.ggActionState.pausedOperation)
+            {
                 OperationCard(
                     operation: op,
                     hasUnresolvedConflicts: !conflicts.isEmpty,
@@ -219,6 +221,13 @@ struct ChangesTabView: View {
                 onGGCheckout: { entry in rps.requestGGCheckout(target: entry.id) }
             )
         }
+    }
+
+    static func shouldShowGenericOperationCard(
+        mergeOperation: MergeOperation?,
+        pausedGGOperation: GGPausedOperation?
+    ) -> Bool {
+        mergeOperation != nil && pausedGGOperation == nil
     }
 
     private var hasDraftTab: Bool {
