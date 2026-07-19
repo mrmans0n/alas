@@ -6,18 +6,25 @@ private final class RecordingGGRunner: GGCommandRunning, @unchecked Sendable {
     var stdout: String
     var exitCode: Int32
     var stderr: String
+    var syncHelpStdout: String
     private(set) var lastArgs: [String] = []
     private(set) var lastCwd: URL?
+    private(set) var calls: [[String]] = []
 
-    init(stdout: String = "", exitCode: Int32 = 0, stderr: String = "") {
+    init(stdout: String = "", exitCode: Int32 = 0, stderr: String = "", syncHelpStdout: String = "--jsonl") {
         self.stdout = stdout
         self.exitCode = exitCode
         self.stderr = stderr
+        self.syncHelpStdout = syncHelpStdout
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        calls.append(args)
         lastArgs = args
         lastCwd = cwd
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: syncHelpStdout, stderr: "")
+        }
         return ProcessResult(exitCode: exitCode, stdout: stdout, stderr: stderr)
     }
 }
@@ -47,6 +54,19 @@ struct GGServiceActionsTests {
         ])
         #expect(runner.lastArgs == ["sync", "--jsonl", "--no-rebase-check"])
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
+    }
+
+    @Test func syncFallsBackToJSONWhenJSONLIsUnsupported() async throws {
+        let runner = RecordingGGRunner(stdout: #"{"version":1}"#, syncHelpStdout: "--json")
+        let service = GGService(runner: runner)
+
+        var events: [GGSyncEvent] = []
+        for try await event in service.sync(worktreePath: "/tmp/wt") {
+            events.append(event)
+        }
+
+        #expect(events == [.summary])
+        #expect(runner.calls == [["sync", "--help"], ["sync", "--json", "--no-rebase-check"]])
     }
 
     @Test func landAllSendsAllFlagAndDecodes() async throws {

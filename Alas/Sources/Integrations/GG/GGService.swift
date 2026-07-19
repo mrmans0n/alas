@@ -273,17 +273,26 @@ struct GGService {
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8)).stack
     }
 
-    /// Streams `gg sync --jsonl` events. Non-`GGSyncEvent` lines are skipped.
+    /// Streams sync events when `gg sync --jsonl` is supported; older gg
+    /// builds fall back to `--json` and yield a summary event on success.
     func sync(worktreePath: String) -> AsyncThrowingStream<GGSyncEvent, Error> {
-        let lines = runner.runStreaming(
-            args: ["sync", "--jsonl", "--no-rebase-check"],
-            cwd: URL(fileURLWithPath: worktreePath)
-        )
         return AsyncThrowingStream { continuation in
             Task {
                 do {
-                    for try await line in lines {
-                        if let event = GGSyncEvent.parse(line: line) { continuation.yield(event) }
+                    if await syncSupportsJSONL() {
+                        let lines = runner.runStreaming(
+                            args: ["sync", "--jsonl", "--no-rebase-check"],
+                            cwd: URL(fileURLWithPath: worktreePath)
+                        )
+                        for try await line in lines {
+                            if let event = GGSyncEvent.parse(line: line) { continuation.yield(event) }
+                        }
+                    } else {
+                        _ = try await runChecked(
+                            args: ["sync", "--json", "--no-rebase-check"],
+                            worktreePath: worktreePath
+                        )
+                        continuation.yield(.summary)
                     }
                     continuation.finish()
                 } catch {
@@ -303,6 +312,13 @@ struct GGService {
 
     func clean(worktreePath: String) async throws {
         _ = try await runChecked(args: ["clean", "--all"], worktreePath: worktreePath)
+    }
+
+    private func syncSupportsJSONL() async -> Bool {
+        guard let result = try? await runner.run(args: ["sync", "--help"], cwd: nil),
+              result.exitCode == 0
+        else { return false }
+        return result.stdout.contains("--jsonl")
     }
 
     func continueOp(worktreePath: String) async throws {

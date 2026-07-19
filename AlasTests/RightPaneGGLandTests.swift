@@ -42,4 +42,14 @@ struct RightPaneGGLandTests {
         state.cancelGGLand()
         #expect(state.pendingGGLand == nil)
     }
+
+    @Test func requestAndCancelCleanAllSetAndClearPending() {
+        let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
+                          path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.requestGGCleanAll()
+        #expect(state.pendingGGCleanAll)
+        state.cancelGGCleanAll()
+        #expect(!state.pendingGGCleanAll)
+    }
 }

@@ -212,6 +212,7 @@ final class RightPaneState {
     var mergeError: String? = nil
     var mergeQueuedMessage: String? = nil
     var pendingGGLand: GGLandRequest? = nil
+    var pendingGGCleanAll: Bool = false
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -796,24 +797,18 @@ final class RightPaneState {
     // watcher.
     @MainActor
     func refreshGGStack() async {
-        // Reconcile paused-operation state from a git-level probe before
-        // anything else: it's a cheap filesystem read, independent of the
-        // gg query below and of whether the gate/stack-shape checks pass, so
-        // Continue/Abort stay accurate even across app restarts and terminal
-        // interventions (`gg ls --json` can't report a paused rebase, and a
-        // stack that stops being gated must still clear a stale flag).
-        reconcilePausedOperation()
-
         let snapshotGeneration = snapshotInvalidationGeneration
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
             ggStackCommitsKey = nil
+            ggActionState.clearPaused()
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
             return
         }
+        reconcilePausedOperation()
         // `gg ls --json` reaches out to gh/glab for PR state — skip when
         // the branch and commit set are unchanged since the last query. PR-
         // state churn from the outside world refreshes on the next commits
@@ -911,7 +906,7 @@ final class RightPaneState {
         case .sync:
             runGGSync()
         case .clean:
-            runGGSimpleAction(.clean) { try await self.ggService.clean(worktreePath: self.worktree.path.path) }
+            requestGGCleanAll()
         case .continueOp:
             runGGSimpleAction(.continueOp) { try await self.ggService.continueOp(worktreePath: self.worktree.path.path) }
         case .abortOp:
@@ -925,6 +920,13 @@ final class RightPaneState {
 
     func requestGGLand(_ request: GGLandRequest) { pendingGGLand = request }
     func cancelGGLand() { pendingGGLand = nil }
+    func requestGGCleanAll() { pendingGGCleanAll = true }
+    func cancelGGCleanAll() { pendingGGCleanAll = false }
+    func performGGCleanAll() {
+        guard pendingGGCleanAll else { return }
+        pendingGGCleanAll = false
+        runGGSimpleAction(.clean) { try await self.ggService.clean(worktreePath: self.worktree.path.path) }
+    }
 
     /// Checks out a stack entry (`gg mv <target>`), routed through
     /// `runGGSimpleAction` so it gets the same busy-gating, error-surfacing,

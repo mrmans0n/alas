@@ -432,6 +432,23 @@ private struct RootPresentationHandlers: ViewModifier {
                 stack: state.rightPaneStore.stateWithPendingGGLand()?.ggStack
             ))
         }
+        .confirmationDialog(
+            "Clean all merged stacks?",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateWithPendingGGCleanAll() != nil },
+                set: { if !$0 { state.rightPaneStore.stateWithPendingGGCleanAll()?.cancelGGCleanAll() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Clean all merged stacks", role: .destructive) {
+                state.rightPaneStore.stateWithPendingGGCleanAll()?.performGGCleanAll()
+            }
+            Button("Cancel", role: .cancel) {
+                state.rightPaneStore.stateWithPendingGGCleanAll()?.cancelGGCleanAll()
+            }
+        } message: {
+            Text("Remove every merged gg stack and associated worktree in this repository.")
+        }
         .alert(
             "Merge failed",
             isPresented: Binding(

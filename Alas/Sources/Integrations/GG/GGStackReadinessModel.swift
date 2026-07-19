@@ -68,7 +68,7 @@ struct GGStackReadinessModel: Equatable {
                        isInFlight: inFlight == .sync, emphasis: .primary),
                 Action(kind: .land, title: "Land ready", isEnabled: !busy && landReady,
                        isInFlight: inFlight == .land, emphasis: .normal),
-                Action(kind: .clean, title: "Clean", isEnabled: !busy && hasMerged,
+                Action(kind: .clean, title: "Clean all", isEnabled: !busy && hasMerged,
                        isInFlight: inFlight == .clean, emphasis: .normal),
             ]
         }

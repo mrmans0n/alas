@@ -324,4 +324,11 @@ final class RightPaneStore {
     func stateWithPendingGGLand() -> RightPaneState? {
         states.values.first { $0.pendingGGLand != nil }
     }
+
+    /// The first cached state with a pending gg clean-all confirmation.
+    /// Mirrors the other cross-worktree confirmations so changing selection
+    /// while the dialog is open resolves the state that requested it.
+    func stateWithPendingGGCleanAll() -> RightPaneState? {
+        states.values.first { $0.pendingGGCleanAll }
+    }
 }

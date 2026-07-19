@@ -131,6 +131,18 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
     }
 
+    @Test func gateClosedClearsPausedOperation() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggGateProvider = { false }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
+        state.ggActionState.setPaused(GGPausedOperation(pausedBy: .sync))
+
+        await state.refreshGGStack()
+
+        #expect(state.ggActionState.pausedOperation == nil)
+    }
+
     @Test func notStackShapedSkipsCLIAndClearsStack() async throws {
         let wt = makeWorktree()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
