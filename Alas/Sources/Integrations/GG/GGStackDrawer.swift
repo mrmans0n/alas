@@ -9,7 +9,11 @@ struct GGStackDrawer: View {
 
     private var model: GGStackReadinessModel? {
         if let stack = rps.ggStack {
-            return GGStackReadinessModel.make(stack: stack, action: rps.ggActionState)
+            return GGStackReadinessModel.make(
+                stack: stack,
+                action: rps.ggActionState,
+                liveBehindBase: rps.behindBase?.count
+            )
         }
         return GGStackReadinessModel.makePausedFallback(action: rps.ggActionState)
     }

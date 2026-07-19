@@ -28,10 +28,14 @@ struct GGStackReadinessModel: Equatable {
     let isPaused: Bool
 
     @MainActor
-    static func make(stack: GGStack, action: GGStackActionState) -> GGStackReadinessModel {
+    static func make(
+        stack: GGStack,
+        action: GGStackActionState,
+        liveBehindBase: Int? = nil
+    ) -> GGStackReadinessModel {
         let merged = stack.entries.filter { $0.prState == .merged }.count
         let unsynced = max(0, stack.totalCommits - stack.syncedCommits)
-        let behind = stack.behindBase ?? 0
+        let behind = liveBehindBase ?? stack.behindBase ?? 0
         let isPaused = action.pausedOperation != nil
         let inFlight = action.inFlightAction
         let busy = inFlight != nil

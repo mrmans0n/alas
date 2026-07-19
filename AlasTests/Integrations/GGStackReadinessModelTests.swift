@@ -45,6 +45,19 @@ struct GGStackReadinessModelTests {
         #expect(sync?.isEnabled == false)
     }
 
+    @Test func syncUsesLiveBehindBaseOverride() {
+        let staleStack = stack([entry(position: 1, prState: nil)], synced: 1, behind: 0)
+        let model = GGStackReadinessModel.make(
+            stack: staleStack,
+            action: GGStackActionState(),
+            liveBehindBase: 2
+        )
+
+        #expect(model.actions.first { $0.kind == .sync }?.isEnabled == false)
+        #expect(model.facts.contains { $0.label == "Behind base" && $0.value == "2" })
+        #expect(model.summaryChip.contains("2"))
+    }
+
     @Test func landReadyEnabledWithOpenEntryForFreshVerification() {
         let staleProviderState = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open, approved: false, ci: .success)]),
