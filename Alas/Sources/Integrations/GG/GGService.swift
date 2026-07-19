@@ -329,7 +329,7 @@ struct GGService {
                 do {
                     if await syncSupportsJSONL() {
                         let lines = runner.runStreaming(
-                            args: ["sync", "--jsonl", "--no-rebase-check"],
+                            args: ["sync", "--jsonl"],
                             cwd: URL(fileURLWithPath: worktreePath)
                         )
                         for try await line in lines {
@@ -337,7 +337,7 @@ struct GGService {
                         }
                     } else {
                         let result = try await runChecked(
-                            args: ["sync", "--json", "--no-rebase-check"],
+                            args: ["sync", "--json"],
                             worktreePath: worktreePath
                         )
                         continuation.yield(GGSyncEvent.parse(line: result.stdout) ?? .summary)

@@ -52,7 +52,7 @@ struct GGServiceActionsTests {
             .prCreated(position: 1, prNumber: 7, prURL: "https://x/pull/7", draft: false),
             .summary,
         ])
-        #expect(runner.lastArgs == ["sync", "--jsonl", "--no-rebase-check"])
+        #expect(runner.lastArgs == ["sync", "--jsonl"])
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
     }
 
@@ -66,7 +66,7 @@ struct GGServiceActionsTests {
         }
 
         #expect(events == [.summary])
-        #expect(runner.calls == [["sync", "--help"], ["sync", "--json", "--no-rebase-check"]])
+        #expect(runner.calls == [["sync", "--help"], ["sync", "--json"]])
     }
 
     @Test func syncFallbackSurfacesJSONSummaryErrors() async throws {

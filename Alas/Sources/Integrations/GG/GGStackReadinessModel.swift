@@ -59,14 +59,12 @@ struct GGStackReadinessModel: Equatable {
                        isInFlight: inFlight == .abortOp, emphasis: .normal),
             ]
         } else {
-            let landReady = stack.entries.contains {
-                $0.prState == .open && $0.approved && $0.ciStatus == .success
-            }
+            let canCheckLandReadiness = stack.entries.contains { $0.prState == .open }
             let hasMerged = merged > 0
             actions = [
                 Action(kind: .sync, title: "Sync stack", isEnabled: !busy,
                        isInFlight: inFlight == .sync, emphasis: .primary),
-                Action(kind: .land, title: "Land ready", isEnabled: !busy && landReady,
+                Action(kind: .land, title: "Land ready", isEnabled: !busy && canCheckLandReadiness,
                        isInFlight: inFlight == .land, emphasis: .normal),
                 Action(kind: .clean, title: "Clean all", isEnabled: !busy && hasMerged,
                        isInFlight: inFlight == .clean, emphasis: .normal),

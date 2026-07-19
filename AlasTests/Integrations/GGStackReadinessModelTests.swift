@@ -36,18 +36,18 @@ struct GGStackReadinessModelTests {
         #expect(sync?.isEnabled == true)
     }
 
-    @Test func landReadyEnabledOnlyWithOpenApprovedGreenEntry() {
-        let notReady = GGStackReadinessModel.make(
+    @Test func landReadyEnabledWithOpenEntryForFreshVerification() {
+        let staleProviderState = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open, approved: false, ci: .success)]),
             action: GGStackActionState()
         )
-        #expect(notReady.actions.first { $0.kind == .land }?.isEnabled == false)
+        #expect(staleProviderState.actions.first { $0.kind == .land }?.isEnabled == true)
 
-        let ready = GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .open, approved: true, ci: .success)]),
+        let noOpenEntries = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .merged)]),
             action: GGStackActionState()
         )
-        #expect(ready.actions.first { $0.kind == .land }?.isEnabled == true)
+        #expect(noOpenEntries.actions.first { $0.kind == .land }?.isEnabled == false)
     }
 
     @Test func cleanEnabledOnlyWithMergedEntry() {

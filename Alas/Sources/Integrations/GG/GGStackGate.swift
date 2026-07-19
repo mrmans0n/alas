@@ -4,6 +4,8 @@ import Foundation
 /// when every gate passes: master toggle → gg installed → per-project
 /// mode → the current branch is actually stack-shaped.
 enum GGStackGate {
+    private static let alasOperationMarkerName = "alas-gg-operation"
+
     /// Gate 3 (auto mode): the repo's common git dir carries gg config.
     /// `repoPath` is a project's checkout path, which is not guaranteed to
     /// be the primary one — a project can be added from a linked worktree,
@@ -30,6 +32,21 @@ enum GGStackGate {
         return markers.contains {
             FileManager.default.fileExists(atPath: (gitDir as NSString).appendingPathComponent($0))
         }
+    }
+
+    static func alasGGOperationInProgress(repoPath: String) -> Bool {
+        guard let markerPath = alasGGOperationMarkerPath(repoPath: repoPath) else { return false }
+        return FileManager.default.fileExists(atPath: markerPath)
+    }
+
+    static func markAlasGGOperationInProgress(repoPath: String) {
+        guard let markerPath = alasGGOperationMarkerPath(repoPath: repoPath) else { return }
+        FileManager.default.createFile(atPath: markerPath, contents: Data())
+    }
+
+    static func clearAlasGGOperationInProgress(repoPath: String) {
+        guard let markerPath = alasGGOperationMarkerPath(repoPath: repoPath) else { return }
+        try? FileManager.default.removeItem(atPath: markerPath)
     }
 
     /// Resolves the shared git directory for `repoPath`: itself when `.git`
@@ -72,6 +89,12 @@ enum GGStackGate {
         }
         let rawPath = gitdirLine.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
         return resolvedPath(rawPath, relativeTo: repoPath)
+    }
+
+    private static func alasGGOperationMarkerPath(repoPath: String) -> String? {
+        worktreeGitDir(repoPath: repoPath).map {
+            ($0 as NSString).appendingPathComponent(alasOperationMarkerName)
+        }
     }
 
     private static func resolvedPath(_ path: String, relativeTo base: String) -> String {

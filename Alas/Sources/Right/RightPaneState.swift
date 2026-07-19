@@ -889,7 +889,9 @@ final class RightPaneState {
     /// their regular recovery UI.
     private func reconcilePausedOperation() {
         if GGStackGate.operationInProgress(repoPath: worktree.path.path),
-           ggActionState.inFlightAction != nil || ggActionState.pausedOperation != nil
+           ggActionState.inFlightAction != nil
+               || ggActionState.pausedOperation != nil
+               || GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
         {
             if ggActionState.pausedOperation == nil {
                 ggActionState.setPaused(GGPausedOperation(pausedBy: ggActionState.inFlightAction ?? .sync))
@@ -903,6 +905,7 @@ final class RightPaneState {
         guard GGStackGate.operationInProgress(repoPath: worktree.path.path) else { return false }
         return ggActionState.inFlightAction != nil
             || ggActionState.pausedOperation != nil
+            || GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
     }
 
     /// Dispatches a stack-drawer action kind to its gg mutation. `.land`
@@ -972,10 +975,12 @@ final class RightPaneState {
         guard let request = pendingGGLand else { return }
         pendingGGLand = nil
         guard ggActionState.beginAction(.land) else { return }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
         ggActionState.clearError()
         Task { @MainActor in
             defer {
                 preservePausedGGOperationIfNeeded()
+                clearAlasGGOperationMarkerIfComplete()
                 ggActionState.endAction(.land)
                 Task { @MainActor in
                     await self.refresh()
@@ -1002,11 +1007,13 @@ final class RightPaneState {
 
     private func runGGSync() {
         guard ggActionState.beginAction(.sync) else { return }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
         ggActionState.clearError()
         ggActionState.clearSyncProgress()
         Task { @MainActor in
             defer {
                 preservePausedGGOperationIfNeeded()
+                clearAlasGGOperationMarkerIfComplete()
                 ggActionState.endAction(.sync)
                 Task { @MainActor in
                     await self.refresh()
@@ -1028,10 +1035,12 @@ final class RightPaneState {
 
     private func runGGSimpleAction(_ kind: GGStackActionKind, _ body: @escaping () async throws -> Void) {
         guard ggActionState.beginAction(kind) else { return }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
         ggActionState.clearError()
         Task { @MainActor in
             defer {
                 preservePausedGGOperationIfNeeded()
+                clearAlasGGOperationMarkerIfComplete()
                 ggActionState.endAction(kind)
                 Task { @MainActor in
                     await self.refresh()
@@ -1054,6 +1063,12 @@ final class RightPaneState {
               ggActionState.pausedOperation == nil
         else { return }
         ggActionState.setPaused(GGPausedOperation(pausedBy: action))
+    }
+
+    private func clearAlasGGOperationMarkerIfComplete() {
+        if !GGStackGate.operationInProgress(repoPath: worktree.path.path) {
+            GGStackGate.clearAlasGGOperationInProgress(repoPath: worktree.path.path)
+        }
     }
 
     func markSnapshotUnknown() {

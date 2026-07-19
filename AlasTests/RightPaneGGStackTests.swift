@@ -35,7 +35,7 @@ private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendab
         if args == ["sync", "--help"] {
             return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
         }
-        if args == ["sync", "--jsonl", "--no-rebase-check"], let cwd {
+        if args == ["sync", "--jsonl"], let cwd {
             try FileManager.default.createDirectory(
                 at: cwd.appendingPathComponent(".git/rebase-merge"),
                 withIntermediateDirectories: true
@@ -423,6 +423,7 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.pausedOperation == nil)
 
         _ = state.ggActionState.beginAction(.sync)
+        GGStackGate.markAlasGGOperationInProgress(repoPath: dir.path)
         state.ggStackCommitsKey = nil
         await state.refreshGGStack()
         #expect(state.ggActionState.pausedOperation != nil)
@@ -433,6 +434,28 @@ struct RightPaneGGStackTests {
         state.ggStackCommitsKey = nil // force a re-query past the unchanged-key guard
         await state.refreshGGStack()
         #expect(state.ggActionState.pausedOperation == nil)
+    }
+
+    @Test func refreshRestoresPausedGGOperationFromAlasMarker() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-paused-reload-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git/rebase-merge"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: dir.path)
+        let wt = Worktree(
+            id: Worktree.makeId(path: dir), projectId: "p", name: "feature",
+            branch: "feature", path: dir, status: .clean, lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        ))
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "r", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+
+        #expect(state.ggActionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
     }
 
     @Test func thrownRefreshKeepsPausedOperationWhenGitProbeIsPaused() async throws {
