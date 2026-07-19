@@ -50,18 +50,33 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
+        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv())
+    }
+
+    /// Pipe-lifecycle core of `runStreaming`, parameterized on the
+    /// executable/args so tests can exercise the readability-handler /
+    /// write-end-close pattern against a trivial subprocess (e.g.
+    /// `/bin/sh -c ...`) without depending on the `gg` binary being
+    /// installed.
+    static func streamProcess(
+        executable: String,
+        args: [String],
+        cwd: URL?,
+        env: [String: String]?
+    ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["gg"] + args
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = args
             if let cwd { process.currentDirectoryURL = cwd }
-            process.environment = Process.gitEnv()
+            if let env { process.environment = env }
             let outPipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = outPipe
             process.standardError = errPipe
 
             let buffer = LineBuffer()
+            let stderrAccum = StderrAccumulator()
             outPipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 if data.isEmpty {
@@ -72,27 +87,73 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     for line in buffer.feed(chunk) { continuation.yield(line) }
                 }
             }
+            // Drain stderr incrementally as it arrives rather than blocking
+            // on it in the termination handler — see `Process+Git.swift`'s
+            // `run(_:args:...)` for the same pattern and why it matters: a
+            // chatty child can fill the ~64KB pipe buffer and block its own
+            // `write()` (and therefore its own exit) if nobody is reading.
+            errPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    stderrAccum.append(data)
+                }
+            }
             process.terminationHandler = { proc in
-                let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 if proc.terminationStatus == 0 {
                     continuation.finish()
                 } else if proc.terminationStatus == 127 {
                     continuation.finish(throwing: GGServiceError.cliMissing)
                 } else {
                     continuation.finish(throwing: GGServiceError.commandFailed(
-                        stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                        stderr: stderrAccum.text().trimmingCharacters(in: .whitespacesAndNewlines)
                     ))
                 }
             }
             do {
                 try process.run()
             } catch {
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: error.localizedDescription))
+                return
             }
+            // Close the parent's copy of the pipe write ends now that the
+            // child has dup'd them. Without this, the kernel keeps
+            // reporting "writers still open" on the read side and the
+            // readability handlers never see EOF after the child exits —
+            // the stream would hang forever waiting for a termination that
+            // already happened.
+            try? outPipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForWriting.close()
             continuation.onTermination = { _ in
                 if process.isRunning { process.terminate() }
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
             }
         }
+    }
+}
+
+/// Thread-safe accumulator for stderr bytes read incrementally off a
+/// readability handler. Mirrors `Process+Git.swift`'s `ByteAccumulator`
+/// (kept separate here since that type is file-private and this call site
+/// only needs the final text, not EOF-latching).
+private final class StderrAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func text() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
