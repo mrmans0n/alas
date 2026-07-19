@@ -39,11 +39,15 @@ struct ChangesTabView: View {
             ScrollView {
                 scrollContent
             }
-            ReviewLoopDrawer(
-                state: rps.reviewLoop,
-                canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
-                onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
-            )
+            if rps.ggStack != nil {
+                GGStackDrawer(rps: rps, appState: appState)
+            } else {
+                ReviewLoopDrawer(
+                    state: rps.reviewLoop,
+                    canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
+                    onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
+                )
+            }
         }
     }
 

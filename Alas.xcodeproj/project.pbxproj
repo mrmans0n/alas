@@ -300,6 +300,7 @@
 		3A866AA94C2B50FA00805875 /* SettingsGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */; };
 		3AC6DD00AD2D19FB3A0CCD03 /* RecommendedLanguageCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E265B0C6F314FC80DB18053D /* RecommendedLanguageCatalog.swift */; };
 		3AF04FB045CE3D9CAC066B27 /* HarnessKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76F2498E56CBAF84CB67166C /* HarnessKind.swift */; };
+		3AFEB19356A2BC5E7B6E1E4A /* GGStackDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7860DF249939BC7FC1EBD76 /* GGStackDrawer.swift */; };
 		3B0629E55CC38A713F763AA8 /* AppearancePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B450918CC98255AD9170586 /* AppearancePane.swift */; };
 		3B34A2725C1F6B6E29C312F1 /* SearchInputRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3519B5A28746C49C35D9DAF9 /* SearchInputRow.swift */; };
 		3B7D77B9E71C66ACB1E007D7 /* EditorBufferStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */; };
@@ -2433,6 +2434,7 @@
 		D7331F53100D12A0DDFD6B1D /* RemoteFileSearchGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFileSearchGateTests.swift; sourceTree = "<group>"; };
 		D73C433B373577FD515FECD3 /* DiffReviewScrollSpy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewScrollSpy.swift; sourceTree = "<group>"; };
 		D76C02E43360C0BCFEDF5428 /* DiffOpenFileAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailability.swift; sourceTree = "<group>"; };
+		D7860DF249939BC7FC1EBD76 /* GGStackDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackDrawer.swift; sourceTree = "<group>"; };
 		D837246E56472EBA3993F515 /* RemoteWorktreePoll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorktreePoll.swift; sourceTree = "<group>"; };
 		D8ACFACD788DF2035534F62E /* AppConfigCodeInstallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigCodeInstallTests.swift; sourceTree = "<group>"; };
 		D8D583586BC5171D2FE91F6C /* ReviewScopeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewScopeSelection.swift; sourceTree = "<group>"; };
@@ -4834,6 +4836,7 @@
 				9160AF4DDD35E2A02262D868 /* GGService.swift */,
 				2A9D7898F772DC2F10532A1F /* GGStackActionState.swift */,
 				E81D0FF9B67ADCA35679FF76 /* GGStackChip.swift */,
+				D7860DF249939BC7FC1EBD76 /* GGStackDrawer.swift */,
 				ABF9F7D29F77AE8524E06EFA /* GGStackGate.swift */,
 				86CE36A9A7301E6863CEDFCC /* GGStackModels.swift */,
 				4D59124348BCE765816A0C6C /* GGStackReadinessModel.swift */,
@@ -5541,6 +5544,7 @@
 				3CF61CA14860FC9E9C3224DC /* GGService.swift in Sources */,
 				F59B834AB41CDD4BBCA84A7B /* GGStackActionState.swift in Sources */,
 				985B3CFBBCB9AF3059192796 /* GGStackChip.swift in Sources */,
+				3AFEB19356A2BC5E7B6E1E4A /* GGStackDrawer.swift in Sources */,
 				4BA49732C8D13ED574A0E35D /* GGStackGate.swift in Sources */,
 				93CE39FC58076587CC85F489 /* GGStackModels.swift in Sources */,
 				8ADC05EBB9FE7D278508A941 /* GGStackReadinessModel.swift in Sources */,
