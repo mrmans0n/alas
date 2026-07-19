@@ -2800,4 +2800,690 @@ struct ACPSessionTests {
             #expect(tc.contentLanguage == nil)
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("streamed toolCallUpdate suffix chunks accumulate into the full content")
+    func toolCallUpdateStreamingSuffixAccumulates() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-stream", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Adapter sends the full cumulative content on each update.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-stream", status: "in_progress",
+            content: [.content(.text("line one\n"))])))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-stream", status: "in_progress",
+            content: [.content(.text("line one\nline two\n"))])))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-stream", status: "in_progress",
+            content: [.content(.text("line one\nline two\nline three\n"))])))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-stream", status: "completed",
+            content: [.content(.text("line one\nline two\nline three\n"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "line one\nline two\nline three\n")
+            #expect(tc.preview == "line one")
+            #expect(tc.status == "completed")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate strips wrapping fence across suffix chunks")
+    func toolCallUpdateStreamingFenceStripsAcrossChunks() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-fence-stream", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Opening fence arrives alone.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-fence-stream", status: "in_progress",
+            content: [.content(.text("```swift"))])))
+        // First line of code arrives.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-fence-stream", status: "in_progress",
+            content: [.content(.text("```swift\nlet x = 1"))])))
+        // More code arrives.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-fence-stream", status: "in_progress",
+            content: [.content(.text("```swift\nlet x = 1\nlet y = 2"))])))
+        // Closing fence arrives with final status.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-fence-stream", status: "completed",
+            content: [.content(.text("```swift\nlet x = 1\nlet y = 2\n```"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "let x = 1\nlet y = 2")
+            #expect(tc.contentLanguage == "swift")
+            #expect(tc.preview == "let x = 1")
+            #expect(tc.status == "completed")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate preserves assets declared across suffix chunks")
+    func toolCallUpdateStreamingAssetsAcrossChunks() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-asset-stream", title: "screenshot", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: text + an image asset.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-asset-stream", status: "in_progress",
+            content: [
+                .content(.text("captured")),
+                .content(.image(data: "first-bytes", uri: nil, mimeType: "image/png"))
+            ])))
+        // Second chunk: same text+image plus a second image (cumulative snapshot).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-asset-stream", status: "completed",
+            content: [
+                .content(.text("captured")),
+                .content(.image(data: "first-bytes", uri: nil, mimeType: "image/png")),
+                .content(.image(data: nil, uri: "file:///tmp/second.png", mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "captured")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "first-bytes", mimeType: "image/png"),
+                ACPMessage.ToolCallAsset.image(
+                    data: nil, uri: "file:///tmp/second.png", mimeType: "image/png", name: "second.png")
+            ])
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate preserves terminal ids declared across suffix chunks")
+    func toolCallUpdateStreamingTerminalIdsAcrossChunks() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-term-stream", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-term-stream", status: "in_progress",
+            content: [
+                .terminal(terminalId: "term-a"),
+                .content(.text("starting"))
+            ])))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-term-stream", status: "completed",
+            content: [
+                .terminal(terminalId: "term-a"),
+                .content(.text("starting\nfinished")),
+                .terminal(terminalId: "term-b")
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "starting\nfinished")
+            #expect(tc.terminalIds == ["term-a", "term-b"])
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with identical cumulative content does not bump contentRevision")
+    func toolCallUpdateIdenticalContentDoesNotBumpRevision() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-identical", title: "run", kind: "execute", status: "in_progress",
+            content: [.content(.text("same output"))])))
+        guard case .toolCall(let initial) = session.transcript.messages[0] else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        let revisionBefore = initial.contentRevision
+        // Adapter re-sends the same cumulative content (e.g. a status-only
+        // update that happens to also include the content snapshot).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-identical", status: "completed",
+            content: [.content(.text("same output"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.contentRevision == revisionBefore)
+            #expect(tc.content == "same output")
+            #expect(tc.status == "completed")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with divergent content (non-prefix) reprocesses fully")
+    func toolCallUpdateDivergentContentReprocessesFully() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-divergent", title: "run", kind: "execute", status: "in_progress",
+            content: [.content(.text("first output\n"))])))
+        // The next update carries entirely different content (not a prefix
+        // extension). The full reprocess path must replace content.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-divergent", status: "completed",
+            content: [.content(.text("completely different output\n"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "completely different output\n")
+            #expect(tc.preview == "completely different output")
+            #expect(tc.status == "completed")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed text-growing item preserves earlier content assets across suffix updates")
+    func toolCallUpdateStreamingTextGrowthPreservesEarlierAssets() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-asset-preserve", title: "screenshot", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: text + image (two items).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-asset-preserve", status: "in_progress",
+            content: [
+                .content(.text("a")),
+                .content(.image(data: "img-bytes", uri: nil, mimeType: "image/png"))
+            ])))
+        // Second chunk: the SAME image item, but the text item grew in place
+        // (text "a" -> "ab"). Items count is still 2; the suffix path's
+        // `newItemSlice` is empty, so the image must be preserved from the
+        // previous apply, not dropped.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-asset-preserve", status: "completed",
+            content: [
+                .content(.text("ab")),
+                .content(.image(data: "img-bytes", uri: nil, mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "ab")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-bytes", mimeType: "image/png")
+            ])
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text but newly added image asset extracts the asset")
+    func toolCallUpdateSameTextNewAssetExtractsAsset() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-same-text-asset", title: "screenshot", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update establishes the text + cache.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-asset", status: "in_progress",
+            content: [.content(.text("same"))])))
+        // Second update re-sends the same flattened text but adds a new
+        // image asset, with the SAME status (in_progress) so `isFinal`
+        // doesn't flip and force a full reprocess. The identical-text fast
+        // path must NOT skip asset extraction for the newly added item.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-asset", status: "in_progress",
+            content: [
+                .content(.text("same")),
+                .content(.image(data: "new-img", uri: nil, mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "same")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "new-img", mimeType: "image/png")
+            ], "assets=\(tc.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text but newly added terminal id extracts the terminal id")
+    func toolCallUpdateSameTextNewTerminalExtractsTerminalId() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-same-text-term", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update establishes the text + cache.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-term", status: "in_progress",
+            content: [.content(.text("running"))])))
+        // Second update re-sends the same text but adds a terminal item,
+        // with the SAME status (in_progress) so `isFinal` doesn't flip.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-term", status: "in_progress",
+            content: [
+                .content(.text("running")),
+                .terminal(terminalId: "term-late")
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "running")
+            #expect(tc.terminalIds == ["term-late"], "terminalIds=\(tc.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed partial opening fence then completion strips the wrapper fence")
+    func toolCallUpdateStreamingPartialFenceThenCompletionStripsFence() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-partial-fence", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Partial opening fence (not yet a complete fence line: "``" is not
+        // recognized by `isOpeningFence` which requires "```" prefix).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-fence", status: "in_progress",
+            content: [.content(.text("``"))])))
+        // Completion: the full opening fence plus code.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-fence", status: "completed",
+            content: [.content(.text("```swift\nlet x = 1\n```"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "let x = 1")
+            #expect(tc.contentLanguage == "swift")
+            #expect(tc.preview == "let x = 1")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text and item count but replaced image reprocesses assets")
+    func toolCallUpdateSameTextReplacedImageReprocessesAssets() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replaced-img", title: "screenshot", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + image(old).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-replaced-img", status: "in_progress",
+            content: [
+                .content(.text("same")),
+                .content(.image(data: "old-img", uri: nil, mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "old-img", mimeType: "image/png")
+            ], "assets after first=\(tc1.assets)")
+        }
+        // Second update: text + image(new) — same item count, same
+        // flattened text, but the image was replaced in place. The
+        // identical-text fast path must detect the structured change and
+        // reprocess to pick up the new asset (replacing the old one, matching
+        // the legacy full-reprocess semantics).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-replaced-img", status: "in_progress",
+            content: [
+                .content(.text("same")),
+                .content(.image(data: "new-img", uri: nil, mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "same")
+            #expect(tc2.assets == [
+                ACPMessage.ToolCallAsset.image(data: "new-img", mimeType: "image/png")
+            ], "assets after second=\(tc2.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate refreshes preview while the first line is still being built")
+    func toolCallUpdateStreamingRefreshesPreviewForPartialFirstLine() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-partial-first-line", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a partial first line "bui" (no newline yet).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-first-line", status: "in_progress",
+            content: [.content(.text("bui"))])))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.preview == "bui", "preview=\(tc1.preview ?? "nil")")
+        }
+        // Second chunk: the first line is completed to "building" and a
+        // newline starts the second line. The preview must be refreshed
+        // from "bui" to "building".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-first-line", status: "in_progress",
+            content: [.content(.text("building\nsecond line"))])))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "building\nsecond line")
+            #expect(tc2.preview == "building", "preview=\(tc2.preview ?? "nil")")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate refreshes fence language while the tag is still being built")
+    func toolCallUpdateStreamingRefreshesFenceLanguageForPartialTag() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-partial-tag", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: opening fence with a partial language tag "```c".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-tag", status: "in_progress",
+            content: [.content(.text("```c\nint x = 1;"))])))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.contentLanguage == "c", "lang=\(tc1.contentLanguage ?? "nil")")
+        }
+        // Second chunk: the tag is completed to "cpp". The fence language
+        // must be refreshed from "c" to "cpp".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-tag", status: "in_progress",
+            content: [.content(.text("```cpp\nint x = 1;\nint y = 2;"))])))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "int x = 1;\nint y = 2;")
+            #expect(tc2.contentLanguage == "cpp", "lang=\(tc2.contentLanguage ?? "nil")")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate with terminal inserted before text reprocesses terminals")
+    func toolCallUpdateStreamingTerminalInsertedBeforeTextReprocesses() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-term-insert", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text only.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-term-insert", status: "in_progress",
+            content: [.content(.text("run"))])))
+        // Second update: a terminal is inserted BEFORE the text item, and
+        // the text grows. The suffix path's `newItemSlice` (starting at
+        // the old item count) would miss the terminal; the prefix-items
+        // guard must detect the restructure and fall to full reprocess.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-term-insert", status: "completed",
+            content: [
+                .terminal(terminalId: "t1"),
+                .content(.text("running"))
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "running")
+            #expect(tc.terminalIds == ["t1"], "terminalIds=\(tc.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate does not strip a trailing fence line when there is no opening fence")
+    func toolCallUpdateStreamingNoOpeningFenceKeepsTrailingFenceLine() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-no-opening-fence", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: ordinary log output (no opening fence).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-no-opening-fence", status: "in_progress",
+            content: [.content(.text("log line\n```"))])))
+        // Final chunk: the log grows, ending with a line of three
+        // backticks that is NOT a closing fence (there was no opening
+        // fence). The suffix path must NOT strip the trailing "```".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-no-opening-fence", status: "completed",
+            content: [.content(.text("log line\n```\nmore output"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "log line\n```\nmore output")
+            #expect(tc.preview == "log line")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed single text item growing takes the suffix path (regression)")
+    func toolCallUpdateStreamingSingleTextItemGrowingTakesSuffixPath() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-growing-text", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Adapter sends a single text content item that grows on each
+        // update (the common cumulative shape). The suffix-only fast path
+        // must fire on each update; this is a regression test for the
+        // `prefixItemsUnchanged` guard which previously compared text
+        // items element-wise and forced a full reprocess every update.
+        let chunks = ["a", "ab", "abc", "abcdef", "abcdefghij"]
+        for chunk in chunks {
+            session.apply(.toolCallUpdate(.init(
+                toolCallId: "tc-growing-text", status: "in_progress",
+                content: [.content(.text(chunk))])))
+        }
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "abcdefghij")
+            #expect(tc.preview == "abcdefghij")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text but replaced rawOutput rebuilds assets")
+    func toolCallUpdateSameTextReplacedRawOutputRebuildsAssets() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-replace", title: "image", kind: "other", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + rawOutput image A.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-replace", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
+            ], "after first: \(tc1.assets)")
+        }
+        // Second update: same text + same status, but rawOutput replaced
+        // with image B. The identical-text fast path must fall to full
+        // reprocess so `tc.assets` is rebuilt from content + the new
+        // rawOutput (replacing image A, not accumulating it).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-replace", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-b"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-b", mimeType: "image/png")
+            ], "after second: \(tc2.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text and rawOutput clearing image drops stale asset")
+    func toolCallUpdateSameTextRawOutputClearsImageDropsStale() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-clear", title: "image", kind: "other", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + rawOutput image.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-clear", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
+            ], "after first: \(tc1.assets)")
+        }
+        // Second update: same text + same status, but rawOutput replaced
+        // with a non-image result (no assets). The identical-text fast
+        // path must fall to full reprocess so the stale image is dropped.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-clear", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["text": AnyCodable("done")]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.assets == [], "after second: \(tc2.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed partial fence completing to an invalid fence tag falls to full reprocess")
+    func toolCallUpdateStreamingPartialFenceInvalidTagFallsToFullReprocess() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-invalid-tag", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a valid-looking opening fence prefix "```".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-tag", status: "in_progress",
+            content: [.content(.text("```"))])))
+        // Second chunk: the fence line completes to "```{.swift}" which
+        // isOpeningFence REJECTS (the `{` is not a valid tag character).
+        // The suffix path must fall to full reprocess so the line is kept
+        // in the body (not stripped as a fence).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-tag", status: "completed",
+            content: [.content(.text("```{.swift}\nlet x = 1\n```"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            // The first line "```{.swift}" is NOT a valid opening fence
+            // (isOpeningFence rejects `{`), so stripWrappingFence leaves
+            // it in the content. The trailing "```" is also NOT stripped.
+            // Note: `wrappingFenceLanguage` is more permissive than
+            // `isOpeningFence` and still extracts "swift" from the tag —
+            // that's the legacy behavior too.
+            #expect(tc.content == "```{.swift}\nlet x = 1\n```")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed partial fence growing to invalid tag without newline falls to full reprocess")
+    func toolCallUpdateStreamingPartialFenceInvalidNoNewlineFallsToFullReprocess() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-invalid-no-newline", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a valid-looking opening fence prefix "```".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-no-newline", status: "in_progress",
+            content: [.content(.text("```"))])))
+        // Second chunk: the fence line grows to "```{" (still no newline).
+        // `{` is not a valid tag character, so couldBeOpeningFencePrefix
+        // returns false and the suffix path falls to full reprocess,
+        // keeping the line in the body.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-no-newline", status: "completed",
+            content: [.content(.text("```{\nbody"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            // "```{" is NOT a valid opening fence, so stripWrappingFence
+            // leaves it in the content.
+            #expect(tc.content == "```{\nbody")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed toolCallUpdate refreshes preview when the first line is empty then filled")
+    func toolCallUpdateStreamingEmptyFirstLineThenFilledRefreshesPreview() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-empty-first", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a leading blank line (first line is empty).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-empty-first", status: "in_progress",
+            content: [.content(.text("\n"))])))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.preview == nil, "preview after first=\(tc1.preview ?? "nil")")
+        }
+        // Second chunk: the second line fills in. The preview must be
+        // recomputed from the now-non-empty second line (which becomes the
+        // first non-empty line for `previewLine`).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-empty-first", status: "completed",
+            content: [.content(.text("\nactual first line"))])))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "\nactual first line")
+            #expect(tc2.preview == "actual first line", "preview=\(tc2.preview ?? "nil")")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed inline-code first chunk does not trigger partial-fence full reprocess")
+    func toolCallUpdateStreamingInlineCodeDoesNotTriggerPartialFenceReprocess() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-inline", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: inline code starting with a backtick — NOT a partial
+        // opening fence (it can never become "```" + valid tag).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-inline", status: "in_progress",
+            content: [.content(.text("`cmd` ran"))])))
+        // Second chunk: the log grows. The suffix-only fast path must fire
+        // (previousRawWasPartialFence returns false for "`cmd` ran").
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-inline", status: "completed",
+            content: [.content(.text("`cmd` ran successfully"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "`cmd` ran successfully")
+            #expect(tc.preview == "`cmd` ran successfully")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text but changed metadata terminal id reprocesses")
+    func toolCallUpdateSameTextChangedMetadataTerminalReprocesses() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-meta-term", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + metadata terminal m1.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-meta-term", status: "in_progress",
+            content: [.content(.text("running"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m1"),
+                    "data": AnyCodable("out\n")
+                ])
+            ]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.terminalIds == ["m1"], "after first: \(tc1.terminalIds)")
+        }
+        // Second update: same text + same status, but metadata changed to
+        // terminal m2. The identical-text fast path must fall to full
+        // reprocess so `tc.terminalIds` is rebuilt from the current metadata
+        // (adding m2, keeping m1 via merge — matching legacy semantics).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-meta-term", status: "in_progress",
+            content: [.content(.text("running"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m2"),
+                    "data": AnyCodable("more\n")
+                ])
+            ]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            // The metadata's terminal_output_delta was overwritten by
+            // mergeMetadata, so the rebuilt terminalIds contains m2 (the
+            // current metadata terminal). This matches the legacy
+            // full-reprocess semantics.
+            #expect(tc2.terminalIds.contains("m2"), "after second: \(tc2.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate suffix path with metadata change falls to full reprocess")
+    func toolCallUpdateSuffixPathWithMetadataChangeFallsToFullReprocess() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-suffix-meta", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + metadata terminal m1.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-suffix-meta", status: "in_progress",
+            content: [.content(.text("run"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m1"),
+                    "data": AnyCodable("out\n")
+                ])
+            ]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.terminalIds == ["m1"], "after first: \(tc1.terminalIds)")
+        }
+        // Second update: text grows (suffix path) AND metadata changes to
+        // terminal m2. The suffix path must fall to full reprocess so
+        // `tc.terminalIds` is rebuilt from the current metadata.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-suffix-meta", status: "completed",
+            content: [.content(.text("running"))],
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("m2"),
+                    "data": AnyCodable("more\n")
+                ])
+            ]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "running")
+            #expect(tc2.terminalIds.contains("m2"), "after second: \(tc2.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("side-channel rawOutput-only update invalidates content cache for next same-content update")
+    func toolCallUpdateSideChannelRawOutputInvalidatesCache() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-side", title: "image", kind: "other", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + rawOutput image A.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-side", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
+            ], "after first: \(tc1.assets)")
+        }
+        // Side-channel update: rawOutput changes to image B, no content.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-side", status: "in_progress",
+            rawOutput: AnyCodable(["data": AnyCodable("img-b"), "mime_type": AnyCodable("image/png")]))))
+        // Third update: same content "same" as the first, no rawOutput.
+        // The cache was invalidated by the side-channel update, so this
+        // falls to full reprocess and rebuilds tc.assets from content +
+        // the current rawOutput (image B), dropping the stale image A.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-side", status: "in_progress",
+            content: [.content(.text("same"))])))
+        if case .toolCall(let tc3) = session.transcript.messages[0] {
+            #expect(tc3.content == "same")
+            #expect(tc3.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-b", mimeType: "image/png")
+            ], "after third: \(tc3.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
 }
