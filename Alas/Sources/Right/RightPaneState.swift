@@ -211,6 +211,7 @@ final class RightPaneState {
     var pendingMerge: ReviewLoopSnapshot? = nil
     var mergeError: String? = nil
     var mergeQueuedMessage: String? = nil
+    var pendingGGLand: GGLandRequest? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -899,10 +900,10 @@ final class RightPaneState {
         }
     }
 
-    /// Dispatches a stack-drawer action kind to its gg mutation. `.land` is
-    /// routed straight to the confirmation flow (Task 7) and `.checkout` is
-    /// dispatched directly by the entry menu (Task 9) — neither goes through
-    /// this dispatcher.
+    /// Dispatches a stack-drawer action kind to its gg mutation. `.land`
+    /// stages a confirmation (see `requestGGLand`/`performGGLand`) rather
+    /// than mutating directly, and `.checkout` is dispatched directly by the
+    /// entry menu (Task 9) instead of going through this dispatcher.
     @MainActor
     func onGGStackAction(_ kind: GGStackActionKind, appState: AppState) {
         switch kind {
@@ -914,8 +915,66 @@ final class RightPaneState {
             runGGSimpleAction(.continueOp) { try await self.ggService.continueOp(worktreePath: self.worktree.path.path) }
         case .abortOp:
             runGGSimpleAction(.abortOp) { try await self.ggService.abortOp(worktreePath: self.worktree.path.path) }
-        case .land, .checkout:
+        case .checkout:
             break
+        case .land:
+            requestGGLand(.ready)
+        }
+    }
+
+    func requestGGLand(_ request: GGLandRequest) { pendingGGLand = request }
+    func cancelGGLand() { pendingGGLand = nil }
+
+    /// Pure landability check used both to stage the confirmation and to
+    /// re-verify against a freshly re-fetched stack before mutating.
+    func ggLandTargetStillLandable(_ request: GGLandRequest, in stack: GGStack) -> Bool {
+        switch request {
+        case .ready:
+            return stack.entries.contains { $0.prState == .open && $0.approved && $0.ciStatus == .success }
+        case .until(let entryId, _):
+            return stack.entries.contains { $0.id == entryId }
+        }
+    }
+
+    static func ggLandConfirmationMessage(for request: GGLandRequest, stack: GGStack?) -> String {
+        switch request {
+        case .ready:
+            let n = stack?.entries.filter { $0.prState == .open && $0.approved && $0.ciStatus == .success }.count ?? 0
+            return "Merge \(n) approved, passing PR\(n == 1 ? "" : "s") from the bottom of the stack."
+        case .until(_, let title):
+            return "Land the stack up to and including \u{201C}\(title)\u{201D}."
+        }
+    }
+
+    @MainActor
+    func performGGLand() {
+        guard let request = pendingGGLand else { return }
+        pendingGGLand = nil
+        guard ggActionState.beginAction(.land) else { return }
+        ggActionState.clearError()
+        Task { @MainActor in
+            defer {
+                ggActionState.endAction(.land)
+                Task { @MainActor in
+                    await self.refresh()
+                    _ = self.reevaluateGGGate()
+                }
+            }
+            do {
+                // Re-verify against a fresh stack before mutating (defends a
+                // stale dialog), mirroring performMerge.
+                let fresh = try await ggService.currentStack(worktreePath: worktree.path.path)
+                guard let fresh, ggLandTargetStillLandable(request, in: fresh) else {
+                    ggActionState.setError("This stack is no longer ready to land.")
+                    return
+                }
+                let until: String? = { if case .until(let id, _) = request { return id } else { return nil } }()
+                _ = try await ggService.land(worktreePath: worktree.path.path, until: until)
+            } catch let error as GGServiceError {
+                ggActionState.setError(error.userMessage)
+            } catch {
+                ggActionState.setError(error.localizedDescription)
+            }
         }
     }
 

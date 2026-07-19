@@ -411,6 +411,27 @@ private struct RootPresentationHandlers: ViewModifier {
         } message: { snapshot in
             Text(RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest))
         }
+        .confirmationDialog(
+            "Land stack?",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateWithPendingGGLand() != nil },
+                set: { if !$0 { state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand() } }
+            ),
+            titleVisibility: .visible,
+            presenting: state.rightPaneStore.stateWithPendingGGLand()?.pendingGGLand
+        ) { _ in
+            Button("Land", role: .destructive) {
+                state.rightPaneStore.stateWithPendingGGLand()?.performGGLand()
+            }
+            Button("Cancel", role: .cancel) {
+                state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand()
+            }
+        } message: { request in
+            Text(RightPaneState.ggLandConfirmationMessage(
+                for: request,
+                stack: state.rightPaneStore.stateWithPendingGGLand()?.ggStack
+            ))
+        }
         .alert(
             "Merge failed",
             isPresented: Binding(

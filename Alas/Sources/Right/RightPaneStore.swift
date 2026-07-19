@@ -315,4 +315,13 @@ final class RightPaneStore {
     func stateWithPendingMerge() -> RightPaneState? {
         states.values.first { $0.pendingMerge != nil }
     }
+
+    /// The first cached state with a pending gg-land confirmation, if any.
+    /// Mirrors `stateWithPendingMerge` for the same reason: the confirmation
+    /// dialog (see RootView) must resolve its owning state through this
+    /// rather than the current selection, so switching worktrees while the
+    /// dialog is open can't cancel the wrong state and strand `pendingGGLand`.
+    func stateWithPendingGGLand() -> RightPaneState? {
+        states.values.first { $0.pendingGGLand != nil }
+    }
 }
