@@ -618,7 +618,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var shouldResetHorizontalOrigin = false
     private var wraps = false
     private var appliedTextLayoutConfiguration: TextLayoutConfiguration?
-    private var lastAppliedTextViewWidth: CGFloat?
+    private var rowGeometryPresentationWidth: CGFloat?
     private var textLayoutConfigurationApplicationCount = 0
     private var horizontalScrollerVisibilityChangeCount = 0
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -926,15 +926,18 @@ final class DiffPaneTextScrollView: NSScrollView {
         }
         applyTextLayoutConfigurationIfNeeded(configuration)
         let finalTextViewWidth = textViewWidth()
-        if !configuration.wraps,
-           let lastAppliedTextViewWidth,
-           abs(lastAppliedTextViewWidth - finalTextViewWidth) > 0.5
-        {
+        let presentationWidthChanged = !configuration.wraps
+            && rowGeometryPresentationWidth.map { abs($0 - finalTextViewWidth) > 0.5 } == true
+        setTextViewSize(width: finalTextViewWidth, height: textView.frame.height)
+        if presentationWidthChanged {
             textView.invalidateDiffRowGeometry()
         }
+        let geometryWillBeMeasured = !textView.hasCachedDiffRowGeometry
         let measuredDocumentHeight = documentHeight
         setTextViewSize(width: finalTextViewWidth, height: measuredDocumentHeight)
-        lastAppliedTextViewWidth = finalTextViewWidth
+        if geometryWillBeMeasured {
+            rowGeometryPresentationWidth = finalTextViewWidth
+        }
         if shouldResetHorizontalOrigin {
             resetHorizontalOriginToLeading()
             shouldResetHorizontalOrigin = false
@@ -1205,6 +1208,10 @@ final class DiffPaneCodeTextView: NSTextView {
 
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
+    }
+
+    var hasCachedDiffRowGeometry: Bool {
+        cachedRowGeometry != nil
     }
 
     var lineTones: [DiffPaneLineTone] = [] {
