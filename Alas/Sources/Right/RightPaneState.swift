@@ -975,6 +975,7 @@ final class RightPaneState {
         ggActionState.clearError()
         Task { @MainActor in
             defer {
+                preservePausedGGOperationIfNeeded()
                 ggActionState.endAction(.land)
                 Task { @MainActor in
                     await self.refresh()
@@ -1005,6 +1006,7 @@ final class RightPaneState {
         ggActionState.clearSyncProgress()
         Task { @MainActor in
             defer {
+                preservePausedGGOperationIfNeeded()
                 ggActionState.endAction(.sync)
                 Task { @MainActor in
                     await self.refresh()
@@ -1029,6 +1031,7 @@ final class RightPaneState {
         ggActionState.clearError()
         Task { @MainActor in
             defer {
+                preservePausedGGOperationIfNeeded()
                 ggActionState.endAction(kind)
                 Task { @MainActor in
                     await self.refresh()
@@ -1043,6 +1046,14 @@ final class RightPaneState {
                 ggActionState.setError(error.localizedDescription)
             }
         }
+    }
+
+    private func preservePausedGGOperationIfNeeded() {
+        guard GGStackGate.operationInProgress(repoPath: worktree.path.path),
+              let action = ggActionState.inFlightAction,
+              ggActionState.pausedOperation == nil
+        else { return }
+        ggActionState.setPaused(GGPausedOperation(pausedBy: action))
     }
 
     func markSnapshotUnknown() {

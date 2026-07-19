@@ -30,8 +30,29 @@ private final class ThrowingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
     }
 }
 
+private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendable {
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        if args == ["sync", "--jsonl", "--no-rebase-check"], let cwd {
+            try FileManager.default.createDirectory(
+                at: cwd.appendingPathComponent(".git/rebase-merge"),
+                withIntermediateDirectories: true
+            )
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "conflict")
+        }
+        return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+    }
+}
+
 @MainActor
 struct RightPaneGGStackTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
     private func makeWorktree() -> Worktree {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-stack-\(UUID().uuidString)")
@@ -433,5 +454,27 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggStack == nil)
         #expect(state.ggActionState.pausedOperation != nil)
+    }
+
+    @Test func syncConflictPreservesPausedBeforeClearingInFlight() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-sync-conflict-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let wt = Worktree(
+            id: Worktree.makeId(path: dir), projectId: "p", name: "feature",
+            branch: "feature", path: dir, status: .clean, lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: ConflictAfterSyncRunner())
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
+
+        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        while state.ggActionState.inFlightAction != nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(state.ggActionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
     }
 }

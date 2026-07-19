@@ -40,12 +40,15 @@ extension GGCommandRunning {
 }
 
 struct ProcessGGCommandRunner: GGCommandRunning {
+    private static let commandTimeout: TimeInterval = 600
+
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         try await Process.run(
             "/usr/bin/env",
             args: ["gg"] + args,
             cwd: cwd,
-            env: Process.gitEnv()
+            env: Process.gitEnv(),
+            timeout: Self.commandTimeout
         )
     }
 
