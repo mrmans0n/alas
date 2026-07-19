@@ -39,12 +39,20 @@ struct ChangesTabView: View {
             ScrollView {
                 scrollContent
             }
-            ReviewLoopDrawer(
-                state: rps.reviewLoop,
-                canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
-                onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
-            )
+            if isGGDrawerActive {
+                GGStackDrawer(rps: rps, appState: appState)
+            } else {
+                ReviewLoopDrawer(
+                    state: rps.reviewLoop,
+                    canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
+                    onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
+                )
+            }
         }
+    }
+
+    private var isGGDrawerActive: Bool {
+        Self.shouldShowGGDrawer(stack: rps.ggStack, pausedGGOperation: rps.ggActionState.pausedOperation)
     }
 
     private var scrollContent: some View {
@@ -58,7 +66,9 @@ struct ChangesTabView: View {
                 .padding(.top, 6)
             }
 
-            if let op = rps.mergeOp.current {
+            if let op = rps.mergeOp.current,
+               Self.shouldShowGenericOperationCard(mergeOperation: op, pausedGGOperation: rps.ggActionState.pausedOperation)
+            {
                 OperationCard(
                     operation: op,
                     hasUnresolvedConflicts: !conflicts.isEmpty,
@@ -89,7 +99,10 @@ struct ChangesTabView: View {
                 onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
-            if preparationModel.isVisible {
+            if Self.shouldShowChangesPreparationCard(
+                preparationIsVisible: preparationModel.isVisible,
+                ggDrawerIsActive: isGGDrawerActive
+            ) {
                 ChangesPreparationCard(
                     model: preparationModel,
                     onReviewChanges: openReviewChangesTab,
@@ -206,9 +219,35 @@ struct ChangesTabView: View {
                 onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
                 rps: rps,
                 ggStack: rps.ggStack,
-                stackCodeHostKind: rps.commitRemote?.kind
+                stackCodeHostKind: rps.commitRemote?.kind,
+                onGGOpenPR: rps.commitRemote.map { remote in
+                    { entry in
+                        guard let number = entry.prNumber else { return }
+                        NSWorkspace.shared.open(remote.reviewRequestURL(number: number))
+                    }
+                },
+                onGGLandUntil: { entry in rps.requestGGLand(.until(entryId: entry.id, title: entry.title)) },
+                onGGCheckout: { entry in rps.requestGGCheckout(target: entry.id) }
             )
         }
+    }
+
+    static func shouldShowGenericOperationCard(
+        mergeOperation: MergeOperation?,
+        pausedGGOperation: GGPausedOperation?
+    ) -> Bool {
+        mergeOperation != nil && pausedGGOperation == nil
+    }
+
+    static func shouldShowGGDrawer(stack: GGStack?, pausedGGOperation: GGPausedOperation?) -> Bool {
+        stack != nil || pausedGGOperation != nil
+    }
+
+    static func shouldShowChangesPreparationCard(
+        preparationIsVisible: Bool,
+        ggDrawerIsActive: Bool
+    ) -> Bool {
+        preparationIsVisible && !ggDrawerIsActive
     }
 
     private var hasDraftTab: Bool {

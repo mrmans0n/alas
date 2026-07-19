@@ -4,6 +4,8 @@ import Foundation
 /// when every gate passes: master toggle → gg installed → per-project
 /// mode → the current branch is actually stack-shaped.
 enum GGStackGate {
+    private static let alasOperationMarkerName = "alas-gg-operation"
+
     /// Gate 3 (auto mode): the repo's common git dir carries gg config.
     /// `repoPath` is a project's checkout path, which is not guaranteed to
     /// be the primary one — a project can be added from a linked worktree,
@@ -17,12 +19,60 @@ enum GGStackGate {
         return FileManager.default.fileExists(atPath: path)
     }
 
+    /// True when a git rebase/merge/cherry-pick/revert is in progress in the
+    /// worktree — i.e. a gg `sync`/`land` paused on a conflict. `gg ls
+    /// --json` cannot report this, so the drawer's Continue/Abort state is
+    /// driven by this cheap filesystem probe and self-corrects each refresh.
+    /// Uses `worktreeGitDir`, not `commonGitDir`: these markers are written
+    /// to the private per-worktree git dir, not the dir shared across
+    /// worktrees.
+    static func operationInProgress(repoPath: String) -> Bool {
+        guard let gitDir = worktreeGitDir(repoPath: repoPath) else { return false }
+        let markers = ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]
+        return markers.contains {
+            FileManager.default.fileExists(atPath: (gitDir as NSString).appendingPathComponent($0))
+        }
+    }
+
+    static func alasGGOperationInProgress(repoPath: String) -> Bool {
+        guard let markerPath = alasGGOperationMarkerPath(repoPath: repoPath) else { return false }
+        return FileManager.default.fileExists(atPath: markerPath)
+    }
+
+    static func markAlasGGOperationInProgress(repoPath: String) {
+        guard let markerPath = alasGGOperationMarkerPath(repoPath: repoPath) else { return }
+        FileManager.default.createFile(atPath: markerPath, contents: Data())
+    }
+
+    static func clearAlasGGOperationInProgress(repoPath: String) {
+        guard let markerPath = alasGGOperationMarkerPath(repoPath: repoPath) else { return }
+        try? FileManager.default.removeItem(atPath: markerPath)
+    }
+
     /// Resolves the shared git directory for `repoPath`: itself when `.git`
     /// is a real directory (primary checkout), or — for a linked worktree,
     /// where `.git` is a file pointing at a private per-worktree dir under
     /// `<commondir>/worktrees/<name>` — the directory named by that private
     /// dir's `commondir` file.
     private static func commonGitDir(repoPath: String) -> String? {
+        guard let gitDir = worktreeGitDir(repoPath: repoPath) else { return nil }
+        let commondirFile = (gitDir as NSString).appendingPathComponent("commondir")
+        guard let commondirContents = try? String(contentsOfFile: commondirFile, encoding: .utf8) else {
+            return gitDir
+        }
+        let relativeCommonDir = commondirContents.trimmingCharacters(in: .whitespacesAndNewlines)
+        return resolvedPath(relativeCommonDir, relativeTo: gitDir)
+    }
+
+    /// Resolves the *private*, per-checkout git directory for `repoPath`:
+    /// itself when `.git` is a real directory (primary checkout — there is
+    /// no separate private dir; the checkout's own `.git` holds all local
+    /// state), or — for a linked worktree — the directory named by the
+    /// `.git` file's `gitdir:` line, *without* following it on to the
+    /// shared `commondir`. This is where git actually writes per-worktree
+    /// state such as a paused `rebase-merge`, unlike `commonGitDir`, which
+    /// resolves through to the dir shared across all worktrees.
+    private static func worktreeGitDir(repoPath: String) -> String? {
         let dotGitPath = (repoPath as NSString).appendingPathComponent(".git")
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dotGitPath, isDirectory: &isDirectory) else {
@@ -38,13 +88,13 @@ enum GGStackGate {
             return nil
         }
         let rawPath = gitdirLine.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
-        let privateGitDir = resolvedPath(rawPath, relativeTo: repoPath)
-        let commondirFile = (privateGitDir as NSString).appendingPathComponent("commondir")
-        guard let commondirContents = try? String(contentsOfFile: commondirFile, encoding: .utf8) else {
-            return privateGitDir
+        return resolvedPath(rawPath, relativeTo: repoPath)
+    }
+
+    private static func alasGGOperationMarkerPath(repoPath: String) -> String? {
+        worktreeGitDir(repoPath: repoPath).map {
+            ($0 as NSString).appendingPathComponent(alasOperationMarkerName)
         }
-        let relativeCommonDir = commondirContents.trimmingCharacters(in: .whitespacesAndNewlines)
-        return resolvedPath(relativeCommonDir, relativeTo: privateGitDir)
     }
 
     private static func resolvedPath(_ path: String, relativeTo base: String) -> String {

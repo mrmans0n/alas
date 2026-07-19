@@ -17,6 +17,9 @@ struct CommitRow: View {
     var onReview: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
     var onRevert: (() -> Void)? = nil
+    var onGGOpenPR: (() -> Void)? = nil
+    var onGGLandUntil: (() -> Void)? = nil
+    var onGGCheckout: (() -> Void)? = nil
     /// Stack entry for this commit when the branch is a gg stack.
     var stackEntry: GGStackEntry? = nil
     var codeHostKind: CodeHostKind? = nil
@@ -67,6 +70,18 @@ struct CommitRow: View {
             Button("Copy Commit Message") { copyMessage() }
             if let onOpenRemote {
                 Button("Open Commit on Remote") { onOpenRemote() }
+            }
+            if stackEntry != nil {
+                Divider()
+                if let onGGOpenPR, stackEntry?.prNumber != nil {
+                    Button("Open \(codeHostKind?.reviewRequestLabel ?? "PR")") { onGGOpenPR() }
+                }
+                if let onGGCheckout {
+                    Button("Checkout Entry") { onGGCheckout() }
+                }
+                if let onGGLandUntil {
+                    Button("Land Until Here…") { onGGLandUntil() }
+                }
             }
             if onCherryPick != nil {
                 Divider()

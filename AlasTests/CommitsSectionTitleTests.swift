@@ -28,4 +28,27 @@ struct CommitsSectionTitleTests {
     @Test func plainCommitsWhenStackPresentButCommitsEmpty() {
         #expect(CommitsSectionView.sectionTitle(ggStack: stack(), commitsEmpty: true) == "Commits")
     }
+
+    @Test func ggRowMutationsFollowDrawerBusyGate() {
+        #expect(CommitsSectionView.ggRowMutationsEnabled(
+            inFlightAction: nil,
+            mergeOperation: nil,
+            pausedGGOperation: nil
+        ))
+        #expect(!CommitsSectionView.ggRowMutationsEnabled(
+            inFlightAction: .sync,
+            mergeOperation: nil,
+            pausedGGOperation: nil
+        ))
+        #expect(!CommitsSectionView.ggRowMutationsEnabled(
+            inFlightAction: nil,
+            mergeOperation: .merge(sourceBranch: "main"),
+            pausedGGOperation: nil
+        ))
+        #expect(CommitsSectionView.ggRowMutationsEnabled(
+            inFlightAction: nil,
+            mergeOperation: .merge(sourceBranch: "main"),
+            pausedGGOperation: GGPausedOperation(pausedBy: .sync)
+        ))
+    }
 }

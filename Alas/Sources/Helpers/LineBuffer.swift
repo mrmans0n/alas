@@ -4,18 +4,22 @@ import Foundation
 /// content is held until either more data arrives or `flush()` is called.
 final class LineBuffer: @unchecked Sendable {
     private let lock = NSLock()
-    private var pending: String = ""
+    private var pending = Data()
 
     func feed(_ chunk: String) -> [String] {
+        feed(Data(chunk.utf8))
+    }
+
+    func feed(_ data: Data) -> [String] {
         lock.lock()
         defer { lock.unlock() }
-        pending += chunk
+        pending.append(data)
         var out: [String] = []
-        while let newlineRange = pending.range(of: "\n") {
-            var line = String(pending[..<newlineRange.lowerBound])
-            if line.hasSuffix("\r") { line.removeLast() }
-            out.append(line)
-            pending.removeSubrange(pending.startIndex...newlineRange.lowerBound)
+        while let newlineIndex = pending.firstIndex(of: 0x0A) {
+            var line = Data(pending[..<newlineIndex])
+            if line.last == 0x0D { line.removeLast() }
+            out.append(String(decoding: line, as: UTF8.self))
+            pending.removeSubrange(pending.startIndex...newlineIndex)
         }
         return out
     }
@@ -24,8 +28,8 @@ final class LineBuffer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if pending.isEmpty { return nil }
-        let tail = pending
-        pending = ""
+        let tail = String(decoding: pending, as: UTF8.self)
+        pending.removeAll()
         return tail
     }
 }

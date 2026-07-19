@@ -9,6 +9,18 @@ enum GGServiceError: Error, Equatable {
     case unsupportedSchema(Int)
 }
 
+extension GGServiceError {
+    /// User-facing message for the stack drawer's error strip.
+    var userMessage: String {
+        switch self {
+        case .cliMissing: return "gg is not installed."
+        case .commandFailed(let stderr): return stderr.isEmpty ? "gg command failed." : stderr
+        case .malformedOutput(let message): return message
+        case .unsupportedSchema(let version): return "Unsupported gg output (schema \(version))."
+        }
+    }
+}
+
 /// Decoded envelope of `gg ls --json` / `gg log --json`. When the current
 /// branch is a stack, gg emits `{"version":1,"stack":{...}}`; off-stack it
 /// emits an all-stacks shape with no `stack` key, which decodes here as

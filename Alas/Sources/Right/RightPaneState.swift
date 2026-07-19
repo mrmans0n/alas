@@ -107,6 +107,10 @@ final class RightPaneState {
     /// gg installed, per-project mode) against app-level state.
     var ggGateProvider: (@MainActor () -> Bool)? = nil
     var ggService = GGService()
+    /// Backing store for the stack drawer's mutation UI (in-flight action,
+    /// sync progress, paused/error state). Not snapshot-derived, so
+    /// `markSnapshotUnknown()` does not reset it.
+    let ggActionState = GGStackActionState()
     /// Commits ahead of base used for the gg stack-shape check and cache
     /// key — deliberately NOT the display `commits` list. `commits` follows
     /// the user's chosen comparison mode, and under "Branch upstream" it is
@@ -207,6 +211,9 @@ final class RightPaneState {
     var pendingMerge: ReviewLoopSnapshot? = nil
     var mergeError: String? = nil
     var mergeQueuedMessage: String? = nil
+    var pendingGGLand: GGLandRequest? = nil
+    @ObservationIgnored private var pendingGGLandStackFingerprint: String? = nil
+    var pendingGGCleanAll: Bool = false
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -795,12 +802,18 @@ final class RightPaneState {
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
             ggStackCommitsKey = nil
+            if gated, shouldPreservePausedOperationOutsideStackShape() {
+                reconcilePausedOperation()
+            } else {
+                ggActionState.clearPaused()
+            }
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
             return
         }
+        reconcilePausedOperation()
         // `gg ls --json` reaches out to gh/glab for PR state — skip when
         // the branch and commit set are unchanged since the last query. PR-
         // state churn from the outside world refreshes on the next commits
@@ -869,6 +882,258 @@ final class RightPaneState {
         }
         ggStackRefreshTask = task
         return task
+    }
+
+    /// Pure filesystem probe → `ggActionState.pausedOperation` sync. Runs
+    /// after the GG gates pass, but only for an already-known/active GG
+    /// operation. Plain git conflicts use the same marker files and must keep
+    /// their regular recovery UI.
+    private func reconcilePausedOperation() {
+        let operationInProgress = GGStackGate.operationInProgress(repoPath: worktree.path.path)
+        if !operationInProgress {
+            GGStackGate.clearAlasGGOperationInProgress(repoPath: worktree.path.path)
+        }
+        if operationInProgress,
+           ggActionState.inFlightAction != nil
+               || ggActionState.pausedOperation != nil
+               || GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
+        {
+            if ggActionState.pausedOperation == nil {
+                ggActionState.setPaused(GGPausedOperation(pausedBy: ggActionState.inFlightAction ?? .sync))
+            }
+        } else {
+            ggActionState.clearPaused()
+        }
+    }
+
+    private func shouldPreservePausedOperationOutsideStackShape() -> Bool {
+        guard GGStackGate.operationInProgress(repoPath: worktree.path.path) else { return false }
+        return ggActionState.inFlightAction != nil
+            || ggActionState.pausedOperation != nil
+            || GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
+    }
+
+    /// Dispatches a stack-drawer action kind to its gg mutation. `.land`
+    /// stages a confirmation (see `requestGGLand`/`performGGLand`) rather
+    /// than mutating directly, and `.checkout` is dispatched directly by the
+    /// entry menu (Task 9) via `requestGGCheckout` instead of going through
+    /// this dispatcher.
+    @MainActor
+    func onGGStackAction(_ kind: GGStackActionKind, appState: AppState) {
+        switch kind {
+        case .sync:
+            runGGSync()
+        case .clean:
+            requestGGCleanAll()
+        case .continueOp:
+            runGGSimpleAction(.continueOp) { try await self.ggService.continueOp(worktreePath: self.worktree.path.path) }
+        case .abortOp:
+            runGGSimpleAction(.abortOp) { try await self.ggService.abortOp(worktreePath: self.worktree.path.path) }
+        case .checkout:
+            break
+        case .land:
+            requestGGLand(.ready)
+        }
+    }
+
+    func requestGGLand(_ request: GGLandRequest) {
+        pendingGGLand = request
+        pendingGGLandStackFingerprint = ggStack.map(Self.ggLandStackFingerprint)
+    }
+
+    func cancelGGLand() {
+        pendingGGLand = nil
+        pendingGGLandStackFingerprint = nil
+    }
+    func requestGGCleanAll() { pendingGGCleanAll = true }
+    func cancelGGCleanAll() { pendingGGCleanAll = false }
+    func performGGCleanAll() {
+        guard pendingGGCleanAll else { return }
+        pendingGGCleanAll = false
+        runGGSimpleAction(.clean) { try await self.ggService.clean(worktreePath: self.worktree.path.path) }
+    }
+
+    /// Checks out a stack entry (`gg mv <target>`), routed through
+    /// `runGGSimpleAction` so it gets the same busy-gating, error-surfacing,
+    /// and post-action refresh as every other gg mutation.
+    @MainActor
+    func requestGGCheckout(target: String) {
+        runGGSimpleAction(.checkout) { try await self.ggService.checkout(worktreePath: self.worktree.path.path, target: target) }
+    }
+
+    /// Pure landability check used both to stage the confirmation and to
+    /// re-verify against a freshly re-fetched stack before mutating.
+    func ggLandTargetStillLandable(_ request: GGLandRequest, in stack: GGStack) -> Bool {
+        switch request {
+        case .ready:
+            return !Self.ggLandReadyPrefix(in: stack).isEmpty
+        case .until(let entryId, _):
+            guard let target = stack.entries.first(where: { $0.id == entryId }),
+                  Self.ggEntryIsReadyToLand(target)
+            else { return false }
+            return stack.entries
+                .filter { $0.position < target.position }
+                .allSatisfy(Self.ggEntryDoesNotBlockLand)
+        }
+    }
+
+    static func ggEntryIsReadyToLand(_ entry: GGStackEntry) -> Bool {
+        entry.prState == .open && entry.approved && (entry.ciStatus == nil || entry.ciStatus == .success)
+    }
+
+    static func ggEntryDoesNotBlockLand(_ entry: GGStackEntry) -> Bool {
+        entry.prState == .merged || ggEntryIsReadyToLand(entry)
+    }
+
+    static func ggLandReadyPrefix(in stack: GGStack) -> [GGStackEntry] {
+        var entries: [GGStackEntry] = []
+        for entry in stack.entries.sorted(by: { $0.position < $1.position }) {
+            if entry.prState == .merged { continue }
+            guard ggEntryIsReadyToLand(entry) else { break }
+            entries.append(entry)
+        }
+        return entries
+    }
+
+    static func ggLandStackFingerprint(_ stack: GGStack) -> String {
+        let entryFingerprint = stack.entries
+            .sorted(by: { $0.position < $1.position })
+            .map { "\($0.position):\($0.id):\($0.sha)" }
+            .joined(separator: "|")
+        return "\(stack.name)|\(stack.base)|\(entryFingerprint)"
+    }
+
+    static func ggLandStackMatchesPendingConfirmation(_ stack: GGStack, fingerprint: String?) -> Bool {
+        guard let fingerprint else { return false }
+        return ggLandStackFingerprint(stack) == fingerprint
+    }
+
+    static func ggLandUntilTarget(for request: GGLandRequest, in stack: GGStack) -> String? {
+        switch request {
+        case .ready:
+            return ggLandReadyPrefix(in: stack).last?.id
+        case .until(let entryId, _):
+            return entryId
+        }
+    }
+
+    static func ggLandConfirmationMessage(for request: GGLandRequest, stack: GGStack?) -> String {
+        switch request {
+        case .ready:
+            let n = stack.map { Self.ggLandReadyPrefix(in: $0).count } ?? 0
+            return "Merge \(n) approved, passing PR\(n == 1 ? "" : "s") from the bottom of the stack."
+        case .until(_, let title):
+            return "Land the stack up to and including \u{201C}\(title)\u{201D}."
+        }
+    }
+
+    @MainActor
+    func performGGLand() {
+        guard let request = pendingGGLand else { return }
+        let confirmedStackFingerprint = pendingGGLandStackFingerprint
+        pendingGGLand = nil
+        pendingGGLandStackFingerprint = nil
+        guard ggActionState.beginAction(.land) else { return }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
+        ggActionState.clearError()
+        Task { @MainActor in
+            defer {
+                preservePausedGGOperationIfNeeded()
+                clearAlasGGOperationMarkerIfComplete()
+                ggActionState.endAction(.land)
+                Task { @MainActor in
+                    await self.refresh()
+                    _ = self.reevaluateGGGate()
+                }
+            }
+            do {
+                // Re-verify against a fresh stack before mutating (defends a
+                // stale dialog), mirroring performMerge.
+                let fresh = try await ggService.currentStack(worktreePath: worktree.path.path)
+                guard let fresh,
+                      Self.ggLandStackMatchesPendingConfirmation(fresh, fingerprint: confirmedStackFingerprint),
+                      ggLandTargetStillLandable(request, in: fresh)
+                else {
+                    ggActionState.setError("This stack is no longer ready to land.")
+                    return
+                }
+                guard let until = Self.ggLandUntilTarget(for: request, in: fresh) else {
+                    ggActionState.setError("This stack is no longer ready to land.")
+                    return
+                }
+                _ = try await ggService.land(worktreePath: worktree.path.path, until: until)
+            } catch let error as GGServiceError {
+                ggActionState.setError(error.userMessage)
+            } catch {
+                ggActionState.setError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func runGGSync() {
+        guard ggActionState.beginAction(.sync) else { return }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
+        ggActionState.clearError()
+        ggActionState.clearSyncProgress()
+        Task { @MainActor in
+            defer {
+                preservePausedGGOperationIfNeeded()
+                clearAlasGGOperationMarkerIfComplete()
+                ggActionState.endAction(.sync)
+                Task { @MainActor in
+                    await self.refresh()
+                    _ = self.reevaluateGGGate()
+                }
+            }
+            do {
+                for try await event in ggService.sync(worktreePath: worktree.path.path) {
+                    ggActionState.appendSyncEvent(event)
+                    if case .error(let message) = event { ggActionState.setError(message) }
+                }
+            } catch let error as GGServiceError {
+                if ggActionState.lastError == nil { ggActionState.setError(error.userMessage) }
+            } catch {
+                if ggActionState.lastError == nil { ggActionState.setError(error.localizedDescription) }
+            }
+        }
+    }
+
+    private func runGGSimpleAction(_ kind: GGStackActionKind, _ body: @escaping () async throws -> Void) {
+        guard ggActionState.beginAction(kind) else { return }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
+        ggActionState.clearError()
+        Task { @MainActor in
+            defer {
+                preservePausedGGOperationIfNeeded()
+                clearAlasGGOperationMarkerIfComplete()
+                ggActionState.endAction(kind)
+                Task { @MainActor in
+                    await self.refresh()
+                    _ = self.reevaluateGGGate()
+                }
+            }
+            do {
+                try await body()
+            } catch let error as GGServiceError {
+                ggActionState.setError(error.userMessage)
+            } catch {
+                ggActionState.setError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func preservePausedGGOperationIfNeeded() {
+        guard GGStackGate.operationInProgress(repoPath: worktree.path.path),
+              let action = ggActionState.inFlightAction,
+              ggActionState.pausedOperation == nil
+        else { return }
+        ggActionState.setPaused(GGPausedOperation(pausedBy: action))
+    }
+
+    private func clearAlasGGOperationMarkerIfComplete() {
+        if !GGStackGate.operationInProgress(repoPath: worktree.path.path) {
+            GGStackGate.clearAlasGGOperationInProgress(repoPath: worktree.path.path)
+        }
     }
 
     func markSnapshotUnknown() {

@@ -57,6 +57,15 @@ struct CodeHostModelsTests {
         #expect(ReviewCheckBucket.pass.severity > ReviewCheckBucket.skipping.severity)
     }
 
+    @Test func reviewRequestURLPerKind() {
+        let gh = CodeHostRemote(kind: .github, host: "github.com", owner: "o", repository: "r",
+                                remoteName: "origin", webURL: URL(string: "https://github.com/o/r")!)
+        #expect(gh.reviewRequestURL(number: 42).absoluteString == "https://github.com/o/r/pull/42")
+        let gl = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "o", repository: "r",
+                                remoteName: "origin", webURL: URL(string: "https://gitlab.com/o/r")!)
+        #expect(gl.reviewRequestURL(number: 42).absoluteString == "https://gitlab.com/o/r/-/merge_requests/42")
+    }
+
     @Test func reviewRequestDisplayIdentityUsesProviderAndNumber() {
         let request = makeReviewRequest(reviewDecision: .reviewRequired)
 

@@ -101,6 +101,9 @@ struct CommitsSectionView: View {
     let rps: RightPaneState
     let ggStack: GGStack?
     let stackCodeHostKind: CodeHostKind?
+    let onGGOpenPR: ((GGStackEntry) -> Void)?
+    let onGGLandUntil: (GGStackEntry) -> Void
+    let onGGCheckout: (GGStackEntry) -> Void
 
     @Environment(\.theme) private var theme
 
@@ -163,6 +166,18 @@ struct CommitsSectionView: View {
         (commitsEmpty ? nil : ggStack).map { "Stack · \($0.name)" } ?? "Commits"
     }
 
+    static func ggRowMutationsEnabled(
+        inFlightAction: GGStackActionKind?,
+        mergeOperation: MergeOperation?,
+        pausedGGOperation: GGPausedOperation?
+    ) -> Bool {
+        inFlightAction == nil
+            && !GGStackDrawer.hasBlockingGitOperation(
+                mergeOperation: mergeOperation,
+                pausedGGOperation: pausedGGOperation
+            )
+    }
+
     @ViewBuilder
     private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
@@ -179,6 +194,9 @@ struct CommitsSectionView: View {
                     onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) },
+                    onGGOpenPR: ggStack?.entry(matchingCommitSHA: commit.sha).flatMap { e in onGGOpenPR.map { openPR in { openPR(e) } } },
+                    onGGLandUntil: ggLandUntilAction(for: commit),
+                    onGGCheckout: ggCheckoutAction(for: commit),
                     stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
                     codeHostKind: stackCodeHostKind
                 )
@@ -239,6 +257,24 @@ struct CommitsSectionView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    private var ggRowMutationsEnabled: Bool {
+        Self.ggRowMutationsEnabled(
+            inFlightAction: rps.ggActionState.inFlightAction,
+            mergeOperation: rps.mergeOp.current,
+            pausedGGOperation: rps.ggActionState.pausedOperation
+        )
+    }
+
+    private func ggLandUntilAction(for commit: CommitInfo) -> (() -> Void)? {
+        guard ggRowMutationsEnabled, let entry = ggStack?.entry(matchingCommitSHA: commit.sha) else { return nil }
+        return { onGGLandUntil(entry) }
+    }
+
+    private func ggCheckoutAction(for commit: CommitInfo) -> (() -> Void)? {
+        guard ggRowMutationsEnabled, let entry = ggStack?.entry(matchingCommitSHA: commit.sha) else { return nil }
+        return { onGGCheckout(entry) }
     }
 
     private func openRemoteAction(for commit: CommitInfo, remote: CodeHostRemote?) -> (() -> Void)? {

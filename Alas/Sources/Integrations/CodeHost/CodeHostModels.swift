@@ -68,6 +68,16 @@ struct CodeHostRemote: Equatable, Sendable {
             return webURL.appendingPathComponent("-").appendingPathComponent("commit").appendingPathComponent(sha)
         }
     }
+
+    func reviewRequestURL(number: Int) -> URL {
+        switch kind {
+        case .github:
+            return webURL.appendingPathComponent("pull").appendingPathComponent("\(number)")
+        case .gitlab:
+            return webURL.appendingPathComponent("-")
+                .appendingPathComponent("merge_requests").appendingPathComponent("\(number)")
+        }
+    }
 }
 
 struct CodeHostProviderCapabilities: Equatable, Sendable {
