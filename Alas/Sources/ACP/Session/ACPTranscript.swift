@@ -12,6 +12,7 @@ final class ACPTranscript: ObservableObject {
         didSet {
             messagesGeneration &+= 1
             updatePlanCaches(for: pendingMessagesMutation)
+            updateMessageIndexCaches(for: pendingMessagesMutation)
             pendingMessagesMutation = nil
             recordMessagesDiff(old: oldValue)
         }
@@ -25,8 +26,20 @@ final class ACPTranscript: ObservableObject {
     private var pendingMessagesMutation: MessagesMutation?
     private var latestPlanMessageIndex: Int?
     private var latestUserMessageIndex: Int?
+    enum TextMessageKind: Hashable {
+        case user
+        case agent
+        case thought
+    }
+    private struct TextMessageKey: Hashable {
+        let kind: TextMessageKind
+        let messageId: String
+    }
+    private var textMessageIndices: [TextMessageKey: Int] = [:]
+    private var toolCallIndices: [String: Int] = [:]
     #if DEBUG
     private(set) var planCacheRebuildCountForTests = 0
+    private(set) var messageIndexCacheRebuildCountForTests = 0
     #endif
     /// Bumped on every `messages` array mutation. Non-published: consumed by
     /// value caches (visible-rows lookup) that must invalidate when the array
@@ -138,9 +151,9 @@ final class ACPTranscript: ObservableObject {
 
     // MARK: - Incremental plan caches
 
-    /// Production mutation entry points carry enough context for plan caches
-    /// to update in O(1). Direct `messages` assignments remain supported for
-    /// restore/test call sites and safely rebuild both indices once.
+    /// Production mutation entry points carry enough context for plan and
+    /// message-index caches to update in O(1). Direct `messages` assignments
+    /// remain supported for restore/test call sites and safely rebuild once.
     var currentPlanMessageIndex: Int? {
         guard let latestPlanMessageIndex,
               latestPlanMessageIndex > (latestUserMessageIndex ?? -1) else {
@@ -168,6 +181,106 @@ final class ACPTranscript: ObservableObject {
         guard !older.isEmpty else { return }
         pendingMessagesMutation = .prepend(count: older.count)
         messages.insert(contentsOf: older, at: 0)
+    }
+
+    func messageIndex(messageId: String, kind: TextMessageKind) -> Int? {
+        textMessageIndices[TextMessageKey(kind: kind, messageId: messageId)]
+    }
+
+    func toolCallIndex(toolCallId: String) -> Int? {
+        toolCallIndices[toolCallId]
+    }
+
+    // MARK: - Incremental message index caches
+
+    private func updateMessageIndexCaches(for mutation: MessagesMutation?) {
+        switch mutation {
+        case .append(let message):
+            cacheMessageIndex(messages.count - 1, for: message)
+        case .replace(let index, let old, let new):
+            let oldTextKey = textMessageKey(for: old)
+            let newTextKey = textMessageKey(for: new)
+            if oldTextKey != newTextKey {
+                if let oldTextKey, textMessageIndices[oldTextKey] == index {
+                    textMessageIndices.removeValue(forKey: oldTextKey)
+                    restoreTextMessageIndex(for: oldTextKey)
+                }
+                if let newTextKey,
+                   textMessageIndices[newTextKey].map({ index < $0 }) ?? true {
+                    textMessageIndices[newTextKey] = index
+                }
+            }
+
+            let oldToolCallId = toolCallId(for: old)
+            let newToolCallId = toolCallId(for: new)
+            if oldToolCallId != newToolCallId {
+                if let oldToolCallId, toolCallIndices[oldToolCallId] == index {
+                    toolCallIndices.removeValue(forKey: oldToolCallId)
+                    restoreToolCallIndex(for: oldToolCallId)
+                }
+                if let newToolCallId,
+                   toolCallIndices[newToolCallId].map({ index < $0 }) ?? true {
+                    toolCallIndices[newToolCallId] = index
+                }
+            }
+        case .planNeutral:
+            break
+        case .prepend, nil:
+            rebuildMessageIndexCaches()
+        }
+    }
+
+    private func rebuildMessageIndexCaches() {
+        #if DEBUG
+        messageIndexCacheRebuildCountForTests += 1
+        #endif
+        textMessageIndices.removeAll(keepingCapacity: true)
+        toolCallIndices.removeAll(keepingCapacity: true)
+        for index in messages.indices {
+            cacheMessageIndex(index, for: messages[index])
+        }
+    }
+
+    private func cacheMessageIndex(_ index: Int, for message: ACPMessage) {
+        if let key = textMessageKey(for: message), textMessageIndices[key] == nil {
+            textMessageIndices[key] = index
+        }
+        if let toolCallId = toolCallId(for: message), toolCallIndices[toolCallId] == nil {
+            toolCallIndices[toolCallId] = index
+        }
+    }
+
+    /// Message ids are expected to be unique within their kind, but retain
+    /// the old first-match behavior if malformed/restored data contains a
+    /// duplicate and the cached first occurrence changes identity.
+    private func restoreTextMessageIndex(for key: TextMessageKey) {
+        if let index = messages.indices.first(where: { textMessageKey(for: messages[$0]) == key }) {
+            textMessageIndices[key] = index
+        }
+    }
+
+    private func restoreToolCallIndex(for toolCallId: String) {
+        if let index = messages.indices.first(where: { self.toolCallId(for: messages[$0]) == toolCallId }) {
+            toolCallIndices[toolCallId] = index
+        }
+    }
+
+    private func textMessageKey(for message: ACPMessage) -> TextMessageKey? {
+        switch message {
+        case .user(_, let messageId?, _, _, _):
+            TextMessageKey(kind: .user, messageId: messageId)
+        case .agent(_, let messageId?, _):
+            TextMessageKey(kind: .agent, messageId: messageId)
+        case .thought(_, let messageId?, _):
+            TextMessageKey(kind: .thought, messageId: messageId)
+        default:
+            nil
+        }
+    }
+
+    private func toolCallId(for message: ACPMessage) -> String? {
+        guard case .toolCall(let toolCall) = message else { return nil }
+        return toolCall.toolCallId
     }
 
     private func updatePlanCaches(for mutation: MessagesMutation?) {
