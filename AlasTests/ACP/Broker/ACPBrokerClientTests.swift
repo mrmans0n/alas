@@ -1169,6 +1169,86 @@ struct ACPBrokerClientTests {
         }
     }
 
+    // Regression (code review on #853, P1, fourth finding): send()'s
+    // defer used to force-ack the completion cursor whenever the call
+    // exited without handing a response to its caller. But the operation
+    // can have genuinely succeeded at the broker while THIS call still
+    // fails for an unrelated reason — e.g. the attachAndReplay() right
+    // after a successful/replayed service.send() throws on its own
+    // transient hiccup. Acking there tells the broker it may prune the
+    // completed operation even though the caller never got the result, and
+    // the queued-send retry path reuses the same operationKey on
+    // non-JSONRPC failures — so the retry would be treated as a fresh
+    // prompt instead of replaying the already-completed one. Confirms no
+    // ack happens when send() throws this way, and that a subsequent
+    // successful retry for the same key still acks correctly once the
+    // caller actually consumes it.
+    @Test func sendDoesNotAckCompletionWhenFollowUpAttachFails() async throws {
+        let service = MockBrokerService()
+        let operationKey = "queued-prompt:test:0:session/prompt"
+        // The completion is already known before send() ever runs — e.g.
+        // via pre-registration + start()'s own replay, matching the
+        // restored-queue scenario above.
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: operationKey),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            )
+        ])
+        // service.send() itself succeeds (replaying the already-completed
+        // operation)...
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: true,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: false
+        ))
+        // ...but the attachAndReplay() immediately after it throws.
+        await service.enqueueAttach(events: [], shouldThrow: true)
+        let client = makeClient(service: service)
+        client.preRegisterAwaitedOperationKeys([operationKey])
+
+        try await client.start()
+        await #expect(throws: (any Error).self) {
+            _ = try await client.send(ACPRequest(
+                method: "session/prompt",
+                params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+                brokerOperationKey: operationKey
+            ))
+        }
+
+        // The already-known completion must NOT have been acked away just
+        // because this call failed for an unrelated reason.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await service.acks.isEmpty)
+
+        // A later retry for the same operationKey succeeds normally and
+        // still acks it correctly once actually consumed.
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: true,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: false
+        ))
+        await service.enqueueAttach(events: [], turnState: .idle)
+        let response = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+            brokerOperationKey: operationKey
+        ))
+        response.acknowledgeDurableConsumption()
+
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)]
+        }
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -1365,7 +1445,8 @@ private actor MockBrokerService: ACPBrokerServicing {
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
         turnState: ACPBrokerTurnState = .idle,
-        delayNanoseconds: UInt64 = 0
+        delayNanoseconds: UInt64 = 0,
+        shouldThrow: Bool = false
     ) {
         attachReplies.append(AttachReply(
             events: events,
@@ -1373,7 +1454,8 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotJournalTail: snapshotJournalTail,
             snapshotOperations: snapshotOperations,
             turnState: turnState,
-            delayNanoseconds: delayNanoseconds
+            delayNanoseconds: delayNanoseconds,
+            shouldThrow: shouldThrow
         ))
     }
 
@@ -1415,6 +1497,9 @@ private actor MockBrokerService: ACPBrokerServicing {
                     continuation.resume()
                 }
             }
+        }
+        if reply.shouldThrow {
+            throw MockBrokerServiceError.injected
         }
         let events = reply.events
         let tail = reply.snapshotJournalTail ?? events.map(\.cursor).max() ?? params.acknowledgedCursor
@@ -1517,6 +1602,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         let snapshotOperations: [ACPBrokerOperationSnapshot]
         let turnState: ACPBrokerTurnState
         let delayNanoseconds: UInt64
+        let shouldThrow: Bool
 
         init(
             events: [ACPBrokerEvent],
@@ -1524,7 +1610,8 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
             turnState: ACPBrokerTurnState = .idle,
-            delayNanoseconds: UInt64 = 0
+            delayNanoseconds: UInt64 = 0,
+            shouldThrow: Bool = false
         ) {
             self.events = events
             self.snapshotPendingRequests = snapshotPendingRequests
@@ -1532,6 +1619,11 @@ private actor MockBrokerService: ACPBrokerServicing {
             self.snapshotOperations = snapshotOperations
             self.turnState = turnState
             self.delayNanoseconds = delayNanoseconds
+            self.shouldThrow = shouldThrow
         }
     }
+}
+
+private enum MockBrokerServiceError: Error {
+    case injected
 }

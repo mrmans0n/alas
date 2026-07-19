@@ -229,13 +229,24 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         // a queued retry the caller abandoned) — protecting those
         // unconditionally would leave them "unacknowledged" forever with no
         // call left to release them, permanently blocking every later ack.
+        //
+        // This defer only ever releases the registration above, never the
+        // cursor itself. An earlier version also force-acked the cursor
+        // here whenever this call exited without handing a response to its
+        // caller — but the operation can have genuinely SUCCEEDED at the
+        // broker while THIS call still fails for an unrelated reason (e.g.
+        // the `attachAndReplay()` right after a successful/replayed
+        // `service.send()` throws on its own transient RPC hiccup). Acking
+        // in that case tells the broker it may prune the completed
+        // operation (the helper only retains completions above the acked
+        // cursor) even though the caller never received the result — and
+        // the queued-send retry path reuses the same operationKey on
+        // non-JSONRPC failures, expecting the broker to still have it
+        // cached. The only path allowed to ack is the one below that
+        // actually hands a response back, via `durableConsumptionAcknowledgement`.
         beginAwaitingOperationCompletion(operationKey)
-        var releasedToCaller = false
         defer {
             endAwaitingOperationCompletion(operationKey)
-            if !releasedToCaller, let cursor = currentOperationCompletionCursor(for: operationKey) {
-                ackResponse(cursor: cursor)
-            }
         }
         while true {
             let result = try await service.send(ACPBrokerSendParams(
@@ -257,7 +268,6 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
             let cursor = currentOperationCompletionCursor(for: operationKey)
-            releasedToCaller = true
             return ACPResponse(
                 body: try (result.result ?? .null).data,
                 durableConsumptionAcknowledgement: { [weak self] in
