@@ -958,16 +958,20 @@ final class RightPaneState {
     func ggLandTargetStillLandable(_ request: GGLandRequest, in stack: GGStack) -> Bool {
         switch request {
         case .ready:
-            return stack.entries.contains { $0.prState == .open && $0.approved && $0.ciStatus == .success }
+            return stack.entries.contains(where: Self.ggEntryIsReadyToLand)
         case .until(let entryId, _):
             return stack.entries.contains { $0.id == entryId }
         }
     }
 
+    static func ggEntryIsReadyToLand(_ entry: GGStackEntry) -> Bool {
+        entry.prState == .open && entry.approved && (entry.ciStatus == nil || entry.ciStatus == .success)
+    }
+
     static func ggLandConfirmationMessage(for request: GGLandRequest, stack: GGStack?) -> String {
         switch request {
         case .ready:
-            let n = stack?.entries.filter { $0.prState == .open && $0.approved && $0.ciStatus == .success }.count ?? 0
+            let n = stack?.entries.filter(Self.ggEntryIsReadyToLand).count ?? 0
             return "Merge \(n) approved, passing PR\(n == 1 ? "" : "s") from the bottom of the stack."
         case .until(_, let title):
             return "Land the stack up to and including \u{201C}\(title)\u{201D}."

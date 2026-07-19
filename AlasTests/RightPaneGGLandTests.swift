@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct RightPaneGGLandTests {
-    private func entry(id: String, prState: GGPRState, approved: Bool, ci: GGCIStatus) -> GGStackEntry {
+    private func entry(id: String, prState: GGPRState, approved: Bool, ci: GGCIStatus?) -> GGStackEntry {
         GGStackEntry(position: 1, sha: "s", title: "t", ggId: id, prNumber: 5,
                      prState: prState, approved: approved, ciStatus: ci)
     }
@@ -20,8 +20,25 @@ struct RightPaneGGLandTests {
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         let landable = stack([entry(id: "a", prState: .open, approved: true, ci: .success)])
         #expect(state.ggLandTargetStillLandable(.ready, in: landable))
+        let landableWithoutCI = stack([entry(id: "a", prState: .open, approved: true, ci: nil)])
+        #expect(state.ggLandTargetStillLandable(.ready, in: landableWithoutCI))
+        let failingCI = stack([entry(id: "a", prState: .open, approved: true, ci: .failed)])
+        #expect(!state.ggLandTargetStillLandable(.ready, in: failingCI))
         let notLandable = stack([entry(id: "a", prState: .open, approved: false, ci: .success)])
         #expect(!state.ggLandTargetStillLandable(.ready, in: notLandable))
+    }
+
+    @Test func readyConfirmationCountsApprovedOpenEntriesWithNoCI() {
+        let message = RightPaneState.ggLandConfirmationMessage(
+            for: .ready,
+            stack: stack([
+                entry(id: "a", prState: .open, approved: true, ci: .success),
+                entry(id: "b", prState: .open, approved: true, ci: nil),
+                entry(id: "c", prState: .open, approved: true, ci: .pending),
+            ])
+        )
+
+        #expect(message == "Merge 2 approved, passing PRs from the bottom of the stack.")
     }
 
     @Test func untilLandableWhenTargetEntryPresent() {
