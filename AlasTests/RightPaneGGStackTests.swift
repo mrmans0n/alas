@@ -380,11 +380,9 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
     }
 
-    /// `gg ls --json` can't report a paused rebase, so `refreshGGStack()`
-    /// reconciles `ggActionState.pausedOperation` from a git-level probe
-    /// (`GGStackGate.operationInProgress`) independent of the gg query.
-    @Test func refreshReconcilesPausedFromGitProbe() async throws {
-        // Real temp repo with a rebase-merge dir → operationInProgress true.
+    /// Plain git actions use the same marker files as paused gg actions, so
+    /// stack refresh must not infer a gg pause from filesystem state alone.
+    @Test func refreshDoesNotInferPausedFromPlainGitProbe() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-paused-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git/rebase-merge"), withIntermediateDirectories: true)
@@ -401,7 +399,13 @@ struct RightPaneGGStackTests {
         state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
+        #expect(state.ggActionState.pausedOperation == nil)
+
+        _ = state.ggActionState.beginAction(.sync)
+        state.ggStackCommitsKey = nil
+        await state.refreshGGStack()
         #expect(state.ggActionState.pausedOperation != nil)
+        state.ggActionState.endAction(.sync)
 
         // Remove the marker → next refresh clears paused.
         try FileManager.default.removeItem(at: dir.appendingPathComponent(".git/rebase-merge"))
@@ -423,6 +427,7 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: ThrowingFakeGGRunner())
         state.ggGateProvider = { true }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
+        state.ggActionState.setPaused(GGPausedOperation(pausedBy: .sync))
 
         await state.refreshGGStack()
 

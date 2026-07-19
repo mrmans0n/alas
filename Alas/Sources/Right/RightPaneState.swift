@@ -884,10 +884,13 @@ final class RightPaneState {
     }
 
     /// Pure filesystem probe → `ggActionState.pausedOperation` sync. Runs
-    /// after the GG gates pass, or while preserving an already-known/active
-    /// GG operation whose stack shape temporarily disappeared mid-conflict.
+    /// after the GG gates pass, but only for an already-known/active GG
+    /// operation. Plain git conflicts use the same marker files and must keep
+    /// their regular recovery UI.
     private func reconcilePausedOperation() {
-        if GGStackGate.operationInProgress(repoPath: worktree.path.path) {
+        if GGStackGate.operationInProgress(repoPath: worktree.path.path),
+           ggActionState.inFlightAction != nil || ggActionState.pausedOperation != nil
+        {
             if ggActionState.pausedOperation == nil {
                 ggActionState.setPaused(GGPausedOperation(pausedBy: ggActionState.inFlightAction ?? .sync))
             }
@@ -900,8 +903,6 @@ final class RightPaneState {
         guard GGStackGate.operationInProgress(repoPath: worktree.path.path) else { return false }
         return ggActionState.inFlightAction != nil
             || ggActionState.pausedOperation != nil
-            || ggStack != nil
-            || GGStackGate.repoHasGGConfig(repoPath: worktree.path.path)
     }
 
     /// Dispatches a stack-drawer action kind to its gg mutation. `.land`
