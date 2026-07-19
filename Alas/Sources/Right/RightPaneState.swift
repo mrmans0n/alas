@@ -212,6 +212,7 @@ final class RightPaneState {
     var mergeError: String? = nil
     var mergeQueuedMessage: String? = nil
     var pendingGGLand: GGLandRequest? = nil
+    @ObservationIgnored private var pendingGGLandStackFingerprint: String? = nil
     var pendingGGCleanAll: Bool = false
 
     /// True while the workspace-level agent invocation is running.
@@ -935,8 +936,15 @@ final class RightPaneState {
         }
     }
 
-    func requestGGLand(_ request: GGLandRequest) { pendingGGLand = request }
-    func cancelGGLand() { pendingGGLand = nil }
+    func requestGGLand(_ request: GGLandRequest) {
+        pendingGGLand = request
+        pendingGGLandStackFingerprint = ggStack.map(Self.ggLandStackFingerprint)
+    }
+
+    func cancelGGLand() {
+        pendingGGLand = nil
+        pendingGGLandStackFingerprint = nil
+    }
     func requestGGCleanAll() { pendingGGCleanAll = true }
     func cancelGGCleanAll() { pendingGGCleanAll = false }
     func performGGCleanAll() {
@@ -987,6 +995,19 @@ final class RightPaneState {
         return entries
     }
 
+    static func ggLandStackFingerprint(_ stack: GGStack) -> String {
+        let entryFingerprint = stack.entries
+            .sorted(by: { $0.position < $1.position })
+            .map { "\($0.position):\($0.id):\($0.sha)" }
+            .joined(separator: "|")
+        return "\(stack.name)|\(stack.base)|\(entryFingerprint)"
+    }
+
+    static func ggLandStackMatchesPendingConfirmation(_ stack: GGStack, fingerprint: String?) -> Bool {
+        guard let fingerprint else { return false }
+        return ggLandStackFingerprint(stack) == fingerprint
+    }
+
     static func ggLandConfirmationMessage(for request: GGLandRequest, stack: GGStack?) -> String {
         switch request {
         case .ready:
@@ -1000,7 +1021,9 @@ final class RightPaneState {
     @MainActor
     func performGGLand() {
         guard let request = pendingGGLand else { return }
+        let confirmedStackFingerprint = pendingGGLandStackFingerprint
         pendingGGLand = nil
+        pendingGGLandStackFingerprint = nil
         guard ggActionState.beginAction(.land) else { return }
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
         ggActionState.clearError()
@@ -1018,7 +1041,10 @@ final class RightPaneState {
                 // Re-verify against a fresh stack before mutating (defends a
                 // stale dialog), mirroring performMerge.
                 let fresh = try await ggService.currentStack(worktreePath: worktree.path.path)
-                guard let fresh, ggLandTargetStillLandable(request, in: fresh) else {
+                guard let fresh,
+                      Self.ggLandStackMatchesPendingConfirmation(fresh, fingerprint: confirmedStackFingerprint),
+                      ggLandTargetStillLandable(request, in: fresh)
+                else {
                     ggActionState.setError("This stack is no longer ready to land.")
                     return
                 }

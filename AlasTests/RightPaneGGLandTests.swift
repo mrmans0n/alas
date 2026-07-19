@@ -97,6 +97,26 @@ struct RightPaneGGLandTests {
         #expect(message == "Merge 2 approved, passing PRs from the bottom of the stack.")
     }
 
+    @Test func landStackFingerprintTracksConfirmedStackIdentity() {
+        let original = stack([
+            GGStackEntry(position: 1, sha: "s1", title: "t1", ggId: "a", prNumber: 6,
+                         prState: .open, approved: true, ciStatus: .success),
+            GGStackEntry(position: 2, sha: "s2", title: "t2", ggId: "b", prNumber: 7,
+                         prState: .open, approved: true, ciStatus: .success),
+        ])
+        let rebased = stack([
+            GGStackEntry(position: 1, sha: "s1-rebased", title: "t1", ggId: "a", prNumber: 6,
+                         prState: .open, approved: true, ciStatus: .success),
+            GGStackEntry(position: 2, sha: "s2", title: "t2", ggId: "b", prNumber: 7,
+                         prState: .open, approved: true, ciStatus: .success),
+        ])
+        let fingerprint = RightPaneState.ggLandStackFingerprint(original)
+
+        #expect(RightPaneState.ggLandStackMatchesPendingConfirmation(original, fingerprint: fingerprint))
+        #expect(!RightPaneState.ggLandStackMatchesPendingConfirmation(rebased, fingerprint: fingerprint))
+        #expect(!RightPaneState.ggLandStackMatchesPendingConfirmation(original, fingerprint: nil))
+    }
+
     @Test func untilLandableWhenTargetEntryPresent() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
