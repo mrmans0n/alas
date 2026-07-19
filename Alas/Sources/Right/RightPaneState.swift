@@ -106,6 +106,10 @@ final class RightPaneState {
     /// Injected by RightPaneStore — resolves gates 1–3 (master toggle,
     /// gg installed, per-project mode) against app-level state.
     var ggGateProvider: (@MainActor () -> Bool)? = nil
+    /// Injected by RightPaneStore so a successful clean can reconcile any
+    /// gg-managed worktrees removed from the app-level project topology.
+    @ObservationIgnored
+    var refreshProjectTopologyAfterGGClean: (@MainActor () async -> Void)? = nil
     var ggService = GGService()
     /// Backing store for the stack drawer's mutation UI (in-flight action,
     /// sync progress, paused/error state). Not snapshot-derived, so
@@ -950,7 +954,10 @@ final class RightPaneState {
     func performGGCleanAll() {
         guard pendingGGCleanAll else { return }
         pendingGGCleanAll = false
-        runGGSimpleAction(.clean) { try await self.ggService.clean(worktreePath: self.worktree.path.path) }
+        runGGSimpleAction(.clean) {
+            try await self.ggService.clean(worktreePath: self.worktree.path.path)
+            await self.refreshProjectTopologyAfterGGClean?()
+        }
     }
 
     /// Checks out a stack entry (`gg mv <target>`), routed through

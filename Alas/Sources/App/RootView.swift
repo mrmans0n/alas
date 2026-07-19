@@ -411,44 +411,7 @@ private struct RootPresentationHandlers: ViewModifier {
         } message: { snapshot in
             Text(RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest))
         }
-        .confirmationDialog(
-            "Land stack?",
-            isPresented: Binding(
-                get: { state.rightPaneStore.stateWithPendingGGLand() != nil },
-                set: { if !$0 { state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand() } }
-            ),
-            titleVisibility: .visible,
-            presenting: state.rightPaneStore.stateWithPendingGGLand()?.pendingGGLand
-        ) { _ in
-            Button("Land", role: .destructive) {
-                state.rightPaneStore.stateWithPendingGGLand()?.performGGLand()
-            }
-            Button("Cancel", role: .cancel) {
-                state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand()
-            }
-        } message: { request in
-            Text(RightPaneState.ggLandConfirmationMessage(
-                for: request,
-                stack: state.rightPaneStore.stateWithPendingGGLand()?.ggStack
-            ))
-        }
-        .confirmationDialog(
-            "Clean all merged stacks?",
-            isPresented: Binding(
-                get: { state.rightPaneStore.stateWithPendingGGCleanAll() != nil },
-                set: { if !$0 { state.rightPaneStore.stateWithPendingGGCleanAll()?.cancelGGCleanAll() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Clean all merged stacks", role: .destructive) {
-                state.rightPaneStore.stateWithPendingGGCleanAll()?.performGGCleanAll()
-            }
-            Button("Cancel", role: .cancel) {
-                state.rightPaneStore.stateWithPendingGGCleanAll()?.cancelGGCleanAll()
-            }
-        } message: {
-            Text("Remove every merged gg stack and associated worktree in this repository.")
-        }
+        .modifier(RootGGPresentationHandlers(state: state))
         .alert(
             "Merge failed",
             isPresented: Binding(
@@ -508,6 +471,52 @@ private struct RootPresentationHandlers: ViewModifier {
             }
             .environment(\.theme, state.themeStore.current)
         }
+    }
+}
+
+private struct RootGGPresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "Land stack?",
+                isPresented: Binding(
+                    get: { state.rightPaneStore.stateWithPendingGGLand() != nil },
+                    set: { if !$0 { state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand() } }
+                ),
+                titleVisibility: .visible,
+                presenting: state.rightPaneStore.stateWithPendingGGLand()?.pendingGGLand
+            ) { _ in
+                Button("Land", role: .destructive) {
+                    state.rightPaneStore.stateWithPendingGGLand()?.performGGLand()
+                }
+                Button("Cancel", role: .cancel) {
+                    state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand()
+                }
+            } message: { request in
+                Text(RightPaneState.ggLandConfirmationMessage(
+                    for: request,
+                    stack: state.rightPaneStore.stateWithPendingGGLand()?.ggStack
+                ))
+            }
+            .confirmationDialog(
+                "Clean all merged stacks?",
+                isPresented: Binding(
+                    get: { state.rightPaneStore.stateWithPendingGGCleanAll() != nil },
+                    set: { if !$0 { state.rightPaneStore.stateWithPendingGGCleanAll()?.cancelGGCleanAll() } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Clean all merged stacks", role: .destructive) {
+                    state.rightPaneStore.stateWithPendingGGCleanAll()?.performGGCleanAll()
+                }
+                Button("Cancel", role: .cancel) {
+                    state.rightPaneStore.stateWithPendingGGCleanAll()?.cancelGGCleanAll()
+                }
+            } message: {
+                Text("Remove every merged gg stack and associated worktree in this repository.")
+            }
     }
 }
 

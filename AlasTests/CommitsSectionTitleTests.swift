@@ -45,7 +45,7 @@ struct CommitsSectionTitleTests {
             mergeOperation: .merge(sourceBranch: "main"),
             pausedGGOperation: nil
         ))
-        #expect(CommitsSectionView.ggRowMutationsEnabled(
+        #expect(!CommitsSectionView.ggRowMutationsEnabled(
             inFlightAction: nil,
             mergeOperation: .merge(sourceBranch: "main"),
             pausedGGOperation: GGPausedOperation(pausedBy: .sync)
