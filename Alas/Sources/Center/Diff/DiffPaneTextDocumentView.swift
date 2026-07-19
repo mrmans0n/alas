@@ -290,10 +290,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
             theme: theme,
             lspContext: lspContext.map(UpdateSignature.LSPContextSignature.init)
         )
-        guard signature != lastUpdateSignature else {
-            needsLayout = true
-            return
-        }
+        guard signature != lastUpdateSignature else { return }
         lastUpdateSignature = signature
 
         self.layoutMode = layoutMode
@@ -490,10 +487,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
             theme: theme,
             lspContext: lspContext.map(UpdateSignature.LSPContextSignature.init)
         )
-        guard signature != lastRowsUpdateSignature else {
-            needsLayout = true
-            return
-        }
+        guard signature != lastRowsUpdateSignature else { return }
         lastRowsUpdateSignature = signature
 
         self.layoutMode = layoutMode

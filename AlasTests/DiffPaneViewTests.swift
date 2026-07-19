@@ -3729,6 +3729,43 @@ let second = true
         #expect(codeView.rowGeometryComputationCountForTesting == 2)
     }
 
+    @Test func identicalDiffDocumentContainerUpdateDoesNotRequestLayout() throws {
+        let group = try #require(model().groups.first)
+        let container = DiffPaneTextDocumentContainerView(
+            frame: NSRect(x: 0, y: 0, width: 700, height: 300)
+        )
+
+        func update() {
+            container.update(
+                group: group,
+                expandedCollapsedRowIDs: [],
+                layoutMode: .stacked,
+                wrapLines: true,
+                showWhitespace: false,
+                fileExtension: "swift",
+                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                theme: theme(),
+                lspContext: nil
+            )
+        }
+
+        update()
+        container.layoutSubtreeIfNeeded()
+        #expect(!container.needsLayout)
+
+        let codeView = try #require(allSubviews(of: container)
+            .compactMap { $0 as? DiffPaneCodeTextView }
+            .first(where: isEffectivelyVisible))
+        _ = codeView.diffRowRects()
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+
+        update()
+
+        #expect(!container.needsLayout)
+        container.layoutSubtreeIfNeeded()
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
+    }
+
     @Test func stableWidthLayoutAppliesTextLayoutConfigurationOnce() throws {
         let scrollView = makeLongTextScrollView(width: 220, wraps: true)
 
