@@ -258,6 +258,15 @@ final class RightPaneStore {
         states[worktreeId]?.markSnapshotUnknown()
     }
 
+    /// Re-evaluate the gg gate across all cached right-pane states after a
+    /// stacked-diffs config change in Settings (master toggle or a
+    /// project's ggMode), so stale stack styling and the sidebar badge
+    /// clear/reload immediately instead of waiting for the next
+    /// watcher-driven refresh.
+    func reevaluateGGGates() {
+        for state in states.values { state.reevaluateGGGate() }
+    }
+
     func commitEditorComparisonRef(worktreeId: String) -> String? {
         guard let state = states[worktreeId] else { return nil }
         return state.comparisonRef

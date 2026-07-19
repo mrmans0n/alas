@@ -74,6 +74,9 @@ struct ChangesPane: View {
                             .toggleStyle(.switch)
                             .labelsHidden()
                             .disabled(!GGAvailability.shared.isInstalled)
+                            .onChange(of: state.config.changes.stackedDiffsEnabled) { _, _ in
+                                state.rightPaneStore.reevaluateGGGates()
+                            }
                     }
                     SettingsRow(
                         name: "Per project",
@@ -204,6 +207,7 @@ struct ChangesPane: View {
             set: { newMode in
                 state.projectsManager.setGGMode(projectId: project.id, mode: newMode)
                 _ = state.saveProjects()
+                state.rightPaneStore.reevaluateGGGates()
             }
         )
     }

@@ -114,6 +114,9 @@ final class RightPaneState {
     // Exposed (not `private`) so tests can seed/inspect it via `@testable
     // import` without a real git repo driving `refresh()`.
     var ggStackCommitsKey: String? = nil
+    /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
+    /// slow `gg ls --json` never blocks the Changes-pane snapshot.
+    private var ggStackRefreshTask: Task<Void, Never>? = nil
 
     // Sync-nudge state. All fields are in-memory only; nothing is
     // persisted to AppConfig. Two independent conditions:
@@ -338,6 +341,8 @@ final class RightPaneState {
         remoteHelperSession?.stop()
         remoteHelperSession = nil
         remoteEventDebouncer.cancel()
+        ggStackRefreshTask?.cancel()
+        ggStackRefreshTask = nil
     }
 
     private func startRemoteHelperWatching() {
@@ -688,7 +693,8 @@ final class RightPaneState {
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             if self.commits != commits { self.commits = commits }
-            await refreshGGStack()
+            ggStackRefreshTask?.cancel()
+            ggStackRefreshTask = Task { @MainActor [weak self] in await self?.refreshGGStack() }
             if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
             let commitRemote = CodeHostRemoteDetector.detect(
@@ -788,12 +794,35 @@ final class RightPaneState {
         guard key != ggStackCommitsKey else { return }
         // Failure degrades to the plain commits section, never an error UI.
         let stack = try? await ggService.currentStack(worktreePath: worktree.path.path)
+        // A newer refresh superseded this one — its own `refreshGGStack` call
+        // will write the current state; writing here would race it with a
+        // stale result.
+        if Task.isCancelled { return }
         ggStackCommitsKey = key
         if ggStack != stack { ggStack = stack }
         let summary = stack?.summary
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
         }
+    }
+
+    /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
+    /// than waiting for the next watcher-driven refresh. Resets the
+    /// commits-key so the gate is fully re-evaluated even when commits are
+    /// unchanged, then reloads or clears stack state. Returns the
+    /// underlying task so tests can await completion; production call
+    /// sites ignore the return value.
+    @MainActor
+    @discardableResult
+    func reevaluateGGGate() -> Task<Void, Never> {
+        ggStackCommitsKey = nil
+        ggStackRefreshTask?.cancel()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.refreshGGStack()
+        }
+        ggStackRefreshTask = task
+        return task
     }
 
     func markSnapshotUnknown() {

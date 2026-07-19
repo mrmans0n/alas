@@ -103,4 +103,31 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
         #expect(runner.callCount == 2)
     }
+
+    /// `reevaluateGGGate()` must clear stale stack state immediately when the
+    /// gate flips closed (e.g. the Settings master toggle goes off), rather
+    /// than waiting for the next watcher-driven refresh. `reevaluateGGGate()`
+    /// returns its underlying fire-and-forget task so the test can await it
+    /// deterministically instead of racing the MainActor scheduler.
+    @Test func reevaluateGGGateClearsStackWhenGateClosed() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.commits = [commit(sha: String(repeating: "e", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggStack != nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
+
+        // Simulate the master toggle going off in Settings.
+        state.ggGateProvider = { false }
+        await state.reevaluateGGGate().value
+
+        #expect(state.ggStack == nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+    }
 }
