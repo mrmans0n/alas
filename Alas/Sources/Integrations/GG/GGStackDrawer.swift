@@ -16,6 +16,10 @@ struct GGStackDrawer: View {
                     stack: stack,
                     selectedBaseBranch: rps.baseBranch,
                     behindBase: rps.behindBase
+                ),
+                hasBlockingGitOperation: Self.hasBlockingGitOperation(
+                    mergeOperation: rps.mergeOp.current,
+                    pausedGGOperation: rps.ggActionState.pausedOperation
                 )
             )
         }
@@ -29,6 +33,13 @@ struct GGStackDrawer: View {
     ) -> Int? {
         guard selectedBaseBranch == stack.base else { return nil }
         return behindBase?.count
+    }
+
+    static func hasBlockingGitOperation(
+        mergeOperation: MergeOperation?,
+        pausedGGOperation: GGPausedOperation?
+    ) -> Bool {
+        mergeOperation != nil && pausedGGOperation == nil
     }
 
     var body: some View {

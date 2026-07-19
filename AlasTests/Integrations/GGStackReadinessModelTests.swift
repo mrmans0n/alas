@@ -75,6 +75,33 @@ struct GGStackReadinessModelTests {
         ) == nil)
     }
 
+    @Test func blockingGitOperationDisablesStackMutations() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open, approved: true, ci: .success)]),
+            action: GGStackActionState(),
+            hasBlockingGitOperation: true
+        )
+
+        #expect(model.actions.allSatisfy { !$0.isEnabled })
+    }
+
+    @Test func drawerTreatsPlainGitOperationAsBlockingOnlyWhenGGIsNotPaused() {
+        let operation = MergeOperation.merge(sourceBranch: "main")
+
+        #expect(GGStackDrawer.hasBlockingGitOperation(
+            mergeOperation: operation,
+            pausedGGOperation: nil
+        ))
+        #expect(!GGStackDrawer.hasBlockingGitOperation(
+            mergeOperation: operation,
+            pausedGGOperation: GGPausedOperation(pausedBy: .sync)
+        ))
+        #expect(!GGStackDrawer.hasBlockingGitOperation(
+            mergeOperation: nil,
+            pausedGGOperation: nil
+        ))
+    }
+
     @Test func landReadyEnabledWithOpenEntryForFreshVerification() {
         let staleProviderState = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open, approved: false, ci: .success)]),

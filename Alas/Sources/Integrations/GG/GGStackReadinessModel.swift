@@ -31,14 +31,15 @@ struct GGStackReadinessModel: Equatable {
     static func make(
         stack: GGStack,
         action: GGStackActionState,
-        liveBehindBase: Int? = nil
+        liveBehindBase: Int? = nil,
+        hasBlockingGitOperation: Bool = false
     ) -> GGStackReadinessModel {
         let merged = stack.entries.filter { $0.prState == .merged }.count
         let unsynced = max(0, stack.totalCommits - stack.syncedCommits)
         let behind = liveBehindBase ?? stack.behindBase ?? 0
         let isPaused = action.pausedOperation != nil
         let inFlight = action.inFlightAction
-        let busy = inFlight != nil
+        let busy = inFlight != nil || hasBlockingGitOperation
 
         let summaryChip: String = {
             if isPaused { return "paused" }
