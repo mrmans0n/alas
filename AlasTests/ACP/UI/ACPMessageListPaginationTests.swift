@@ -100,6 +100,278 @@ struct ACPMessageListPaginationTests {
         ))
     }
 
+    @Test("content height oscillation schedules one tail restore")
+    func contentHeightOscillationSchedulesOneTailRestore() {
+        let viewportHeight: CGFloat = 600
+        let lowEstimatedHeight: CGFloat = 5_000
+        let highEstimatedHeight: CGFloat = 5_220
+        let oldTailOffset = lowEstimatedHeight - viewportHeight
+
+        #expect(ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: lowEstimatedHeight,
+            newContentHeight: highEstimatedHeight,
+            viewportHeight: viewportHeight,
+            newMinY: oldTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false
+        ))
+
+        #expect(!ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: lowEstimatedHeight,
+            newContentHeight: highEstimatedHeight,
+            viewportHeight: viewportHeight,
+            newMinY: oldTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            lastRestoreSourceContentHeight: lowEstimatedHeight,
+            lastRestoredContentHeight: highEstimatedHeight
+        ))
+
+        #expect(ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: highEstimatedHeight,
+            newContentHeight: highEstimatedHeight + ACPScrollDirectionClassifier.bottomTolerance + 1,
+            viewportHeight: viewportHeight,
+            newMinY: oldTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            lastRestoreSourceContentHeight: lowEstimatedHeight,
+            lastRestoredContentHeight: highEstimatedHeight
+        ))
+    }
+
+    @Test("content growth can restore after a real content shrink")
+    func contentGrowthCanRestoreAfterRealContentShrink() {
+        let viewportHeight: CGFloat = 600
+        let previousRestoredHeight: CGFloat = 5_220
+        let previousRestoreSourceHeight: CGFloat = 5_000
+        let shrunkenHeight: CGFloat = 4_800
+        let regrownHeight: CGFloat = 5_000
+        let shrunkenTailOffset = shrunkenHeight - viewportHeight
+
+        #expect(ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: shrunkenHeight,
+            newContentHeight: regrownHeight,
+            viewportHeight: viewportHeight,
+            newMinY: shrunkenTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            lastRestoreSourceContentHeight: previousRestoreSourceHeight,
+            lastRestoredContentHeight: previousRestoredHeight
+        ))
+    }
+
+    @Test("settled content shrink resets the content growth restore bookmark")
+    func settledContentShrinkResetsContentGrowthRestoreBookmark() {
+        let viewportHeight: CGFloat = 600
+        let previousRestoredHeight: CGFloat = 5_220
+        let shrunkenHeight: CGFloat = 5_000
+        let shrunkenTailOffset = shrunkenHeight - viewportHeight
+
+        #expect(ACPMessageList.shouldResetContentGrowthTailRestoreAfterShrink(
+            previousContentHeight: previousRestoredHeight,
+            newContentHeight: shrunkenHeight,
+            viewportHeight: viewportHeight,
+            newMinY: shrunkenTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: true,
+            hasPendingTailScroll: false,
+            lastRestoredContentHeight: previousRestoredHeight
+        ))
+
+        #expect(ACPMessageList.shouldApplyDeferredContentShrinkBookmarkReset(
+            expectedContentHeight: shrunkenHeight,
+            latestContentHeight: shrunkenHeight,
+            latestViewportHeight: viewportHeight,
+            latestMinY: shrunkenTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: true,
+            hasPendingTailScroll: false
+        ))
+
+        #expect(ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: shrunkenHeight,
+            newContentHeight: previousRestoredHeight,
+            viewportHeight: viewportHeight,
+            newMinY: shrunkenTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            lastRestoreSourceContentHeight: nil,
+            lastRestoredContentHeight: nil
+        ))
+    }
+
+    @Test("estimate oscillation does not apply deferred shrink reset")
+    func estimateOscillationDoesNotApplyDeferredShrinkReset() {
+        let viewportHeight: CGFloat = 600
+        let highEstimatedHeight: CGFloat = 5_220
+        let lowEstimatedHeight: CGFloat = 5_000
+        let highTailOffset = highEstimatedHeight - viewportHeight
+
+        #expect(!ACPMessageList.shouldApplyDeferredContentShrinkBookmarkReset(
+            expectedContentHeight: lowEstimatedHeight,
+            latestContentHeight: highEstimatedHeight,
+            latestViewportHeight: viewportHeight,
+            latestMinY: highTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            hasPendingTailScroll: false
+        ))
+    }
+
+    @Test("pending shrink reset keeps same oscillation bookmark active")
+    func pendingShrinkResetKeepsSameOscillationBookmarkActive() {
+        let viewportHeight: CGFloat = 600
+        let lowHeight: CGFloat = 5_000
+        let highHeight: CGFloat = 5_220
+        let lowTailOffset = lowHeight - viewportHeight
+
+        #expect(!ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: lowHeight,
+            newContentHeight: highHeight,
+            viewportHeight: viewportHeight,
+            newMinY: lowTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            contentShrinkBookmarkResetState: .pending,
+            lastRestoreSourceContentHeight: lowHeight,
+            lastRestoredContentHeight: highHeight
+        ))
+    }
+
+    @Test("verified shrink reset allows same source regrowth restore")
+    func verifiedShrinkResetAllowsSameSourceRegrowthRestore() {
+        let viewportHeight: CGFloat = 600
+        let lowHeight: CGFloat = 5_000
+        let highHeight: CGFloat = 5_220
+        let lowTailOffset = lowHeight - viewportHeight
+
+        #expect(ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: lowHeight,
+            newContentHeight: highHeight,
+            viewportHeight: viewportHeight,
+            newMinY: lowTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            contentShrinkBookmarkResetState: .verified,
+            lastRestoreSourceContentHeight: lowHeight,
+            lastRestoredContentHeight: highHeight
+        ))
+    }
+
+    @Test("content growth restore is stored before coalescing a pending tail scroll")
+    func contentGrowthRestoreIsStoredBeforeCoalescingPendingTailScroll() {
+        #expect(ACPMessageList.shouldStoreContentGrowthRestoreBeforeCoalescing(
+            hasPendingTailScroll: true,
+            hasContentGrowthRestore: true
+        ))
+        #expect(!ACPMessageList.shouldStoreContentGrowthRestoreBeforeCoalescing(
+            hasPendingTailScroll: false,
+            hasContentGrowthRestore: true
+        ))
+        #expect(!ACPMessageList.shouldStoreContentGrowthRestoreBeforeCoalescing(
+            hasPendingTailScroll: true,
+            hasContentGrowthRestore: false
+        ))
+    }
+
+    @Test("coalesced content growth restore preserves lowest source height")
+    func coalescedContentGrowthRestorePreservesLowestSourceHeight() {
+        let existing = ACPContentGrowthTailRestore(sourceHeight: 5_000, targetHeight: 5_100)
+        let next = ACPContentGrowthTailRestore(sourceHeight: 5_100, targetHeight: 5_220)
+        let lowerNext = ACPContentGrowthTailRestore(sourceHeight: 5_000, targetHeight: 5_050)
+
+        #expect(ACPMessageList.mergedContentGrowthTailRestore(existing: existing, new: next) == ACPContentGrowthTailRestore(
+            sourceHeight: 5_000,
+            targetHeight: 5_220
+        ))
+        #expect(ACPMessageList.mergedContentGrowthTailRestore(existing: next, new: lowerNext) == ACPContentGrowthTailRestore(
+            sourceHeight: 5_000,
+            targetHeight: 5_220
+        ))
+        #expect(ACPMessageList.mergedContentGrowthTailRestore(existing: nil, new: next) == next)
+        #expect(ACPMessageList.mergedContentGrowthTailRestore(existing: existing, new: nil) == nil)
+    }
+
+    @Test("scheduled tail task clears bookkeeping only for its own generation")
+    func scheduledTailTaskClearsBookkeepingOnlyForOwnGeneration() {
+        #expect(ACPMessageList.shouldClearScheduledTailScrollBookkeeping(
+            scheduledGeneration: 4,
+            currentGeneration: 4
+        ))
+        #expect(!ACPMessageList.shouldClearScheduledTailScrollBookkeeping(
+            scheduledGeneration: 4,
+            currentGeneration: 5
+        ))
+    }
+
+    @Test("shrink reset task clears bookkeeping only for its own generation")
+    func shrinkResetTaskClearsBookkeepingOnlyForOwnGeneration() {
+        #expect(ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+            scheduledGeneration: 8,
+            currentGeneration: 8
+        ))
+        #expect(!ACPMessageList.shouldClearContentShrinkResetBookkeeping(
+            scheduledGeneration: 8,
+            currentGeneration: 9
+        ))
+    }
+
+    @Test("verified shrink reset is consumed only after growth restore scrolls")
+    func verifiedShrinkResetIsConsumedOnlyAfterGrowthRestoreScrolls() {
+        #expect(ACPMessageList.contentShrinkBookmarkResetStateAfterScheduledTailScroll(
+            didScroll: false,
+            hasContentGrowthRestore: true,
+            currentState: .verified
+        ) == .verified)
+        #expect(ACPMessageList.contentShrinkBookmarkResetStateAfterScheduledTailScroll(
+            didScroll: true,
+            hasContentGrowthRestore: true,
+            currentState: .verified
+        ) == .none)
+        #expect(ACPMessageList.contentShrinkBookmarkResetStateAfterScheduledTailScroll(
+            didScroll: true,
+            hasContentGrowthRestore: false,
+            currentState: .verified
+        ) == .verified)
+    }
+
+    @Test("deferred shrink reset accepts small settled height drift at bottom")
+    func deferredShrinkResetAcceptsSmallSettledHeightDriftAtBottom() {
+        let viewportHeight: CGFloat = 600
+        let expectedContentHeight: CGFloat = 5_000
+        let latestContentHeight: CGFloat = 5_001
+        let latestTailOffset = latestContentHeight - viewportHeight
+
+        #expect(ACPMessageList.shouldApplyDeferredContentShrinkBookmarkReset(
+            expectedContentHeight: expectedContentHeight,
+            latestContentHeight: latestContentHeight,
+            latestViewportHeight: viewportHeight,
+            latestMinY: latestTailOffset,
+            followsTranscriptTail: true,
+            isRestoring: false,
+            hasPendingTailScroll: false
+        ))
+    }
+
+    @Test("deferred shrink reset requires a later geometry probe or debounce")
+    func deferredShrinkResetRequiresLaterGeometryProbeOrDebounce() {
+        #expect(!ACPMessageList.shouldUseScrollProbeForDeferredShrinkReset(
+            latestProbeGeneration: 12,
+            scheduledProbeGeneration: 12,
+            didDebounce: false
+        ))
+        #expect(ACPMessageList.shouldUseScrollProbeForDeferredShrinkReset(
+            latestProbeGeneration: 12,
+            scheduledProbeGeneration: 12,
+            didDebounce: true
+        ))
+        #expect(ACPMessageList.shouldUseScrollProbeForDeferredShrinkReset(
+            latestProbeGeneration: 13,
+            scheduledProbeGeneration: 12,
+            didDebounce: false
+        ))
+    }
+
     @Test("streaming tail scrolls do not animate")
     func streamingTailScrollsDoNotAnimate() {
         #expect(!ACPMessageList.shouldAnimateTailScroll(
