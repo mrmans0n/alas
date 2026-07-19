@@ -942,6 +942,92 @@ struct ACPBrokerClientTests {
         #expect(recorder.records().isEmpty)
     }
 
+    // Regression (code review on #853, P1): with the background poller now
+    // running continuously, it can dispatch an operation's
+    // `operationCompleted` event on its OWN independent attach() call,
+    // completely decoupled from whichever `send()` call is actually
+    // waiting on that operation. Before this fix, the completion's cursor
+    // wasn't protected from `ackAfterEarlierDurableEvents` until `send()`'s
+    // own retry loop caught up — so a later durable event (e.g. the next
+    // streamed chunk) dispatched by that same poller could be acked
+    // immediately in the meantime, advancing past the completion's cursor
+    // before `send()` ever got the chance to hand its result back. This
+    // reproduces exactly that: the poller alone (no live `send()` yet)
+    // delivers the completion, then a later chunk, and only afterwards
+    // does the matching `send()` call show up to claim it.
+    @Test func operationCompletionIsProtectedBeforeSendClaimsIt() async throws {
+        let service = MockBrokerService()
+        let operationKey = "queued-prompt:test:0:session/prompt"
+        await service.enqueueAttach(events: [], turnState: .idle)
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: operationKey),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            )
+        ], turnState: .idle)
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("next chunk")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ], turnState: .idle)
+        let client = makeClient(
+            service: service,
+            backgroundPollIdleIntervalNanoseconds: 20_000_000
+        )
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+
+        try await client.start()
+        let update = try await updateTask.value
+        update.durableConsumptionAcknowledgement?()
+
+        // Without the fix, nothing protects the completion's cursor yet
+        // (no send() call has run for it), so this ack would go through
+        // immediately instead of deferring.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await service.acks.isEmpty)
+
+        // The original send() for that operation finally catches up.
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: false,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: false
+        ))
+        await service.enqueueAttach(events: [], turnState: .idle)
+        let response = try await client.send(ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+            brokerOperationKey: operationKey
+        ))
+        response.acknowledgeDurableConsumption()
+
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [
+                ACPBrokerEventCursor(rawValue: 2),
+                ACPBrokerEventCursor(rawValue: 3)
+            ]
+        }
+    }
+
     @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

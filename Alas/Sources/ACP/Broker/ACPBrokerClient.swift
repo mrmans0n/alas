@@ -184,6 +184,21 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         let operationKey = request.brokerOperationKey.map(ACPBrokerOperationKey.init(rawValue:))
             ?? nextOperationKey(method: request.method)
         let params = try ACPBrokerJSONValue(encodable: request.params)
+        // `dispatch()`'s `.operationCompleted` handler eagerly protects this
+        // operation's completion cursor the moment ANY caller observes it
+        // (including the background poller, independently of this call).
+        // Every exit below other than the successful return must release
+        // that protection here — otherwise a completion this call never
+        // hands off (error, cancellation) would stay "unacknowledged"
+        // forever, permanently blocking later acks. The successful path
+        // hands the release off to the caller instead, via
+        // `durableConsumptionAcknowledgement`.
+        var releasedToCaller = false
+        defer {
+            if !releasedToCaller, let cursor = currentOperationCompletionCursor(for: operationKey) {
+                ackResponse(cursor: cursor)
+            }
+        }
         while true {
             let result = try await service.send(ACPBrokerSendParams(
                 brokerId: brokerId,
@@ -204,9 +219,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
             let cursor = currentOperationCompletionCursor(for: operationKey)
-            if let cursor {
-                trackDeferredResponse(cursor: cursor)
-            }
+            releasedToCaller = true
             return ACPResponse(
                 body: try (result.result ?? .null).data,
                 durableConsumptionAcknowledgement: { [weak self] in
@@ -444,6 +457,23 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         case .operationCompleted(let operationKey, _):
             stateLock.lock()
             operationCompletionCursors[operationKey] = event.cursor
+            // Protect this cursor from `ackAfterEarlierDurableEvents`
+            // immediately, at the moment ANY caller observes it — not only
+            // once `send()`'s own retry loop gets around to noticing it.
+            // With the background poller now
+            // running continuously (previously it only ran during an
+            // adopted session's active turn), it can dispatch this same
+            // event on a call completely independent of the `send()` call
+            // that's actually waiting on it. In the window before that
+            // `send()` call catches up, a later durable event (e.g. the
+            // next streamed chunk) could otherwise be acked immediately —
+            // `ackAfterEarlierDurableEvents` only defers when it already
+            // knows an earlier cursor is unconsumed — advancing
+            // `acknowledgedCursor` past this one before its response was
+            // ever handed back. `send()` releases this via a `defer` on
+            // every exit path (success, error, cancellation), so it can't
+            // be left tracked forever for a call that did run.
+            unacknowledgedDurableEventCursors.insert(event.cursor)
             stateLock.unlock()
         case .turnStateChanged(let state):
             setTurnState(state)
@@ -666,12 +696,6 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         unacknowledgedDurableEventCursors.remove(cursor)
         stateLock.unlock()
         ackAfterEarlierDurableEvents(cursor: cursor)
-    }
-
-    private func trackDeferredResponse(cursor: ACPBrokerEventCursor) {
-        stateLock.lock()
-        unacknowledgedDurableEventCursors.insert(cursor)
-        stateLock.unlock()
     }
 
     private func ackAfterEarlierDurableEvents(cursor: ACPBrokerEventCursor) {
