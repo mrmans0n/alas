@@ -3302,4 +3302,28 @@ struct ACPSessionTests {
             #expect(tc.content == "```{.swift}\nlet x = 1\n```")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("streamed partial fence growing to invalid tag without newline falls to full reprocess")
+    func toolCallUpdateStreamingPartialFenceInvalidNoNewlineFallsToFullReprocess() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-invalid-no-newline", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a valid-looking opening fence prefix "```".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-no-newline", status: "in_progress",
+            content: [.content(.text("```"))])))
+        // Second chunk: the fence line grows to "```{" (still no newline).
+        // `{` is not a valid tag character, so couldBeOpeningFencePrefix
+        // returns false and the suffix path falls to full reprocess,
+        // keeping the line in the body.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-no-newline", status: "completed",
+            content: [.content(.text("```{\nbody"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            // "```{" is NOT a valid opening fence, so stripWrappingFence
+            // leaves it in the content.
+            #expect(tc.content == "```{\nbody")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

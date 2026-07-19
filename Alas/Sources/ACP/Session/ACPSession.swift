@@ -718,8 +718,13 @@ final class ACPSession: ObservableObject, Identifiable {
             // reprocess would now recognize and strip. Fall to full
             // reprocess in that case.
             let suffix = String(raw.dropFirst(prev.count))
+            // When the opening fence is unterminated, `appliedStrippedRaw`
+            // is empty and `extendStrippedRaw` needs the previous raw
+            // fence line to re-validate. Otherwise it appends to
+            // `appliedStrippedRaw` (the stripped body).
+            let extendBase = tc.appliedOpeningFenceUnterminated ? prev : tc.appliedStrippedRaw
             let (newStrippedRaw, unterminated, needsFullReprocess) = Self.extendStrippedRaw(
-                prev: tc.appliedStrippedRaw,
+                previousRaw: extendBase,
                 suffix: suffix,
                 openingFenceUnterminated: tc.appliedOpeningFenceUnterminated)
             if needsFullReprocess {
@@ -961,37 +966,53 @@ final class ACPSession: ObservableObject, Identifiable {
     /// false positive and incremental stripping can't safely proceed —
     /// `needsFullReprocess` returns true so the caller falls back.
     private static func extendStrippedRaw(
-        prev: String,
+        previousRaw: String,
         suffix: String,
         openingFenceUnterminated: Bool
     ) -> (strippedRaw: String, unterminated: Bool, needsFullReprocess: Bool) {
         if openingFenceUnterminated {
             if let newlineRange = suffix.range(of: "\n") {
                 let after = String(suffix[newlineRange.upperBound...])
-                // The completed fence line is `suffix[..<newline]`. We
-                // can't see the original partial line here, but we CAN
-                // re-validate by re-running stripWrappingFence on the full
-                // body — which is exactly what full reprocess does. If
-                // the completed line is still a valid isOpeningFence, the
-                // incremental path is safe; otherwise the partial fence
-                // was a false positive and we must fall back.
-                let completedLine = String(suffix[..<newlineRange.lowerBound])
+                // The completed fence line is `previousRaw + suffix[..<newline]`.
+                // Re-validate against `isOpeningFence`: if it grew into a
+                // form that is NOT a valid opening fence (e.g. "```{.swift}"
+                // where `{` is not in the allowed tag character set), the
+                // partial fence was a false positive and we must fall back
+                // to full reprocess so the line is kept in the body.
+                let completedLine = previousRaw + String(suffix[..<newlineRange.lowerBound])
                 if Self.isOpeningFence(completedLine) {
                     return (after, false, false)
                 }
-                // The completed line is NOT a valid opening fence (e.g.
-                // "```{.swift}" or "``` c"). The previous chunk's partial
-                // fence was a false positive. Fall back to full reprocess.
                 return ("", false, true)
             }
-            // The opening fence line is still being built. The body stays
-            // empty. We could re-validate the growing line here, but the
-            // common case is a valid tag prefix ("```sw" -> "```swift"),
-            // and a false positive (e.g. "```{") is caught on the next
-            // update when the line completes. Keep waiting.
-            return ("", true, false)
+            // No newline yet: the opening fence line is still being built.
+            // Re-validate the growing line: if it can no longer be a valid
+            // opening fence (e.g. "```{" — the `{` is not a valid tag
+            // character), the partial fence was a false positive and we
+            // must fall back so the line is kept in the body. Otherwise
+            // keep waiting for more characters.
+            let growingLine = previousRaw + suffix
+            if Self.couldBeOpeningFencePrefix(growingLine) {
+                return ("", true, false)
+            }
+            return ("", false, true)
         }
-        return (prev + suffix, false, false)
+        // `previousRaw` is not used in the non-unterminated path; the
+        // caller passes the stripped-raw body as the accumulator.
+        return (previousRaw + suffix, false, false)
+    }
+
+    /// Whether `s` is a prefix of a potential opening fence line — i.e.
+    /// it starts with `` ``` `` and the rest (so far) is all valid tag
+    /// characters. Used by `extendStrippedRaw` to decide whether a
+    /// still-growing line should keep waiting for more characters before
+    /// being classified as a fence. A line like `` ```sw `` is a prefix
+    /// of `` ```swift `` (valid), while `` ```{.swift} `` is not (the
+    /// `{` disqualifies it even though it starts with `` ``` ``).
+    private static func couldBeOpeningFencePrefix(_ s: String) -> Bool {
+        guard s.hasPrefix("```") else { return false }
+        let rest = s.dropFirst(3)
+        return rest.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "+" || $0 == "-" }
     }
 
     /// Whether `raw` starts with an opening fence line that has no
