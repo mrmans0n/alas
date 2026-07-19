@@ -165,6 +165,29 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
+    /// `gg ls --json` answers for the *current* branch, so a checkout to a
+    /// different branch that happens to share the same commit SHAs (e.g.
+    /// right after `git checkout -b` from the same HEAD) must not reuse the
+    /// previous branch's cached stack via the unchanged-commits guard.
+    @Test func branchChangeWithSameCommitsReinvokesCLI() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.currentBranch = "nacho/stack-a"
+        state.commits = [commit(sha: String(repeating: "h", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(runner.callCount == 1)
+
+        state.currentBranch = "nacho/stack-b"
+        await state.refreshGGStack()
+        #expect(runner.callCount == 2)
+    }
+
     /// `markSnapshotUnknown()` resets `commits` along with the rest of the
     /// snapshot; gg stack state derives from `commits`, so it must be reset
     /// in lockstep or a delayed/failed refresh after invalidation can leave

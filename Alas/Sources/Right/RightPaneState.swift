@@ -790,10 +790,14 @@ final class RightPaneState {
             return
         }
         // `gg ls --json` reaches out to gh/glab for PR state — skip when
-        // the commit set is unchanged since the last query. PR-state churn
-        // from the outside world refreshes on the next commits change (a
-        // manual-refresh hook can come with the phase-2 drawer).
-        let key = commits.map(\.sha).joined(separator: "|")
+        // the branch and commit set are unchanged since the last query. PR-
+        // state churn from the outside world refreshes on the next commits
+        // change (a manual-refresh hook can come with the phase-2 drawer).
+        // The branch is part of the key because `gg ls` answers for the
+        // *current* branch — a checkout to a different branch that happens
+        // to share the same commits (e.g. right after `git checkout -b`)
+        // must not reuse the old branch's cached stack.
+        let key = "\(currentBranch)|" + commits.map(\.sha).joined(separator: "|")
         guard key != ggStackCommitsKey else { return }
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
