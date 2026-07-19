@@ -107,6 +107,10 @@ final class RightPaneState {
     /// gg installed, per-project mode) against app-level state.
     var ggGateProvider: (@MainActor () -> Bool)? = nil
     var ggService = GGService()
+    /// Backing store for the stack drawer's mutation UI (in-flight action,
+    /// sync progress, paused/error state). Not snapshot-derived, so
+    /// `markSnapshotUnknown()` does not reset it.
+    let ggActionState = GGStackActionState()
     /// Commits ahead of base used for the gg stack-shape check and cache
     /// key — deliberately NOT the display `commits` list. `commits` follows
     /// the user's chosen comparison mode, and under "Branch upstream" it is
@@ -791,6 +795,14 @@ final class RightPaneState {
     // watcher.
     @MainActor
     func refreshGGStack() async {
+        // Reconcile paused-operation state from a git-level probe before
+        // anything else: it's a cheap filesystem read, independent of the
+        // gg query below and of whether the gate/stack-shape checks pass, so
+        // Continue/Abort stay accurate even across app restarts and terminal
+        // interventions (`gg ls --json` can't report a paused rebase, and a
+        // stack that stops being gated must still clear a stale flag).
+        reconcilePausedOperation()
+
         let snapshotGeneration = snapshotInvalidationGeneration
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
@@ -869,6 +881,88 @@ final class RightPaneState {
         }
         ggStackRefreshTask = task
         return task
+    }
+
+    /// Pure filesystem probe → `ggActionState.pausedOperation` sync. Split
+    /// out of `refreshGGStack()` so it runs unconditionally on every entry
+    /// (including the gate-closed / not-stack-shaped early return), not just
+    /// on a successful `gg ls --json` fetch — the paused marker is written
+    /// by git itself, not by gg, so it can appear or disappear independent
+    /// of gating and of whether the gg query even runs.
+    private func reconcilePausedOperation() {
+        if GGStackGate.operationInProgress(repoPath: worktree.path.path) {
+            if ggActionState.pausedOperation == nil {
+                ggActionState.setPaused(GGPausedOperation(pausedBy: ggActionState.inFlightAction ?? .sync))
+            }
+        } else {
+            ggActionState.clearPaused()
+        }
+    }
+
+    /// Dispatches a stack-drawer action kind to its gg mutation. `.land` is
+    /// routed straight to the confirmation flow (Task 7) and `.checkout` is
+    /// dispatched directly by the entry menu (Task 9) — neither goes through
+    /// this dispatcher.
+    @MainActor
+    func onGGStackAction(_ kind: GGStackActionKind, appState: AppState) {
+        switch kind {
+        case .sync:
+            runGGSync()
+        case .clean:
+            runGGSimpleAction(.clean) { try await self.ggService.clean(worktreePath: self.worktree.path.path) }
+        case .continueOp:
+            runGGSimpleAction(.continueOp) { try await self.ggService.continueOp(worktreePath: self.worktree.path.path) }
+        case .abortOp:
+            runGGSimpleAction(.abortOp) { try await self.ggService.abortOp(worktreePath: self.worktree.path.path) }
+        case .land, .checkout:
+            break
+        }
+    }
+
+    private func runGGSync() {
+        guard ggActionState.beginAction(.sync) else { return }
+        ggActionState.clearError()
+        ggActionState.clearSyncProgress()
+        Task { @MainActor in
+            defer {
+                ggActionState.endAction(.sync)
+                Task { @MainActor in
+                    await self.refresh()
+                    _ = self.reevaluateGGGate()
+                }
+            }
+            do {
+                for try await event in ggService.sync(worktreePath: worktree.path.path) {
+                    ggActionState.appendSyncEvent(event)
+                    if case .error(let message) = event { ggActionState.setError(message) }
+                }
+            } catch let error as GGServiceError {
+                ggActionState.setError(error.userMessage)
+            } catch {
+                ggActionState.setError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func runGGSimpleAction(_ kind: GGStackActionKind, _ body: @escaping () async throws -> Void) {
+        guard ggActionState.beginAction(kind) else { return }
+        ggActionState.clearError()
+        Task { @MainActor in
+            defer {
+                ggActionState.endAction(kind)
+                Task { @MainActor in
+                    await self.refresh()
+                    _ = self.reevaluateGGGate()
+                }
+            }
+            do {
+                try await body()
+            } catch let error as GGServiceError {
+                ggActionState.setError(error.userMessage)
+            } catch {
+                ggActionState.setError(error.localizedDescription)
+            }
+        }
     }
 
     func markSnapshotUnknown() {

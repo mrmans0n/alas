@@ -347,4 +347,34 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackCommitsKey == nil)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
     }
+
+    /// `gg ls --json` can't report a paused rebase, so `refreshGGStack()`
+    /// reconciles `ggActionState.pausedOperation` from a git-level probe
+    /// (`GGStackGate.operationInProgress`) independent of the gg query.
+    @Test func refreshReconcilesPausedFromGitProbe() async throws {
+        // Real temp repo with a rebase-merge dir → operationInProgress true.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-paused-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git/rebase-merge"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let wt = Worktree(
+            id: Worktree.makeId(path: dir), projectId: "p", name: "feature",
+            branch: "feature", path: dir, status: .clean, lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        ))
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggActionState.pausedOperation != nil)
+
+        // Remove the marker → next refresh clears paused.
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(".git/rebase-merge"))
+        state.ggStackCommitsKey = nil // force a re-query past the unchanged-key guard
+        await state.refreshGGStack()
+        #expect(state.ggActionState.pausedOperation == nil)
+    }
 }
