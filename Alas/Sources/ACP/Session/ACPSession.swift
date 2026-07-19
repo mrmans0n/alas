@@ -661,11 +661,18 @@ final class ACPSession: ObservableObject, Identifiable {
             items: items, snapshot: tc.appliedItemsSnapshot, count: tc.appliedItemCount)
         if let prev = tc.appliedRawContent, raw == prev,
            items.count == tc.appliedItemCount, prefixItemsUnchanged {
-            if isFinal == tc.appliedIsFinal {
+            if isFinal == tc.appliedIsFinal && rawOutputAssets.isEmpty {
                 // Content unchanged, item count unchanged, prefix items
-                // unchanged, AND same isFinal — nothing to do for the
-                // content body. `rawOutputAssets` were already merged into
-                // `tc.assets` by the caller's rawOutput handling.
+                // unchanged, same isFinal, AND no new raw-output assets —
+                // nothing to do for the content body. `rawOutputAssets`
+                // is empty when this update carries no new `rawOutput`,
+                // so the caller's rawOutput handling left `tc.assets`
+                // consistent with the previous apply. If rawOutput DID
+                // change, `rawOutputAssets` is non-empty and we fall
+                // through to full reprocess so `tc.assets` is rebuilt
+                // from content + the new rawOutput (matching the legacy
+                // semantics where `reprocessToolCallContentFull` replaces
+                // `tc.assets` rather than merging into the stale set).
                 // Item-count + prefix-items guards: `flatten` ignores
                 // images/resource-links/terminals, so equal flattened text
                 // does NOT imply the structured items are the same —

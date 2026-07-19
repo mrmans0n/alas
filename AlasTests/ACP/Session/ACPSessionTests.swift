@@ -3215,4 +3215,35 @@ struct ACPSessionTests {
             #expect(tc.preview == "abcdefghij")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("toolCallUpdate with same text but replaced rawOutput rebuilds assets")
+    func toolCallUpdateSameTextReplacedRawOutputRebuildsAssets() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-replace", title: "image", kind: "other", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + rawOutput image A.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-replace", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
+            ], "after first: \(tc1.assets)")
+        }
+        // Second update: same text + same status, but rawOutput replaced
+        // with image B. The identical-text fast path must fall to full
+        // reprocess so `tc.assets` is rebuilt from content + the new
+        // rawOutput (replacing image A, not accumulating it).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-replace", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-b"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-b", mimeType: "image/png")
+            ], "after second: \(tc2.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
 }
