@@ -906,14 +906,24 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// Whether the first line of `strippedRaw` is complete — i.e. the
-    /// body contains a newline, so the first line won't grow further.
-    /// Used to decide whether `preview`/`contentLanguage` (derived from
-    /// the first line) need recomputing on a suffix update. While the
-    /// first line is still being built (no newline yet), each suffix can
-    /// extend it and change the preview/fence-language.
+    /// Whether the first line of `strippedRaw` is stable — i.e. the body
+    /// has a non-empty first line followed by a newline, so the preview
+    /// (first non-empty line) and fence language (first line) won't change
+    /// on a suffix update. Used to decide whether `preview`/
+    /// `contentLanguage` need recomputing. While the first line is still
+    /// being built (no newline yet) or the first line is empty (the
+    /// preview may come from a LATER line), each suffix can extend or
+    /// start the first non-empty line and change the preview/fence.
     private static func firstLineIsComplete(_ strippedRaw: String) -> Bool {
-        strippedRaw.firstIndex(of: "\n") != nil || strippedRaw.isEmpty
+        // Find the first newline. Everything before it is the first line.
+        // If there's no newline, the first line is still growing.
+        guard let newlineIndex = strippedRaw.firstIndex(of: "\n") else {
+            return false
+        }
+        let firstLine = strippedRaw[..<newlineIndex]
+        // An empty first line means the preview comes from a later line
+        // which may not have arrived yet. Keep recomputing.
+        return !firstLine.isEmpty
     }
 
     /// Whether `previousRaw` is a PARTIAL opening fence — a prefix of

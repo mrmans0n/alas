@@ -3326,4 +3326,29 @@ struct ACPSessionTests {
             #expect(tc.content == "```{\nbody")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("streamed toolCallUpdate refreshes preview when the first line is empty then filled")
+    func toolCallUpdateStreamingEmptyFirstLineThenFilledRefreshesPreview() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-empty-first", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a leading blank line (first line is empty).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-empty-first", status: "in_progress",
+            content: [.content(.text("\n"))])))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.preview == nil, "preview after first=\(tc1.preview ?? "nil")")
+        }
+        // Second chunk: the second line fills in. The preview must be
+        // recomputed from the now-non-empty second line (which becomes the
+        // first non-empty line for `previewLine`).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-empty-first", status: "completed",
+            content: [.content(.text("\nactual first line"))])))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.content == "\nactual first line")
+            #expect(tc2.preview == "actual first line", "preview=\(tc2.preview ?? "nil")")
+        } else { Issue.record("expected toolCall message") }
+    }
 }
