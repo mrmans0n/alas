@@ -112,11 +112,13 @@ final class RightPaneState {
     /// performRefresh fires continuously from the file watcher — so only
     /// re-query gg when the commit set actually changed.
     // Exposed (not `private`) so tests can seed/inspect it via `@testable
-    // import` without a real git repo driving `refresh()`.
-    var ggStackCommitsKey: String? = nil
+    // import` without a real git repo driving `refresh()`. Bookkeeping only,
+    // never read by a view — kept out of observation to avoid invalidation
+    // churn on the hot refresh path.
+    @ObservationIgnored var ggStackCommitsKey: String? = nil
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
-    private var ggStackRefreshTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
 
     // Sync-nudge state. All fields are in-memory only; nothing is
     // persisted to AppConfig. Two independent conditions:
