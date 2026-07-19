@@ -3246,4 +3246,60 @@ struct ACPSessionTests {
             ], "after second: \(tc2.assets)")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("toolCallUpdate with same text and rawOutput clearing image drops stale asset")
+    func toolCallUpdateSameTextRawOutputClearsImageDropsStale() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-clear", title: "image", kind: "other", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + rawOutput image.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-clear", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
+            ], "after first: \(tc1.assets)")
+        }
+        // Second update: same text + same status, but rawOutput replaced
+        // with a non-image result (no assets). The identical-text fast
+        // path must fall to full reprocess so the stale image is dropped.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-clear", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["text": AnyCodable("done")]))))
+        if case .toolCall(let tc2) = session.transcript.messages[0] {
+            #expect(tc2.assets == [], "after second: \(tc2.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed partial fence completing to an invalid fence tag falls to full reprocess")
+    func toolCallUpdateStreamingPartialFenceInvalidTagFallsToFullReprocess() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-invalid-tag", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: a valid-looking opening fence prefix "```".
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-tag", status: "in_progress",
+            content: [.content(.text("```"))])))
+        // Second chunk: the fence line completes to "```{.swift}" which
+        // isOpeningFence REJECTS (the `{` is not a valid tag character).
+        // The suffix path must fall to full reprocess so the line is kept
+        // in the body (not stripped as a fence).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-invalid-tag", status: "completed",
+            content: [.content(.text("```{.swift}\nlet x = 1\n```"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            // The first line "```{.swift}" is NOT a valid opening fence
+            // (isOpeningFence rejects `{`), so stripWrappingFence leaves
+            // it in the content. The trailing "```" is also NOT stripped.
+            // Note: `wrappingFenceLanguage` is more permissive than
+            // `isOpeningFence` and still extracts "swift" from the tag —
+            // that's the legacy behavior too.
+            #expect(tc.content == "```{.swift}\nlet x = 1\n```")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

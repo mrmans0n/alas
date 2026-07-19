@@ -619,6 +619,7 @@ final class ACPSession: ObservableObject, Identifiable {
             items: items,
             isFinal: Self.isFinalStatus(payload.status),
             rawOutputAssets: rawOutputAssets,
+            rawOutputChanged: payload.rawOutput != nil,
             to: &tc)
     }
 
@@ -654,6 +655,7 @@ final class ACPSession: ObservableObject, Identifiable {
         items: [ACPToolCallContent],
         isFinal: Bool,
         rawOutputAssets: [ACPMessage.ToolCallAsset],
+        rawOutputChanged: Bool,
         to tc: inout ACPMessage.ToolCall
     ) {
         let raw = Self.flatten(items)
@@ -661,18 +663,17 @@ final class ACPSession: ObservableObject, Identifiable {
             items: items, snapshot: tc.appliedItemsSnapshot, count: tc.appliedItemCount)
         if let prev = tc.appliedRawContent, raw == prev,
            items.count == tc.appliedItemCount, prefixItemsUnchanged {
-            if isFinal == tc.appliedIsFinal && rawOutputAssets.isEmpty {
+            if isFinal == tc.appliedIsFinal && !rawOutputChanged && rawOutputAssets.isEmpty {
                 // Content unchanged, item count unchanged, prefix items
-                // unchanged, same isFinal, AND no new raw-output assets —
-                // nothing to do for the content body. `rawOutputAssets`
-                // is empty when this update carries no new `rawOutput`,
-                // so the caller's rawOutput handling left `tc.assets`
-                // consistent with the previous apply. If rawOutput DID
-                // change, `rawOutputAssets` is non-empty and we fall
-                // through to full reprocess so `tc.assets` is rebuilt
-                // from content + the new rawOutput (matching the legacy
-                // semantics where `reprocessToolCallContentFull` replaces
-                // `tc.assets` rather than merging into the stale set).
+                // unchanged, same isFinal, AND rawOutput did not change —
+                // nothing to do for the content body. `rawOutputChanged`
+                // guards the case where the update carried a new
+                // `rawOutput` that produced no image assets but replaced
+                // an earlier image-producing rawOutput: the caller already
+                // updated `tc.rawOutput` and merged (empty) rawOutputAssets,
+                // but the old image is still in `tc.assets`. Full reprocess
+                // rebuilds `tc.assets` from content + the new rawOutput,
+                // dropping the stale image.
                 // Item-count + prefix-items guards: `flatten` ignores
                 // images/resource-links/terminals, so equal flattened text
                 // does NOT imply the structured items are the same —
@@ -717,10 +718,16 @@ final class ACPSession: ObservableObject, Identifiable {
             // reprocess would now recognize and strip. Fall to full
             // reprocess in that case.
             let suffix = String(raw.dropFirst(prev.count))
-            let (newStrippedRaw, unterminated) = Self.extendStrippedRaw(
+            let (newStrippedRaw, unterminated, needsFullReprocess) = Self.extendStrippedRaw(
                 prev: tc.appliedStrippedRaw,
                 suffix: suffix,
                 openingFenceUnterminated: tc.appliedOpeningFenceUnterminated)
+            if needsFullReprocess {
+                Self.reprocessToolCallContentFull(
+                    raw: raw, items: items, isFinal: isFinal,
+                    rawOutputAssets: rawOutputAssets, to: &tc)
+                return
+            }
             let newStripped: String
             if isFinal && tc.appliedOpeningFenceStripped {
                 // Only strip a trailing fence line when an opening fence
@@ -944,26 +951,47 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Extend `prev` (the previously stripped-raw body, after opening
     /// fence removal) by `suffix` (the newly arrived raw tail). Returns
-    /// the new stripped-raw body and the updated `openingFenceUnterminated`
-    /// flag. When the previous chunk left the opening fence line
-    /// unterminated (e.g. `"```swift"` with no newline), the first newline
-    /// in `suffix` terminates that line and the body begins after it;
-    /// until then the body stays empty.
+    /// the new stripped-raw body, the updated `openingFenceUnterminated`
+    /// flag, and whether the extension can be taken incrementally. When
+    /// the previous chunk left the opening fence line unterminated, the
+    /// first newline in `suffix` completes it; the completed line is
+    /// re-validated against `isOpeningFence`. If it grew into a form
+    /// that is NOT a valid opening fence (e.g. `` ```{.swift} `` where
+    /// `{` is not in the allowed tag character set), the line was a
+    /// false positive and incremental stripping can't safely proceed —
+    /// `needsFullReprocess` returns true so the caller falls back.
     private static func extendStrippedRaw(
         prev: String,
         suffix: String,
         openingFenceUnterminated: Bool
-    ) -> (strippedRaw: String, unterminated: Bool) {
+    ) -> (strippedRaw: String, unterminated: Bool, needsFullReprocess: Bool) {
         if openingFenceUnterminated {
             if let newlineRange = suffix.range(of: "\n") {
-                let after = suffix[newlineRange.upperBound...]
-                return (String(after), false)
+                let after = String(suffix[newlineRange.upperBound...])
+                // The completed fence line is `suffix[..<newline]`. We
+                // can't see the original partial line here, but we CAN
+                // re-validate by re-running stripWrappingFence on the full
+                // body — which is exactly what full reprocess does. If
+                // the completed line is still a valid isOpeningFence, the
+                // incremental path is safe; otherwise the partial fence
+                // was a false positive and we must fall back.
+                let completedLine = String(suffix[..<newlineRange.lowerBound])
+                if Self.isOpeningFence(completedLine) {
+                    return (after, false, false)
+                }
+                // The completed line is NOT a valid opening fence (e.g.
+                // "```{.swift}" or "``` c"). The previous chunk's partial
+                // fence was a false positive. Fall back to full reprocess.
+                return ("", false, true)
             }
-            // The opening fence line is still being built (e.g. more
-            // language-tag characters arrived). The body stays empty.
-            return ("", true)
+            // The opening fence line is still being built. The body stays
+            // empty. We could re-validate the growing line here, but the
+            // common case is a valid tag prefix ("```sw" -> "```swift"),
+            // and a false positive (e.g. "```{") is caught on the next
+            // update when the line completes. Keep waiting.
+            return ("", true, false)
         }
-        return (prev + suffix, false)
+        return (prev + suffix, false, false)
     }
 
     /// Whether `raw` starts with an opening fence line that has no
@@ -1038,6 +1066,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 items: content,
                 isFinal: Self.isFinalStatus(tc.status),
                 rawOutputAssets: rawOutputAssets,
+                rawOutputChanged: update.rawOutput != nil,
                 to: &tc)
         }
     }
