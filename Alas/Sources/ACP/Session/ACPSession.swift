@@ -657,16 +657,21 @@ final class ACPSession: ObservableObject, Identifiable {
         to tc: inout ACPMessage.ToolCall
     ) {
         let raw = Self.flatten(items)
-        if let prev = tc.appliedRawContent, raw == prev, items.count == tc.appliedItemCount {
+        let prefixItemsUnchanged = Self.prefixItemsUnchanged(
+            items: items, snapshot: tc.appliedItemsSnapshot, count: tc.appliedItemCount)
+        if let prev = tc.appliedRawContent, raw == prev,
+           items.count == tc.appliedItemCount, prefixItemsUnchanged {
             if isFinal == tc.appliedIsFinal {
-                // Content unchanged, item count unchanged, AND same isFinal —
-                // nothing to do for the content body. `rawOutputAssets` were
-                // already merged into `tc.assets` by the caller's rawOutput
-                // handling, so we're done.
-                // Item count guard: `flatten` ignores images/resource-links/
-                // terminals, so two updates with the same flattened text but
-                // different structured items (e.g. a newly added screenshot)
-                // must NOT skip `extractAssets`/`extractTerminalIds`.
+                // Content unchanged, item count unchanged, prefix items
+                // unchanged, AND same isFinal — nothing to do for the
+                // content body. `rawOutputAssets` were already merged into
+                // `tc.assets` by the caller's rawOutput handling.
+                // Item-count + prefix-items guards: `flatten` ignores
+                // images/resource-links/terminals, so equal flattened text
+                // does NOT imply the structured items are the same —
+                // an added screenshot (count grows) or an in-place
+                // replacement (count same, item differs) would otherwise
+                // skip `extractAssets`/`extractTerminalIds`.
                 return
             }
             // Same content but `isFinal` flipped (e.g. status transitioned to
@@ -681,6 +686,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if let prev = tc.appliedRawContent, !prev.isEmpty, raw.hasPrefix(prev),
            !tc.appliedIsFinal,
            items.count >= tc.appliedItemCount,
+           prefixItemsUnchanged,
            !Self.previousRawWasPartialFence(prev) {
             // Suffix-only fast path. The new flattened raw is the previous
             // one with `suffix` appended; `appliedStrippedRaw` is the body
@@ -688,6 +694,13 @@ final class ACPSession: ObservableObject, Identifiable {
             // (handling the Case where the opening fence line arrived
             // unterminated in the previous chunk) and, if `isFinal`, apply
             // the trailing-fence strip to the resulting body.
+            //
+            // `prefixItemsUnchanged` guard: if any of the first
+            // `appliedItemCount` items changed (in-place replacement, or a
+            // terminal inserted before the text item), the suffix path's
+            // `newItemSlice` would miss the structured change. Fall to full
+            // reprocess so `extractAssets`/`extractTerminalIds` see the
+            // current items.
             //
             // `previousRawWasPartialFence` guard: if the previous raw was a
             // PARTIAL opening fence (e.g. "``" — not yet a complete fence
@@ -709,10 +722,20 @@ final class ACPSession: ObservableObject, Identifiable {
             }
             tc.replaceContent(newStripped)
             tc.isContentTruncated = false
-            if tc.preview == nil {
+            // Refresh `preview`/`contentLanguage` when the first line is
+            // still incomplete. `previewLine` is the first non-empty line;
+            // once the first line is complete (followed by a newline or
+            // EOF), the preview is stable. But if the previous preview was
+            // derived from a partial first line (e.g. "bui" from "bui"),
+            // and the suffix extends that first line (e.g. "lding\n..."),
+            // the preview must be recomputed. Detect this: if the previous
+            // `appliedStrippedRaw` had no newline, the first line was
+            // incomplete and we recompute. Once a newline exists in
+            // `appliedStrippedRaw`, the first line is stable.
+            if tc.preview == nil || !Self.firstLineIsComplete(tc.appliedStrippedRaw) {
                 tc.preview = Self.previewLine(newStripped)
             }
-            if tc.contentLanguage == nil {
+            if tc.contentLanguage == nil || !Self.firstLineIsComplete(tc.appliedStrippedRaw) {
                 tc.contentLanguage = Self.wrappingFenceLanguage(raw)
             }
             let newItemSlice: [ACPToolCallContent]
@@ -744,6 +767,7 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.appliedIsFinal = isFinal
             tc.appliedStrippedRaw = newStrippedRaw
             tc.appliedOpeningFenceUnterminated = unterminated
+            tc.appliedItemsSnapshot = items
             return
         }
         Self.reprocessToolCallContentFull(
@@ -789,6 +813,42 @@ final class ACPSession: ObservableObject, Identifiable {
         tc.appliedStrippedRaw = strippedRaw
         tc.appliedOpeningFenceUnterminated = Self.openingFenceUnterminated(
             raw: raw, strippedRaw: strippedRaw)
+        tc.appliedItemsSnapshot = items
+    }
+
+    /// Whether the first `count` items of `items` match the first
+    /// `count` items of `snapshot`. Used to guard the suffix-only fast
+    /// path: `flatten` ignores images/resource-links/terminals, so equal
+    /// flattened text does NOT imply the structured items are the same.
+    /// An in-place replacement (e.g. `[text, image(old)]` ->
+    /// `[text, image(new)]`) or an insertion before the suffix
+    /// (`[text("run")]` -> `[terminal("t1"), text("running")]`) would
+    /// otherwise skip `extractAssets`/`extractTerminalIds` for the
+    /// changed items. Cost is O(count) — bounded by the previous item
+    /// count, which is small for typical adapter snapshots.
+    private static func prefixItemsUnchanged(
+        items: [ACPToolCallContent],
+        snapshot: [ACPToolCallContent],
+        count: Int
+    ) -> Bool {
+        guard count > 0 else { return true }
+        guard items.count >= count, snapshot.count >= count else {
+            return false
+        }
+        for i in 0..<count {
+            if items[i] != snapshot[i] { return false }
+        }
+        return true
+    }
+
+    /// Whether the first line of `strippedRaw` is complete — i.e. the
+    /// body contains a newline, so the first line won't grow further.
+    /// Used to decide whether `preview`/`contentLanguage` (derived from
+    /// the first line) need recomputing on a suffix update. While the
+    /// first line is still being built (no newline yet), each suffix can
+    /// extend it and change the preview/fence-language.
+    private static func firstLineIsComplete(_ strippedRaw: String) -> Bool {
+        strippedRaw.firstIndex(of: "\n") != nil || strippedRaw.isEmpty
     }
 
     /// Whether `previousRaw` is a PARTIAL opening fence — a prefix of
