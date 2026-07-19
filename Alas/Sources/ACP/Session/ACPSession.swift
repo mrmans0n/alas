@@ -1102,6 +1102,22 @@ final class ACPSession: ObservableObject, Identifiable {
                 rawOutputChanged: update.rawOutput != nil,
                 metadataChanged: update.metadata != nil,
                 to: &tc)
+        } else if update.rawOutput != nil || update.metadata != nil {
+            // Side-channel-only update (no content) changed `tc.assets` /
+            // `tc.terminalIds` via the rawOutput/metadata handling above.
+            // Invalidate the content cache so a later duplicate-content
+            // snapshot does NOT take the identical-text skip (which would
+            // miss the side-channel changes). The next content update
+            // falls to full reprocess, rebuilding `tc.assets` /
+            // `tc.terminalIds` from the current content + rawOutput +
+            // metadata — matching the legacy semantics.
+            tc.appliedRawContent = nil
+            tc.appliedItemCount = 0
+            tc.appliedIsFinal = false
+            tc.appliedStrippedRaw = ""
+            tc.appliedOpeningFenceUnterminated = false
+            tc.appliedOpeningFenceStripped = false
+            tc.appliedItemsSnapshot = []
         }
     }
 

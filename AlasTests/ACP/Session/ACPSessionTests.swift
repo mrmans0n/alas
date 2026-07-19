@@ -3451,4 +3451,39 @@ struct ACPSessionTests {
             #expect(tc2.terminalIds.contains("m2"), "after second: \(tc2.terminalIds)")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("side-channel rawOutput-only update invalidates content cache for next same-content update")
+    func toolCallUpdateSideChannelRawOutputInvalidatesCache() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-side", title: "image", kind: "other", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update: text + rawOutput image A.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-side", status: "in_progress",
+            content: [.content(.text("same"))],
+            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
+        if case .toolCall(let tc1) = session.transcript.messages[0] {
+            #expect(tc1.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
+            ], "after first: \(tc1.assets)")
+        }
+        // Side-channel update: rawOutput changes to image B, no content.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-side", status: "in_progress",
+            rawOutput: AnyCodable(["data": AnyCodable("img-b"), "mime_type": AnyCodable("image/png")]))))
+        // Third update: same content "same" as the first, no rawOutput.
+        // The cache was invalidated by the side-channel update, so this
+        // falls to full reprocess and rebuilds tc.assets from content +
+        // the current rawOutput (image B), dropping the stale image A.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-side", status: "in_progress",
+            content: [.content(.text("same"))])))
+        if case .toolCall(let tc3) = session.transcript.messages[0] {
+            #expect(tc3.content == "same")
+            #expect(tc3.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-b", mimeType: "image/png")
+            ], "after third: \(tc3.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
 }
