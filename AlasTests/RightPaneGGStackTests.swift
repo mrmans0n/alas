@@ -57,6 +57,63 @@ struct RightPaneGGStackTests {
         )
     }
 
+    /// A real repo with `main` pushed to a bare remote, then a `nacho/stack`
+    /// branch carrying one GG-ID-trailered commit — also fully pushed, so
+    /// `@{u}` == HEAD and the branch has nothing left unpushed.
+    private func createSyncedStackRepoWithUpstream() async throws -> (worktree: URL, root: URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-stack-upstream-\(UUID().uuidString)")
+        let remote = root.appendingPathComponent("remote.git")
+        let worktree = root.appendingPathComponent("clone")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "--bare", "-b", "main"], cwd: remote)
+        _ = try await Process.git(["clone", "-q", remote.path, worktree.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: worktree)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: worktree)
+        try "base\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: worktree)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: worktree)
+        _ = try await Process.git(["checkout", "-q", "-b", "nacho/stack"], cwd: worktree)
+        try "stack\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: worktree)
+        _ = try await Process.git(
+            ["commit", "-q", "-m", "feat: stack work", "-m", "GG-ID: abc123\nGG-Parent: def456"],
+            cwd: worktree
+        )
+        _ = try await Process.git(["push", "-q", "-u", "origin", "nacho/stack"], cwd: worktree)
+        return (worktree, root)
+    }
+
+    /// A gg stack that's already fully pushed (`gg sync` already ran) must
+    /// still be detected under "Branch upstream" comparison mode. There the
+    /// *display* `commits` list is `@{u}..HEAD` — empty once synced — but
+    /// `ggStackSourceCommits` (fed by the review-loop base resolution,
+    /// which never uses upstream) must still reflect the branch's GG-ID
+    /// commit relative to `main`, or the stack-shape gate would incorrectly
+    /// treat a synced stack as "not a stack" and clear the UI.
+    @Test func performRefreshPopulatesGGStackSourceCommitsUnderBranchUpstreamMode() async throws {
+        let (repo, root) = try await createSyncedStackRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wt = Worktree(
+            id: Worktree.makeId(path: repo),
+            projectId: "test-project",
+            name: "nacho/stack",
+            branch: "nacho/stack",
+            path: repo,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.comparisonMode = .branchUpstream
+
+        await state.refresh()
+
+        #expect(state.commits.isEmpty)
+        #expect(!state.ggStackSourceCommits.isEmpty)
+        #expect(GGStackGate.isStackShaped(commits: state.ggStackSourceCommits))
+    }
+
     @Test func gateClosedSkipsCLIAndClearsStack() async throws {
         let wt = makeWorktree()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
@@ -65,7 +122,7 @@ struct RightPaneGGStackTests {
         )
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { false }
-        state.commits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
 
@@ -82,7 +139,7 @@ struct RightPaneGGStackTests {
         )
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { true }
-        state.commits = [commit(sha: String(repeating: "b", count: 40), stackShaped: false)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "b", count: 40), stackShaped: false)]
 
         await state.refreshGGStack()
 
@@ -99,7 +156,7 @@ struct RightPaneGGStackTests {
         )
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { true }
-        state.commits = [commit(sha: String(repeating: "c", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "c", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
         #expect(runner.callCount == 1)
@@ -110,7 +167,7 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 1)
 
         // Changing the commit set (new fingerprint) — must re-query.
-        state.commits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
         await state.refreshGGStack()
         #expect(runner.callCount == 2)
     }
@@ -128,7 +185,7 @@ struct RightPaneGGStackTests {
         )
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { true }
-        state.commits = [commit(sha: String(repeating: "e", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "e", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
         #expect(state.ggStack != nil)
@@ -152,7 +209,7 @@ struct RightPaneGGStackTests {
         let runner = ThrowingFakeGGRunner()
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { true }
-        state.commits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
         #expect(runner.callCount == 1)
@@ -178,7 +235,7 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: okRunner)
         state.ggGateProvider = { true }
         state.currentBranch = "nacho/stack-a"
-        state.commits = [commit(sha: String(repeating: "i", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "i", count: 40), stackShaped: true)]
         await state.refreshGGStack()
         #expect(state.ggStack != nil)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
@@ -186,7 +243,7 @@ struct RightPaneGGStackTests {
         let throwingRunner = ThrowingFakeGGRunner()
         state.ggService = GGService(runner: throwingRunner)
         state.currentBranch = "nacho/stack-b"
-        state.commits = [commit(sha: String(repeating: "j", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "j", count: 40), stackShaped: true)]
         await state.refreshGGStack()
 
         #expect(throwingRunner.callCount == 1)
@@ -217,14 +274,14 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: firstRunner)
         state.ggGateProvider = { true }
         state.currentBranch = "nacho/stack-a"
-        state.commits = commitsA
+        state.ggStackSourceCommits = commitsA
         await state.refreshGGStack()
         #expect(state.ggStack != nil)
 
         let throwingRunner = ThrowingFakeGGRunner()
         state.ggService = GGService(runner: throwingRunner)
         state.currentBranch = "nacho/stack-b"
-        state.commits = [commit(sha: String(repeating: "l", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "l", count: 40), stackShaped: true)]
         await state.refreshGGStack()
         #expect(state.ggStack == nil)
 
@@ -235,7 +292,7 @@ struct RightPaneGGStackTests {
         )
         state.ggService = GGService(runner: secondRunner)
         state.currentBranch = "nacho/stack-a"
-        state.commits = commitsA
+        state.ggStackSourceCommits = commitsA
         await state.refreshGGStack()
 
         #expect(secondRunner.callCount == 1)
@@ -255,7 +312,7 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { true }
         state.currentBranch = "nacho/stack-a"
-        state.commits = [commit(sha: String(repeating: "h", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "h", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
         #expect(runner.callCount == 1)
@@ -278,7 +335,7 @@ struct RightPaneGGStackTests {
         )
         state.ggService = GGService(runner: runner)
         state.ggGateProvider = { true }
-        state.commits = [commit(sha: String(repeating: "g", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "g", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
         #expect(state.ggStack != nil)

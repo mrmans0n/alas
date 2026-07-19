@@ -107,6 +107,16 @@ final class RightPaneState {
     /// gg installed, per-project mode) against app-level state.
     var ggGateProvider: (@MainActor () -> Bool)? = nil
     var ggService = GGService()
+    /// Commits ahead of base used for the gg stack-shape check and cache
+    /// key — deliberately NOT the display `commits` list. `commits` follows
+    /// the user's chosen comparison mode, and under "Branch upstream" it is
+    /// `@{u}..HEAD`: once a stack is fully pushed (`gg sync` already ran),
+    /// that list is empty even though the branch still carries GG-ID
+    /// commits relative to its stack base. This tracks the review-loop's
+    /// base-relative commit set instead (`GitService.BaseResolution
+    /// .forReviewLoopBase`, computed in `performRefresh`), which never
+    /// resolves to upstream and so always reflects true stack membership.
+    @ObservationIgnored var ggStackSourceCommits: [CommitInfo] = []
     /// SHA-set key of the last commits list gg was queried for. `gg ls
     /// --json` hits the forge API (best-effort PR-state refresh), and
     /// performRefresh fires continuously from the file watcher — so only
@@ -695,6 +705,7 @@ final class RightPaneState {
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             if self.commits != commits { self.commits = commits }
+            self.ggStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
             ggStackRefreshTask?.cancel()
             ggStackRefreshTask = Task { @MainActor [weak self] in await self?.refreshGGStack() }
             if self.comparisonRef != ref { self.comparisonRef = ref }
@@ -776,12 +787,13 @@ final class RightPaneState {
     }
 
     // Not `private` so tests can call it directly against injected
-    // `commits` / `ggService` without needing a real git repo + watcher.
+    // `ggStackSourceCommits` / `ggService` without needing a real git repo +
+    // watcher.
     @MainActor
     func refreshGGStack() async {
         let snapshotGeneration = snapshotInvalidationGeneration
         let gated = ggGateProvider?() ?? false
-        guard gated, GGStackGate.isStackShaped(commits: commits) else {
+        guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
             ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
@@ -797,7 +809,7 @@ final class RightPaneState {
         // *current* branch — a checkout to a different branch that happens
         // to share the same commits (e.g. right after `git checkout -b`)
         // must not reuse the old branch's cached stack.
-        let key = "\(currentBranch)|" + commits.map(\.sha).joined(separator: "|")
+        let key = "\(currentBranch)|" + ggStackSourceCommits.map(\.sha).joined(separator: "|")
         guard key != ggStackCommitsKey else { return }
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
@@ -874,11 +886,12 @@ final class RightPaneState {
         fileTree = []
         commits = []
         olderCommits = []
-        // gg stack state is derived from `commits` above — reset it here
-        // too, and cancel any in-flight load, so a delayed or failed
-        // refresh after this invalidation can't leave a stale "Stack · …"
+        // gg stack state is derived from commits above — reset it here too,
+        // and cancel any in-flight load, so a delayed or failed refresh
+        // after this invalidation can't leave a stale "Stack · …"
         // header/sidebar badge rendered against the now-empty commit list.
         ggStackRefreshTask?.cancel()
+        ggStackSourceCommits = []
         ggStackCommitsKey = nil
         if ggStack != nil { ggStack = nil }
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
