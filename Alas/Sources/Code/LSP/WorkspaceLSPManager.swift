@@ -112,10 +112,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private let makeClient: (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient
 
     /// Cached per-language availability so the status badge doesn't re-run
-    /// `LanguageServerAvailability.status(for:)` — which can spawn
-    /// `xcrun --find sourcekit-lsp` synchronously on the main actor — on
-    /// every SwiftUI breadcrumb re-render. Cleared whenever the registry
-    /// changes (the only thing that can change the answer).
+    /// `LanguageServerAvailability.status(for:)` on every SwiftUI breadcrumb
+    /// re-render. Swift `sourcekit-lsp` can fall back to a bounded `xcrun
+    /// --find` probe, so render-adjacent callers should still reuse the cached
+    /// result. Cleared whenever the registry changes (the only thing that can
+    /// change the answer).
     private let makeAvailability: () -> LanguageServerAvailability
     private var cachedAvailability: LanguageServerAvailability
     private var availabilityCache: [String: LanguageServerAvailability.Status] = [:]
@@ -148,10 +149,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// caching the result. Designed for hot-path callers like the status
     /// badge resolver.
     ///
-    /// Missing Swift `sourcekit-lsp` is cached too: that resolution can fall
-    /// back to `xcrun --find`, so negative results must not be re-probed from
-    /// render-adjacent status badge paths. Other `.notInstalled` statuses
-    /// continue to re-probe so manual installs outside Alas are picked up.
+    /// Missing Swift `sourcekit-lsp` is cached too: that resolution can still
+    /// fall back to bounded `xcrun --find`, so negative results must not be
+    /// re-probed from render-adjacent status badge paths. Other
+    /// `.notInstalled` statuses continue to re-probe so manual installs outside
+    /// Alas are picked up.
     /// Runtime installs explicitly invalidate the language below.
     /// `.blockedByGatekeeper` still re-probes because remediation can flip
     /// without changing the registry.

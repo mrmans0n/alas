@@ -269,23 +269,19 @@ struct LanguageServerAvailability {
         }
     }
 
-    nonisolated private static func xcrunFind(_ tool: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["--find", tool]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return output.isEmpty ? nil : output
-        } catch {
-            return nil
-        }
+    nonisolated static func xcrunFind(
+        _ tool: String,
+        runner: SubprocessRunner = .system,
+        timeout: TimeInterval = 5
+    ) -> String? {
+        let result = runner.run(
+            URL(fileURLWithPath: "/usr/bin/xcrun"),
+            ["--find", tool],
+            ProcessInfo.processInfo.environment,
+            timeout
+        )
+        guard result.exitCode == 0 else { return nil }
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return output.isEmpty ? nil : output
     }
 }

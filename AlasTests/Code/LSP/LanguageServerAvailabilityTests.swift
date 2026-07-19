@@ -124,6 +124,49 @@ struct LanguageServerAvailabilityTests {
         #expect(spawn!.arguments == ["--flag"])
     }
 
+    @Test("xcrun find uses bounded runner and parses successful output")
+    nonisolated func xcrunFindUsesBoundedRunner() {
+        var observedExecutable: URL?
+        var observedArguments: [String] = []
+        var observedEnvironment: [String: String] = [:]
+        var observedTimeout: TimeInterval?
+        let xcrunPath = """
+        /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp
+        """
+        let runner = SubprocessRunner { executable, arguments, environment, timeout in
+            observedExecutable = executable
+            observedArguments = arguments
+            observedEnvironment = environment
+            observedTimeout = timeout
+            return SubprocessRunner.Result(exitCode: 0, stdout: xcrunPath, stderr: "")
+        }
+
+        let resolved = LanguageServerAvailability.xcrunFind(
+            "sourcekit-lsp",
+            runner: runner,
+            timeout: 1.25
+        )
+
+        #expect(resolved == xcrunPath.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(observedExecutable?.path == "/usr/bin/xcrun")
+        #expect(observedArguments == ["--find", "sourcekit-lsp"])
+        #expect(observedEnvironment == ProcessInfo.processInfo.environment)
+        #expect(observedTimeout == 1.25)
+    }
+
+    @Test("xcrun find timeout is treated as missing")
+    nonisolated func xcrunFindTimeoutIsMissing() {
+        let runner = SubprocessRunner { _, _, _, _ in
+            SubprocessRunner.Result(exitCode: nil, stdout: "", stderr: "")
+        }
+
+        #expect(LanguageServerAvailability.xcrunFind(
+            "sourcekit-lsp",
+            runner: runner,
+            timeout: 1.25
+        ) == nil)
+    }
+
     @Test("spawnArguments uses resolved absolute path from PATH")
     func spawnArgumentsPathCommand() throws {
         let dir = try temporaryDirectory()
