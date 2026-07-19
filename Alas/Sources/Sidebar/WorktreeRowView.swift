@@ -48,6 +48,10 @@ struct WorktreeRowView: View {
         }
     }
 
+    private var stackSummary: GGStackSummary? {
+        GGStackSummaryStore.shared.summaries[worktree.path.path]
+    }
+
     var body: some View {
         ZStack(alignment: .leading) {
             if isSelected {
@@ -92,6 +96,12 @@ struct WorktreeRowView: View {
                             Text("−\(worktree.deletedLines)")
                                 .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundColor(theme.color("del"))
+                        }
+                        if let stack = stackSummary {
+                            Text("▲ \(stack.merged)/\(stack.total)")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(theme.color("accent"))
+                                .help("gg stack · \(stack.merged) of \(stack.total) entries merged")
                         }
                         if let summary = harnessSummary {
                             Spacer()
