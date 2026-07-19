@@ -210,7 +210,19 @@ struct ChangesTabView: View {
                 onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
                 rps: rps,
                 ggStack: rps.ggStack,
-                stackCodeHostKind: rps.commitRemote?.kind
+                stackCodeHostKind: rps.commitRemote?.kind,
+                onGGOpenPR: { entry in
+                    guard let number = entry.prNumber, let url = rps.commitRemote?.reviewRequestURL(number: number) else { return }
+                    NSWorkspace.shared.open(url)
+                },
+                onGGLandUntil: { entry in rps.requestGGLand(.until(entryId: entry.id, title: entry.title)) },
+                onGGCheckout: { entry in
+                    Task { @MainActor in
+                        try? await rps.ggService.checkout(worktreePath: rps.worktree.path.path, target: entry.id)
+                        await rps.refresh()
+                        _ = rps.reevaluateGGGate()
+                    }
+                }
             )
         }
     }

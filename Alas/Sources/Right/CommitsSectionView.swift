@@ -101,6 +101,9 @@ struct CommitsSectionView: View {
     let rps: RightPaneState
     let ggStack: GGStack?
     let stackCodeHostKind: CodeHostKind?
+    let onGGOpenPR: (GGStackEntry) -> Void
+    let onGGLandUntil: (GGStackEntry) -> Void
+    let onGGCheckout: (GGStackEntry) -> Void
 
     @Environment(\.theme) private var theme
 
@@ -179,6 +182,9 @@ struct CommitsSectionView: View {
                     onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) },
+                    onGGOpenPR: ggStack?.entry(matchingCommitSHA: commit.sha).map { e in { onGGOpenPR(e) } },
+                    onGGLandUntil: ggStack?.entry(matchingCommitSHA: commit.sha).map { e in { onGGLandUntil(e) } },
+                    onGGCheckout: ggStack?.entry(matchingCommitSHA: commit.sha).map { e in { onGGCheckout(e) } },
                     stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
                     codeHostKind: stackCodeHostKind
                 )
