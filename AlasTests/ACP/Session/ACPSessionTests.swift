@@ -2953,4 +2953,109 @@ struct ACPSessionTests {
             #expect(tc.status == "completed")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("streamed text-growing item preserves earlier content assets across suffix updates")
+    func toolCallUpdateStreamingTextGrowthPreservesEarlierAssets() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-asset-preserve", title: "screenshot", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: text + image (two items).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-asset-preserve", status: "in_progress",
+            content: [
+                .content(.text("a")),
+                .content(.image(data: "img-bytes", uri: nil, mimeType: "image/png"))
+            ])))
+        // Second chunk: the SAME image item, but the text item grew in place
+        // (text "a" -> "ab"). Items count is still 2; the suffix path's
+        // `newItemSlice` is empty, so the image must be preserved from the
+        // previous apply, not dropped.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-asset-preserve", status: "completed",
+            content: [
+                .content(.text("ab")),
+                .content(.image(data: "img-bytes", uri: nil, mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "ab")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "img-bytes", mimeType: "image/png")
+            ])
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text but newly added image asset extracts the asset")
+    func toolCallUpdateSameTextNewAssetExtractsAsset() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-same-text-asset", title: "screenshot", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update establishes the text + cache.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-asset", status: "in_progress",
+            content: [.content(.text("same"))])))
+        // Second update re-sends the same flattened text but adds a new
+        // image asset, with the SAME status (in_progress) so `isFinal`
+        // doesn't flip and force a full reprocess. The identical-text fast
+        // path must NOT skip asset extraction for the newly added item.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-asset", status: "in_progress",
+            content: [
+                .content(.text("same")),
+                .content(.image(data: "new-img", uri: nil, mimeType: "image/png"))
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "same")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "new-img", mimeType: "image/png")
+            ], "assets=\(tc.assets)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate with same text but newly added terminal id extracts the terminal id")
+    func toolCallUpdateSameTextNewTerminalExtractsTerminalId() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-same-text-term", title: "bash", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First update establishes the text + cache.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-term", status: "in_progress",
+            content: [.content(.text("running"))])))
+        // Second update re-sends the same text but adds a terminal item,
+        // with the SAME status (in_progress) so `isFinal` doesn't flip.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-same-text-term", status: "in_progress",
+            content: [
+                .content(.text("running")),
+                .terminal(terminalId: "term-late")
+            ])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "running")
+            #expect(tc.terminalIds == ["term-late"], "terminalIds=\(tc.terminalIds)")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("streamed partial opening fence then completion strips the wrapper fence")
+    func toolCallUpdateStreamingPartialFenceThenCompletionStripsFence() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-partial-fence", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Partial opening fence (not yet a complete fence line: "``" is not
+        // recognized by `isOpeningFence` which requires "```" prefix).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-fence", status: "in_progress",
+            content: [.content(.text("``"))])))
+        // Completion: the full opening fence plus code.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-partial-fence", status: "completed",
+            content: [.content(.text("```swift\nlet x = 1\n```"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "let x = 1")
+            #expect(tc.contentLanguage == "swift")
+            #expect(tc.preview == "let x = 1")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

@@ -657,11 +657,16 @@ final class ACPSession: ObservableObject, Identifiable {
         to tc: inout ACPMessage.ToolCall
     ) {
         let raw = Self.flatten(items)
-        if let prev = tc.appliedRawContent, raw == prev {
+        if let prev = tc.appliedRawContent, raw == prev, items.count == tc.appliedItemCount {
             if isFinal == tc.appliedIsFinal {
-                // Content unchanged AND same isFinal — nothing to do for the
-                // content body. `rawOutputAssets` were already merged into
-                // `tc.assets` by the caller's rawOutput handling, so we're done.
+                // Content unchanged, item count unchanged, AND same isFinal —
+                // nothing to do for the content body. `rawOutputAssets` were
+                // already merged into `tc.assets` by the caller's rawOutput
+                // handling, so we're done.
+                // Item count guard: `flatten` ignores images/resource-links/
+                // terminals, so two updates with the same flattened text but
+                // different structured items (e.g. a newly added screenshot)
+                // must NOT skip `extractAssets`/`extractTerminalIds`.
                 return
             }
             // Same content but `isFinal` flipped (e.g. status transitioned to
@@ -675,13 +680,22 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         if let prev = tc.appliedRawContent, !prev.isEmpty, raw.hasPrefix(prev),
            !tc.appliedIsFinal,
-           items.count >= tc.appliedItemCount {
+           items.count >= tc.appliedItemCount,
+           !Self.previousRawWasPartialFence(prev) {
             // Suffix-only fast path. The new flattened raw is the previous
             // one with `suffix` appended; `appliedStrippedRaw` is the body
             // after opening-fence removal. We extend that body by the suffix
             // (handling the Case where the opening fence line arrived
             // unterminated in the previous chunk) and, if `isFinal`, apply
             // the trailing-fence strip to the resulting body.
+            //
+            // `previousRawWasPartialFence` guard: if the previous raw was a
+            // PARTIAL opening fence (e.g. "``" — not yet a complete fence
+            // line), `stripWrappingFence` did NOT strip it, so
+            // `appliedStrippedRaw` still contains the partial fence. The
+            // suffix might complete the fence line, which the legacy full
+            // reprocess would now recognize and strip. Fall to full
+            // reprocess in that case.
             let suffix = String(raw.dropFirst(prev.count))
             let (newStrippedRaw, unterminated) = Self.extendStrippedRaw(
                 prev: tc.appliedStrippedRaw,
@@ -715,8 +729,16 @@ final class ACPSession: ObservableObject, Identifiable {
             let preservedRawOutputAssets = rawOutputAssets.isEmpty
                 ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
                 : rawOutputAssets
+            // Preserve content assets from items already processed (they
+            // may still be present in the cumulative snapshot even when
+            // `newItemSlice` is empty — e.g. an image item that stays while
+            // a text item grows in place). Merge the existing image/resource
+            // assets with the new ones; `mergeAssets` dedups by value.
+            let existingContentAssets = Self.contentAssetsFromItems(
+                items, prefix: tc.appliedItemCount)
             tc.assets = Self.mergeAssets(
-                Self.extractAssets(newItemSlice), preservedRawOutputAssets)
+                Self.mergeAssets(existingContentAssets, Self.extractAssets(newItemSlice)),
+                preservedRawOutputAssets)
             tc.appliedRawContent = raw
             tc.appliedItemCount = items.count
             tc.appliedIsFinal = isFinal
@@ -767,6 +789,44 @@ final class ACPSession: ObservableObject, Identifiable {
         tc.appliedStrippedRaw = strippedRaw
         tc.appliedOpeningFenceUnterminated = Self.openingFenceUnterminated(
             raw: raw, strippedRaw: strippedRaw)
+    }
+
+    /// Whether `previousRaw` is a PARTIAL opening fence — a prefix of
+    /// `"```"` that is not yet a complete fence line (e.g. `` ` `` or
+    /// `` `` ``). `isOpeningFence` requires the full `` ``` `` prefix, so
+    /// `stripWrappingFence` did NOT strip these; the suffix might complete
+    /// the fence, which the legacy full reprocess would now recognize and
+    /// strip. The suffix-only fast path must fall to full reprocess in
+    /// that case so the wrapper fence is removed.
+    private static func previousRawWasPartialFence(_ previousRaw: String) -> Bool {
+        // ````` <= previousRaw < ``` — i.e. starts with ` but is not a
+        // complete opening fence line. A complete fence line either has
+        // a newline after the fence, or is exactly ```(+language) with no
+        // newline (handled by `appliedOpeningFenceUnterminated`).
+        // Partial: 1 or 2 backticks, or 3+ backticks NOT forming a valid
+        // fence (e.g. "````x" with non-tag chars). Simplest check: any
+        // prefix of "```" (1 or 2 backticks) is partial.
+        guard !previousRaw.isEmpty else { return false }
+        let prefix = String("```".prefix(previousRaw.count))
+        // If previousRaw starts with a backtick but isOpeningFence fails,
+        // it's partial. isOpeningFence requires "```" prefix.
+        if previousRaw.hasPrefix("`") && !isOpeningFence(previousRaw) {
+            return true
+        }
+        return false
+    }
+
+    /// Extract content assets (images, resource links, resources) from
+    /// the first `prefix` items of `items`, for preserving across suffix
+    /// updates. Used when `newItemSlice` is empty but the cumulative
+    /// snapshot still carries content assets from earlier items.
+    private static func contentAssetsFromItems(
+        _ items: [ACPToolCallContent],
+        prefix: Int
+    ) -> [ACPMessage.ToolCallAsset] {
+        let count = min(prefix, items.count)
+        guard count > 0 else { return [] }
+        return Self.extractAssets(Array(items[0..<count]))
     }
 
     /// Extend `prev` (the previously stripped-raw body, after opening
