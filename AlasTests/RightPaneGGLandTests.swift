@@ -97,6 +97,25 @@ struct RightPaneGGLandTests {
         #expect(message == "Merge 2 approved, passing PRs from the bottom of the stack.")
     }
 
+    @Test func readyLandUsesLastVerifiedPrefixEntryAsUntilTarget() {
+        let s = stack([
+            entry(id: "a", position: 1, prState: .open, approved: true, ci: .success),
+            entry(id: "b", position: 2, prState: .open, approved: true, ci: nil),
+            entry(id: "c", position: 3, prState: .open, approved: false, ci: .success),
+        ])
+
+        #expect(RightPaneState.ggLandUntilTarget(for: .ready, in: s) == "b")
+    }
+
+    @Test func untilLandUsesRequestedEntryAsUntilTarget() {
+        let s = stack([
+            entry(id: "a", position: 1, prState: .open, approved: true, ci: .success),
+            entry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+        ])
+
+        #expect(RightPaneState.ggLandUntilTarget(for: .until(entryId: "b", title: "t2"), in: s) == "b")
+    }
+
     @Test func landStackFingerprintTracksConfirmedStackIdentity() {
         let original = stack([
             GGStackEntry(position: 1, sha: "s1", title: "t1", ggId: "a", prNumber: 6,

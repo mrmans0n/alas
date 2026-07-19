@@ -1008,6 +1008,15 @@ final class RightPaneState {
         return ggLandStackFingerprint(stack) == fingerprint
     }
 
+    static func ggLandUntilTarget(for request: GGLandRequest, in stack: GGStack) -> String? {
+        switch request {
+        case .ready:
+            return ggLandReadyPrefix(in: stack).last?.id
+        case .until(let entryId, _):
+            return entryId
+        }
+    }
+
     static func ggLandConfirmationMessage(for request: GGLandRequest, stack: GGStack?) -> String {
         switch request {
         case .ready:
@@ -1048,7 +1057,10 @@ final class RightPaneState {
                     ggActionState.setError("This stack is no longer ready to land.")
                     return
                 }
-                let until: String? = { if case .until(let id, _) = request { return id } else { return nil } }()
+                guard let until = Self.ggLandUntilTarget(for: request, in: fresh) else {
+                    ggActionState.setError("This stack is no longer ready to land.")
+                    return
+                }
                 _ = try await ggService.land(worktreePath: worktree.path.path, until: until)
             } catch let error as GGServiceError {
                 ggActionState.setError(error.userMessage)
