@@ -603,6 +603,11 @@ final class DiffPaneTextDocumentContainerView: NSView {
 final class DiffPaneTextScrollView: NSScrollView {
     private static let unwrappedTextContainerWidth: CGFloat = 1_000_000
 
+    private struct TextLayoutConfiguration: Equatable {
+        let wraps: Bool
+        let contentWidth: CGFloat
+    }
+
     private let textView: DiffPaneCodeTextView
     private var lineLabels: [String] = []
     private var rowKinds: [DiffDisplayRow.Kind] = []
@@ -612,6 +617,9 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var synchronizedRowLineHeights: [CGFloat?] = []
     private var shouldResetHorizontalOrigin = false
     private var wraps = false
+    private var appliedTextLayoutConfiguration: TextLayoutConfiguration?
+    private var textLayoutConfigurationApplicationCount = 0
+    private var horizontalScrollerVisibilityChangeCount = 0
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
     var activeCommentHighlight: DiffReviewCommentHighlight? {
@@ -645,6 +653,14 @@ final class DiffPaneTextScrollView: NSScrollView {
         return max(measuredTextHeight() + textView.textContainerInset.height * 2, fallbackTextHeight())
     }
 
+    var textLayoutConfigurationApplicationCountForTesting: Int {
+        textLayoutConfigurationApplicationCount
+    }
+
+    var horizontalScrollerVisibilityChangeCountForTesting: Int {
+        horizontalScrollerVisibilityChangeCount
+    }
+
     override init(frame frameRect: NSRect) {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
@@ -665,7 +681,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         drawsBackground = false
         borderType = .noBorder
         hasVerticalScroller = false
-        hasHorizontalScroller = true
+        setHorizontalScrollerVisible(true)
         autohidesScrollers = true
         scrollerStyle = .overlay
         documentView = textView
@@ -702,6 +718,13 @@ final class DiffPaneTextScrollView: NSScrollView {
         fatalError("not used")
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        let wasSuppressingFrameWidthGeometryInvalidation = textView.suppressesFrameWidthGeometryInvalidation
+        textView.suppressesFrameWidthGeometryInvalidation = true
+        super.setFrameSize(newSize)
+        textView.suppressesFrameWidthGeometryInvalidation = wasSuppressingFrameWidthGeometryInvalidation
+    }
+
     func update(
         document: DiffPaneTextDocumentBuilder.CodeDocument,
         lineLabels: [String],
@@ -730,7 +753,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         self.font = font
         self.theme = theme
         self.onContextExpansion = onContextExpansion
-        hasHorizontalScroller = !wraps
+        setHorizontalScrollerVisible(!wraps)
 
         textView.textStorage?.setAttributedString(document.attributedString)
         textView.font = font
@@ -884,16 +907,25 @@ final class DiffPaneTextScrollView: NSScrollView {
     }
 
     override func layout() {
+        let wasSuppressingFrameWidthGeometryInvalidation = textView.suppressesFrameWidthGeometryInvalidation
+        textView.suppressesFrameWidthGeometryInvalidation = true
+        defer {
+            textView.suppressesFrameWidthGeometryInvalidation = wasSuppressingFrameWidthGeometryInvalidation
+        }
+
         super.layout()
-        hasHorizontalScroller = !wraps
         tile()
-        configureTextContainer()
-        textView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: textViewWidth(),
-            height: documentHeight
-        )
+        let configuration = desiredTextLayoutConfiguration()
+        let configurationChanged = !textLayoutConfigurationMatches(configuration)
+        if configurationChanged, configuration.wraps {
+            setTextViewSize(
+                width: max(contentView.bounds.width, 1),
+                height: textView.frame.height
+            )
+        }
+        applyTextLayoutConfigurationIfNeeded(configuration)
+        let measuredDocumentHeight = documentHeight
+        setTextViewSize(width: textViewWidth(), height: measuredDocumentHeight)
         if shouldResetHorizontalOrigin {
             resetHorizontalOriginToLeading()
             shouldResetHorizontalOrigin = false
@@ -916,8 +948,10 @@ final class DiffPaneTextScrollView: NSScrollView {
         clipBounds.size = clipFrame.size
         contentView.bounds = clipBounds
         if wraps {
-            configureTextContainer()
-            textView.frame.size.width = max(clipFrame.width, 1)
+            setTextViewSizeSuppressingFrameWidthGeometryInvalidation(
+                width: max(clipFrame.width, 1),
+                height: textView.frame.height
+            )
         }
         ruler.frame = NSRect(
             x: 0,
@@ -942,20 +976,64 @@ final class DiffPaneTextScrollView: NSScrollView {
         super.scrollWheel(with: event)
     }
 
-    private func configureTextContainer() {
-        let contentWidth = max(contentView.bounds.width - textView.textContainerInset.width * 2, 1)
-        textView.isHorizontallyResizable = !wraps
+    private func desiredTextLayoutConfiguration() -> TextLayoutConfiguration {
+        TextLayoutConfiguration(
+            wraps: wraps,
+            contentWidth: max(contentView.bounds.width - textView.textContainerInset.width * 2, 1)
+        )
+    }
+
+    private func applyTextLayoutConfigurationIfNeeded(_ configuration: TextLayoutConfiguration) {
+        guard !textLayoutConfigurationMatches(configuration) else { return }
+
+        textView.invalidateDiffRowGeometry()
+        textView.isHorizontallyResizable = !configuration.wraps
         textView.minSize = .zero
         textView.maxSize = NSSize(
-            width: wraps ? contentWidth : Self.unwrappedTextContainerWidth,
+            width: configuration.wraps ? configuration.contentWidth : Self.unwrappedTextContainerWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
-        textView.textContainer?.widthTracksTextView = wraps
+        textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.containerSize = NSSize(
-            width: wraps ? contentWidth : Self.unwrappedTextContainerWidth,
+            width: configuration.wraps ? configuration.contentWidth : Self.unwrappedTextContainerWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
+        appliedTextLayoutConfiguration = configuration
+        textLayoutConfigurationApplicationCount += 1
+    }
+
+    private func textLayoutConfigurationMatches(_ configuration: TextLayoutConfiguration) -> Bool {
+        guard let appliedTextLayoutConfiguration else { return false }
+        return appliedTextLayoutConfiguration.wraps == configuration.wraps
+            && abs(appliedTextLayoutConfiguration.contentWidth - configuration.contentWidth) <= 0.5
+    }
+
+    private func setTextViewSize(width: CGFloat, height: CGFloat) {
+        var size = textView.frame.size
+        if abs(size.width - width) > 0.5 {
+            size.width = width
+        }
+        if abs(size.height - height) > 0.5 {
+            size.height = height
+        }
+        guard size != textView.frame.size else { return }
+        textView.setFrameSize(size)
+    }
+
+    private func setTextViewSizeSuppressingFrameWidthGeometryInvalidation(width: CGFloat, height: CGFloat) {
+        let wasSuppressingFrameWidthGeometryInvalidation = textView.suppressesFrameWidthGeometryInvalidation
+        textView.suppressesFrameWidthGeometryInvalidation = true
+        defer {
+            textView.suppressesFrameWidthGeometryInvalidation = wasSuppressingFrameWidthGeometryInvalidation
+        }
+        setTextViewSize(width: width, height: height)
+    }
+
+    private func setHorizontalScrollerVisible(_ visible: Bool) {
+        guard hasHorizontalScroller != visible else { return }
+        hasHorizontalScroller = visible
+        horizontalScrollerVisibilityChangeCount += 1
     }
 
     private func textViewWidth() -> CGFloat {
@@ -1061,6 +1139,7 @@ final class DiffPaneCodeTextView: NSTextView {
     private var lspController: DiffPaneLSPController?
     private var cachedRowGeometry: RowGeometry?
     private var rowGeometryComputationCount = 0
+    var suppressesFrameWidthGeometryInvalidation = false
     private var hoverExpansionTarget: ExpansionTarget? {
         didSet { if hoverExpansionTarget != oldValue { needsDisplay = true } }
     }
@@ -1208,7 +1287,7 @@ final class DiffPaneCodeTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         let oldSize = frame.size
         super.setFrameSize(newSize)
-        if abs(oldSize.width - newSize.width) > 0.5 {
+        if !suppressesFrameWidthGeometryInvalidation, abs(oldSize.width - newSize.width) > 0.5 {
             invalidateDiffRowGeometry()
         }
     }
