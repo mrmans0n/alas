@@ -264,7 +264,17 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func shutdown() async {
-        await cancelBackgroundPollingAndAwait()
+        // Mark terminated BEFORE anything else, not after: the background
+        // poller's `service.attach()` call goes through `RemoteHelperClient`,
+        // which waits on the helper's stdio pipe with no read timeout. If
+        // the helper or broker is wedged, awaiting that poller here would
+        // hang shutdown() forever and the close RPC below would never even
+        // be attempted. `attachAndReplay()`'s `isConnectionTerminated()`
+        // guard (see there) already makes any such in-flight response safe
+        // to ignore whenever it eventually resolves, so there's nothing to
+        // gain from waiting for it — only cancel and move on.
+        markTerminated()
+        cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.close(ACPBrokerCloseParams(brokerId: brokerId, generation: generation))
         }
@@ -272,28 +282,33 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func detach() async {
-        await cancelBackgroundPollingAndAwait()
+        markTerminated()
+        cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
         }
         finishStreams()
     }
 
-    private func finishStreams() {
-        // Marks the connection as permanently done. Every path that ends
-        // streaming (explicit shutdown/detach, an `adapter/exit` replayed
-        // mid-`attachAndReplay`, or the poll loop's own error handler) routes
-        // through here, so this is the one place that reliably knows the
-        // connection is dead — including the startup-exit ordering where
-        // `attachAndReplay()` inside `start()` replays `adapter/exit` and
-        // calls this *before* `start()` reaches `startBackgroundPolling()`.
-        // Without this flag, `startBackgroundPolling()` would still create a
-        // fresh poller for the already-dead connection, since the exit
-        // handler's own `cancelBackgroundPolling()` call has nothing to
-        // cancel yet at that point.
+    /// Marks the connection as permanently done. Every path that ends
+    /// streaming (explicit shutdown/detach, an `adapter/exit` replayed
+    /// mid-`attachAndReplay`, or the poll loop's own error handler) sets
+    /// this, so it's the one flag that reliably reflects whether the
+    /// connection is dead — including the startup-exit ordering where
+    /// `attachAndReplay()` inside `start()` replays `adapter/exit` and
+    /// marks termination *before* `start()` reaches `startBackgroundPolling()`.
+    /// Without this flag, `startBackgroundPolling()` would still create a
+    /// fresh poller for the already-dead connection, since the exit
+    /// handler's own `cancelBackgroundPolling()` call has nothing to cancel
+    /// yet at that point. Idempotent — safe to call more than once.
+    private func markTerminated() {
         stateLock.lock()
         isTerminated = true
         stateLock.unlock()
+    }
+
+    private func finishStreams() {
+        markTerminated()
         updatesCont.finish()
         permsCont.finish()
         questionsCont.finish()
@@ -387,38 +402,20 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     /// Requests cancellation without waiting for the current iteration to
-    /// unwind. Safe to call from *inside* the poller's own task (the
-    /// `adapter/exit` handler runs synchronously as part of
-    /// `runBackgroundPolling()`'s own `attachAndReplay()` call) — unlike
-    /// `cancelBackgroundPollingAndAwait()`, this never awaits the task it
-    /// just cancelled, so it can't deadlock on itself.
+    /// unwind — `Task.cancel()` can't interrupt an in-flight, non-
+    /// cancellation-aware `attachAndReplay()` anyway (see
+    /// `isConnectionTerminated()`'s doc comment in `attachAndReplay()`), so
+    /// there's nothing to gain from awaiting it, and awaiting a helper RPC
+    /// with no read timeout would risk hanging the caller forever. Safe to
+    /// call from *inside* the poller's own task too (the `adapter/exit`
+    /// handler runs synchronously as part of `runBackgroundPolling()`'s own
+    /// `attachAndReplay()` call) since it never awaits the task it cancels.
     private func cancelBackgroundPolling() {
-        _ = requestBackgroundPollingCancellation()
-    }
-
-    /// Cancels and waits for the poller to fully unwind before returning.
-    /// `Task.cancel()` alone doesn't help here: the poller's underlying
-    /// `attachAndReplay()` awaits a helper RPC that isn't cancellation-aware,
-    /// so a cancelled-but-in-flight iteration still runs to completion and
-    /// dispatches whatever it received (`onTurnStateChanged`/
-    /// `onDurableStateChanged` are plain closures, not gated by
-    /// `finishStreams()`'s stream-`finish()` calls). Without awaiting it
-    /// here, `shutdown()`/`detach()` could return while that dispatch is
-    /// still racing to land, delivering updates for a connection the app
-    /// already believes is torn down. Only safe to call from a task other
-    /// than the poller's own (`shutdown()`/`detach()` always are) — awaiting
-    /// the poller from within itself would hang forever.
-    private func cancelBackgroundPollingAndAwait() async {
-        await requestBackgroundPollingCancellation()?.value
-    }
-
-    private func requestBackgroundPollingCancellation() -> Task<Void, Never>? {
         stateLock.lock()
         let task = backgroundPollingTask
         backgroundPollingTask = nil
         stateLock.unlock()
         task?.cancel()
-        return task
     }
 
     private func clearBackgroundPollingTask() {

@@ -839,16 +839,22 @@ struct ACPBrokerClientTests {
         await client.shutdown()
     }
 
-    // Regression (code review on #853): `shutdown()`/`detach()` only marked
-    // the background poller's task cancelled without waiting for it to
-    // unwind. `Task.cancel()` doesn't abort an in-flight, non-cancellation-
-    // aware RPC await, so a poll iteration already inside `attachAndReplay()`
-    // ran to completion and dispatched its results — including firing
-    // `onTurnStateChanged`, a plain closure unaffected by `finishStreams()` —
-    // after `shutdown()` had already returned to its caller, who by then
-    // believes the connection is fully torn down. `shutdown()`/`detach()`
-    // must not return before that in-flight dispatch has landed.
-    @Test func shutdownAwaitsInFlightPollBeforeReturning() async throws {
+    // Regression (code review on #853, two rounds): `shutdown()`/`detach()`
+    // first tried marking the poller cancelled and moving on immediately,
+    // which let an in-flight, non-cancellation-aware `attachAndReplay()`
+    // dispatch a stale result after teardown. The next fix made
+    // `shutdown()`/`detach()` await that in-flight iteration before
+    // returning — but the underlying helper RPC has no read timeout, so a
+    // wedged helper/broker would hang teardown forever and the close/detach
+    // RPC would never even be attempted. The actual fix is
+    // `attachAndReplay()`'s `isConnectionTerminated()` guard: mark the
+    // connection terminated immediately (before cancelling or awaiting
+    // anything), so a stale in-flight response is safely dropped whenever
+    // it eventually resolves, and `shutdown()`/`detach()` never need to
+    // wait for it. This proves both halves: shutdown() returns promptly
+    // (doesn't block out the in-flight delay), and the stale response is
+    // never dispatched even after it does resolve.
+    @Test func shutdownReturnsPromptlyAndDropsStaleInFlightPollResult() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [], turnState: .idle)
         await service.enqueueAttach(
@@ -869,13 +875,19 @@ struct ACPBrokerClientTests {
         // The idle-rate poll's second attach() call should be in flight
         // (sleeping inside the mock) by now, but not yet resolved.
         try await Task.sleep(for: .milliseconds(60))
+
+        let shutdownStart = ContinuousClock.now
+        await client.shutdown()
+        let shutdownElapsed = ContinuousClock.now - shutdownStart
+
+        // Must not have blocked out anywhere near the in-flight delay.
+        #expect(shutdownElapsed < .milliseconds(100))
         #expect(recorder.records().isEmpty)
 
-        await client.shutdown()
-
-        // If shutdown() returned before the in-flight iteration's dispatch
-        // landed, this would still be empty here.
-        #expect(recorder.records() == [.streaming])
+        // Outlast the delayed attach's resolution and confirm its stale
+        // `.streaming` never gets applied post-termination.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(recorder.records().isEmpty)
     }
 
     // Regression (code review on #853): a foreground send()/notify() can
