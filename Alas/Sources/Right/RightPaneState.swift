@@ -801,7 +801,11 @@ final class RightPaneState {
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
             ggStackCommitsKey = nil
-            ggActionState.clearPaused()
+            if gated, shouldPreservePausedOperationOutsideStackShape() {
+                reconcilePausedOperation()
+            } else {
+                ggActionState.clearPaused()
+            }
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
@@ -879,12 +883,9 @@ final class RightPaneState {
         return task
     }
 
-    /// Pure filesystem probe → `ggActionState.pausedOperation` sync. Split
-    /// out of `refreshGGStack()` so it runs unconditionally on every entry
-    /// (including the gate-closed / not-stack-shaped early return), not just
-    /// on a successful `gg ls --json` fetch — the paused marker is written
-    /// by git itself, not by gg, so it can appear or disappear independent
-    /// of gating and of whether the gg query even runs.
+    /// Pure filesystem probe → `ggActionState.pausedOperation` sync. Runs
+    /// after the GG gates pass, or while preserving an already-known/active
+    /// GG operation whose stack shape temporarily disappeared mid-conflict.
     private func reconcilePausedOperation() {
         if GGStackGate.operationInProgress(repoPath: worktree.path.path) {
             if ggActionState.pausedOperation == nil {
@@ -893,6 +894,14 @@ final class RightPaneState {
         } else {
             ggActionState.clearPaused()
         }
+    }
+
+    private func shouldPreservePausedOperationOutsideStackShape() -> Bool {
+        guard GGStackGate.operationInProgress(repoPath: worktree.path.path) else { return false }
+        return ggActionState.inFlightAction != nil
+            || ggActionState.pausedOperation != nil
+            || ggStack != nil
+            || GGStackGate.repoHasGGConfig(repoPath: worktree.path.path)
     }
 
     /// Dispatches a stack-drawer action kind to its gg mutation. `.land`
