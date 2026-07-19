@@ -99,6 +99,8 @@ struct CommitsSectionView: View {
     let onSelectBaseBranch: (String) -> Void
     let onOpenBaseBranchSelector: () -> Void
     let rps: RightPaneState
+    let ggStack: GGStack?
+    let stackCodeHostKind: CodeHostKind?
 
     @Environment(\.theme) private var theme
 
@@ -109,7 +111,7 @@ struct CommitsSectionView: View {
             }
         } header: {
             SectionHeader(
-                title: "Commits",
+                title: ggStack.map { "Stack · \($0.name)" } ?? "Commits",
                 count: totalCount,
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
@@ -165,7 +167,9 @@ struct CommitsSectionView: View {
                     onEdit: { onEdit(commit) },
                     onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-                    onRevert: { rps.runRevert(sha: commit.sha) }
+                    onRevert: { rps.runRevert(sha: commit.sha) },
+                    stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
+                    codeHostKind: stackCodeHostKind
                 )
             }
         } else if olderCommits.isEmpty {
