@@ -615,9 +615,134 @@ final class ACPSession: ObservableObject, Identifiable {
             }
             return
         }
+        Self.applyToolCallContent(
+            items: items,
+            isFinal: Self.isFinalStatus(payload.status),
+            rawOutputAssets: rawOutputAssets,
+            to: &tc)
+    }
+
+    /// Apply a `tool_call`/`tool_call_update` content payload to `tc`,
+    /// taking the suffix-only fast path when the new flattened raw content
+    /// is a prefix-extension of the previously applied one.
+    ///
+    /// Adapters that stream tool output re-emit the full cumulative content
+    /// on every update, so the i-th update carries ~i/k · m bytes and the
+    /// naive full-reprocess path is O(m·k) total work. Here we cache the
+    /// last fully-applied flattened raw content on `tc` and:
+    ///
+    /// - When `raw` equals the cache AND `isFinal` is unchanged: nothing
+    ///   changed, skip all content reprocessing (no `replaceContent`, no
+    ///   `previewLine`, no fence strip, no asset/terminal scan).
+    /// - When the cache is a non-empty prefix of `raw`, the previous apply
+    ///   was not `isFinal`, and items are append-only: suffix-only fast
+    ///   path. The new stripped-raw body is `appliedStrippedRaw + suffix`
+    ///   (with the opening-fence-unterminated boundary adjustment); the
+    ///   `isFinal` trailing-fence strip runs on the single final update.
+    ///   `preview` and `contentLanguage` depend only on the first line,
+    ///   so they are computed once and reused. Assets and terminal ids are
+    ///   scanned only over the items beyond `tc.appliedItemCount`;
+    ///   `mergeAssets`/`mergeTerminalIds` dedup.
+    /// - Otherwise (first apply, divergent content, appending to a
+    ///   finalized snapshot, or post-truncation restore): full reprocess,
+    ///   exactly the legacy path, and refresh the cache.
+    ///
+    /// `isFinal` is computed by the caller from the relevant status field
+    /// (`tc.status` for `toolCallUpdate`, `payload.status` for the initial
+    /// `toolCall`) so the trailing-fence strip matches the legacy semantics.
+    private static func applyToolCallContent(
+        items: [ACPToolCallContent],
+        isFinal: Bool,
+        rawOutputAssets: [ACPMessage.ToolCallAsset],
+        to tc: inout ACPMessage.ToolCall
+    ) {
         let raw = Self.flatten(items)
-        let full = Self.stripWrappingFence(raw,
-                                           isFinal: Self.isFinalStatus(payload.status))
+        if let prev = tc.appliedRawContent, raw == prev {
+            if isFinal == tc.appliedIsFinal {
+                // Content unchanged AND same isFinal — nothing to do for the
+                // content body. `rawOutputAssets` were already merged into
+                // `tc.assets` by the caller's rawOutput handling, so we're done.
+                return
+            }
+            // Same content but `isFinal` flipped (e.g. status transitioned to
+            // completed without the body changing): the trailing-fence strip
+            // may need to run. Full reprocess is safe and rare (one update
+            // per tool call at most).
+            Self.reprocessToolCallContentFull(
+                raw: raw, items: items, isFinal: isFinal,
+                rawOutputAssets: rawOutputAssets, to: &tc)
+            return
+        }
+        if let prev = tc.appliedRawContent, !prev.isEmpty, raw.hasPrefix(prev),
+           !tc.appliedIsFinal,
+           items.count >= tc.appliedItemCount {
+            // Suffix-only fast path. The new flattened raw is the previous
+            // one with `suffix` appended; `appliedStrippedRaw` is the body
+            // after opening-fence removal. We extend that body by the suffix
+            // (handling the Case where the opening fence line arrived
+            // unterminated in the previous chunk) and, if `isFinal`, apply
+            // the trailing-fence strip to the resulting body.
+            let suffix = String(raw.dropFirst(prev.count))
+            let (newStrippedRaw, unterminated) = Self.extendStrippedRaw(
+                prev: tc.appliedStrippedRaw,
+                suffix: suffix,
+                openingFenceUnterminated: tc.appliedOpeningFenceUnterminated)
+            let newStripped: String
+            if isFinal {
+                newStripped = Self.stripTrailingFenceLine(newStrippedRaw)
+            } else {
+                newStripped = newStrippedRaw
+            }
+            tc.replaceContent(newStripped)
+            tc.isContentTruncated = false
+            if tc.preview == nil {
+                tc.preview = Self.previewLine(newStripped)
+            }
+            if tc.contentLanguage == nil {
+                tc.contentLanguage = Self.wrappingFenceLanguage(raw)
+            }
+            let newItemSlice: [ACPToolCallContent]
+            if tc.appliedItemCount < items.count {
+                newItemSlice = Array(items[tc.appliedItemCount..<items.count])
+            } else {
+                newItemSlice = []
+            }
+            tc.terminalIds = Self.mergeTerminalIds(
+                Self.mergeTerminalIds(
+                    tc.terminalIds,
+                    Self.extractTerminalIds(newItemSlice)),
+                Self.extractMetadataTerminalIds(tc.metadata, includeExit: false))
+            let preservedRawOutputAssets = rawOutputAssets.isEmpty
+                ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
+                : rawOutputAssets
+            tc.assets = Self.mergeAssets(
+                Self.extractAssets(newItemSlice), preservedRawOutputAssets)
+            tc.appliedRawContent = raw
+            tc.appliedItemCount = items.count
+            tc.appliedIsFinal = isFinal
+            tc.appliedStrippedRaw = newStrippedRaw
+            tc.appliedOpeningFenceUnterminated = unterminated
+            return
+        }
+        Self.reprocessToolCallContentFull(
+            raw: raw, items: items, isFinal: isFinal,
+            rawOutputAssets: rawOutputAssets, to: &tc)
+    }
+
+    /// Full reprocess path: the legacy behaviour, plus refresh the
+    /// `appliedRawContent`/`appliedItemCount`/`appliedIsFinal`/
+    /// `appliedStrippedRaw`/`appliedOpeningFenceUnterminated` cache so the
+    /// next update can take the suffix-only fast path. Extracted from
+    /// `applyToolCallPayloadFields`/`applyToolCallUpdateFields` so both
+    /// share one implementation.
+    private static func reprocessToolCallContentFull(
+        raw: String,
+        items: [ACPToolCallContent],
+        isFinal: Bool,
+        rawOutputAssets: [ACPMessage.ToolCallAsset],
+        to tc: inout ACPMessage.ToolCall
+    ) {
+        let full = Self.stripWrappingFence(raw, isFinal: isFinal)
         tc.replaceContent(full)
         tc.isContentTruncated = false
         tc.preview = Self.previewLine(full)
@@ -629,6 +754,79 @@ final class ACPSession: ObservableObject, Identifiable {
             ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
             : rawOutputAssets
         tc.assets = Self.mergeAssets(Self.extractAssets(items), preservedRawOutputAssets)
+        tc.appliedRawContent = raw
+        tc.appliedItemCount = items.count
+        tc.appliedIsFinal = isFinal
+        // Derive the stripped-raw (opening fence removed, trailing fence
+        // NOT removed) and whether the opening fence line is still
+        // unterminated. `stripWrappingFence` with isFinal=false returns
+        // exactly the stripped-raw; if the raw starts with an opening
+        // fence and has no newline, the stripped-raw is empty and the
+        // fence is unterminated.
+        let strippedRaw = Self.stripWrappingFence(raw, isFinal: false)
+        tc.appliedStrippedRaw = strippedRaw
+        tc.appliedOpeningFenceUnterminated = Self.openingFenceUnterminated(
+            raw: raw, strippedRaw: strippedRaw)
+    }
+
+    /// Extend `prev` (the previously stripped-raw body, after opening
+    /// fence removal) by `suffix` (the newly arrived raw tail). Returns
+    /// the new stripped-raw body and the updated `openingFenceUnterminated`
+    /// flag. When the previous chunk left the opening fence line
+    /// unterminated (e.g. `"```swift"` with no newline), the first newline
+    /// in `suffix` terminates that line and the body begins after it;
+    /// until then the body stays empty.
+    private static func extendStrippedRaw(
+        prev: String,
+        suffix: String,
+        openingFenceUnterminated: Bool
+    ) -> (strippedRaw: String, unterminated: Bool) {
+        if openingFenceUnterminated {
+            if let newlineRange = suffix.range(of: "\n") {
+                let after = suffix[newlineRange.upperBound...]
+                return (String(after), false)
+            }
+            // The opening fence line is still being built (e.g. more
+            // language-tag characters arrived). The body stays empty.
+            return ("", true)
+        }
+        return (prev + suffix, false)
+    }
+
+    /// Whether `raw` starts with an opening fence line that has no
+    /// terminating newline (so the next suffix's first newline will
+    /// end the fence line and start the stripped-raw body, rather than
+    /// being a content separator).
+    private static func openingFenceUnterminated(raw: String, strippedRaw: String) -> Bool {
+        // No newline at all: if this is an opening fence line, it's
+        // unterminated; otherwise (no fence, single-line body) it's not.
+        guard raw.firstIndex(of: "\n") != nil else {
+            return Self.isOpeningFence(raw)
+        }
+        // A newline exists: any opening fence is terminated (even if the
+        // body after it is still empty).
+        return false
+    }
+
+    /// Apply only the trailing-fence-strip step of `stripWrappingFence` to
+    /// `body` (the stripped-raw content, opening fence already removed).
+    /// Mirrors the `isFinal` branch: trim trailing empty lines, drop a
+    /// trailing `"```"` line if present, otherwise restore the trimmed
+    /// empties. Used by the suffix-only fast path on the single update
+    /// that flips `isFinal` to true; cost is O(body), once per tool call.
+    private static func stripTrailingFenceLine(_ body: String) -> String {
+        var lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var trailingEmpty = 0
+        while let last = lines.last, last.isEmpty {
+            lines.removeLast()
+            trailingEmpty += 1
+        }
+        if lines.last == "```" {
+            lines.removeLast()
+        } else {
+            for _ in 0..<trailingEmpty { lines.append("") }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func applyToolCallUpdateFields(
@@ -663,20 +861,11 @@ final class ACPSession: ObservableObject, Identifiable {
                 }
                 return
             }
-            let raw = Self.flatten(content)
-            let full = Self.stripWrappingFence(raw,
-                                               isFinal: Self.isFinalStatus(tc.status))
-            tc.replaceContent(full)
-            tc.isContentTruncated = false
-            tc.preview = Self.previewLine(full)
-            tc.contentLanguage = Self.wrappingFenceLanguage(raw)
-            tc.terminalIds = Self.mergeTerminalIds(
-                Self.extractTerminalIds(content),
-                Self.extractMetadataTerminalIds(tc.metadata, includeExit: false))
-            let preservedRawOutputAssets = rawOutputAssets.isEmpty
-                ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
-                : rawOutputAssets
-            tc.assets = Self.mergeAssets(Self.extractAssets(content), preservedRawOutputAssets)
+            Self.applyToolCallContent(
+                items: content,
+                isFinal: Self.isFinalStatus(tc.status),
+                rawOutputAssets: rawOutputAssets,
+                to: &tc)
         }
     }
 

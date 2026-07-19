@@ -209,6 +209,47 @@ enum ACPMessage: Equatable {
         /// user expands.
         static let truncatedTailBytes: Int = 4096
 
+        /// In-memory-only cache of the last fully-applied flattened raw
+        /// content (before fence stripping), used by
+        /// `applyToolCallUpdateFields`/`applyToolCallPayloadFields` to
+        /// detect prefix-extension updates and process only the appended
+        /// suffix. Adapters that stream tool output re-emit the full
+        /// cumulative content on every `tool_call_update`, so without
+        /// this cache each update re-runs `stripWrappingFence`,
+        /// `previewLine`, `extractAssets`, and `extractTerminalIds` over
+        /// the whole growing body — O(m·k) total work for m bytes across k
+        /// updates. Never encoded: restored rows start with a nil cache
+        /// and take the full-reprocess path once, which is fine.
+        var appliedRawContent: String? = nil
+        /// In-memory-only count of `ACPToolCallContent` items already
+        /// processed for asset/terminal-id extraction. Pairs with
+        /// `appliedRawContent`: when the next update's flattened content
+        /// has the previous as a prefix, items 0..<appliedItemCount are
+        /// already accounted for and only the tail is scanned.
+        var appliedItemCount: Int = 0
+        /// In-memory-only record of the `isFinal` value used the last time
+        /// `appliedRawContent` was computed. The trailing-fence strip step
+        /// in `stripWrappingFence` depends on `isFinal`, so when an update
+        /// arrives with identical content but a different `isFinal` (e.g.
+        /// the snapshot flips to `completed` without the body changing)
+        /// we must re-strip the tail; otherwise the identical-content fast
+        /// path can skip everything.
+        var appliedIsFinal: Bool = false
+        /// In-memory-only cache of the last stripped-raw content (after
+        /// the opening fence line was removed, before the trailing-fence
+        /// strip). The next suffix-only update appends to THIS, not to
+        /// `tc.content` (which may have a trailing fence stripped if the
+        /// last apply was `isFinal`). Without it, the opening fence's
+        /// separator newline would be double-counted when the fence line
+        /// arrived alone (e.g. `"```swift"` then `"\nlet x = 1"`).
+        var appliedStrippedRaw: String = ""
+        /// In-memory-only flag: the opening fence line was seen but had
+        /// no trailing newline yet (the first chunk was a partial fence
+        /// line like `"```swift"`). The next suffix's first newline
+        /// terminates the fence line and starts the stripped-raw body;
+        /// until then `appliedStrippedRaw` stays empty.
+        var appliedOpeningFenceUnterminated: Bool = false
+
         /// Replace `content` with its first `truncatedTailBytes` characters
         /// and mark the message as truncated. No-op if already truncated.
         mutating func truncateForOffWindow() {
@@ -218,6 +259,14 @@ enum ACPMessage: Equatable {
                 contentRevision &+= 1
             }
             isContentTruncated = true
+            // The in-memory content no longer matches `appliedRawContent`,
+            // so the next update can't take the suffix-only path: drop the
+            // cache and let it reprocess fully (restoring the complete body).
+            appliedRawContent = nil
+            appliedItemCount = 0
+            appliedIsFinal = false
+            appliedStrippedRaw = ""
+            appliedOpeningFenceUnterminated = false
         }
 
         init(toolCallId: String, title: String, kind: String? = nil,
