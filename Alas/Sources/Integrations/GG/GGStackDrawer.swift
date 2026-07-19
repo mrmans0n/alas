@@ -12,10 +12,23 @@ struct GGStackDrawer: View {
             return GGStackReadinessModel.make(
                 stack: stack,
                 action: rps.ggActionState,
-                liveBehindBase: rps.behindBase?.count
+                liveBehindBase: Self.liveBehindBaseOverride(
+                    stack: stack,
+                    selectedBaseBranch: rps.baseBranch,
+                    behindBase: rps.behindBase
+                )
             )
         }
         return GGStackReadinessModel.makePausedFallback(action: rps.ggActionState)
+    }
+
+    static func liveBehindBaseOverride(
+        stack: GGStack,
+        selectedBaseBranch: String,
+        behindBase: GitService.BehindStatus?
+    ) -> Int? {
+        guard selectedBaseBranch == stack.base else { return nil }
+        return behindBase?.count
     }
 
     var body: some View {

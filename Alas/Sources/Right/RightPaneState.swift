@@ -960,12 +960,21 @@ final class RightPaneState {
         case .ready:
             return stack.entries.contains(where: Self.ggEntryIsReadyToLand)
         case .until(let entryId, _):
-            return stack.entries.contains { $0.id == entryId && Self.ggEntryIsReadyToLand($0) }
+            guard let target = stack.entries.first(where: { $0.id == entryId }),
+                  Self.ggEntryIsReadyToLand(target)
+            else { return false }
+            return stack.entries
+                .filter { $0.position < target.position }
+                .allSatisfy(Self.ggEntryDoesNotBlockLand)
         }
     }
 
     static func ggEntryIsReadyToLand(_ entry: GGStackEntry) -> Bool {
         entry.prState == .open && entry.approved && (entry.ciStatus == nil || entry.ciStatus == .success)
+    }
+
+    static func ggEntryDoesNotBlockLand(_ entry: GGStackEntry) -> Bool {
+        entry.prState == .merged || ggEntryIsReadyToLand(entry)
     }
 
     static func ggLandConfirmationMessage(for request: GGLandRequest, stack: GGStack?) -> String {

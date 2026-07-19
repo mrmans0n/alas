@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -56,6 +57,22 @@ struct GGStackReadinessModelTests {
         #expect(model.actions.first { $0.kind == .sync }?.isEnabled == false)
         #expect(model.facts.contains { $0.label == "Behind base" && $0.value == "2" })
         #expect(model.summaryChip.contains("2"))
+    }
+
+    @Test func drawerUsesLiveBehindBaseOnlyForMatchingStackBase() {
+        let stack = stack([entry(position: 1, prState: nil)], synced: 1, behind: 0)
+        let behind = GitService.BehindStatus(ref: "origin/main", sha: "abc", count: 2, probedAt: Date())
+
+        #expect(GGStackDrawer.liveBehindBaseOverride(
+            stack: stack,
+            selectedBaseBranch: "main",
+            behindBase: behind
+        ) == 2)
+        #expect(GGStackDrawer.liveBehindBaseOverride(
+            stack: stack,
+            selectedBaseBranch: "release",
+            behindBase: behind
+        ) == nil)
     }
 
     @Test func landReadyEnabledWithOpenEntryForFreshVerification() {

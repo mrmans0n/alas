@@ -73,6 +73,44 @@ struct RightPaneGGLandTests {
         ))
     }
 
+    @Test func untilRequiresReadyLowerEntries() {
+        let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
+                          path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        func positionedEntry(
+            id: String,
+            position: Int,
+            prState: GGPRState,
+            approved: Bool,
+            ci: GGCIStatus?
+        ) -> GGStackEntry {
+            GGStackEntry(position: position, sha: "s\(position)", title: "t\(position)", ggId: id, prNumber: 5 + position,
+                         prState: prState, approved: approved, ciStatus: ci)
+        }
+
+        #expect(state.ggLandTargetStillLandable(
+            .until(entryId: "b", title: "t2"),
+            in: stack([
+                positionedEntry(id: "a", position: 1, prState: .open, approved: true, ci: .success),
+                positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+            ])
+        ))
+        #expect(state.ggLandTargetStillLandable(
+            .until(entryId: "b", title: "t2"),
+            in: stack([
+                positionedEntry(id: "a", position: 1, prState: .merged, approved: false, ci: .failed),
+                positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+            ])
+        ))
+        #expect(!state.ggLandTargetStillLandable(
+            .until(entryId: "b", title: "t2"),
+            in: stack([
+                positionedEntry(id: "a", position: 1, prState: .open, approved: false, ci: .success),
+                positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+            ])
+        ))
+    }
+
     @Test func requestAndCancelSetAndClearPending() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
