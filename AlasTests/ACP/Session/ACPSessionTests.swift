@@ -3351,4 +3351,26 @@ struct ACPSessionTests {
             #expect(tc2.preview == "actual first line", "preview=\(tc2.preview ?? "nil")")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("streamed inline-code first chunk does not trigger partial-fence full reprocess")
+    func toolCallUpdateStreamingInlineCodeDoesNotTriggerPartialFenceReprocess() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-inline", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // First chunk: inline code starting with a backtick — NOT a partial
+        // opening fence (it can never become "```" + valid tag).
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-inline", status: "in_progress",
+            content: [.content(.text("`cmd` ran"))])))
+        // Second chunk: the log grows. The suffix-only fast path must fire
+        // (previousRawWasPartialFence returns false for "`cmd` ran").
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-inline", status: "completed",
+            content: [.content(.text("`cmd` ran successfully"))])))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "`cmd` ran successfully")
+            #expect(tc.preview == "`cmd` ran successfully")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

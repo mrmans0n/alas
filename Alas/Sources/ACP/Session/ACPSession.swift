@@ -927,28 +927,24 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Whether `previousRaw` is a PARTIAL opening fence — a prefix of
-    /// `"```"` that is not yet a complete fence line (e.g. `` ` `` or
-    /// `` `` ``). `isOpeningFence` requires the full `` ``` `` prefix, so
-    /// `stripWrappingFence` did NOT strip these; the suffix might complete
-    /// the fence, which the legacy full reprocess would now recognize and
-    /// strip. The suffix-only fast path must fall to full reprocess in
-    /// that case so the wrapper fence is removed.
+    /// a potential `` ``` `` fence line that could still grow into a
+    /// valid opening fence with more characters. Only returns true for
+    /// strings that are strict prefixes of `` ``` `` (1 or 2 backticks)
+    /// or `` ``` `` followed by valid tag characters (letters, digits,
+    /// `_`, `+`, `-`) without a newline. A string like `` `cmd` `` (inline
+    /// code) or `` ```{ `` (invalid tag) is NOT a partial fence — it can
+    /// never become a valid opening fence, so the suffix path is safe.
+    /// `isOpeningFence` (complete fence) is handled separately by
+    /// `appliedOpeningFenceUnterminated`; this guard is for the case
+    /// where the previous raw was NOT recognized as a fence at all but
+    /// could still become one.
     private static func previousRawWasPartialFence(_ previousRaw: String) -> Bool {
-        // ````` <= previousRaw < ``` — i.e. starts with ` but is not a
-        // complete opening fence line. A complete fence line either has
-        // a newline after the fence, or is exactly ```(+language) with no
-        // newline (handled by `appliedOpeningFenceUnterminated`).
-        // Partial: 1 or 2 backticks, or 3+ backticks NOT forming a valid
-        // fence (e.g. "````x" with non-tag chars). Simplest check: any
-        // prefix of "```" (1 or 2 backticks) is partial.
         guard !previousRaw.isEmpty else { return false }
-        let prefix = String("```".prefix(previousRaw.count))
-        // If previousRaw starts with a backtick but isOpeningFence fails,
-        // it's partial. isOpeningFence requires "```" prefix.
-        if previousRaw.hasPrefix("`") && !isOpeningFence(previousRaw) {
-            return true
-        }
-        return false
+        // A complete opening fence (with or without a newline) is handled
+        // by `appliedOpeningFenceUnterminated` / `appliedOpeningFenceStripped`.
+        // Here we only care about fence PREFIXES that weren't yet recognized.
+        if Self.isOpeningFence(previousRaw) { return false }
+        return Self.couldBeOpeningFencePrefix(previousRaw)
     }
 
     /// Extract content assets (images, resource links, resources) from
@@ -1013,13 +1009,18 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Whether `s` is a prefix of a potential opening fence line — i.e.
-    /// it starts with `` ``` `` and the rest (so far) is all valid tag
-    /// characters. Used by `extendStrippedRaw` to decide whether a
-    /// still-growing line should keep waiting for more characters before
-    /// being classified as a fence. A line like `` ```sw `` is a prefix
-    /// of `` ```swift `` (valid), while `` ```{.swift} `` is not (the
-    /// `{` disqualifies it even though it starts with `` ``` ``).
+    /// it is a strict prefix of `` ``` `` (1 or 2 backticks) OR it starts
+    /// with `` ``` `` and the rest (so far) is all valid tag characters.
+    /// Used by `extendStrippedRaw` to decide whether a still-growing line
+    /// should keep waiting for more characters before being classified
+    /// as a fence. A line like `` ```sw `` is a prefix of `` ```swift ``
+    /// (valid), while `` ```{.swift} `` is not (the `{` disqualifies it
+    /// even though it starts with `` ``` ``). A line like `` `cmd` `` is
+    /// not a fence prefix (the `c` after the first backtick means it can
+    /// never become `` ``` ``).
     private static func couldBeOpeningFencePrefix(_ s: String) -> Bool {
+        // 1 or 2 backticks: strict prefix of "```".
+        if s == "`" || s == "``" { return true }
         guard s.hasPrefix("```") else { return false }
         let rest = s.dropFirst(3)
         return rest.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "+" || $0 == "-" }
