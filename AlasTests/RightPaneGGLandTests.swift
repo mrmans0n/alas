@@ -9,6 +9,17 @@ struct RightPaneGGLandTests {
                      prState: prState, approved: approved, ciStatus: ci)
     }
 
+    private func entry(
+        id: String,
+        position: Int,
+        prState: GGPRState,
+        approved: Bool,
+        ci: GGCIStatus?
+    ) -> GGStackEntry {
+        GGStackEntry(position: position, sha: "s\(position)", title: "t\(position)", ggId: id, prNumber: 5 + position,
+                     prState: prState, approved: approved, ciStatus: ci)
+    }
+
     private func stack(_ entries: [GGStackEntry]) -> GGStack {
         GGStack(name: "feat", base: "main", totalCommits: entries.count, syncedCommits: entries.count,
                 currentPosition: nil, behindBase: nil, entries: entries)
@@ -28,13 +39,58 @@ struct RightPaneGGLandTests {
         #expect(!state.ggLandTargetStillLandable(.ready, in: notLandable))
     }
 
+    @Test func readyRequiresContiguousBottomPrefix() {
+        let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
+                          path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        func positionedEntry(
+            id: String,
+            position: Int,
+            prState: GGPRState,
+            approved: Bool,
+            ci: GGCIStatus?
+        ) -> GGStackEntry {
+            GGStackEntry(position: position, sha: "s\(position)", title: "t\(position)", ggId: id, prNumber: 5 + position,
+                         prState: prState, approved: approved, ciStatus: ci)
+        }
+
+        let blockedBottom = stack([
+            positionedEntry(id: "a", position: 1, prState: .open, approved: false, ci: .success),
+            positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+        ])
+        #expect(!state.ggLandTargetStillLandable(.ready, in: blockedBottom))
+
+        let readyAfterMergedBottom = stack([
+            positionedEntry(id: "a", position: 1, prState: .merged, approved: false, ci: .failed),
+            positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+        ])
+        #expect(state.ggLandTargetStillLandable(.ready, in: readyAfterMergedBottom))
+        #expect(RightPaneState.ggLandReadyPrefix(in: readyAfterMergedBottom).map(\.id) == ["b"])
+    }
+
+    @Test func readyConfirmationCountsContiguousBottomPrefixOnly() {
+        let message = RightPaneState.ggLandConfirmationMessage(
+            for: .ready,
+            stack: stack([
+                GGStackEntry(position: 1, sha: "s1", title: "t1", ggId: "a", prNumber: 6,
+                             prState: .open, approved: true, ciStatus: .success),
+                GGStackEntry(position: 2, sha: "s2", title: "t2", ggId: "b", prNumber: 7,
+                             prState: .open, approved: false, ciStatus: .success),
+                GGStackEntry(position: 3, sha: "s3", title: "t3", ggId: "c", prNumber: 8,
+                             prState: .open, approved: true, ciStatus: .success),
+            ])
+        )
+
+        #expect(message == "Merge 1 approved, passing PR from the bottom of the stack.")
+    }
+
     @Test func readyConfirmationCountsApprovedOpenEntriesWithNoCI() {
         let message = RightPaneState.ggLandConfirmationMessage(
             for: .ready,
             stack: stack([
-                entry(id: "a", prState: .open, approved: true, ci: .success),
-                entry(id: "b", prState: .open, approved: true, ci: nil),
-                entry(id: "c", prState: .open, approved: true, ci: .pending),
+                entry(id: "a", position: 1, prState: .open, approved: true, ci: .success),
+                entry(id: "b", position: 2, prState: .open, approved: true, ci: nil),
+                entry(id: "c", position: 3, prState: .open, approved: true, ci: .pending),
             ])
         )
 
