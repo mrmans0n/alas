@@ -960,7 +960,7 @@ final class RightPaneState {
         case .ready:
             return stack.entries.contains(where: Self.ggEntryIsReadyToLand)
         case .until(let entryId, _):
-            return stack.entries.contains { $0.id == entryId }
+            return stack.entries.contains { $0.id == entryId && Self.ggEntryIsReadyToLand($0) }
         }
     }
 

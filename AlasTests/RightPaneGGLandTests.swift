@@ -50,6 +50,29 @@ struct RightPaneGGLandTests {
         #expect(!state.ggLandTargetStillLandable(.until(entryId: "missing", title: "t"), in: s))
     }
 
+    @Test func untilRequiresReadyTargetEntry() {
+        let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
+                          path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+
+        #expect(!state.ggLandTargetStillLandable(
+            .until(entryId: "a", title: "t"),
+            in: stack([entry(id: "a", prState: .open, approved: false, ci: .success)])
+        ))
+        #expect(!state.ggLandTargetStillLandable(
+            .until(entryId: "a", title: "t"),
+            in: stack([entry(id: "a", prState: .draft, approved: true, ci: .success)])
+        ))
+        #expect(!state.ggLandTargetStillLandable(
+            .until(entryId: "a", title: "t"),
+            in: stack([entry(id: "a", prState: .open, approved: true, ci: .failed)])
+        ))
+        #expect(state.ggLandTargetStillLandable(
+            .until(entryId: "a", title: "t"),
+            in: stack([entry(id: "a", prState: .open, approved: true, ci: nil)])
+        ))
+    }
+
     @Test func requestAndCancelSetAndClearPending() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
