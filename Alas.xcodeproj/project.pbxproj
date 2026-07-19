@@ -1240,6 +1240,7 @@
 		EDC5F3C0F2964AC78C832F87 /* StatusParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */; };
 		EE02460865C6A4ED1046B13F /* AgentLifecycleEventMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18B5372BF572EBA3A84113E4 /* AgentLifecycleEventMapperTests.swift */; };
 		EE06DE97F2DCEFAD2B48B05C /* UpdateThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE09B83A747269494B206F23 /* UpdateThrottle.swift */; };
+		EE4A552DB5EF6559CA1A5AE0 /* GGStackActionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C421FFAE27A92B2510D87C9 /* GGStackActionStateTests.swift */; };
 		EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */; };
 		EEB1E9992AB101D398909EFA /* DiffFeedbackLaneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4128039056F417E483AB4DC /* DiffFeedbackLaneTests.swift */; };
 		EEB6534271EB7EA475A703DE /* HunkPatchBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A06D96DE3FEBF63E7A157DD /* HunkPatchBuilder.swift */; };
@@ -1270,6 +1271,7 @@
 		F53E906F828DEFF6A41C46BA /* RemotePollCadenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 807FC0DF3AE4C069E77F85B6 /* RemotePollCadenceTests.swift */; };
 		F5626F154B2CF446FF3F917B /* ReviewLoopState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0299820D15A2A4C7838B2CE9 /* ReviewLoopState.swift */; };
 		F57297D50FC237F7993F7B81 /* ACPSelectChipMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D5632302DE981B0BD36273 /* ACPSelectChipMetricsTests.swift */; };
+		F59B834AB41CDD4BBCA84A7B /* GGStackActionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A9D7898F772DC2F10532A1F /* GGStackActionState.swift */; };
 		F60AF5FD23412D018F263322 /* NotificationDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19E98A53E2B793436D2F10D /* NotificationDelegate.swift */; };
 		F6442CEA8D80C6845ABF0A63 /* FocusDirectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42BB90D7C9A270876F470EB /* FocusDirectionTests.swift */; };
 		F64E588419012161F690ACB7 /* ProviderReviewOriginalPathResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FC7D68CD8300C0F6766AED0 /* ProviderReviewOriginalPathResolverTests.swift */; };
@@ -1536,6 +1538,7 @@
 		29D7631D754795D16E946440 /* ACPFileEditCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFileEditCard.swift; sourceTree = "<group>"; };
 		29FCCD153F9C2AF78A7B2E47 /* ACPMessageGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageGutter.swift; sourceTree = "<group>"; };
 		2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictTabState.swift; sourceTree = "<group>"; };
+		2A9D7898F772DC2F10532A1F /* GGStackActionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackActionState.swift; sourceTree = "<group>"; };
 		2AE565966DD010FDFD7DFF50 /* ACPMarkdownLiveStyler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownLiveStyler.swift; sourceTree = "<group>"; };
 		2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteNetworkTests.swift; sourceTree = "<group>"; };
 		2B0206F856D9639147D0A4BF /* ACPComposerActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerActions.swift; sourceTree = "<group>"; };
@@ -1967,6 +1970,7 @@
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7C38FA009B7044E9DC5480A7 /* ACPSessionsButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionsButton.swift; sourceTree = "<group>"; };
 		7C3A8A65C6EC8182FD23AE97 /* CodeTextViewAutoPairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextViewAutoPairTests.swift; sourceTree = "<group>"; };
+		7C421FFAE27A92B2510D87C9 /* GGStackActionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackActionStateTests.swift; sourceTree = "<group>"; };
 		7C80F21C310F35EBA6FBDF58 /* CompletionFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionFeatureTests.swift; sourceTree = "<group>"; };
 		7D223B9B905C2BBEFDE50E36 /* MemoryDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDiagnostics.swift; sourceTree = "<group>"; };
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
@@ -4567,6 +4571,7 @@
 				611F2522E4A89EA38B0779AC /* GGInstallControllerTests.swift */,
 				7532F1267DB3F18530C9AD84 /* GGServiceActionsTests.swift */,
 				2F74F721E41ADB3EC7906DC1 /* GGServiceTests.swift */,
+				7C421FFAE27A92B2510D87C9 /* GGStackActionStateTests.swift */,
 				59FC4FF152C92166C561D645 /* GGStackChipModelTests.swift */,
 				6C09F563CF8F2EC4EF2B42BC /* GGStackGateTests.swift */,
 				A948C5D9B5EB13DBAC21E538 /* GGStackModelsTests.swift */,
@@ -4819,6 +4824,7 @@
 				79485A502B7856609349A138 /* GGInstallController.swift */,
 				1C53EA4D34091E3711B0ED54 /* GGProjectMode.swift */,
 				9160AF4DDD35E2A02262D868 /* GGService.swift */,
+				2A9D7898F772DC2F10532A1F /* GGStackActionState.swift */,
 				E81D0FF9B67ADCA35679FF76 /* GGStackChip.swift */,
 				ABF9F7D29F77AE8524E06EFA /* GGStackGate.swift */,
 				86CE36A9A7301E6863CEDFCC /* GGStackModels.swift */,
@@ -5524,6 +5530,7 @@
 				EBF83E611756C005753D7F25 /* GGInstallController.swift in Sources */,
 				A95EC5D1544C32B61DE0B2C9 /* GGProjectMode.swift in Sources */,
 				3CF61CA14860FC9E9C3224DC /* GGService.swift in Sources */,
+				F59B834AB41CDD4BBCA84A7B /* GGStackActionState.swift in Sources */,
 				985B3CFBBCB9AF3059192796 /* GGStackChip.swift in Sources */,
 				4BA49732C8D13ED574A0E35D /* GGStackGate.swift in Sources */,
 				93CE39FC58076587CC85F489 /* GGStackModels.swift in Sources */,
@@ -6181,6 +6188,7 @@
 				6E2597E7FB61606C9A9F04AC /* GGInstallControllerTests.swift in Sources */,
 				AA9C6D213883037790F00042 /* GGServiceActionsTests.swift in Sources */,
 				7A9F0DE5D1E5B5DFC9991474 /* GGServiceTests.swift in Sources */,
+				EE4A552DB5EF6559CA1A5AE0 /* GGStackActionStateTests.swift in Sources */,
 				B8E2F8710E6B8A3CD1A23E49 /* GGStackChipModelTests.swift in Sources */,
 				2111C060CDF39B78FEFECB7A /* GGStackGateTests.swift in Sources */,
 				7E2E0B87C53DBAAE4AEF81E9 /* GGStackModelsTests.swift in Sources */,
