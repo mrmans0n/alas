@@ -172,6 +172,7 @@ struct CommitsSectionView: View {
         pausedGGOperation: GGPausedOperation?
     ) -> Bool {
         inFlightAction == nil
+            && pausedGGOperation == nil
             && !GGStackDrawer.hasBlockingGitOperation(
                 mergeOperation: mergeOperation,
                 pausedGGOperation: pausedGGOperation

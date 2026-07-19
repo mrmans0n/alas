@@ -523,4 +523,31 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggActionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
     }
+
+    @Test func successfulCleanRefreshesProjectTopology() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: wt.path) }
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        var didRefreshProjectTopology = false
+        state.refreshProjectTopologyAfterGGClean = {
+            didRefreshProjectTopology = true
+        }
+
+        state.requestGGCleanAll()
+        state.performGGCleanAll()
+        while state.ggActionState.inFlightAction != nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(runner.callCount == 1)
+        #expect(didRefreshProjectTopology)
+    }
 }

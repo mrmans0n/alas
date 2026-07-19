@@ -166,6 +166,10 @@ final class RightPaneStore {
                     isRemoteProject: project.host != nil
                 )
             }
+            new.refreshProjectTopologyAfterGGClean = { [weak self] in
+                guard let app = self?.appState else { return }
+                await app.refreshProjectTopology(projectId: worktree.projectId)
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in
