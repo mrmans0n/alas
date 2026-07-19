@@ -46,6 +46,31 @@ struct GGCommandRunningStreamingTests {
         #expect(lines == ["one", "two", "three"])
     }
 
+    @Test func preservesUTF8ScalarsSplitAcrossReads() async throws {
+        let script = "printf '\\303'; sleep 0.1; printf '\\251\\n'"
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", script],
+            cwd: nil,
+            env: nil
+        )
+        let lines = try await collectWithTimeout(stream)
+        #expect(lines == ["é"])
+    }
+
+    @Test func streamingRunTimesOutHungProcess() async throws {
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "sleep 2"],
+            cwd: nil,
+            env: nil,
+            timeout: 0.1
+        )
+        await #expect(throws: ProcessError.self) {
+            _ = try await collectWithTimeout(stream)
+        }
+    }
+
     @Test func nonZeroExitSurfacesCommandFailedWithAccumulatedStderr() async throws {
         let script = "echo boom 1>&2; exit 3"
         let stream = ProcessGGCommandRunner.streamProcess(

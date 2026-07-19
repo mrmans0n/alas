@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 
@@ -53,7 +54,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
-        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv())
+        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: Self.commandTimeout)
     }
 
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the
@@ -65,7 +66,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         executable: String,
         args: [String],
         cwd: URL?,
-        env: [String: String]?
+        env: [String: String]?,
+        timeout: TimeInterval = Process.defaultTimeout
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let process = Process()
@@ -80,6 +82,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
 
             let buffer = LineBuffer()
             let stderrAccum = StderrAccumulator()
+            let timeoutState = GGStreamingTimeoutState()
             // `terminationHandler` and these readability handlers are two
             // independent dispatch mechanisms with no ordering guarantee
             // between them: the child exiting does not imply the kernel has
@@ -98,8 +101,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     if let tail = buffer.flush() { continuation.yield(tail) }
                     stdoutEOF.markClosed()
                 } else {
-                    let chunk = String(decoding: data, as: UTF8.self)
-                    for line in buffer.feed(chunk) { continuation.yield(line) }
+                    for line in buffer.feed(data) { continuation.yield(line) }
                 }
             }
             // Drain stderr incrementally as it arrives rather than blocking
@@ -125,7 +127,9 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     async let outClosed = stdoutEOF.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     async let errClosed = stderrAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     _ = await (outClosed, errClosed)
-                    if status == 0 {
+                    if timeoutState.didTimeOut {
+                        continuation.finish(throwing: ProcessError.timedOut(executable: executable, args: args, seconds: timeout))
+                    } else if status == 0 {
                         continuation.finish()
                     } else if status == 127 {
                         continuation.finish(throwing: GGServiceError.cliMissing)
@@ -144,6 +148,18 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: error.localizedDescription))
                 return
             }
+            let watchdog = Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if Task.isCancelled { return }
+                if process.isRunning {
+                    timeoutState.markTimedOut()
+                    fputs(
+                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                        stderr
+                    )
+                    terminateGGStreamingProcessWithEscalation(process)
+                }
+            }
             // Close the parent's copy of the pipe write ends now that the
             // child has dup'd them. Without this, the kernel keeps
             // reporting "writers still open" on the read side and the
@@ -153,11 +169,37 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             try? outPipe.fileHandleForWriting.close()
             try? errPipe.fileHandleForWriting.close()
             continuation.onTermination = { _ in
+                watchdog.cancel()
                 if process.isRunning { process.terminate() }
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
             }
         }
+    }
+}
+
+private func terminateGGStreamingProcessWithEscalation(_ process: Process) {
+    process.terminate()
+    let pid = process.processIdentifier
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+        if process.isRunning { kill(pid, SIGKILL) }
+    }
+}
+
+private final class GGStreamingTimeoutState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timedOut = false
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
+    }
+
+    var didTimeOut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return timedOut
     }
 }
 
