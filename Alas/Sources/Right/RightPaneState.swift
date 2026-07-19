@@ -815,19 +815,24 @@ final class RightPaneState {
             }
         } catch {
             // A transient gg/provider failure (gh/glab auth hiccup, network
-            // blip, etc.) must not poison the commits-key cache — leave it
-            // untouched so the next refresh retries instead of being skipped
-            // by the unchanged-key guard above. But whatever `ggStack`
-            // currently holds was loaded for a *different* key (the guard
-            // above only lets us reach this point when the key changed) —
-            // e.g. the previous branch's stack, if the user just checked
-            // out a different stack-shaped branch and this fetch for it
-            // failed. Rendering it against the now-different `commits`
-            // would misattribute its header, PR chips, and sidebar badge
-            // to the wrong branch, so clear it and degrade to plain
-            // commits rather than show stale, mismatched data.
+            // blip, etc.) must not cache the *failed* key `key` — it stays
+            // unset so the next refresh for it retries instead of being
+            // skipped by the unchanged-key guard above. But whatever
+            // `ggStack` currently holds was loaded for the *previous*
+            // cached key (the guard above only lets us reach this point
+            // when `key` differs from it) — e.g. the previous branch's
+            // stack, if the user just checked out a different stack-shaped
+            // branch and this fetch for it failed. Rendering it against the
+            // now-different `commits` would misattribute its header, PR
+            // chips, and sidebar badge to the wrong branch, so clear it and
+            // degrade to plain commits. Clearing `ggStackCommitsKey` too
+            // (not just leaving it at the previous key) matters just as
+            // much: leaving it would make the guard above wrongly treat a
+            // later return to that same branch/commit set as "already
+            // cached" and skip re-fetching the now-cleared stack.
             if Task.isCancelled { return }
             guard snapshotGeneration == snapshotInvalidationGeneration else { return }
+            ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil

@@ -193,13 +193,53 @@ struct RightPaneGGStackTests {
         #expect(state.ggStack == nil)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
 
-        // The failed branch-B key must not have been cached (it stays at
-        // whatever branch-A's successful load left it at, which is neither
-        // nil nor branch B's key) — retrying must re-invoke gg rather than
-        // being skipped by the unchanged-key guard.
-        #expect(state.ggStackCommitsKey != "nacho/stack-b|" + String(repeating: "j", count: 40))
+        // The cache key is reset (not left at branch A's stale key, and not
+        // set to branch B's failed key) — retrying must re-invoke gg rather
+        // than being skipped by the unchanged-key guard either way.
+        #expect(state.ggStackCommitsKey == nil)
         await state.refreshGGStack()
         #expect(throwingRunner.callCount == 2)
+    }
+
+    /// The cache key must be reset (not left pointing at the last
+    /// *successful* key) when a later reload fails and clears `ggStack` —
+    /// otherwise returning to that prior branch/commit set would hit the
+    /// unchanged-key guard and skip re-fetching the now-cleared stack,
+    /// leaving the UI stuck showing plain commits.
+    @Test func failedReloadAllowsRefetchOnReturnToPriorBranch() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let commitsA = [commit(sha: String(repeating: "k", count: 40), stackShaped: true)]
+
+        let firstRunner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: firstRunner)
+        state.ggGateProvider = { true }
+        state.currentBranch = "nacho/stack-a"
+        state.commits = commitsA
+        await state.refreshGGStack()
+        #expect(state.ggStack != nil)
+
+        let throwingRunner = ThrowingFakeGGRunner()
+        state.ggService = GGService(runner: throwingRunner)
+        state.currentBranch = "nacho/stack-b"
+        state.commits = [commit(sha: String(repeating: "l", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+        #expect(state.ggStack == nil)
+
+        // Back to branch A with the exact same commits as the first,
+        // successful load — must re-fetch, not be skipped as "unchanged".
+        let secondRunner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: secondRunner)
+        state.currentBranch = "nacho/stack-a"
+        state.commits = commitsA
+        await state.refreshGGStack()
+
+        #expect(secondRunner.callCount == 1)
+        #expect(state.ggStack != nil)
     }
 
     /// `gg ls --json` answers for the *current* branch, so a checkout to a
