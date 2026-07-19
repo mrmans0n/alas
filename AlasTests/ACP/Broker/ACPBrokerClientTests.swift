@@ -945,20 +945,29 @@ struct ACPBrokerClientTests {
     // Regression (code review on #853, P1): with the background poller now
     // running continuously, it can dispatch an operation's
     // `operationCompleted` event on its OWN independent attach() call,
-    // completely decoupled from whichever `send()` call is actually
-    // waiting on that operation. Before this fix, the completion's cursor
-    // wasn't protected from `ackAfterEarlierDurableEvents` until `send()`'s
-    // own retry loop caught up — so a later durable event (e.g. the next
-    // streamed chunk) dispatched by that same poller could be acked
-    // immediately in the meantime, advancing past the completion's cursor
-    // before `send()` ever got the chance to hand its result back. This
-    // reproduces exactly that: the poller alone (no live `send()` yet)
-    // delivers the completion, then a later chunk, and only afterwards
-    // does the matching `send()` call show up to claim it.
-    @Test func operationCompletionIsProtectedBeforeSendClaimsIt() async throws {
+    // completely decoupled from the `send()` call actually waiting on that
+    // operation. Before this fix, the completion's cursor wasn't protected
+    // from `ackAfterEarlierDurableEvents` until `send()`'s own retry loop
+    // caught up — so a later durable event (e.g. the next streamed chunk,
+    // dispatched by that same poller) could be acked immediately in the
+    // meantime, advancing past the completion's cursor before `send()`
+    // ever got the chance to hand its result back. Reproduces exactly
+    // that: `send()` is already running (registered, mid pending-retry
+    // sleep) when the poller's own, independent attach() delivers both the
+    // completion and the next chunk.
+    @Test func operationCompletionIsProtectedWhileSendIsMidRetry() async throws {
         let service = MockBrokerService()
         let operationKey = "queued-prompt:test:0:session/prompt"
         await service.enqueueAttach(events: [], turnState: .idle)
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: false,
+            pending: true
+        ))
+        // send()'s own attachAndReplay right after that pending result.
+        await service.enqueueAttach(events: [], turnState: .idle)
+        // The background poller's next scheduled attach, landing while
+        // send() is asleep in its (fixed, 50ms) pending-retry wait.
         await service.enqueueAttach(events: [
             ACPBrokerEvent(
                 cursor: ACPBrokerEventCursor(rawValue: 2),
@@ -969,9 +978,7 @@ struct ACPBrokerClientTests {
                         error: nil
                     )
                 )
-            )
-        ], turnState: .idle)
-        await service.enqueueAttach(events: [
+            ),
             ACPBrokerEvent(
                 cursor: ACPBrokerEventCursor(rawValue: 3),
                 kind: .adapterNotification(
@@ -989,6 +996,14 @@ struct ACPBrokerClientTests {
                 )
             )
         ], turnState: .idle)
+        // send()'s second service.send() call, after its retry sleep.
+        await service.enqueueSendResult(ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
+            replayed: true,
+            result: .object(["stopReason": .string("end_turn")]),
+            pending: false
+        ))
+        await service.enqueueAttach(events: [], turnState: .idle)
         let client = makeClient(
             service: service,
             backgroundPollIdleIntervalNanoseconds: 20_000_000
@@ -996,28 +1011,24 @@ struct ACPBrokerClientTests {
         let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
 
         try await client.start()
+        let sendTask = Task {
+            try await client.send(ACPRequest(
+                method: "session/prompt",
+                params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+                brokerOperationKey: operationKey
+            ))
+        }
+
         let update = try await updateTask.value
         update.durableConsumptionAcknowledgement?()
 
-        // Without the fix, nothing protects the completion's cursor yet
-        // (no send() call has run for it), so this ack would go through
-        // immediately instead of deferring.
-        try await Task.sleep(for: .milliseconds(50))
+        // send() is still asleep in its fixed 50ms pending-retry wait; the
+        // completion it registered interest in at entry must still be
+        // protected, so this ack has to defer rather than go through.
+        try await Task.sleep(for: .milliseconds(30))
         #expect(await service.acks.isEmpty)
 
-        // The original send() for that operation finally catches up.
-        await service.enqueueSendResult(ACPBrokerSendResult(
-            requestId: ACPBrokerAdapterRequestID(rawValue: 9),
-            replayed: false,
-            result: .object(["stopReason": .string("end_turn")]),
-            pending: false
-        ))
-        await service.enqueueAttach(events: [], turnState: .idle)
-        let response = try await client.send(ACPRequest(
-            method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
-            brokerOperationKey: operationKey
-        ))
+        let response = try await sendTask.value
         response.acknowledgeDurableConsumption()
 
         try await waitUntil {
@@ -1025,6 +1036,58 @@ struct ACPBrokerClientTests {
                 ACPBrokerEventCursor(rawValue: 2),
                 ACPBrokerEventCursor(rawValue: 3)
             ]
+        }
+    }
+
+    // Regression (code review on #853, P1, second finding): protecting
+    // every operationCompleted cursor unconditionally (the first version of
+    // the fix above) broke on an adopted broker's replay, or any queued
+    // retry the caller abandoned — nothing in this process will ever call
+    // send() again for that operationKey, so the cursor would stay
+    // "unacknowledged" forever with no call left to release it, and every
+    // later ack would defer permanently. Only a completion a live send()
+    // call actually registered interest in may be protected.
+    @Test func unclaimedOperationCompletionDoesNotBlockLaterAcks() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .operationCompleted(
+                    operationKey: ACPBrokerOperationKey(rawValue: "abandoned-operation"),
+                    outcome: ACPBrokerRPCOutcome(
+                        result: .object(["stopReason": .string("end_turn")]),
+                        error: nil
+                    )
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object([
+                                "type": .string("text"),
+                                "text": .string("hello")
+                            ])
+                        ])
+                    ])
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
+
+        try await client.start()
+        let update = try await updateTask.value
+        update.durableConsumptionAcknowledgement?()
+
+        // Must not be stuck deferring behind a completion nobody will ever
+        // claim.
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 3)]
         }
     }
 
