@@ -42,18 +42,19 @@ struct GGStackDrawer: View {
     @ViewBuilder
     private func expandedBody(_ model: GGStackReadinessModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !model.progressRows.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(model.progressRows.enumerated()), id: \.offset) { _, row in
-                        Text(row).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
-                    }
+            if model.isPaused {
+                if !model.progressRows.isEmpty { progressList(model) }
+                Text("A gg operation is paused on conflicts. Resolve them in the Conflicts section, then Continue — or Abort to roll back.")
+                    .font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let err = rps.ggActionState.lastError {
+                    Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
+                actionRow(model)
+                factsView(model)
+            } else if !model.progressRows.isEmpty {
+                progressList(model)
             } else {
-                if model.isPaused {
-                    Text("A gg operation is paused on conflicts. Resolve them in the Conflicts section, then Continue — or Abort to roll back.")
-                        .font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 if let err = rps.ggActionState.lastError {
                     Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
@@ -62,6 +63,14 @@ struct GGStackDrawer: View {
             }
         }
         .padding(.horizontal, 10).padding(.bottom, 10)
+    }
+
+    private func progressList(_ model: GGStackReadinessModel) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(model.progressRows.enumerated()), id: \.offset) { _, row in
+                Text(row).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+            }
+        }
     }
 
     private func actionRow(_ model: GGStackReadinessModel) -> some View {

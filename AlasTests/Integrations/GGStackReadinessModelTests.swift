@@ -119,6 +119,23 @@ struct GGStackReadinessModelTests {
         #expect(model.progressRows.contains { $0.contains("7") })
     }
 
+    @Test func pausedOnSyncKeepsProgressRowsAndOffersContinueAbort() {
+        // Reproduces the exact state a rebase conflict during `gg sync` leaves
+        // behind: syncProgress is non-empty AND the operation is paused. The
+        // model must report both facts simultaneously so the drawer can show
+        // the progress list *and* still surface Continue/Abort.
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.start(totalEntries: 1))
+        action.appendSyncEvent(.pushStarted(position: 1))
+        action.endAction(.sync) // sync's gg process exits when it hits the conflict
+        action.setPaused(GGPausedOperation(pausedBy: .sync)) // watcher-driven filesystem probe picks up the pause
+        let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: .open)]), action: action)
+        #expect(model.isPaused)
+        #expect(model.actions.map(\.kind) == [.continueOp, .abortOp])
+        #expect(!model.progressRows.isEmpty)
+    }
+
     @Test func progressRowsClearedWhenDifferentActionSucceedsSync() {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)
