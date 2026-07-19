@@ -110,7 +110,9 @@ configuration once and invalidates width-dependent row geometry once.
 The comparison will use the project's existing half-point layout tolerance so
 subpixel frame noise does not repeatedly reflow wrapped text. The applied width
 must still be the actual current effective width when a change exceeds that
-tolerance.
+tolerance. Compare against the last width actually applied to TextKit, not the
+immediately preceding requested width, so cumulative sub-tolerance changes
+eventually reconfigure once their total difference exceeds the tolerance.
 
 ### Layout Passes
 
