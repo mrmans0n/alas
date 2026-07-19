@@ -3753,14 +3753,43 @@ let second = true
     @Test func unwrappedOuterWidthChangeKeepsFixedTextLayoutConfiguration() throws {
         let scrollView = makeLongTextScrollView(width: 220, wraps: false)
         scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
         let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let textViewWidth = codeView.frame.width
 
         scrollView.setFrameSize(NSSize(width: 280, height: 120))
         scrollView.needsLayout = true
         scrollView.layout()
 
         #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.frame.width == textViewWidth)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
         #expect(scrollView.hasHorizontalScroller)
+    }
+
+    @Test func unwrappedPresentationWidthChangeRecomputesRowGeometryOnce() throws {
+        let scrollView = makeTextScrollView(
+            width: 220,
+            wraps: false,
+            lines: ["let value = 1", "return value"]
+        )
+        scrollView.layout()
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        _ = codeView.diffRowRects()
+        let configurationApplications = scrollView.textLayoutConfigurationApplicationCountForTesting
+        let geometryComputations = codeView.rowGeometryComputationCountForTesting
+        let textViewWidth = codeView.frame.width
+        codeView.autoresizingMask = []
+
+        scrollView.setFrameSize(NSSize(width: 280, height: 120))
+        scrollView.needsLayout = true
+        scrollView.layout()
+
+        #expect(codeView.frame.width > textViewWidth + 0.5)
+        #expect(scrollView.textLayoutConfigurationApplicationCountForTesting == configurationApplications)
+        #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations + 1)
     }
 
     @Test func changingFromWrappedToUnwrappedReconfiguresLayoutAndScrollerOnce() throws {
@@ -4223,17 +4252,41 @@ let second = true
     }
 
     private func makeLongTextScrollView(width: CGFloat, height: CGFloat = 120, wraps: Bool) -> DiffPaneTextScrollView {
-        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        updateLongTextScrollView(scrollView, wraps: wraps)
-        return scrollView
+        makeTextScrollView(
+            width: width,
+            height: height,
+            wraps: wraps,
+            lines: [
+                "let firstValue = service.fetchAnIntentionallyLongValueForWrappedLayoutTesting()",
+                "let secondValue = service.fetchAnotherIntentionallyLongValueForWrappedLayoutTesting()",
+            ]
+        )
     }
 
     private func updateLongTextScrollView(_ scrollView: DiffPaneTextScrollView, wraps: Bool) {
+        updateTextScrollView(
+            scrollView,
+            wraps: wraps,
+            lines: [
+                "let firstValue = service.fetchAnIntentionallyLongValueForWrappedLayoutTesting()",
+                "let secondValue = service.fetchAnotherIntentionallyLongValueForWrappedLayoutTesting()",
+            ]
+        )
+    }
+
+    private func makeTextScrollView(
+        width: CGFloat,
+        height: CGFloat = 120,
+        wraps: Bool,
+        lines: [String]
+    ) -> DiffPaneTextScrollView {
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        updateTextScrollView(scrollView, wraps: wraps, lines: lines)
+        return scrollView
+    }
+
+    private func updateTextScrollView(_ scrollView: DiffPaneTextScrollView, wraps: Bool, lines: [String]) {
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        let lines = [
-            "let firstValue = service.fetchAnIntentionallyLongValueForWrappedLayoutTesting()",
-            "let secondValue = service.fetchAnotherIntentionallyLongValueForWrappedLayoutTesting()",
-        ]
         let text = lines.joined(separator: "\n")
         var location = 0
         let metadata = lines.map { line in

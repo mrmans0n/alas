@@ -618,6 +618,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var shouldResetHorizontalOrigin = false
     private var wraps = false
     private var appliedTextLayoutConfiguration: TextLayoutConfiguration?
+    private var lastAppliedTextViewWidth: CGFloat?
     private var textLayoutConfigurationApplicationCount = 0
     private var horizontalScrollerVisibilityChangeCount = 0
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -925,11 +926,15 @@ final class DiffPaneTextScrollView: NSScrollView {
         }
         applyTextLayoutConfigurationIfNeeded(configuration)
         let finalTextViewWidth = textViewWidth()
-        if !configuration.wraps, abs(textView.frame.width - finalTextViewWidth) > 0.5 {
+        if !configuration.wraps,
+           let lastAppliedTextViewWidth,
+           abs(lastAppliedTextViewWidth - finalTextViewWidth) > 0.5
+        {
             textView.invalidateDiffRowGeometry()
         }
         let measuredDocumentHeight = documentHeight
         setTextViewSize(width: finalTextViewWidth, height: measuredDocumentHeight)
+        lastAppliedTextViewWidth = finalTextViewWidth
         if shouldResetHorizontalOrigin {
             resetHorizontalOriginToLeading()
             shouldResetHorizontalOrigin = false
