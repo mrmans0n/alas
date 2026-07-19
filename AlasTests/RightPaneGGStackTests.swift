@@ -164,4 +164,30 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
         #expect(runner.callCount == 2)
     }
+
+    /// `markSnapshotUnknown()` resets `commits` along with the rest of the
+    /// snapshot; gg stack state derives from `commits`, so it must be reset
+    /// in lockstep or a delayed/failed refresh after invalidation can leave
+    /// a stale "Stack · …" header/sidebar badge rendered against an emptied
+    /// commit list.
+    @Test func markSnapshotUnknownClearsStackState() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.commits = [commit(sha: String(repeating: "g", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggStack != nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
+
+        state.markSnapshotUnknown()
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+    }
 }

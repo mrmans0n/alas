@@ -779,6 +779,7 @@ final class RightPaneState {
     // `commits` / `ggService` without needing a real git repo + watcher.
     @MainActor
     func refreshGGStack() async {
+        let snapshotGeneration = snapshotInvalidationGeneration
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: commits) else {
             ggStackCommitsKey = nil
@@ -796,10 +797,12 @@ final class RightPaneState {
         guard key != ggStackCommitsKey else { return }
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
-            // A newer refresh superseded this one — its own `refreshGGStack`
-            // call will write the current state; writing here would race it
-            // with a stale result.
+            // A newer refresh, or a `markSnapshotUnknown()` invalidation,
+            // superseded this one — its own `refreshGGStack` call (or the
+            // invalidation's own reset) will write the current state;
+            // writing here would race it with a stale result.
             if Task.isCancelled { return }
+            guard snapshotGeneration == snapshotInvalidationGeneration else { return }
             ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
             let summary = stack?.summary
@@ -850,6 +853,16 @@ final class RightPaneState {
         fileTree = []
         commits = []
         olderCommits = []
+        // gg stack state is derived from `commits` above — reset it here
+        // too, and cancel any in-flight load, so a delayed or failed
+        // refresh after this invalidation can't leave a stale "Stack · …"
+        // header/sidebar badge rendered against the now-empty commit list.
+        ggStackRefreshTask?.cancel()
+        ggStackCommitsKey = nil
+        if ggStack != nil { ggStack = nil }
+        if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+        }
         comparisonRef = nil
         commitRemote = nil
         primaryCommitRemote = nil
