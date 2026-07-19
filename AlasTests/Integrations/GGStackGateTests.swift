@@ -123,4 +123,23 @@ struct GGStackGateTests {
         FileManager.default.createFile(atPath: gitDir + "/MERGE_HEAD", contents: Data("sha\n".utf8))
         #expect(GGStackGate.operationInProgress(repoPath: dir))
     }
+
+    /// The paused-operation markers live in the *private* per-worktree git
+    /// dir, not the dir shared across worktrees. Drop a `rebase-merge`
+    /// marker only under the linked worktree's private dir
+    /// (`main/.git/worktrees/feature/rebase-merge`) and confirm the linked
+    /// worktree reports mid-rebase while the primary checkout — whose own
+    /// `.git` never held the marker — does not. A regression that swapped
+    /// in `commonGitDir` (which resolves the linked worktree through to
+    /// `main/.git`) would make `operationInProgress(linked)` wrongly return
+    /// `false` here.
+    @Test func detectsRebaseInProgressOnlyInLinkedWorktreePrivateDir() throws {
+        let (main, linked) = try makeRepoWithLinkedWorktree(withGGConfig: false)
+        let privateGitDir = main + "/.git/worktrees/feature"
+        try FileManager.default.createDirectory(
+            atPath: privateGitDir + "/rebase-merge", withIntermediateDirectories: true
+        )
+        #expect(GGStackGate.operationInProgress(repoPath: linked))
+        #expect(!GGStackGate.operationInProgress(repoPath: main))
+    }
 }
