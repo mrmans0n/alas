@@ -4,6 +4,7 @@ struct ChangesPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @Environment(\.openWindow) private var openWindow
+    @State private var ggInstall = GGInstallController()
 
     var body: some View {
         ScrollView {
@@ -56,6 +57,45 @@ struct ChangesPane: View {
                     }
                 }
 
+                SettingsGroup(title: "Stacked diffs") {
+                    SettingsRow(
+                        name: "git-gud (gg)",
+                        desc: GGAvailability.shared.isInstalled
+                            ? "Stack-aware commits section, synced from gg."
+                            : "Installs via Homebrew: brew install mrmans0n/tap/gg-stack"
+                    ) {
+                        ggStatusControl
+                    }
+                    SettingsRow(
+                        name: "Enable stacked diffs",
+                        desc: "Master switch. Off hides all gg UI everywhere."
+                    ) {
+                        Toggle("", isOn: state.bind(\.changes.stackedDiffsEnabled))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .disabled(!GGAvailability.shared.isInstalled)
+                    }
+                    SettingsRow(
+                        name: "Per project",
+                        desc: "Auto enables gg UI when the repo's main worktree has .git/gg/config.json."
+                    ) {
+                        EmptyView()
+                    }
+                    ForEach(state.projectsManager.projects) { project in
+                        SettingsRow(name: project.name, desc: "") {
+                            Picker("", selection: ggModeBinding(project)) {
+                                Text("Off").tag(GGProjectMode.off)
+                                Text("Auto").tag(GGProjectMode.auto)
+                                Text("On").tag(GGProjectMode.on)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .disabled(!GGAvailability.shared.isInstalled
+                                      || !state.config.changes.stackedDiffsEnabled)
+                        }
+                    }
+                }
+
                 SettingsGroup(title: "Merge conflicts") {
                     SettingsRow(name: "Bulk resolve prompt",
                                 desc: "Sent to the agent CWD'd at the worktree when the user clicks 'Resolve all with agent'. The agent uses its own tools to enumerate, reconcile, and stage every conflicted file.") {
@@ -77,6 +117,7 @@ struct ChangesPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+        .task { await GGAvailability.shared.probe() }
     }
 
     private var comparisonModeDescription: String {
@@ -124,6 +165,47 @@ struct ChangesPane: View {
         }
         .pickerStyle(.menu)
         .settingsDropdownFrame()
+    }
+
+    @ViewBuilder
+    private var ggStatusControl: some View {
+        switch ggInstall.phase {
+        case .running:
+            HStack(spacing: 6) {
+                Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                Text("Installing…")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("warning"))
+                    .lineLimit(2)
+                AlasButton(title: "Retry", style: .normal) { ggInstall.install() }
+            }
+        case .idle, .succeeded:
+            if let version = GGAvailability.shared.version {
+                Text("gg \(version)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-muted"))
+            } else {
+                AlasButton(title: "Install gg…", style: .normal) { ggInstall.install() }
+            }
+        }
+    }
+
+    private func ggModeBinding(_ project: ProjectConfig) -> Binding<GGProjectMode> {
+        Binding(
+            get: {
+                state.projectsManager.projects.first { $0.id == project.id }?.ggMode ?? .auto
+            },
+            set: { newMode in
+                state.projectsManager.setGGMode(projectId: project.id, mode: newMode)
+                _ = state.saveProjects()
+            }
+        )
     }
 }
 
