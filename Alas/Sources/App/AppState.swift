@@ -533,8 +533,13 @@ final class AppState {
 
         // Probe gg CLI availability once at startup so the stacked-diffs
         // gate (RightPaneStore.ggGateProvider) has an answer by the time
-        // the first right pane activates.
+        // the first right pane activates. Wait for the login-shell PATH
+        // resolution kicked off above first — otherwise a gg installed only
+        // via Homebrew (not on the process's own PATH, e.g. launched from
+        // Finder/Dock) can probe as "not installed" and stay stuck there,
+        // since a non-force probe short-circuits once `hasProbed` is set.
         Task { @MainActor in
+            await ShellEnvResolver.shared.waitUntilResolved()
             await GGAvailability.shared.probe()
         }
     }

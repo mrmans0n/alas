@@ -7,7 +7,10 @@ struct GGInstallControllerTests {
         var probed = false
         let controller = GGInstallController(
             runInstall: { ProcessResult(exitCode: 0, stdout: "installed", stderr: "") },
-            reprobe: { probed = true; return true }
+            reprobe: {
+                probed = true
+                return true
+            }
         )
         await controller.installAndWait()
         #expect(controller.phase == .succeeded)

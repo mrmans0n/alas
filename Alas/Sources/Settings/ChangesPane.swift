@@ -121,6 +121,15 @@ struct ChangesPane: View {
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
         .task { await GGAvailability.shared.probe() }
+        .onChange(of: ggInstall.phase) { _, newPhase in
+            // Right-pane states that already evaluated the gate while gg was
+            // absent are otherwise never asked to re-check it, so an install
+            // completed with a pane open would leave the stack UI missing
+            // until an unrelated refresh happened to fire.
+            if newPhase == .succeeded {
+                state.rightPaneStore.reevaluateGGGates()
+            }
+        }
     }
 
     private var comparisonModeDescription: String {

@@ -5,6 +5,7 @@ final class ShellEnvResolver {
 
     private let lock = NSLock()
     private var _resolvedPath: String?
+    private var resolveTask: Task<Void, Never>?
 
     var resolvedPath: String? {
         get {
@@ -20,12 +21,27 @@ final class ShellEnvResolver {
     }
 
     func resolve() {
-        Task {
+        let task = Task {
             let path = await Self.discoverShellPath()
             lock.lock()
             _resolvedPath = path
             lock.unlock()
         }
+        lock.lock()
+        resolveTask = task
+        lock.unlock()
+    }
+
+    /// Awaits the in-flight PATH resolution started by `resolve()`, if any.
+    /// Returns immediately when resolution already finished or never started.
+    /// Callers that need the login-shell PATH before probing an external CLI
+    /// (e.g. `gg`) should await this instead of racing `resolve()`'s
+    /// fire-and-forget Task.
+    func waitUntilResolved() async {
+        lock.lock()
+        let task = resolveTask
+        lock.unlock()
+        await task?.value
     }
 
     private static func discoverShellPath() async -> String? {
