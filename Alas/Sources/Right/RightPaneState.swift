@@ -888,7 +888,11 @@ final class RightPaneState {
     /// operation. Plain git conflicts use the same marker files and must keep
     /// their regular recovery UI.
     private func reconcilePausedOperation() {
-        if GGStackGate.operationInProgress(repoPath: worktree.path.path),
+        let operationInProgress = GGStackGate.operationInProgress(repoPath: worktree.path.path)
+        if !operationInProgress {
+            GGStackGate.clearAlasGGOperationInProgress(repoPath: worktree.path.path)
+        }
+        if operationInProgress,
            ggActionState.inFlightAction != nil
                || ggActionState.pausedOperation != nil
                || GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)

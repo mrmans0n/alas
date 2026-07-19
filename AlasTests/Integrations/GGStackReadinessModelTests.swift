@@ -30,10 +30,19 @@ struct GGStackReadinessModelTests {
         #expect(model.facts.contains { $0.label == "Merged" && $0.value == "1" })
     }
 
-    @Test func syncAlwaysEnabled() {
+    @Test func syncEnabledWhenBaseIsCurrent() {
         let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: nil)]), action: GGStackActionState())
         let sync = model.actions.first { $0.kind == .sync }
         #expect(sync?.isEnabled == true)
+    }
+
+    @Test func syncDisabledWhenBaseIsBehind() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: nil)], behind: 1),
+            action: GGStackActionState()
+        )
+        let sync = model.actions.first { $0.kind == .sync }
+        #expect(sync?.isEnabled == false)
     }
 
     @Test func landReadyEnabledWithOpenEntryForFreshVerification() {
