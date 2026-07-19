@@ -8,6 +8,20 @@ import Testing
 struct DiffPaneViewTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func diffRowRectsReturnOnlyIndicesIntersectingDirtyVerticalRange() {
+        let rows = [
+            NSRect(x: 0, y: 0, width: 100, height: 10),
+            NSRect(x: 0, y: 10, width: 100, height: 10),
+            NSRect(x: 0, y: 20, width: 100, height: 10),
+            NSRect(x: 0, y: 30, width: 100, height: 10),
+        ]
+
+        #expect(rows.indicesIntersecting(NSRect(x: 0, y: 10, width: 100, height: 10)) == 1..<2)
+        #expect(rows.indicesIntersecting(NSRect(x: 0, y: 9, width: 100, height: 12)) == 0..<3)
+        #expect(rows.indicesIntersecting(NSRect(x: 0, y: 40, width: 100, height: 10)).isEmpty)
+        #expect([NSRect]().indicesIntersecting(.zero).isEmpty)
+    }
+
     private func model() -> DiffDisplayModel {
         DiffDisplayModelBuilder.build(
             diff: parsedDiff(),

@@ -1738,11 +1738,11 @@ final class DiffPaneCodeTextView: NSTextView {
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
         guard let theme else { return }
         let rowRects = diffRowRects()
-        for (index, rowRect) in rowRects.enumerated() {
+        for index in rowRects.indicesIntersecting(dirtyRect) {
             guard lineTones.indices.contains(index) else { continue }
+            let rowRect = rowRects[index]
             let tone = lineTones[index]
             guard tone != .context else { continue }
-            guard rowRect.intersects(dirtyRect) else { continue }
 
             rowFill(for: tone, theme: theme).setFill()
             rowRect.fill()
@@ -2700,6 +2700,15 @@ private extension DiffPaneTextDocumentBuilder.LineMetadata {
 }
 
 extension Array where Element == NSRect {
+    func indicesIntersecting(_ rect: NSRect) -> Range<Int> {
+        guard !isEmpty, rect.height > 0 else { return 0..<0 }
+
+        let start = lowerBound { $0.maxY > rect.minY }
+        let end = lowerBound { $0.minY >= rect.maxY }
+        guard start < end else { return 0..<0 }
+        return start..<end
+    }
+
     func binarySearchRow(containing point: NSPoint) -> Int? {
         var low = 0
         var high = count - 1
@@ -2718,5 +2727,19 @@ extension Array where Element == NSRect {
             }
         }
         return nil
+    }
+
+    private func lowerBound(where predicate: (NSRect) -> Bool) -> Int {
+        var low = 0
+        var high = count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if predicate(self[mid]) {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        return low
     }
 }
