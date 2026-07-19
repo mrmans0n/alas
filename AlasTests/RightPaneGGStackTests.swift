@@ -165,6 +165,43 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
+    /// A stack loaded for one branch must not keep rendering after the user
+    /// switches to a different stack-shaped branch and the reload for it
+    /// fails transiently — the stale stack no longer matches `commits`.
+    @Test func failedReloadClearsStaleStackFromDifferentBranch() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+
+        let okRunner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: okRunner)
+        state.ggGateProvider = { true }
+        state.currentBranch = "nacho/stack-a"
+        state.commits = [commit(sha: String(repeating: "i", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+        #expect(state.ggStack != nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
+
+        let throwingRunner = ThrowingFakeGGRunner()
+        state.ggService = GGService(runner: throwingRunner)
+        state.currentBranch = "nacho/stack-b"
+        state.commits = [commit(sha: String(repeating: "j", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+
+        #expect(throwingRunner.callCount == 1)
+        #expect(state.ggStack == nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+
+        // The failed branch-B key must not have been cached (it stays at
+        // whatever branch-A's successful load left it at, which is neither
+        // nil nor branch B's key) — retrying must re-invoke gg rather than
+        // being skipped by the unchanged-key guard.
+        #expect(state.ggStackCommitsKey != "nacho/stack-b|" + String(repeating: "j", count: 40))
+        await state.refreshGGStack()
+        #expect(throwingRunner.callCount == 2)
+    }
+
     /// `gg ls --json` answers for the *current* branch, so a checkout to a
     /// different branch that happens to share the same commit SHAs (e.g.
     /// right after `git checkout -b` from the same HEAD) must not reuse the

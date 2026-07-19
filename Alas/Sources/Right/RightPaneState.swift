@@ -817,9 +817,21 @@ final class RightPaneState {
             // A transient gg/provider failure (gh/glab auth hiccup, network
             // blip, etc.) must not poison the commits-key cache — leave it
             // untouched so the next refresh retries instead of being skipped
-            // by the unchanged-key guard above. Whatever was already
-            // rendered (nil on first load, last-good stack on a later
-            // refresh) stays as-is; never surface an error UI.
+            // by the unchanged-key guard above. But whatever `ggStack`
+            // currently holds was loaded for a *different* key (the guard
+            // above only lets us reach this point when the key changed) —
+            // e.g. the previous branch's stack, if the user just checked
+            // out a different stack-shaped branch and this fetch for it
+            // failed. Rendering it against the now-different `commits`
+            // would misattribute its header, PR chips, and sidebar badge
+            // to the wrong branch, so clear it and degrade to plain
+            // commits rather than show stale, mismatched data.
+            if Task.isCancelled { return }
+            guard snapshotGeneration == snapshotInvalidationGeneration else { return }
+            if ggStack != nil { ggStack = nil }
+            if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
+                GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+            }
         }
     }
 
