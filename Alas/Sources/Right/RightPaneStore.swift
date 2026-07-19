@@ -162,7 +162,8 @@ final class RightPaneStore {
                     masterEnabled: true,
                     ggInstalled: true,
                     mode: project.ggMode,
-                    repoPath: project.path
+                    repoPath: project.path,
+                    isRemoteProject: project.host != nil
                 )
             }
 

@@ -54,13 +54,21 @@ enum GGStackGate {
     }
 
     /// Gates 1–3 combined for a project.
+    /// - Parameter isRemoteProject: true when the project is a registered
+    ///   SSH destination rather than a local checkout. gg's runner is
+    ///   local-only (`/usr/bin/env gg`), unlike git's own process wrapper,
+    ///   which rewrites invocations to SSH for registered remote hosts —
+    ///   running gg against a remote path either fails repeatedly or, if
+    ///   the same path coincidentally exists locally too, reads an
+    ///   unrelated repo. Fail closed regardless of mode.
     static func projectEnabled(
         masterEnabled: Bool,
         ggInstalled: Bool,
         mode: GGProjectMode,
-        repoPath: String
+        repoPath: String,
+        isRemoteProject: Bool
     ) -> Bool {
-        guard masterEnabled, ggInstalled else { return false }
+        guard masterEnabled, ggInstalled, !isRemoteProject else { return false }
         switch mode {
         case .off: return false
         case .on: return true

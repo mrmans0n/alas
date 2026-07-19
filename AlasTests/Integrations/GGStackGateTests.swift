@@ -51,13 +51,37 @@ struct GGStackGateTests {
         let ggRepo = try makeRepo(withGGConfig: true)
         let plainRepo = try makeRepo(withGGConfig: false)
         // Master off / gg missing kill everything.
-        #expect(!GGStackGate.projectEnabled(masterEnabled: false, ggInstalled: true, mode: .on, repoPath: ggRepo))
-        #expect(!GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: false, mode: .on, repoPath: ggRepo))
+        #expect(!GGStackGate.projectEnabled(
+            masterEnabled: false, ggInstalled: true, mode: .on, repoPath: ggRepo, isRemoteProject: false
+        ))
+        #expect(!GGStackGate.projectEnabled(
+            masterEnabled: true, ggInstalled: false, mode: .on, repoPath: ggRepo, isRemoteProject: false
+        ))
         // off always hides; on always allows; auto follows the config file.
-        #expect(!GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .off, repoPath: ggRepo))
-        #expect(GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .on, repoPath: plainRepo))
-        #expect(GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .auto, repoPath: ggRepo))
-        #expect(!GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .auto, repoPath: plainRepo))
+        #expect(!GGStackGate.projectEnabled(
+            masterEnabled: true, ggInstalled: true, mode: .off, repoPath: ggRepo, isRemoteProject: false
+        ))
+        #expect(GGStackGate.projectEnabled(
+            masterEnabled: true, ggInstalled: true, mode: .on, repoPath: plainRepo, isRemoteProject: false
+        ))
+        #expect(GGStackGate.projectEnabled(
+            masterEnabled: true, ggInstalled: true, mode: .auto, repoPath: ggRepo, isRemoteProject: false
+        ))
+        #expect(!GGStackGate.projectEnabled(
+            masterEnabled: true, ggInstalled: true, mode: .auto, repoPath: plainRepo, isRemoteProject: false
+        ))
+    }
+
+    /// gg's runner is local-only, unlike git's own process wrapper, which
+    /// rewrites invocations to SSH for registered remote hosts. A remote
+    /// project must never enable gg, regardless of mode.
+    @Test func remoteProjectIsAlwaysDisabledRegardlessOfMode() throws {
+        let ggRepo = try makeRepo(withGGConfig: true)
+        for mode: GGProjectMode in [.off, .auto, .on] {
+            #expect(!GGStackGate.projectEnabled(
+                masterEnabled: true, ggInstalled: true, mode: mode, repoPath: ggRepo, isRemoteProject: true
+            ))
+        }
     }
 
     @Test func detectsGGConfigThroughLinkedWorktreeCommonDir() throws {
