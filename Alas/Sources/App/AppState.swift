@@ -538,9 +538,14 @@ final class AppState {
         // via Homebrew (not on the process's own PATH, e.g. launched from
         // Finder/Dock) can probe as "not installed" and stay stuck there,
         // since a non-force probe short-circuits once `hasProbed` is set.
-        Task { @MainActor in
+        // A right pane can activate and evaluate the gate before this probe
+        // resolves — it sees `isInstalled == false` and clears/skips its
+        // stack. Re-evaluate every cached pane once the probe lands so a
+        // real stack doesn't stay rendered as plain commits.
+        Task { @MainActor [weak self] in
             await ShellEnvResolver.shared.waitUntilResolved()
             await GGAvailability.shared.probe()
+            self?.rightPaneStore.reevaluateGGGates()
         }
     }
 

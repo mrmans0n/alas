@@ -16,6 +16,23 @@ struct GGStackGateTests {
         return dir
     }
 
+    /// Builds a primary checkout with a real `.git` directory (optionally
+    /// carrying gg config) plus a linked worktree whose `.git` is a *file*
+    /// pointing at a private per-worktree dir under
+    /// `<main>/.git/worktrees/<name>`, itself carrying a `commondir` file
+    /// that points back to `<main>/.git` — mirroring real `git worktree add`
+    /// output. Returns (mainRepoPath, linkedWorktreePath).
+    private func makeRepoWithLinkedWorktree(withGGConfig: Bool) throws -> (main: String, linked: String) {
+        let main = try makeRepo(withGGConfig: withGGConfig)
+        let linked = NSTemporaryDirectory() + "gg-gate-linked-" + UUID().uuidString
+        let privateGitDir = main + "/.git/worktrees/feature"
+        try FileManager.default.createDirectory(atPath: privateGitDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: linked, withIntermediateDirectories: true)
+        try "../..".write(toFile: privateGitDir + "/commondir", atomically: true, encoding: .utf8)
+        try "gitdir: \(privateGitDir)".write(toFile: linked + "/.git", atomically: true, encoding: .utf8)
+        return (main, linked)
+    }
+
     private func commit(body: String) -> CommitInfo {
         CommitInfo(
             sha: String(repeating: "a", count: 40), shortSha: "aaaaaaa",
@@ -41,6 +58,15 @@ struct GGStackGateTests {
         #expect(GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .on, repoPath: plainRepo))
         #expect(GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .auto, repoPath: ggRepo))
         #expect(!GGStackGate.projectEnabled(masterEnabled: true, ggInstalled: true, mode: .auto, repoPath: plainRepo))
+    }
+
+    @Test func detectsGGConfigThroughLinkedWorktreeCommonDir() throws {
+        let (mainWithConfig, linkedWithConfig) = try makeRepoWithLinkedWorktree(withGGConfig: true)
+        #expect(GGStackGate.repoHasGGConfig(repoPath: mainWithConfig))
+        #expect(GGStackGate.repoHasGGConfig(repoPath: linkedWithConfig))
+
+        let (_, linkedWithoutConfig) = try makeRepoWithLinkedWorktree(withGGConfig: false)
+        #expect(!GGStackGate.repoHasGGConfig(repoPath: linkedWithoutConfig))
     }
 
     @Test func stackShapeRequiresGGIDTrailer() {
