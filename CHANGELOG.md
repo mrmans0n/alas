@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-20
+
+### ✨ Features
+
+- Add optional `git-gud` stacked diffs integration for Alas worktrees (#850).
+- Add GG stack actions and drawer flows (#854).
+- Harden stacked-diffs agent integration and MCP prompt injection (#858).
+
+### 🐛 Fixes
+
+- Cache streamed ACP message indices and stabilize transcript tail restoration (#845, #846).
+- Bound SourceKit `xcrun` availability probing (#847).
+- Process incremental ACP `toolCallUpdate` content correctly (#849).
+- Improve wrapped diff scroll performance (#851).
+- Avoid idle durable state invalidations and keep ACP broker polling alive for connection lifetime (#852, #853).
+- Address GG post-merge review feedback and refresh clean topology from a surviving worktree (#855, #857).
+
+### 🏗️ Internal
+
+- Update Rust crates `serde` and `serde_json` (#848, #859).
+
 ## [0.11.8] - 2026-07-18
 
 ### 🐛 Fixes
