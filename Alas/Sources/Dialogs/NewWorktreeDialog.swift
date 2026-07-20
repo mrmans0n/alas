@@ -18,6 +18,7 @@ struct NewWorktreeDialog: View {
     @State private var base: String = ""
     @State private var branch: String = ""
     @State private var runStartup: Bool = true
+    @State private var createAsGGStack: Bool = false
     @State private var openAfterCreate: Bool = true
     @State private var launchMode: AppConfig.LauncherMode = .terminal
     /// The launcher mode to persist — preserves the user's intent even when
@@ -58,7 +59,7 @@ struct NewWorktreeDialog: View {
                         errorMessage: branchLoadError
                     )
                 }
-                DialogField(label: "Branch name") {
+                DialogField(label: createAsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
                         text: $branch,
                         monospaced: true,
@@ -71,6 +72,21 @@ struct NewWorktreeDialog: View {
                     AlasToggle(on: $runStartup)
                     Text("Run startup script after create").font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
+                }
+                if ggStackAvailability != .hidden {
+                    HStack(spacing: 10) {
+                        AlasToggle(on: $createAsGGStack)
+                            .disabled({ if case .disabled = ggStackAvailability { return true } else { return false } }())
+                        Text("Create as gg stack").font(.system(size: 12))
+                            .foregroundColor(theme.color("fg"))
+                    }
+                    if case .disabled(let hint) = ggStackAvailability {
+                        Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    } else if createAsGGStack, case .enabled(let username) = ggStackAvailability, !branch.isEmpty {
+                        Text("Branch: \(GGConfigReader.composeStackBranch(username: username, stackName: branch))")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(theme.color("fg-dim"))
+                    }
                 }
                 if let validationMessage = branchValidationMessage, branch != state.config.worktrees.branchPrefix {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
@@ -124,6 +140,11 @@ struct NewWorktreeDialog: View {
         .onChange(of: branch) { _, _ in
             createErrorMessage = nil
         }
+        .onChange(of: createAsGGStack) { _, isOn in
+            if isOn, branch == state.config.worktrees.branchPrefix {
+                branch = ""
+            }
+        }
     }
 
     private var presetProject: ProjectConfig? {
@@ -142,6 +163,33 @@ struct NewWorktreeDialog: View {
         case .invalid(let message):
             return message
         }
+    }
+
+    private var ggStackAvailability: GGStackCreateMode.Availability {
+        guard let project = state.projects.first(where: { $0.id == projectId }) else { return .hidden }
+        let gatePassed = state.config.changes.stackedDiffsEnabled
+            && GGAvailability.shared.isInstalled
+            && GGStackGate.projectEnabled(
+                masterEnabled: true, ggInstalled: true,
+                mode: project.ggMode, repoPath: project.path,
+                isRemoteProject: project.host != nil
+            )
+        guard gatePassed else { return .hidden }
+        return GGStackCreateMode.availability(
+            gatePassed: true,
+            username: GGConfigReader.branchUsername(repoPath: project.path)
+        )
+    }
+
+    /// The branch actually created. In stack mode `branch` holds the stack
+    /// name and the real branch is gg's `<username>/<name>` convention;
+    /// otherwise it's the field verbatim (existing behavior, incl. the
+    /// global branchPrefix default the field is seeded with).
+    private var effectiveBranch: String {
+        if createAsGGStack, case .enabled(let username) = ggStackAvailability {
+            return GGConfigReader.composeStackBranch(username: username, stackName: branch)
+        }
+        return branch
     }
 
     private var subtitleText: String {
@@ -170,7 +218,7 @@ struct NewWorktreeDialog: View {
             template: state.config.worktrees.pathTemplate,
             worktreeRoot: state.config.worktrees.rootPath,
             repoName: project.name,
-            branch: branch
+            branch: effectiveBranch
         ).path
     }
 
@@ -254,7 +302,7 @@ struct NewWorktreeDialog: View {
             let id = await state.createWorktree(
                 projectId: project.id,
                 base: base,
-                branch: branch,
+                branch: effectiveBranch,
                 destination: dest,
                 runStartup: runStartup,
                 launchSurface: surface
