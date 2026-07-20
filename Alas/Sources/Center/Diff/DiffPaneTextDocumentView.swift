@@ -1210,7 +1210,7 @@ final class DiffPaneCodeTextView: NSTextView {
     nonisolated static func expandPillFillAlpha(hovered: Bool, pressed: Bool) -> CGFloat {
         if pressed { return 0.36 }
         if hovered { return 0.28 }
-        return 0.18
+        return 0
     }
 
     nonisolated static func expandPillRect(
@@ -1973,6 +1973,7 @@ final class DiffPaneCodeTextView: NSTextView {
             guard
                 let chevronImage = Self.expandChevronImage(
                     boundary: action.boundary,
+                    mode: action.mode,
                     font: font,
                     color: tint
                 ),
@@ -1992,6 +1993,7 @@ final class DiffPaneCodeTextView: NSTextView {
         let chevronGap: CGFloat = 5
         let chevronSize = Self.expandChevronImage(
             boundary: action.boundary,
+            mode: action.mode,
             font: font,
             color: .textColor
         )?.size ?? .zero
@@ -2013,6 +2015,7 @@ final class DiffPaneCodeTextView: NSTextView {
         let chevronGap: CGFloat = 5
         let chevronImage = Self.expandChevronImage(
             boundary: action.boundary,
+            mode: action.mode,
             font: font,
             color: .textColor
         )
@@ -2070,10 +2073,14 @@ final class DiffPaneCodeTextView: NSTextView {
 
     private static func expandChevronImage(
         boundary: DiffContextBoundary?,
+        mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode,
         font: NSFont?,
         color: NSColor
     ) -> NSImage? {
-        let symbol = DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: boundary)
+        let symbol = DiffPaneTextDocumentBuilder.expandableContextSymbolName(
+            boundary: boundary,
+            mode: mode
+        )
         let pointSize = (font?.pointSize ?? 13) - 1
         let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))

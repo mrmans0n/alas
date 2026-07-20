@@ -16,8 +16,19 @@ struct DiffPaneTextDocumentBuilderTests {
         #expect(DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: nil) == "chevron.down")
     }
 
+    @Test func expandAllUsesDoubleChevron() {
+        #expect(
+            DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: .above, mode: .all)
+                == "chevron.up.2"
+        )
+        #expect(
+            DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: .below, mode: .all)
+                == "chevron.down.2"
+        )
+    }
+
     @Test func pillFillAlphaByState() {
-        #expect(DiffPaneCodeTextView.expandPillFillAlpha(hovered: false, pressed: false) == 0.18)
+        #expect(DiffPaneCodeTextView.expandPillFillAlpha(hovered: false, pressed: false) == 0)
         #expect(DiffPaneCodeTextView.expandPillFillAlpha(hovered: true, pressed: false) == 0.28)
         #expect(DiffPaneCodeTextView.expandPillFillAlpha(hovered: true, pressed: true) == 0.36)
         #expect(DiffPaneCodeTextView.expandPillFillAlpha(hovered: false, pressed: true) == 0.36)
