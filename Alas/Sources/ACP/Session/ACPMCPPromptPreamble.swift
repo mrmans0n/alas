@@ -23,6 +23,13 @@ struct GGPreambleStackContext: Equatable {
     let ggMCPAttached: Bool
 }
 
+/// What the session's worktree looks like to gg at session-creation time.
+enum GGPreambleSignal: Equatable {
+    case none
+    case generic // gg-enabled repo, stack not loaded
+    case stack(name: String, entryCount: Int) // loaded stack state
+}
+
 /// Builds the one-time, wire-only context preamble injected into the first
 /// prompt of a freshly created ACP session. Modern agent harnesses defer MCP
 /// tools behind tool search, so the model never sees the attached tools

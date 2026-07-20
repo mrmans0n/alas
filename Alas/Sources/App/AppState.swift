@@ -4792,6 +4792,41 @@ final class AppState {
                     sessionId: sessionId,
                     parentSessionId: parentSessionId
                 )
+            },
+            ggMCPProvider: { [weak self] worktreePath in
+                guard let self,
+                      let project = self.projects.first(where: { $0.id == worktree.projectId }),
+                      self.config.changes.stackedDiffsEnabled,
+                      GGAvailability.shared.isInstalled,
+                      GGStackGate.projectEnabled(
+                          masterEnabled: true, ggInstalled: true,
+                          mode: project.ggMode, repoPath: project.path,
+                          isRemoteProject: project.host != nil
+                      ),
+                      GGStackGate.repoHasGGConfig(repoPath: worktreePath)
+                else { return nil }
+                return GGMCPInjection.injection(
+                    gatePassed: true,
+                    binaryPath: GGAvailability.shared.ggMCPBinaryPath,
+                    configuredServers: project.mcpServers,
+                    worktreePath: worktreePath
+                )
+            },
+            ggPreambleProvider: { [weak self] worktreePath in
+                guard let self,
+                      let project = self.projects.first(where: { $0.id == worktree.projectId }),
+                      self.config.changes.stackedDiffsEnabled,
+                      GGAvailability.shared.isInstalled,
+                      GGStackGate.projectEnabled(
+                          masterEnabled: true, ggInstalled: true,
+                          mode: project.ggMode, repoPath: project.path,
+                          isRemoteProject: project.host != nil
+                      )
+                else { return .none }
+                if let stack = self.rightPaneStore.stackForWorktreePath(worktreePath) {
+                    return .stack(name: stack.name, entryCount: stack.totalCommits)
+                }
+                return GGStackGate.repoHasGGConfig(repoPath: worktreePath) ? .generic : .none
             }
         )
         mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
