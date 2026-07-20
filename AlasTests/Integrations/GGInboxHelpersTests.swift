@@ -60,6 +60,21 @@ struct GGInboxHelpersTests {
         #expect(GGInboxWorktreeResolver.ambiguousStackNames(in: snapshot.buckets).isEmpty)
     }
 
+    @Test func ambiguousStackNamesCountsStackErrorsToo() throws {
+        let json = #"""
+        {"version":1,"total_items":1,
+         "buckets":{
+           "ready_to_land":[],"changes_requested":[],"blocked_on_ci":[],
+           "awaiting_review":[{"stack_name":"auth","position":1,"sha":"bbb","title":"Bob's auth","pr_number":2,"pr_url":"https://example.test/2"}],
+           "behind_base":[],"draft":[]},
+         "stack_errors":[{"stack_name":"auth","error":"branch missing"}]}
+        """#
+        let snapshot = try GGInboxSnapshot.decode(fromJSON: Data(json.utf8))
+        #expect(GGInboxWorktreeResolver.ambiguousStackNames(
+            in: snapshot.buckets, stackErrors: snapshot.stackErrors
+        ) == ["auth"])
+    }
+
     @Test func updatedLabel() {
         let now = Date(timeIntervalSince1970: 100_000)
         #expect(GGInboxTabView.updatedLabel(fetchedAt: nil, now: now) == nil)
