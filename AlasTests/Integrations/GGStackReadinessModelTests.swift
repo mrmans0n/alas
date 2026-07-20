@@ -225,4 +225,19 @@ struct GGStackReadinessModelTests {
         #expect(!action.syncProgress.isEmpty)
         #expect(model.progressRows.isEmpty)
     }
+
+    @Test func actionSummarySurfacesWhenIdleOnly() {
+        let action = GGStackActionState()
+        action.setActionSummary("Synced · 1 pushed")
+        let idle = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]), action: action
+        )
+        #expect(idle.actionSummary == "Synced · 1 pushed")
+
+        _ = action.beginAction(.sync) // beginAction clears the summary
+        let syncing = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]), action: action
+        )
+        #expect(syncing.actionSummary == nil)
+    }
 }

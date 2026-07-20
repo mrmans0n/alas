@@ -345,7 +345,13 @@ struct GGService {
     func land(worktreePath: String, until: String?) async throws -> GGLandResult {
         let args: [String] = until.map { ["land", "--until", $0, "--json", "--no-clean"] } ?? ["land", "--all", "--json", "--no-clean"]
         let result = try await runChecked(args: args, worktreePath: worktreePath)
-        return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
+        do {
+            return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
+        } catch {
+            // Exit 0 means the land completed; output-shape drift must not
+            // surface as a failure after the PRs were already merged.
+            return GGLandResult(landed: [])
+        }
     }
 
     func clean(worktreePath: String) async throws {

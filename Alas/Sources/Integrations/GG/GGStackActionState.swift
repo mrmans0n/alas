@@ -28,11 +28,13 @@ final class GGStackActionState {
     private(set) var syncProgress: [GGSyncEvent] = []
     private(set) var lastError: String?
     private(set) var pausedOperation: GGPausedOperation?
+    private(set) var lastActionSummary: String?
 
     /// Returns false when another action is already running (one at a time).
     func beginAction(_ action: GGStackActionKind) -> Bool {
         guard inFlightAction == nil else { return false }
         inFlightAction = action
+        if lastActionSummary != nil { lastActionSummary = nil }
         return true
     }
 
@@ -47,4 +49,23 @@ final class GGStackActionState {
     func clearError() { if lastError != nil { lastError = nil } }
     func setPaused(_ paused: GGPausedOperation) { if pausedOperation != paused { pausedOperation = paused } }
     func clearPaused() { if pausedOperation != nil { pausedOperation = nil } }
+    func setActionSummary(_ message: String) { lastActionSummary = message }
+
+    /// One-line result for a completed sync, from the accumulated stream
+    /// events. Nil unless the terminal `.summary` event arrived (an errored
+    /// or cancelled sync produces no summary line).
+    static func syncSummaryLine(from events: [GGSyncEvent]) -> String? {
+        guard events.contains(.summary) else { return nil }
+        let pushed = events.filter { if case .pushDone = $0 { return true } else { return false } }.count
+        let created = events.filter { if case .prCreated = $0 { return true } else { return false } }.count
+        var parts = ["Synced"]
+        if pushed > 0 { parts.append("\(pushed) pushed") }
+        if created > 0 { parts.append("\(created) PR\(created == 1 ? "" : "s") created") }
+        return parts.joined(separator: " · ")
+    }
+
+    static func landSummaryLine(landedCount: Int) -> String? {
+        guard landedCount > 0 else { return nil }
+        return "Landed \(landedCount) PR\(landedCount == 1 ? "" : "s")"
+    }
 }

@@ -157,4 +157,10 @@ struct GGServiceActionsTests {
             try await GGService(runner: runner).clean(worktreePath: "/tmp/wt")
         }
     }
+
+    @Test func landToleratesUndecodableOutputAfterSuccessfulExit() async throws {
+        let runner = RecordingGGRunner(stdout: "not json at all", exitCode: 0)
+        let result = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: "c-abc")
+        #expect(result.landed.isEmpty)
+    }
 }
