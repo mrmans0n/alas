@@ -17,6 +17,7 @@ struct NewWorktreeDialog: View {
     // state.config.worktrees.{baseBranch,branchPrefix}).
     @State private var base: String = ""
     @State private var branch: String = ""
+    @State private var stackName: String = ""
     @State private var runStartup: Bool = true
     @State private var createAsGGStack: Bool = false
     @State private var openAfterCreate: Bool = true
@@ -66,7 +67,7 @@ struct NewWorktreeDialog: View {
                 }
                 DialogField(label: createAsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
-                        text: $branch,
+                        text: activeNameBinding,
                         monospaced: true,
                         focusOnAppear: true,
                         onSubmit: submitCreate,
@@ -87,13 +88,13 @@ struct NewWorktreeDialog: View {
                     }
                     if case .disabled(let hint) = ggStackAvailability {
                         Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
-                    } else if createAsGGStack, case .enabled(let username) = ggStackAvailability, !branch.isEmpty {
-                        Text("Branch: \(GGConfigReader.composeStackBranch(username: username, stackName: branch))")
+                    } else if createAsGGStack, case .enabled(let username) = ggStackAvailability, !stackName.isEmpty {
+                        Text("Branch: \(GGConfigReader.composeStackBranch(username: username, stackName: stackName))")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(theme.color("fg-dim"))
                     }
                 }
-                if let validationMessage = branchValidationMessage, branch != state.config.worktrees.branchPrefix {
+                if let validationMessage = branchValidationMessage, activeName != state.config.worktrees.branchPrefix {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
                 DialogField(label: "Open after create") {
@@ -115,7 +116,7 @@ struct NewWorktreeDialog: View {
             onConfirm: create,
             confirmEnabled: Self.canCreate(
                 projectsEmpty: state.projects.isEmpty,
-                branchEmpty: branch.isEmpty,
+                branchEmpty: activeName.isEmpty,
                 branchValidation: branchValidationMessage,
                 requiresAcpAgent: openAfterCreate && launchMode == .acp,
                 hasAcpAgent: launchAgentId != "none"
@@ -150,9 +151,11 @@ struct NewWorktreeDialog: View {
         .onChange(of: branch) { _, _ in
             createErrorMessage = nil
         }
+        .onChange(of: stackName) { _, _ in
+            createErrorMessage = nil
+        }
         .onChange(of: createAsGGStack) { _, isOn in
             if isOn {
-                if branch == state.config.worktrees.branchPrefix { branch = "" }
                 if let pinned = stackPinnedBase { base = pinned }
             }
         }
@@ -166,8 +169,25 @@ struct NewWorktreeDialog: View {
         !state.projects.isEmpty && presetProject == nil
     }
 
+    private var activeName: String {
+        Self.activeName(createAsGGStack: createAsGGStack, branch: branch, stackName: stackName)
+    }
+
+    private var activeNameBinding: Binding<String> {
+        Binding(
+            get: { activeName },
+            set: { newValue in
+                if createAsGGStack {
+                    stackName = newValue
+                } else {
+                    branch = newValue
+                }
+            }
+        )
+    }
+
     private var branchValidationMessage: String? {
-        let result = GitNameValidator.validateBranchName(branch)
+        let result = GitNameValidator.validateBranchName(activeName)
         switch result {
         case .valid:
             return nil
@@ -192,13 +212,12 @@ struct NewWorktreeDialog: View {
         )
     }
 
-    /// The branch actually created. In stack mode `branch` holds the stack
-    /// name and the real branch is gg's `<username>/<name>` convention;
-    /// otherwise it's the field verbatim (existing behavior, incl. the
-    /// global branchPrefix default the field is seeded with).
+    /// The branch actually created. In stack mode the real branch follows
+    /// gg's `<username>/<name>` convention; otherwise the plain branch field
+    /// is used verbatim (including its seeded global branch prefix).
     private var effectiveBranch: String {
         if createAsGGStack, case .enabled(let username) = ggStackAvailability {
-            return GGConfigReader.composeStackBranch(username: username, stackName: branch)
+            return GGConfigReader.composeStackBranch(username: username, stackName: stackName)
         }
         return branch
     }
@@ -347,7 +366,7 @@ struct NewWorktreeDialog: View {
     private func submitCreate() {
         guard Self.canCreate(
             projectsEmpty: state.projects.isEmpty,
-            branchEmpty: branch.isEmpty,
+            branchEmpty: activeName.isEmpty,
             branchValidation: branchValidationMessage,
             requiresAcpAgent: openAfterCreate && launchMode == .acp,
             hasAcpAgent: launchAgentId != "none"
@@ -380,6 +399,14 @@ struct NewWorktreeDialog: View {
         guard on else { return false }
         if case .enabled = availability { return true }
         return false
+    }
+
+    nonisolated static func activeName(
+        createAsGGStack: Bool,
+        branch: String,
+        stackName: String
+    ) -> String {
+        createAsGGStack ? stackName : branch
     }
 
     nonisolated static func resolvedPresetProject(

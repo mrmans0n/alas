@@ -331,4 +331,25 @@ struct NewWorktreeDialogTests {
         // Off stays off regardless of availability.
         #expect(NewWorktreeDialog.stackModeSurvives(false, availability: .enabled(username: "nacho")) == false)
     }
+
+    @Test func ggModeUsesIndependentStackNameInsteadOfBranchPrefix() {
+        #expect(NewWorktreeDialog.activeName(
+            createAsGGStack: false,
+            branch: "nacho/auth-flow",
+            stackName: "auth-flow"
+        ) == "nacho/auth-flow")
+        #expect(NewWorktreeDialog.activeName(
+            createAsGGStack: true,
+            branch: "nacho/auth-flow",
+            stackName: "auth-flow"
+        ) == "auth-flow")
+    }
+
+    @Test func ggModePreservesNestedStackNameVerbatim() {
+        #expect(NewWorktreeDialog.activeName(
+            createAsGGStack: true,
+            branch: "nacho/other-branch",
+            stackName: "nacho/auth-flow"
+        ) == "nacho/auth-flow")
+    }
 }
