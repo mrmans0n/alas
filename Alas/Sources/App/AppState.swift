@@ -1633,10 +1633,9 @@ final class AppState {
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()
         saveSpaces()
-        if await projectsManager.refreshAll() {
-            saveProjects()
-        }
-        startProjectGitWatcher(for: project)
+        _ = await refreshAllProjectTopologies()
+        let refreshedProject = projectsManager.projects.first { $0.id == project.id } ?? project
+        startProjectGitWatcher(for: refreshedProject)
     }
 
     func addProject(
@@ -1859,18 +1858,36 @@ final class AppState {
 
     func refreshProjectTopology(projectId: String) async {
         let beforeIds = allWorktreeIds()
-        let previousProjectPath = projectsManager.projects.first { $0.id == projectId }?.path
+        let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects
+            .filter { $0.id == projectId }
+            .map { ($0.id, $0.path) })
         if (try? await projectsManager.refreshWorktrees(projectId: projectId)) == true { saveProjects() }
-        if let project = projectsManager.projects.first(where: { $0.id == projectId }),
-           project.path != previousProjectPath {
-            startProjectGitWatcher(for: project)
-        }
+        restartProjectGitWatchers(previousPaths: previousPaths)
         let afterIds = allWorktreeIds()
         let addedIds = afterIds.subtracting(beforeIds)
         if !addedIds.isEmpty {
             tabs.loadAll(worktreeIds: Array(addedIds))
         }
         cleanupMissingWorktrees(beforeIds: beforeIds)
+    }
+
+    /// Refresh every project, persist any reconciled configuration, and move
+    /// existing watchers when a deleted linked-worktree anchor is replaced.
+    @discardableResult
+    func refreshAllProjectTopologies() async -> Bool {
+        let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
+        let changed = await projectsManager.refreshAll()
+        if changed { saveProjects() }
+        restartProjectGitWatchers(previousPaths: previousPaths)
+        return changed
+    }
+
+    private func restartProjectGitWatchers(previousPaths: [String: String]) {
+        for project in projectsManager.projects {
+            guard let previousPath = previousPaths[project.id], previousPath != project.path else { continue }
+            guard projectGitWatchers[project.id] != nil || remoteProjectWatchers[project.id] != nil else { continue }
+            startProjectGitWatcher(for: project)
+        }
     }
 
     func updateProject(

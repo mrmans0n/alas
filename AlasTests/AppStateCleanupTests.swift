@@ -200,7 +200,7 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: linkedId).map(\.title) == ["persisted"])
     }
 
-    @Test func topologyRefreshRestartsWatcherWhenProjectAnchorChanges() async throws {
+    @Test func refreshAllRestartsWatcherWhenProjectAnchorChanges() async throws {
         let repo = try await makeRepo(name: "topology-anchor-watcher")
         let linked = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleanup-linked-\(UUID().uuidString)")
@@ -251,7 +251,7 @@ struct AppStateCleanupTests {
             deleteBranchIfMerged: false,
             force: false
         )
-        await state.refreshProjectTopology(projectId: projectId)
+        await state.refreshAllProjectTopologies()
 
         #expect(watchedPaths.map(\.path) == [linked.standardizedFileURL.path, repo.standardizedFileURL.path])
     }
