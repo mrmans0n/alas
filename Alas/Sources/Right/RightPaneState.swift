@@ -1100,7 +1100,8 @@ final class RightPaneState {
                     ggActionState.appendSyncEvent(event)
                     if case .error(let message) = event { ggActionState.setError(message) }
                 }
-                if let summary = GGStackActionState.syncSummaryLine(from: ggActionState.syncProgress) {
+                if ggActionState.lastError == nil,
+                   let summary = GGStackActionState.syncSummaryLine(from: ggActionState.syncProgress) {
                     ggActionState.setActionSummary(summary)
                     ggActionState.clearSyncProgress()
                 }
