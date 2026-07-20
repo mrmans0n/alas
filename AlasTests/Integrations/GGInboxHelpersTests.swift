@@ -41,12 +41,24 @@ struct GGInboxHelpersTests {
     }
 
     @Test func ciIconMapping() {
-        #expect(GGInboxTabView.ciIconName("passed") == "checkmark.circle")
+        #expect(GGInboxTabView.ciIconName("success") == "checkmark.circle")
         #expect(GGInboxTabView.ciIconName("failed") == "xmark.circle")
+        #expect(GGInboxTabView.ciIconName("canceled") == "xmark.circle")
         #expect(GGInboxTabView.ciIconName("running") == "clock")
         #expect(GGInboxTabView.ciIconName("pending") == "clock")
+        #expect(GGInboxTabView.ciIconName("unknown") == nil)
         #expect(GGInboxTabView.ciIconName(nil) == nil)
         #expect(GGInboxTabView.ciIconName("weird") == nil)
+    }
+
+    @Test func ciIconColorMapping() {
+        #expect(GGInboxTabView.ciIconColorToken("success") == "add")
+        #expect(GGInboxTabView.ciIconColorToken("failed") == "del")
+        #expect(GGInboxTabView.ciIconColorToken("canceled") == "del")
+        #expect(GGInboxTabView.ciIconColorToken("running") == "caution")
+        #expect(GGInboxTabView.ciIconColorToken("pending") == "caution")
+        #expect(GGInboxTabView.ciIconColorToken("unknown") == "fg-dim")
+        #expect(GGInboxTabView.ciIconColorToken(nil) == "fg-dim")
     }
 
     @Test func tabStateIdentityAndCodableRoundTrip() throws {

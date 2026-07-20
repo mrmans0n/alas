@@ -53,11 +53,20 @@ struct GGInboxTabView: View {
     }
 
     static func ciIconName(_ status: String?) -> String? {
-        switch status {
-        case "passed":             return "checkmark.circle"
-        case "failed":             return "xmark.circle"
-        case "running", "pending": return "clock"
-        default:                   return nil
+        switch GGCIStatus(rawValue: status ?? "") {
+        case .success:            return "checkmark.circle"
+        case .failed, .canceled:  return "xmark.circle"
+        case .running, .pending:  return "clock"
+        case .unknown, .none:     return nil
+        }
+    }
+
+    static func ciIconColorToken(_ status: String?) -> String {
+        switch GGCIStatus(rawValue: status ?? "") {
+        case .success:            return "add"
+        case .failed, .canceled:  return "del"
+        case .running, .pending:  return "caution"
+        case .unknown, .none:     return "fg-dim"
         }
     }
 
@@ -192,7 +201,7 @@ struct GGInboxTabView: View {
                     .font(.system(size: 10.5)).foregroundColor(theme.color("warn"))
             }
             if let icon = Self.ciIconName(entry.ciStatus) {
-                Icon(name: icon, size: 11, color: theme.color(entry.ciStatus == "failed" ? "warn" : "fg-dim"))
+                Icon(name: icon, size: 11, color: theme.color(Self.ciIconColorToken(entry.ciStatus)))
             }
             Button {
                 if let url = URL(string: entry.prUrl) { NSWorkspace.shared.open(url) }
