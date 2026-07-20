@@ -329,6 +329,8 @@ final class ProjectsManager {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let configuredURL = URL(fileURLWithPath: project.path)
         let url: URL
+        // gg clean can remove the linked worktree stored as the project path.
+        // Query from another cached checkout so the deleted row can be reconciled.
         if project.host == nil,
            !FileManager.default.fileExists(atPath: configuredURL.path),
            let survivingWorktree = worktreesByProject[projectId, default: []].first(where: {
