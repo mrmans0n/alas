@@ -540,25 +540,28 @@ struct DiffPaneTextDocumentBuilder {
         paragraph.firstLineHeadIndent = headIndent
         paragraph.headIndent = headIndent
         paragraph.lineBreakMode = .byClipping
-        // Size the row from the font (code font is user-configurable up to 64pt),
-        // not a fixed height: natural line height plus symmetric vertical padding,
-        // so the row rect grows with the glyphs and the pill keeps its breathing
-        // room at any size. Baseline-shift the glyphs by the padding so they sit in
-        // the vertical center of the row and the pill can center on the row.
-        let naturalLineHeight = font.ascender - font.descender
-        let rowHeight = naturalLineHeight + expandableContextRowPadding * 2
+        // Size the row from the same metrics the text view uses to draw the
+        // pill: label height + pill inset + row inset. The code font is
+        // user-configurable, so fixed row heights clip at larger sizes.
+        let contentInset = expandableContextPillVerticalInset + expandableContextRowOuterVerticalInset
+        let rowHeight = expandableContextRowHeight(font: font)
         paragraph.minimumLineHeight = rowHeight
         paragraph.maximumLineHeight = rowHeight
         return [
             .font: font,
             .foregroundColor: NSColor(theme.color("seg-pill-active-fg")),
             .paragraphStyle: paragraph,
-            .baselineOffset: expandableContextRowPadding,
+            .baselineOffset: contentInset,
         ]
     }
 
-    /// Symmetric vertical padding between the label and the pill edge.
-    private static let expandableContextRowPadding: CGFloat = 5
+    static let expandableContextPillVerticalInset: CGFloat = 2
+    static let expandableContextRowOuterVerticalInset: CGFloat = 4
+
+    static func expandableContextRowHeight(font: NSFont) -> CGFloat {
+        let naturalLineHeight = font.ascender - font.descender
+        return naturalLineHeight + (expandableContextPillVerticalInset + expandableContextRowOuterVerticalInset) * 2
+    }
 
     /// Left inset of the expand label, leaving room for the separately-drawn
     /// chevron and the pill's left padding. Scales with the font so the chevron
