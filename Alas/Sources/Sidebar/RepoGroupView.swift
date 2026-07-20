@@ -20,6 +20,7 @@ struct RepoGroupView: View {
     let onNewWorktree: () -> Void
     let onEditProject: () -> Void
     let onRemoveProject: () -> Void
+    let onOpenGGInbox: (() -> Void)?
     let onResetSort: () -> Void
     let spaces: [SpaceConfig]
     let activeSpaceId: String
@@ -88,6 +89,9 @@ struct RepoGroupView: View {
             .onTapGesture { collapsed.toggle() }
             .contextMenu {
                 Button("Edit Project…", action: onEditProject)
+                if let onOpenGGInbox {
+                    Button("gg Inbox", action: onOpenGGInbox)
+                }
                 Button("Reset Sort to Default", action: onResetSort)
                     .disabled(!project.worktreeOrderIsManual)
                 Menu("Spaces") {

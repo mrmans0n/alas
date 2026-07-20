@@ -618,6 +618,7 @@
 		763947308C99E2D3CB565889 /* AgentKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53C792D59DBFFF6C28F2D426 /* AgentKind.swift */; };
 		771CD72B94194370E783F7DD /* StartupScriptResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3C76F2F0F6BCE4023A9D7F /* StartupScriptResolverTests.swift */; };
 		77CDD88F7C517095DE580B50 /* ReviewEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC11F5C6667A6ECB74E066AE /* ReviewEvidence.swift */; };
+		77D7244E04B1949523699AEB /* GGInboxTabsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649D5CB480CE056B1C4457D6 /* GGInboxTabsTests.swift */; };
 		78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364213292935A05F3B52F51F /* Paths.swift */; };
 		78D49DF401553D2A9BCE1EE5 /* RemoteTerminalScriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E14E781F0E1127387A06907 /* RemoteTerminalScriptTests.swift */; };
 		78D7FFD42803C098160BADC6 /* ProjectMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81E981C10B13C43CE65DA74D /* ProjectMCPServer.swift */; };
@@ -1875,6 +1876,7 @@
 		63376280CA1D01F9D564A6F6 /* ACPSessionDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionDiscovery.swift; sourceTree = "<group>"; };
 		638E94907851A6D0B4AB8F52 /* ImageDiffEndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffEndToEndTests.swift; sourceTree = "<group>"; };
 		639B69601924624FFE573EBA /* ACPSessionRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionRecoveryTests.swift; sourceTree = "<group>"; };
+		649D5CB480CE056B1C4457D6 /* GGInboxTabsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGInboxTabsTests.swift; sourceTree = "<group>"; };
 		64C593F9F14DD962C9822C64 /* ReviewSessionTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionTabView.swift; sourceTree = "<group>"; };
 		64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvBuilderTests.swift; sourceTree = "<group>"; };
 		64E96E26D5F53F217BFD1F49 /* EditorBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBuffer.swift; sourceTree = "<group>"; };
@@ -3004,6 +3006,7 @@
 				E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */,
 				2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */,
 				4836677A0E66A8ADD2D9E89A /* GGConfigCodableTests.swift */,
+				649D5CB480CE056B1C4457D6 /* GGInboxTabsTests.swift */,
 				70BDCB22C2FDC36F6022ADB3 /* GGStackCreateModeTests.swift */,
 				3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */,
 				D3DC5DBEC068EB1BFDBB7F59 /* GitEventFilterTests.swift */,
@@ -6259,6 +6262,7 @@
 				362A966BA9FED1E92B8410CC /* GGInboxHelpersTests.swift in Sources */,
 				490CB816CBED69EC7C886497 /* GGInboxModelsTests.swift in Sources */,
 				16B6CE9E05F7E9B72D191F0C /* GGInboxStoreTests.swift in Sources */,
+				77D7244E04B1949523699AEB /* GGInboxTabsTests.swift in Sources */,
 				6E2597E7FB61606C9A9F04AC /* GGInstallControllerTests.swift in Sources */,
 				40EEB77C4E857AF1FBD7692A /* GGMCPInjectionTests.swift in Sources */,
 				AA9C6D213883037790F00042 /* GGServiceActionsTests.swift in Sources */,

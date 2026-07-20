@@ -57,6 +57,7 @@ struct RepoGroupViewLayoutTests {
             onNewWorktree: {},
             onEditProject: {},
             onRemoveProject: {},
+            onOpenGGInbox: nil,
             onResetSort: {},
             spaces: [],
             activeSpaceId: "",

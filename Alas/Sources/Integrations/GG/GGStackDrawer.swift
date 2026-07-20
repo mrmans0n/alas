@@ -64,6 +64,14 @@ struct GGStackDrawer: View {
             Spacer(minLength: 6)
             Text(model.summaryChip)
                 .font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.color("fg-dim"))
+            Button {
+                appState.openGGInbox(projectId: rps.worktree.projectId)
+            } label: {
+                Icon(name: "tray.full", size: 10, color: theme.color("fg-faint"))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Open gg inbox")
             if isRefreshing {
                 Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 11, height: 11)
             } else {

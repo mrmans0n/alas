@@ -744,6 +744,18 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusGGInbox(worktreeId: String, projectId: String, projectName: String) -> Tab {
+        let state = GGInboxTabState(projectId: projectId, projectName: projectName)
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .ggInbox(state)
+        }
+        let tab = Tab.ggInbox(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusReviewSession(worktreeId: String, record: ReviewSessionRecord) -> Tab {
         let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
         if var file = byWorktree[worktreeId],
