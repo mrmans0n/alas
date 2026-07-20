@@ -44,4 +44,49 @@ struct GGStackActionStateTests {
         state.clearPaused()
         #expect(state.pausedOperation == nil)
     }
+
+    @Test func actionSummaryLifecycle() {
+        let state = GGStackActionState()
+        state.setActionSummary("Synced · 2 pushed")
+        #expect(state.lastActionSummary == "Synced · 2 pushed")
+        // Starting any new action clears the previous summary.
+        _ = state.beginAction(.clean)
+        #expect(state.lastActionSummary == nil)
+    }
+
+    @Test func syncSummaryLineCountsEvents() {
+        let events: [GGSyncEvent] = [
+            .start(totalEntries: 3),
+            .pushDone(position: 1, forced: false),
+            .pushDone(position: 2, forced: false),
+            .prCreated(position: 2, prNumber: 42, prURL: nil, draft: false),
+            .summary,
+        ]
+        #expect(GGStackActionState.syncSummaryLine(from: events) == "Synced · 2 pushed · 1 PR created")
+        // No .summary event (errored/cancelled sync) → no summary line.
+        #expect(GGStackActionState.syncSummaryLine(from: [.pushDone(position: 1, forced: false)]) == nil)
+        // Summary with nothing pushed/created → plain "Synced".
+        #expect(GGStackActionState.syncSummaryLine(from: [.summary]) == "Synced")
+    }
+
+    @Test func landSummaryLine() {
+        #expect(GGStackActionState.landSummaryLine(from: []) == nil)
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1),
+        ]) == "Landed 1 PR")
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1),
+            GGLandedEntry(position: 2, prNumber: 2),
+            GGLandedEntry(position: 3, prNumber: 3),
+        ]) == "Landed 3 PRs")
+        // Queued (GitLab merge-train) entries are reported separately, not as landed.
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1, action: "merged"),
+            GGLandedEntry(position: 2, prNumber: 2, action: "queued"),
+            GGLandedEntry(position: 3, prNumber: 3, action: "already_queued"),
+        ]) == "Landed 1 PR · Queued 2 PRs")
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1, action: "queued"),
+        ]) == "Queued 1 PR")
+    }
 }

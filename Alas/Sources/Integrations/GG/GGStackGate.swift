@@ -14,9 +14,15 @@ enum GGStackGate {
     /// `repo.commondir()` in gg's own source), so resolve the same way
     /// instead of assuming `<repoPath>/.git` is the config's home.
     static func repoHasGGConfig(repoPath: String) -> Bool {
-        guard let commonGitDir = commonGitDir(repoPath: repoPath) else { return false }
-        let path = (commonGitDir as NSString).appendingPathComponent("gg/config.json")
+        guard let path = ggConfigPath(repoPath: repoPath) else { return false }
         return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// Path to the repo's gg config file (`<commondir>/gg/config.json`),
+    /// or nil when the repo path doesn't resolve to a git checkout.
+    static func ggConfigPath(repoPath: String) -> String? {
+        guard let commonGitDir = commonGitDir(repoPath: repoPath) else { return nil }
+        return (commonGitDir as NSString).appendingPathComponent("gg/config.json")
     }
 
     /// True when a git rebase/merge/cherry-pick/revert is in progress in the

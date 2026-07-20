@@ -26,6 +26,7 @@ struct GGStackReadinessModel: Equatable {
     let actions: [Action]
     let progressRows: [String]
     let isPaused: Bool
+    let actionSummary: String?
 
     @MainActor
     static func make(
@@ -78,13 +79,15 @@ struct GGStackReadinessModel: Equatable {
         }
 
         let syncIsRelevant = inFlight == .sync || action.pausedOperation?.pausedBy == .sync
+        let actionSummary = (inFlight == .sync) ? nil : action.lastActionSummary
         return GGStackReadinessModel(
             title: "Stack · \(stack.name)",
             summaryChip: summaryChip,
             facts: facts,
             actions: actions,
             progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
-            isPaused: isPaused
+            isPaused: isPaused,
+            actionSummary: actionSummary
         )
     }
 
@@ -105,7 +108,8 @@ struct GGStackReadinessModel: Equatable {
                        isInFlight: inFlight == .abortOp, emphasis: .normal),
             ],
             progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
-            isPaused: true
+            isPaused: true,
+            actionSummary: nil
         )
     }
 

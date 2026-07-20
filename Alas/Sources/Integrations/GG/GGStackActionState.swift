@@ -28,11 +28,13 @@ final class GGStackActionState {
     private(set) var syncProgress: [GGSyncEvent] = []
     private(set) var lastError: String?
     private(set) var pausedOperation: GGPausedOperation?
+    private(set) var lastActionSummary: String?
 
     /// Returns false when another action is already running (one at a time).
     func beginAction(_ action: GGStackActionKind) -> Bool {
         guard inFlightAction == nil else { return false }
         inFlightAction = action
+        if lastActionSummary != nil { lastActionSummary = nil }
         return true
     }
 
@@ -47,4 +49,32 @@ final class GGStackActionState {
     func clearError() { if lastError != nil { lastError = nil } }
     func setPaused(_ paused: GGPausedOperation) { if pausedOperation != paused { pausedOperation = paused } }
     func clearPaused() { if pausedOperation != nil { pausedOperation = nil } }
+    func setActionSummary(_ message: String) { lastActionSummary = message }
+
+    /// One-line result for a completed sync, from the accumulated stream
+    /// events. Nil unless the terminal `.summary` event arrived (an errored
+    /// or cancelled sync produces no summary line).
+    static func syncSummaryLine(from events: [GGSyncEvent]) -> String? {
+        guard events.contains(.summary) else { return nil }
+        let pushed = events.filter { if case .pushDone = $0 { return true } else { return false } }.count
+        let created = events.filter { if case .prCreated = $0 { return true } else { return false } }.count
+        var parts = ["Synced"]
+        if pushed > 0 { parts.append("\(pushed) pushed") }
+        if created > 0 { parts.append("\(created) PR\(created == 1 ? "" : "s") created") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// One-line result for a completed land. Distinguishes merged PRs from
+    /// entries only queued into a merge train (GitLab auto-merge: gg reports
+    /// `queued`/`already_queued`), so the drawer never claims a queued MR was
+    /// landed. Nil when nothing landed.
+    static func landSummaryLine(from landed: [GGLandedEntry]) -> String? {
+        guard !landed.isEmpty else { return nil }
+        let queued = landed.filter { $0.action == "queued" || $0.action == "already_queued" }.count
+        let merged = landed.count - queued
+        var parts: [String] = []
+        if merged > 0 { parts.append("Landed \(merged) PR\(merged == 1 ? "" : "s")") }
+        if queued > 0 { parts.append("Queued \(queued) PR\(queued == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }

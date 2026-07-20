@@ -13,6 +13,23 @@ enum ACPMCPPreambleMode: Equatable {
     case cli(serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability)
 }
 
+/// gg stacked-diffs context for the session's worktree, rendered as one
+/// extra paragraph of the preamble. `stackName == nil` renders the generic
+/// "this is a gg-enabled worktree" form (repo has gg config but the stack
+/// state wasn't loaded at session start).
+struct GGPreambleStackContext: Equatable {
+    let stackName: String?
+    let entryCount: Int?
+    let ggMCPAttached: Bool
+}
+
+/// What the session's worktree looks like to gg at session-creation time.
+enum GGPreambleSignal: Equatable {
+    case none
+    case generic // gg-enabled repo, stack not loaded
+    case stack(name: String, entryCount: Int) // loaded stack state
+}
+
 /// Builds the one-time, wire-only context preamble injected into the first
 /// prompt of a freshly created ACP session. Modern agent harnesses defer MCP
 /// tools behind tool search, so the model never sees the attached tools
@@ -35,37 +52,45 @@ enum ACPMCPPromptPreamble {
         builtInInjected: Bool,
         isDelegated: Bool,
         userServerNames: [String],
-        mode: ACPMCPPreambleMode = .mcp
+        mode: ACPMCPPreambleMode = .mcp,
+        ggStack: GGPreambleStackContext? = nil
     ) -> String? {
-        guard builtInInjected || !userServerNames.isEmpty else { return nil }
+        guard builtInInjected || !userServerNames.isEmpty || ggStack != nil else { return nil }
         switch mode {
         case .mcp:
             return mcpText(
                 builtInInjected: builtInInjected,
                 isDelegated: isDelegated,
-                userServerNames: userServerNames)
+                userServerNames: userServerNames,
+                ggStack: ggStack)
         case .cli(let serverAvailability):
             return cliText(
                 builtInInjected: builtInInjected,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
-                serverAvailability: serverAvailability)
+                serverAvailability: serverAvailability,
+                ggStack: ggStack)
         }
     }
 
     private static func mcpText(
         builtInInjected: Bool,
         isDelegated: Bool,
-        userServerNames: [String]
+        userServerNames: [String],
+        ggStack: GGPreambleStackContext?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
-        lines.append(
-            "This session runs inside Alas, the user's macOS workspace app. "
-            + "MCP servers are attached to this session. Some agent harnesses "
-            + "defer MCP tools behind tool search, so they may not appear in "
-            + "your direct tool inventory — they ARE available; use your tool "
-            + "discovery/search mechanism to load them.")
+        if builtInInjected || !userServerNames.isEmpty {
+            lines.append(
+                "This session runs inside Alas, the user's macOS workspace app. "
+                + "MCP servers are attached to this session. Some agent harnesses "
+                + "defer MCP tools behind tool search, so they may not appear in "
+                + "your direct tool inventory — they ARE available; use your tool "
+                + "discovery/search mechanism to load them.")
+        } else {
+            lines.append("This session runs inside Alas, the user's macOS workspace app.")
+        }
         if builtInInjected {
             let sessionTools = isDelegated
                 ? "session_list/session_send"
@@ -88,6 +113,9 @@ enum ACPMCPPromptPreamble {
             lines.append("Additional MCP servers attached: "
                 + userServerNames.joined(separator: ", ") + ".")
         }
+        if let ggStack {
+            lines.append(ggStackLine(ggStack, cliMode: false))
+        }
         lines.append("</alas-workspace-context>")
         return lines.joined(separator: "\n")
     }
@@ -96,7 +124,8 @@ enum ACPMCPPromptPreamble {
         builtInInjected: Bool,
         isDelegated: Bool,
         userServerNames: [String],
-        serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability
+        serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability,
+        ggStack: GGPreambleStackContext?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -147,7 +176,31 @@ enum ACPMCPPromptPreamble {
                 break
             }
         }
+        if let ggStack {
+            lines.append(ggStackLine(ggStack, cliMode: true))
+        }
         lines.append("</alas-workspace-context>")
         return lines.joined(separator: "\n")
+    }
+
+    private static func ggStackLine(_ context: GGPreambleStackContext, cliMode: Bool) -> String {
+        var line: String
+        if let name = context.stackName {
+            let entries = context.entryCount.map { " (\($0) entr\($0 == 1 ? "y" : "ies"))" } ?? ""
+            line = "This worktree is the gg stacked-diffs stack \"\(name)\"\(entries)."
+        } else {
+            line = "This worktree belongs to a gg stacked-diffs repo."
+        }
+        line += " Keep one logical change per commit; prefer `gg absorb` or "
+            + "`gg amend` to fold changes into existing stack entries; run "
+            + "`gg sync` to push the stack and create/update its PR chain; "
+            + "never push stack branches directly with `git push`. If a gg "
+            + "operation pauses on conflicts, resolve them, then `gg continue` "
+            + "— or `gg abort` to roll back."
+        if context.ggMCPAttached, !cliMode {
+            line += " The MCP server \"git-gud\" exposes stack tools "
+                + "(list/log/sync/land); prefer them over parsing CLI output."
+        }
+        return line
     }
 }

@@ -147,4 +147,5 @@ struct GGLandResult: Equatable {
 struct GGLandedEntry: Equatable, Decodable {
     let position: Int
     let prNumber: Int?
+    var action: String? = nil
 }

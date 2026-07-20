@@ -33,6 +33,14 @@ final class ACPSessionManager: ObservableObject {
         _ worktreePath: String,
         _ sessionId: ACPSession.ID
     ) async -> BuiltInAlasMCP.Injection?
+    /// Builds the gg-mcp server entry for a worktree path, or nil when gg
+    /// integration is disabled/unavailable for that worktree. Mirrors
+    /// `BuiltInMCPProvider` but is synchronous — gg gating needs no async work.
+    typealias GGMCPProvider = @MainActor (_ worktreePath: String) -> GGMCPInjection.Injection?
+    /// Reports the gg stack state (or lack thereof) for the preamble. Mirrors
+    /// `GGMCPProvider`'s gating so the preamble stays consistent with whether
+    /// gg-mcp was actually attached.
+    typealias GGPreambleProvider = @MainActor (_ worktreePath: String) -> GGPreambleSignal
     /// Extra process env for locally spawned adapters so any agent's shell
     /// can drive the `alas` CLI. Nil (or a nil return) skips injection.
     typealias AlasCLIEnvProvider = @MainActor (
@@ -75,6 +83,13 @@ final class ACPSessionManager: ObservableObject {
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
+    /// Builds the gg-mcp server entry for a worktree path, or nil when gg
+    /// integration is disabled/unavailable. Fetched per attach, mirroring
+    /// `builtInMCPProvider`.
+    private let ggMCPProvider: GGMCPProvider?
+    /// Reports gg stack state for the first-prompt preamble. Fetched per
+    /// attach, mirroring `builtInMCPProvider`.
+    private let ggPreambleProvider: GGPreambleProvider?
     /// Builds extra env for locally spawned adapter processes so the agent's
     /// shell can drive the `alas` CLI. Set post-init (unlike
     /// `builtInMCPProvider`) so AppState can wire it without threading it
@@ -344,7 +359,9 @@ final class ACPSessionManager: ObservableObject {
          connectionFactory: ACPConnectionFactory? = nil,
          brokerServiceFactory: ACPBrokerServiceFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
-         builtInMCPProvider: BuiltInMCPProvider? = nil)
+         builtInMCPProvider: BuiltInMCPProvider? = nil,
+         ggMCPProvider: GGMCPProvider? = nil,
+         ggPreambleProvider: GGPreambleProvider? = nil)
     {
         precondition(store != nil || persistence != nil, "ACPSessionManager requires persistence")
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
@@ -360,6 +377,8 @@ final class ACPSessionManager: ObservableObject {
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.builtInMCPProvider = builtInMCPProvider
+        self.ggMCPProvider = ggMCPProvider
+        self.ggPreambleProvider = ggPreambleProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         self.delegatedMessageNotifier = delegatedMessageNotifier
             ?? DarwinChangeNotifier(worktreeId: worktreeId, channel: "delegated-inbox")
@@ -2522,6 +2541,14 @@ extension ACPSessionManager {
                 plannedWireServers.append(builtInMCP.server)
                 plannedStatuses.append(builtInMCP.status)
             }
+            // gg-mcp composes the same way as the alas built-in: after
+            // planning, local-only, suppressed by a user-configured server
+            // of the same name (checked inside the injection).
+            let ggMCP = remoteHost == nil ? ggMCPProvider?(worktreePath) : nil
+            if let ggMCP {
+                plannedWireServers.append(ggMCP.server)
+                plannedStatuses.append(ggMCP.status)
+            }
             session.mcpAttachmentSummary = .init(
                 statuses: plannedStatuses,
                 configurationFingerprint: mcpPlan.configurationFingerprint
@@ -2869,15 +2896,27 @@ extension ACPSessionManager {
                 } else {
                     userServerNames = wireMCPServers.map(\.name)
                         .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
+                        .filter { !(ggMCP != nil && $0 == GGMCPInjection.serverName) }
                     preambleMode = .mcp
                 }
+                let ggSignal = ggPreambleProvider?(worktreePath) ?? GGPreambleSignal.none
+                let ggStackContext: GGPreambleStackContext? = {
+                    switch ggSignal {
+                    case .none: return nil
+                    case .generic:
+                        return .init(stackName: nil, entryCount: nil, ggMCPAttached: ggMCP != nil)
+                    case let .stack(name, entryCount):
+                        return .init(stackName: name, entryCount: entryCount, ggMCPAttached: ggMCP != nil)
+                    }
+                }()
                 let preamble = ACPMCPPromptPreamble.text(
                     builtInInjected: preambleMode == .mcp ? (builtInMCP != nil) : cliEnvActive,
                     isDelegated: preambleMode == .mcp
                         ? (builtInMCP?.isDelegated == true)
                         : (cliParentSessionId != nil),
                     userServerNames: userServerNames,
-                    mode: preambleMode
+                    mode: preambleMode,
+                    ggStack: ggStackContext
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

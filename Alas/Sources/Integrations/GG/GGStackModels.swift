@@ -19,6 +19,13 @@ extension GGServiceError {
         case .unsupportedSchema(let version): return "Unsupported gg output (schema \(version))."
         }
     }
+
+    /// Canonical exit-code mapping shared by every gg invocation path.
+    /// Callers only invoke this for non-zero exits.
+    static func map(exitCode: Int32, stderr: String) -> GGServiceError {
+        if exitCode == 127 { return .cliMissing }
+        return .commandFailed(stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 }
 
 /// Decoded envelope of `gg ls --json` / `gg log --json`. When the current

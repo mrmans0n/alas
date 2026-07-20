@@ -25,12 +25,8 @@ extension GGCommandRunning {
                     }
                     if result.exitCode == 0 {
                         continuation.finish()
-                    } else if result.exitCode == 127 {
-                        continuation.finish(throwing: GGServiceError.cliMissing)
                     } else {
-                        continuation.finish(throwing: GGServiceError.commandFailed(
-                            stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                        ))
+                        continuation.finish(throwing: GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr))
                     }
                 } catch {
                     continuation.finish(throwing: error)
@@ -131,12 +127,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                         continuation.finish(throwing: ProcessError.timedOut(executable: executable, args: args, seconds: timeout))
                     } else if status == 0 {
                         continuation.finish()
-                    } else if status == 127 {
-                        continuation.finish(throwing: GGServiceError.cliMissing)
                     } else {
-                        continuation.finish(throwing: GGServiceError.commandFailed(
-                            stderr: stderrAccum.text().trimmingCharacters(in: .whitespacesAndNewlines)
-                        ))
+                        continuation.finish(throwing: GGServiceError.map(exitCode: status, stderr: stderrAccum.text()))
                     }
                 }
             }
@@ -310,13 +302,11 @@ struct GGService {
             throw GGServiceError.commandFailed(stderr: String(describing: error))
         }
         guard result.exitCode == 0 else {
-            if result.exitCode == 127 { throw GGServiceError.cliMissing }
+            if result.exitCode == 127 { throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr) }
             if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
                 throw GGServiceError.commandFailed(stderr: message)
             }
-            throw GGServiceError.commandFailed(
-                stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
         }
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8)).stack
     }
@@ -355,7 +345,15 @@ struct GGService {
     func land(worktreePath: String, until: String?) async throws -> GGLandResult {
         let args: [String] = until.map { ["land", "--until", $0, "--json", "--no-clean"] } ?? ["land", "--all", "--json", "--no-clean"]
         let result = try await runChecked(args: args, worktreePath: worktreePath)
-        return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
+        do {
+            return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
+        } catch GGServiceError.malformedOutput {
+            // Exit 0 means the land completed; JSON-shape drift must not
+            // surface as a failure after the PRs were already merged.
+            return GGLandResult(landed: [])
+        }
+        // A real in-band error (GGServiceError.commandFailed thrown by
+        // decode) and anything else still propagate.
     }
 
     func clean(worktreePath: String) async throws {
@@ -393,13 +391,11 @@ struct GGService {
             throw GGServiceError.commandFailed(stderr: String(describing: error))
         }
         guard result.exitCode == 0 else {
-            if result.exitCode == 127 { throw GGServiceError.cliMissing }
+            if result.exitCode == 127 { throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr) }
             if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
                 throw GGServiceError.commandFailed(stderr: message)
             }
-            throw GGServiceError.commandFailed(
-                stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
         }
         return result
     }
@@ -414,12 +410,29 @@ final class GGAvailability {
 
     private(set) var version: String?
     private(set) var hasProbed = false
+    private(set) var ggMCPBinaryPath: String?
 
     var isInstalled: Bool { version != nil }
 
-    func probe(service: GGService = GGService(), force: Bool = false) async {
+    /// Resolves an executable path via `which` on the login-shell PATH.
+    /// Never executes the target binary (gg-mcp is a stdio server that
+    /// would block if run); `which` only resolves.
+    static let defaultWhich: @Sendable (String) async -> String? = { name in
+        guard let result = try? await Process.run(
+            "/usr/bin/env", args: ["which", name], env: Process.gitEnv()
+        ), result.exitCode == 0 else { return nil }
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : path
+    }
+
+    func probe(
+        service: GGService = GGService(),
+        which: @Sendable (String) async -> String? = GGAvailability.defaultWhich,
+        force: Bool = false
+    ) async {
         if hasProbed && !force { return }
         version = await service.probeVersion()
+        ggMCPBinaryPath = version != nil ? await which("gg-mcp") : nil
         hasProbed = true
     }
 }

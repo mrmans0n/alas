@@ -320,6 +320,12 @@ final class RightPaneStore {
         states.values.first { $0.pendingMerge != nil }
     }
 
+    /// Loaded stack state for a worktree path, if its pane has been
+    /// activated. Used by the ACP preamble at session creation.
+    func stackForWorktreePath(_ path: String) -> GGStack? {
+        states.values.first { $0.worktree.path.path == path }?.ggStack
+    }
+
     /// The first cached state with a pending gg-land confirmation, if any.
     /// Mirrors `stateWithPendingMerge` for the same reason: the confirmation
     /// dialog (see RootView) must resolve its owning state through this

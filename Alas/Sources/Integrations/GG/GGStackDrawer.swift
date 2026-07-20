@@ -6,6 +6,7 @@ struct GGStackDrawer: View {
 
     @Environment(\.theme) private var theme
     @State private var expanded = false
+    @State private var isRefreshing = false
 
     private var model: GGStackReadinessModel? {
         if let stack = rps.ggStack {
@@ -63,11 +64,46 @@ struct GGStackDrawer: View {
             Spacer(minLength: 6)
             Text(model.summaryChip)
                 .font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.color("fg-dim"))
+            if isRefreshing {
+                Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 11, height: 11)
+            } else {
+                Button {
+                    isRefreshing = true
+                    let task = rps.reevaluateGGGate()
+                    Task { @MainActor in
+                        await task.value
+                        isRefreshing = false
+                    }
+                } label: {
+                    Icon(name: "arrow.clockwise", size: 10, color: theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .disabled(rps.ggActionState.inFlightAction != nil)
+                .help("Refresh stack and PR status")
+            }
             Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture { expanded.toggle() }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.return) {
+            expanded.toggle()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            expanded.toggle()
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.title)
+        .accessibilityHint(expanded ? "Collapse stack status" : "Expand stack status")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            expanded.toggle()
+        }
     }
 
     @ViewBuilder
@@ -86,6 +122,9 @@ struct GGStackDrawer: View {
             } else if !model.progressRows.isEmpty {
                 progressList(model)
             } else {
+                if let summary = model.actionSummary {
+                    Text(summary).font(.system(size: 11)).foregroundColor(theme.color("add"))
+                }
                 if let err = rps.ggActionState.lastError {
                     Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
@@ -122,8 +161,10 @@ struct GGStackDrawer: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
+                    .focusEffectDisabled()
                     .disabled(!action.isEnabled)
                     .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
+                    .help(action.title)
                 }
             }
         }

@@ -43,6 +43,12 @@ struct GGActionEventsTests {
         ])
     }
 
+    @Test func decodesLandResultActions() throws {
+        let json = #"{"version":1,"land":{"stack":"s","base":"main","landed":[{"position":1,"pr_number":42,"action":"merged"},{"position":2,"pr_number":43,"action":"queued"}]}}"#
+        let result = try GGLandResult.decode(fromJSON: Data(json.utf8))
+        #expect(result.landed.map(\.action) == ["merged", "queued"])
+    }
+
     @Test func decodesLandResultWithEmptyLanded() throws {
         let json = #"{"version":1,"land":{"stack":"s","base":"main","landed":[]}}"#
         #expect(try GGLandResult.decode(fromJSON: Data(json.utf8)).landed.isEmpty)

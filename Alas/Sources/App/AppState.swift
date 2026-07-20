@@ -740,6 +740,13 @@ final class AppState {
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
+        // Stack badges are keyed by worktree path; drop entries for
+        // worktrees that no longer exist so deleted stacks don't keep a
+        // stale ▲ badge forever.
+        let livePaths = Set(projectsManager.projects.flatMap { project in
+            projectsManager.worktrees(projectId: project.id).map(\.path.path)
+        })
+        GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
         if reconcileMissingSpaceProjects() {
             saveSpaces()
         }
@@ -4823,6 +4830,41 @@ final class AppState {
                     sessionId: sessionId,
                     parentSessionId: parentSessionId
                 )
+            },
+            ggMCPProvider: { [weak self] worktreePath in
+                guard let self,
+                      let project = self.projects.first(where: { $0.id == worktree.projectId }),
+                      self.config.changes.stackedDiffsEnabled,
+                      GGAvailability.shared.isInstalled,
+                      GGStackGate.projectEnabled(
+                          masterEnabled: true, ggInstalled: true,
+                          mode: project.ggMode, repoPath: project.path,
+                          isRemoteProject: project.host != nil
+                      ),
+                      GGStackGate.repoHasGGConfig(repoPath: worktreePath)
+                else { return nil }
+                return GGMCPInjection.injection(
+                    gatePassed: true,
+                    binaryPath: GGAvailability.shared.ggMCPBinaryPath,
+                    configuredServers: project.mcpServers,
+                    worktreePath: worktreePath
+                )
+            },
+            ggPreambleProvider: { [weak self] worktreePath in
+                guard let self,
+                      let project = self.projects.first(where: { $0.id == worktree.projectId }),
+                      self.config.changes.stackedDiffsEnabled,
+                      GGAvailability.shared.isInstalled,
+                      GGStackGate.projectEnabled(
+                          masterEnabled: true, ggInstalled: true,
+                          mode: project.ggMode, repoPath: project.path,
+                          isRemoteProject: project.host != nil
+                      )
+                else { return .none }
+                if let stack = self.rightPaneStore.stackForWorktreePath(worktreePath) {
+                    return .stack(name: stack.name, entryCount: stack.totalCommits)
+                }
+                return GGStackGate.repoHasGGConfig(repoPath: worktreePath) ? .generic : .none
             }
         )
         mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in

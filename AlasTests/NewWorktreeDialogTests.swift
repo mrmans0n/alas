@@ -321,4 +321,14 @@ struct NewWorktreeDialogTests {
         #expect(result.launchMode == .terminal)
         #expect(result.persistableLaunchMode == .terminal)
     }
+
+    @Test func stackModeSurvivesOnlyWhenAvailabilityEnabled() {
+        // Stays on when the new project still offers gg stacks.
+        #expect(NewWorktreeDialog.stackModeSurvives(true, availability: .enabled(username: "nacho")) == true)
+        // Clears when the toggle was on but availability dropped to disabled/hidden.
+        #expect(NewWorktreeDialog.stackModeSurvives(true, availability: .disabled(hint: "Set branch_username")) == false)
+        #expect(NewWorktreeDialog.stackModeSurvives(true, availability: .hidden) == false)
+        // Off stays off regardless of availability.
+        #expect(NewWorktreeDialog.stackModeSurvives(false, availability: .enabled(username: "nacho")) == false)
+    }
 }
