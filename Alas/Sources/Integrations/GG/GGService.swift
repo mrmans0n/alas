@@ -311,6 +311,14 @@ struct GGService {
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8)).stack
     }
 
+    /// Cross-stack triage snapshot from `gg inbox --json`. Runs at the
+    /// project root — one forge round-trip per project, never per worktree.
+    /// Per-stack failures arrive in-band as `stackErrors`, not as thrown errors.
+    func inbox(repoPath: String) async throws -> GGInboxSnapshot {
+        let result = try await runChecked(args: ["inbox", "--json"], worktreePath: repoPath)
+        return try GGInboxSnapshot.decode(fromJSON: Data(result.stdout.utf8))
+    }
+
     /// Streams sync events when `gg sync --jsonl` is supported; older gg
     /// builds fall back to `--json` and yield a summary event on success.
     func sync(worktreePath: String) -> AsyncThrowingStream<GGSyncEvent, Error> {
