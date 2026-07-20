@@ -461,14 +461,14 @@ final class AppState {
     @ObservationIgnored
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
     @ObservationIgnored
-    private let projectGitWatcherFactory: (URL) -> ProjectGitWatcher
+    private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
-        projectGitWatcherFactory: @escaping (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) }
+        projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) }
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
