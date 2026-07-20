@@ -25,7 +25,7 @@ enum GGInboxWorktreeResolver {
         if let username {
             return worktrees.first(where: { $0.branch == "\(username)/\(stackName)" })?.id
         }
-        return worktrees.first(where: { $0.branch.hasSuffix("/\(stackName)") })?.id
+        return worktrees.first(where: { stackNameComponent(ofBranch: $0.branch) == stackName })?.id
     }
 
     /// True when more than one local worktree branch matches gg's
@@ -41,7 +41,19 @@ enum GGInboxWorktreeResolver {
         stackName: String,
         worktrees: [(id: String, branch: String)]
     ) -> Bool {
-        worktrees.filter { $0.branch.hasSuffix("/\(stackName)") }.count > 1
+        worktrees.filter { stackNameComponent(ofBranch: $0.branch) == stackName }.count > 1
+    }
+
+    /// Everything after the FIRST `/` in a gg-convention branch
+    /// (`<username>/<stackName>`). gg stack names can themselves contain
+    /// slashes (path-style names), so only the first slash separates the
+    /// username — a suffix match on the whole branch string would falsely
+    /// conflate an unrelated nested stack (e.g. `feature/auth`) with a
+    /// top-level stack of a shorter name (`auth`). Nil for a branch with no
+    /// slash at all (not gg-convention shaped).
+    private static func stackNameComponent(ofBranch branch: String) -> String? {
+        guard let slashIndex = branch.firstIndex(of: "/") else { return nil }
+        return String(branch[branch.index(after: slashIndex)...])
     }
 }
 

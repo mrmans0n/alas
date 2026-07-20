@@ -62,6 +62,15 @@ struct GGInboxHelpersTests {
         #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: "bob", worktrees: worktrees) == "w1")
     }
 
+    @Test func doesNotConflateNestedStackNameWithSuffixMatch() {
+        // "alice/feature/auth" is a DIFFERENT stack ("feature/auth"), not
+        // related to stack "auth" — despite ending in the raw substring
+        // "/auth". Must not be treated as a same-name collision.
+        let worktrees = [(id: "w1", branch: "bob/auth"), (id: "w2", branch: "alice/feature/auth")]
+        #expect(!GGInboxWorktreeResolver.hasAmbiguousLocalOwners(stackName: "auth", worktrees: worktrees))
+        #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: "bob", worktrees: worktrees) == "w1")
+    }
+
     @Test func updatedLabel() {
         let now = Date(timeIntervalSince1970: 100_000)
         #expect(GGInboxTabView.updatedLabel(fetchedAt: nil, now: now) == nil)
