@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-20
+
+### ✨ Features
+
+- Add the `git-gud` stacked-diffs inbox triage tab and harden the phase 4 flow (#860).
+
+### 🐛 Fixes
+
+- Avoid full-row comparisons in review rendering (#861).
+- Expand row pill layout in diff views (#862).
+
 ## [0.12.0] - 2026-07-20
 
 ### ✨ Features
