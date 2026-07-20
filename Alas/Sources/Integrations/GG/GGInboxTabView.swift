@@ -26,6 +26,22 @@ enum GGInboxWorktreeResolver {
         }
         return worktrees.first(where: { $0.branch.hasSuffix("/\(stackName)") })?.id
     }
+
+    /// Stack names gg reports more than once across the whole snapshot —
+    /// e.g. two locally-inferred usernames both have a same-named stack
+    /// checked out. gg's JSON carries only `stack_name` per entry, no owning
+    /// username or branch, so a duplicated name can't be safely attributed
+    /// to any one worktree. Rows with an ambiguous name are dimmed rather
+    /// than risk navigating to the wrong person's worktree.
+    static func ambiguousStackNames(in buckets: GGInboxBuckets) -> Set<String> {
+        var counts: [String: Int] = [:]
+        for bucket in GGInboxBucket.allCases {
+            for entry in bucket.entries(in: buckets) {
+                counts[entry.stackName, default: 0] += 1
+            }
+        }
+        return Set(counts.filter { $0.value > 1 }.map(\.key))
+    }
 }
 
 /// Project-scoped triage tab over `gg inbox`. Navigation-first: rows focus
@@ -257,6 +273,10 @@ struct GGInboxTabView: View {
 
     private func resolveWorktreeId(_ entry: GGInboxEntry) -> String? {
         guard let project else { return nil }
+        if let snapshot = inboxState.snapshot,
+           GGInboxWorktreeResolver.ambiguousStackNames(in: snapshot.buckets).contains(entry.stackName) {
+            return nil
+        }
         let worktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
             .map { (id: $0.id, branch: $0.branch) }
         return GGInboxWorktreeResolver.worktreeId(

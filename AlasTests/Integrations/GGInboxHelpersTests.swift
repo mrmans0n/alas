@@ -32,6 +32,34 @@ struct GGInboxHelpersTests {
         #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: nil, worktrees: worktrees) == nil)
     }
 
+    @Test func ambiguousStackNamesDetectsDuplicatesAcrossBuckets() throws {
+        let json = #"""
+        {"version":1,"total_items":2,
+         "buckets":{
+           "ready_to_land":[{"stack_name":"auth","position":1,"sha":"aaa","title":"Alice's auth","pr_number":1,"pr_url":"https://example.test/1"}],
+           "changes_requested":[],
+           "blocked_on_ci":[],
+           "awaiting_review":[{"stack_name":"auth","position":1,"sha":"bbb","title":"Bob's auth","pr_number":2,"pr_url":"https://example.test/2"}],
+           "behind_base":[],
+           "draft":[{"stack_name":"perf","position":1,"sha":"ccc","title":"Unique stack","pr_number":3,"pr_url":"https://example.test/3"}]},
+         "stack_errors":[]}
+        """#
+        let snapshot = try GGInboxSnapshot.decode(fromJSON: Data(json.utf8))
+        #expect(GGInboxWorktreeResolver.ambiguousStackNames(in: snapshot.buckets) == ["auth"])
+    }
+
+    @Test func ambiguousStackNamesEmptyWhenAllUnique() throws {
+        let json = #"""
+        {"version":1,"total_items":1,
+         "buckets":{
+           "ready_to_land":[{"stack_name":"auth","position":1,"sha":"aaa","title":"t","pr_number":1,"pr_url":"https://example.test/1"}],
+           "changes_requested":[],"blocked_on_ci":[],"awaiting_review":[],"behind_base":[],"draft":[]},
+         "stack_errors":[]}
+        """#
+        let snapshot = try GGInboxSnapshot.decode(fromJSON: Data(json.utf8))
+        #expect(GGInboxWorktreeResolver.ambiguousStackNames(in: snapshot.buckets).isEmpty)
+    }
+
     @Test func updatedLabel() {
         let now = Date(timeIntervalSince1970: 100_000)
         #expect(GGInboxTabView.updatedLabel(fetchedAt: nil, now: now) == nil)
