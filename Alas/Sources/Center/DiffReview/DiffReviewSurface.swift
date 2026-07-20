@@ -237,20 +237,18 @@ struct DiffReviewSurface: View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
-                    let renderEligibleFiles = session.files.filter { renderEligibleIDs.contains($0.id) }
-                    ForEach(Array(renderEligibleFiles.enumerated()), id: \.element.id) { index, file in
+                    let renderRows = DiffReviewRenderEligibility.renderRows(ordered: session.files.map(\.id))
+                    ForEach(renderRows) { row in
+                        let file = session.files[row.index]
                         Color.clear
                             .frame(height: 1)
-                            .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))
+                            .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: row.id))
                             .accessibilityHidden(true)
                         fileSection(file)
-                            .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: file.summary.id))
-                        if index < renderEligibleFiles.index(before: renderEligibleFiles.endIndex) {
-                            Color.clear
-                                .frame(height: 14)
-                                .accessibilityHidden(true)
-                        }
+                            .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: row.id))
+                        Color.clear
+                            .frame(height: row.showsBottomSpacing ? 14 : 0)
+                            .accessibilityHidden(true)
                     }
                 }
                 .padding(16)

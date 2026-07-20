@@ -17,5 +17,19 @@ struct DiffReviewRenderEligibilityTests {
 
     @Test func preservesEmptySessions() {
         #expect(DiffReviewRenderEligibility.fileIDs(ordered: []).isEmpty)
+        #expect(DiffReviewRenderEligibility.renderRows(ordered: []).isEmpty)
+    }
+
+    @Test func renderRowsContainOnlyIndicesAndStableIDs() {
+        let files = [
+            id("A.swift"),
+            id("B.swift"),
+            id("C.swift"),
+        ]
+
+        let rows = DiffReviewRenderEligibility.renderRows(ordered: files)
+
+        #expect(rows.map(\.index) == [0, 1, 2])
+        #expect(rows.map(\.id) == files)
     }
 }
