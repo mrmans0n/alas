@@ -41,4 +41,22 @@ struct GGConfigReaderTests {
     @Test func composesStackBranch() {
         #expect(GGConfigReader.composeStackBranch(username: "nacho", stackName: "auth-flow") == "nacho/auth-flow")
     }
+
+    @Test func readsRepoBase() throws {
+        let repo = try makeRepo(configJSON: #"{"defaults":{"base":"release/1.2"}}"#)
+        #expect(GGConfigReader.defaultBase(repoPath: repo, globalConfigPath: nil) == "release/1.2")
+    }
+
+    @Test func baseFallsBackToGlobal() throws {
+        let repo = try makeRepo(configJSON: #"{"defaults":{}}"#)
+        let global = try makeGlobal(configJSON: #"{"defaults":{"base":"develop"}}"#)
+        #expect(GGConfigReader.defaultBase(repoPath: repo, globalConfigPath: global) == "develop")
+    }
+
+    @Test func baseNilWhenAbsentOrGarbage() throws {
+        let noKey = try makeRepo(configJSON: #"{"defaults":{}}"#)
+        #expect(GGConfigReader.defaultBase(repoPath: noKey, globalConfigPath: nil) == nil)
+        let garbage = try makeRepo(configJSON: "not json")
+        #expect(GGConfigReader.defaultBase(repoPath: garbage, globalConfigPath: nil) == nil)
+    }
 }

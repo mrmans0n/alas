@@ -58,6 +58,11 @@ struct NewWorktreeDialog: View {
                         isLoading: isLoadingBranches,
                         errorMessage: branchLoadError
                     )
+                    .disabled(stackPinnedBase != nil)
+                }
+                if stackPinnedBase != nil {
+                    Text("Pinned to gg's stack base").font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
                 }
                 DialogField(label: createAsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
@@ -136,13 +141,15 @@ struct NewWorktreeDialog: View {
         .onChange(of: projectId) { _, _ in
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
+            if let pinned = stackPinnedBase { base = pinned }
         }
         .onChange(of: branch) { _, _ in
             createErrorMessage = nil
         }
         .onChange(of: createAsGGStack) { _, isOn in
-            if isOn, branch == state.config.worktrees.branchPrefix {
-                branch = ""
+            if isOn {
+                if branch == state.config.worktrees.branchPrefix { branch = "" }
+                if let pinned = stackPinnedBase { base = pinned }
             }
         }
     }
@@ -190,6 +197,18 @@ struct NewWorktreeDialog: View {
             return GGConfigReader.composeStackBranch(username: username, stackName: branch)
         }
         return branch
+    }
+
+    /// When creating a gg stack, the worktree base is pinned to gg's
+    /// `defaults.base` so the branch is cut from the commit gg will treat as
+    /// the stack base — otherwise a non-default pick would leave gg
+    /// syncing/PR-ing against the repo default. Nil when create-as-stack is
+    /// off/unavailable or gg config records no base (then the picker stays free).
+    private var stackPinnedBase: String? {
+        guard createAsGGStack, case .enabled = ggStackAvailability,
+              let project = state.projects.first(where: { $0.id == projectId })
+        else { return nil }
+        return GGConfigReader.defaultBase(repoPath: project.path)
     }
 
     private var subtitleText: String {
@@ -244,7 +263,7 @@ struct NewWorktreeDialog: View {
                     availableBranches: discovered,
                     configuredDefault: state.config.worktrees.baseBranch
                 )
-                if base == baseBeforeLoad {
+                if base == baseBeforeLoad, stackPinnedBase == nil {
                     base = preferred
                 }
             } catch {

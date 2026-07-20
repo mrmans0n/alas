@@ -17,11 +17,29 @@ enum GGConfigReader {
         globalConfigPath: String? = GGConfigReader.defaultGlobalConfigPath
     ) -> String? {
         if let repoConfig = GGStackGate.ggConfigPath(repoPath: repoPath),
-           let username = readBranchUsername(atPath: repoConfig) {
+           let username = readDefault(key: "branch_username", atPath: repoConfig) {
             return username
         }
-        if let globalConfigPath, let username = readBranchUsername(atPath: globalConfigPath) {
+        if let globalConfigPath, let username = readDefault(key: "branch_username", atPath: globalConfigPath) {
             return username
+        }
+        return nil
+    }
+
+    /// `defaults.base` from the repo's gg config, falling back to the global
+    /// config. Nil when neither sets it (or files are unreadable). gg records
+    /// this on init; when present it is the commit new stacks are expected to
+    /// track, so create-as-stack pins the worktree base to it.
+    static func defaultBase(
+        repoPath: String,
+        globalConfigPath: String? = GGConfigReader.defaultGlobalConfigPath
+    ) -> String? {
+        if let repoConfig = GGStackGate.ggConfigPath(repoPath: repoPath),
+           let base = readDefault(key: "base", atPath: repoConfig) {
+            return base
+        }
+        if let globalConfigPath, let base = readDefault(key: "base", atPath: globalConfigPath) {
+            return base
         }
         return nil
     }
@@ -31,13 +49,13 @@ enum GGConfigReader {
         "\(username)/\(stackName)"
     }
 
-    private static func readBranchUsername(atPath path: String) -> String? {
+    private static func readDefault(key: String, atPath path: String) -> String? {
         guard let data = FileManager.default.contents(atPath: path),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let defaults = object["defaults"] as? [String: Any],
-              let username = defaults["branch_username"] as? String,
-              !username.isEmpty
+              let value = defaults[key] as? String,
+              !value.isEmpty
         else { return nil }
-        return username
+        return value
     }
 }
