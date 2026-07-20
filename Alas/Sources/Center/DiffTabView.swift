@@ -679,7 +679,8 @@ struct DiffTabView: View {
                                 id: segment.id,
                                 header: group.header,
                                 sourceHunk: group.sourceHunk,
-                                rows: segment.rows
+                                rows: segment.rows,
+                                rowsSignature: segment.rowsSignature
                             ),
                             expandedCollapsedRowIDs: reviewExpandedCollapsedRowIDs,
                             layoutMode: diffPreferences.layoutMode.wrappedValue,

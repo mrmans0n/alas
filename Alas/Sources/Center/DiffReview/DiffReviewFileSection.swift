@@ -690,7 +690,8 @@ struct DiffReviewFileSection: View {
                                         id: "\(segment.id)-\(rowSeg.id)",
                                         header: displayGroup.header,
                                         sourceHunk: displayGroup.sourceHunk,
-                                        rows: rowSeg.rows
+                                        rows: rowSeg.rows,
+                                        rowsSignature: rowSeg.rowsSignature
                                     ),
                                     expandedCollapsedRowIDs: expandedCollapsedRowIDs,
                                     layoutMode: layoutMode,
@@ -1579,8 +1580,30 @@ enum ReviewDraftCommentRowSegmentation {
     struct Segment: Equatable, Identifiable {
         let id: String
         let rows: [DiffDisplayRow]
+        let rowsSignature: DiffDisplayRowsSignature
         let draftComments: [ReviewDraftComment]
         let showsComposer: Bool
+
+        init(
+            id: String,
+            rows: [DiffDisplayRow],
+            rowsSignature: DiffDisplayRowsSignature? = nil,
+            draftComments: [ReviewDraftComment],
+            showsComposer: Bool
+        ) {
+            self.id = id
+            self.rows = rows
+            self.rowsSignature = rowsSignature ?? DiffDisplayRowsSignature(rows)
+            self.draftComments = draftComments
+            self.showsComposer = showsComposer
+        }
+
+        static func == (lhs: Segment, rhs: Segment) -> Bool {
+            lhs.id == rhs.id
+                && lhs.rowsSignature == rhs.rowsSignature
+                && lhs.draftComments == rhs.draftComments
+                && lhs.showsComposer == rhs.showsComposer
+        }
     }
 
     struct Result: Equatable {

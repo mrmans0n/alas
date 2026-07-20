@@ -2133,7 +2133,19 @@ let second = true
         let expandedIDs = DiffCollapsedContextController.toggled(group, expandedIDs: [])
         #expect(collapsedIDs.isSubset(of: expandedIDs))
         #expect(DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedIDs))
-        #expect(DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: expandedIDs).count > group.rows.count)
+        let collapsedSnapshot = DiffPaneRowProjection.visibleRowsSnapshot(
+            in: group,
+            expandedCollapsedRowIDs: []
+        )
+        #expect(collapsedSnapshot.rows == group.rows)
+        #expect(collapsedSnapshot.signature == group.rowsSignature)
+
+        let expandedSnapshot = DiffPaneRowProjection.visibleRowsSnapshot(
+            in: group,
+            expandedCollapsedRowIDs: expandedIDs
+        )
+        #expect(expandedSnapshot.rows.count > group.rows.count)
+        #expect(expandedSnapshot.signature != group.rowsSignature)
 
         let collapsedAgain = DiffCollapsedContextController.toggled(group, expandedIDs: expandedIDs)
         #expect(collapsedAgain.intersection(collapsedIDs).isEmpty)
@@ -4184,6 +4196,37 @@ let second = true
         nsView.layout()
 
         #expect(nsView.intrinsicContentSize.height > 0)
+    }
+
+    @Test @MainActor func unchangedContainerUpdateRefreshesContextExpansionHandler() {
+        let group = expandableContextGroup(boundary: .above, collapsedLineCount: 9)
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let nsView = DiffPaneTextDocumentContainerView()
+        var firstHandlerInvocations = 0
+        var secondHandlerInvocations = 0
+
+        func update(handler: @escaping DiffContextExpansionHandler) {
+            nsView.update(
+                group: group,
+                expandedCollapsedRowIDs: [],
+                layoutMode: .split,
+                wrapLines: false,
+                showWhitespace: false,
+                fileExtension: "swift",
+                font: font,
+                theme: theme,
+                lspContext: nil,
+                onContextExpansion: handler
+            )
+        }
+
+        update { _, _, _ in firstHandlerInvocations += 1 }
+        update { _, _, _ in secondHandlerInvocations += 1 }
+        nsView.invokeExpansionForTesting(row: 0, side: .old)
+
+        #expect(firstHandlerInvocations == 0)
+        #expect(secondHandlerInvocations == 1)
     }
 
     @Test func containerViewLayoutDoesNotInvalidateAncestorConstraints() throws {

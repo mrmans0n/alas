@@ -60,9 +60,34 @@ struct DiffReviewRenderContext: Equatable {
     struct Segment: Equatable, Identifiable {
         let id: String
         let rows: [DiffDisplayRow]
+        let rowsSignature: DiffDisplayRowsSignature
         let draftComments: [ReviewDraftComment]
         let showsComposer: Bool
         let blocks: [DiffInlineCommentLayout.Block]
+
+        init(
+            id: String,
+            rows: [DiffDisplayRow],
+            rowsSignature: DiffDisplayRowsSignature? = nil,
+            draftComments: [ReviewDraftComment],
+            showsComposer: Bool,
+            blocks: [DiffInlineCommentLayout.Block]
+        ) {
+            self.id = id
+            self.rows = rows
+            self.rowsSignature = rowsSignature ?? DiffDisplayRowsSignature(rows)
+            self.draftComments = draftComments
+            self.showsComposer = showsComposer
+            self.blocks = blocks
+        }
+
+        static func == (lhs: Segment, rhs: Segment) -> Bool {
+            lhs.id == rhs.id
+                && lhs.rowsSignature == rhs.rowsSignature
+                && lhs.draftComments == rhs.draftComments
+                && lhs.showsComposer == rhs.showsComposer
+                && lhs.blocks == rhs.blocks
+        }
     }
 
     let groups: [Group]
@@ -123,10 +148,14 @@ enum DiffReviewRenderContextBuilder {
                 return DiffReviewRenderContext.Segment(
                     id: segment.id,
                     rows: segment.rows,
+                    rowsSignature: segment.rowsSignature,
                     draftComments: segment.draftComments,
                     showsComposer: segment.showsComposer,
                     blocks: DiffInlineCommentLayout.blocks(
-                        visibleRows: segment.rows,
+                        visibleRows: DiffDisplayRowsSnapshot(
+                            rows: segment.rows,
+                            signature: segment.rowsSignature
+                        ),
                         threads: matchedThreads,
                         annotations: matchedAnnotations
                     )

@@ -45,16 +45,35 @@ enum DiffCollapsedContextController {
 }
 
 enum DiffPaneRowProjection {
+    static func visibleRowsSnapshot(
+        in group: DiffDisplayGroup,
+        expandedCollapsedRowIDs: Set<String>
+    ) -> DiffDisplayRowsSnapshot {
+        guard !expandedCollapsedRowIDs.isEmpty,
+              group.rows.contains(where: { $0.kind == .collapsed && expandedCollapsedRowIDs.contains($0.id) })
+        else {
+            return DiffDisplayRowsSnapshot(rows: group.rows, signature: group.rowsSignature)
+        }
+
+        var rows: [DiffDisplayRow] = []
+        rows.reserveCapacity(group.rows.count)
+        for row in group.rows {
+            rows.append(row)
+            if row.kind == .collapsed, expandedCollapsedRowIDs.contains(row.id) {
+                rows.append(contentsOf: row.collapsedRows)
+            }
+        }
+        return DiffDisplayRowsSnapshot(rows: rows)
+    }
+
     static func visibleRows(
         in group: DiffDisplayGroup,
         expandedCollapsedRowIDs: Set<String>
     ) -> [DiffDisplayRow] {
-        group.rows.flatMap { row in
-            guard row.kind == .collapsed, expandedCollapsedRowIDs.contains(row.id) else {
-                return [row]
-            }
-            return [row] + row.collapsedRows
-        }
+        visibleRowsSnapshot(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        ).rows
     }
 
     static func stackedLines(for rows: [DiffDisplayRow]) -> [(row: DiffDisplayRow, line: DiffDisplayLine)] {
@@ -421,14 +440,15 @@ struct DiffPaneView: View {
     }
 
     private func hunk(_ group: DiffDisplayGroup, fusion: DiffPaneHunkFusionState) -> some View {
-        let visibleRows = DiffPaneRowProjection.visibleRows(
+        let visibleRowsSnapshot = DiffPaneRowProjection.visibleRowsSnapshot(
             in: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
         )
+        let visibleRows = visibleRowsSnapshot.rows
         let hunkThreads = threadsForVisibleRows(visibleRows)
         let hunkAnnotations = annotationsForVisibleRows(visibleRows)
         let blocks = DiffInlineCommentLayout.blocks(
-            visibleRows: visibleRows,
+            visibleRows: visibleRowsSnapshot,
             threads: hunkThreads,
             annotations: hunkAnnotations
         )
@@ -440,6 +460,7 @@ struct DiffPaneView: View {
                 case .rows(let segment):
                     DiffPaneSegmentView(
                         rows: segment.rows,
+                        rowsSignature: segment.rowsSignature,
                         layoutMode: layoutMode,
                         wrapLines: wrapLines,
                         showWhitespace: showWhitespace,

@@ -66,6 +66,28 @@ struct DiffDisplaySignatureTests {
         #expect(a.contentHash != b.contentHash)
     }
 
+    @Test func rowAndCollectionRevisionsMatchEquivalentRebuilds() {
+        let lhs = model(lines: sampleLines()).groups[0].rows
+        let rhs = model(lines: sampleLines()).groups[0].rows
+
+        #expect(lhs == rhs)
+        #expect(DiffDisplayRowsSignature(lhs) == DiffDisplayRowsSignature(rhs))
+        #expect(DiffInlineCommentLayout.RowSegment(id: "segment", rows: lhs)
+            == DiffInlineCommentLayout.RowSegment(id: "segment", rows: rhs))
+    }
+
+    @Test func rowAndCollectionRevisionsDetectTextChanges() {
+        var changed = sampleLines()
+        changed[0] = .init(kind: .context, text: "old/new 4 EDITED", oldNumber: 4, newNumber: 4)
+        let lhs = model(lines: sampleLines()).groups[0].rows
+        let rhs = model(lines: changed).groups[0].rows
+
+        #expect(lhs != rhs)
+        #expect(DiffDisplayRowsSignature(lhs) != DiffDisplayRowsSignature(rhs))
+        #expect(DiffInlineCommentLayout.RowSegment(id: "segment", rows: lhs)
+            != DiffInlineCommentLayout.RowSegment(id: "segment", rows: rhs))
+    }
+
     // MARK: - structuralHash
 
     @Test func structuralHashEqualForIdenticalModels() {

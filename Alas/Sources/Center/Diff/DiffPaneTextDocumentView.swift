@@ -181,7 +181,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
 }
 
 struct DiffPaneSegmentView: NSViewRepresentable {
-    let rows: [DiffDisplayRow]
+    let rowsSnapshot: DiffDisplayRowsSnapshot
     let layoutMode: DiffLayoutMode
     let wrapLines: Bool
     let showWhitespace: Bool
@@ -195,13 +195,45 @@ struct DiffPaneSegmentView: NSViewRepresentable {
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     let onContextExpansion: DiffContextExpansionHandler
 
+    init(
+        rows: [DiffDisplayRow],
+        rowsSignature: DiffDisplayRowsSignature? = nil,
+        layoutMode: DiffLayoutMode,
+        wrapLines: Bool,
+        showWhitespace: Bool,
+        fileExtension: String,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?,
+        activeCommentHighlight: DiffReviewCommentHighlight? = nil,
+        allowsReviewLineSelection: Bool = true,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
+        onContextExpansion: @escaping DiffContextExpansionHandler
+    ) {
+        self.rowsSnapshot = DiffDisplayRowsSnapshot(rows: rows, signature: rowsSignature)
+        self.layoutMode = layoutMode
+        self.wrapLines = wrapLines
+        self.showWhitespace = showWhitespace
+        self.fileExtension = fileExtension
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.theme = theme
+        self.lspContext = lspContext
+        self.activeCommentHighlight = activeCommentHighlight
+        self.allowsReviewLineSelection = allowsReviewLineSelection
+        self.onReviewLineSelected = onReviewLineSelected
+        self.onContextExpansion = onContextExpansion
+    }
+
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
         DiffPaneTextDocumentContainerView()
     }
 
     func updateNSView(_ nsView: DiffPaneTextDocumentContainerView, context: Context) {
         nsView.update(
-            rows: rows,
+            rows: rowsSnapshot.rows,
+            rowsSignature: rowsSnapshot.signature,
             layoutMode: layoutMode,
             wrapLines: wrapLines,
             showWhitespace: showWhitespace,
@@ -212,7 +244,7 @@ struct DiffPaneSegmentView: NSViewRepresentable {
             activeCommentHighlight: activeCommentHighlight,
             allowsReviewLineSelection: allowsReviewLineSelection,
             onReviewLineSelected: { anchor in
-                onReviewLineSelected(ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(anchor, in: rows))
+                onReviewLineSelected(ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(anchor, in: rowsSnapshot.rows))
             },
             onContextExpansion: onContextExpansion
         )
@@ -236,6 +268,18 @@ final class DiffPaneTextDocumentContainerView: NSView {
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
     }
+
+    #if DEBUG
+    func invokeExpansionForTesting(row: Int, side: DiffLineSide, optionKey: Bool = false) {
+        let pane = switch side {
+        case .old: oldPane
+        case .new: newPane
+        case .paired: stackedPane
+        }
+        (pane.verticalRulerView as? DiffPaneLineNumberRulerView)?
+            .invokeExpansionForTesting(row: row, optionKey: optionKey)
+    }
+    #endif
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -279,7 +323,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
         stackedPane.activeCommentHighlight = activeCommentHighlight
 
         let signature = UpdateSignature(
-            group: group,
+            groupID: group.id,
+            groupContentHash: group.contentHash,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs,
             layoutMode: layoutMode,
             wrapLines: wrapLines,
@@ -451,6 +496,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
 
     func update(
         rows: [DiffDisplayRow],
+        rowsSignature: DiffDisplayRowsSignature? = nil,
         layoutMode: DiffLayoutMode,
         wrapLines: Bool,
         showWhitespace: Bool,
@@ -477,7 +523,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
         stackedPane.activeCommentHighlight = activeCommentHighlight
 
         let signature = RowsUpdateSignature(
-            rows: rows,
+            rowsSignature: rowsSignature ?? DiffDisplayRowsSignature(rows),
             layoutMode: layoutMode,
             wrapLines: wrapLines,
             showWhitespace: showWhitespace,
@@ -555,7 +601,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
     }
 
     private struct UpdateSignature: Equatable {
-        let group: DiffDisplayGroup
+        let groupID: String
+        let groupContentHash: Int
         let expandedCollapsedRowIDs: Set<String>
         let layoutMode: DiffLayoutMode
         let wrapLines: Bool
@@ -582,7 +629,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
     }
 
     private struct RowsUpdateSignature: Equatable {
-        let rows: [DiffDisplayRow]
+        let rowsSignature: DiffDisplayRowsSignature
         let layoutMode: DiffLayoutMode
         let wrapLines: Bool
         let showWhitespace: Bool

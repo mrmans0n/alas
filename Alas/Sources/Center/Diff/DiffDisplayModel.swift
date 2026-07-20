@@ -230,7 +230,11 @@ struct DiffDisplayRow: Identifiable, Equatable {
     let new: DiffDisplayLine?
     let collapsedLineCount: Int
     let collapsedRows: [DiffDisplayRow]
-    var contextExpansion: DiffContextExpansionRow?
+    let contextExpansion: DiffContextExpansionRow?
+    /// Full-fidelity render revision computed once at construction time.
+    /// SwiftUI compares rows frequently, so equality must not recursively walk
+    /// line text, inline spans, and collapsed child rows on every transaction.
+    let contentHash: Int
 
     init(
         id: String,
@@ -248,6 +252,46 @@ struct DiffDisplayRow: Identifiable, Equatable {
         self.collapsedLineCount = collapsedLineCount
         self.collapsedRows = collapsedRows
         self.contextExpansion = contextExpansion
+        self.contentHash = DiffDisplaySignatureBuilder.contentHash(
+            id: id,
+            kind: kind,
+            old: old,
+            new: new,
+            collapsedLineCount: collapsedLineCount,
+            collapsedRows: collapsedRows,
+            contextExpansion: contextExpansion
+        )
+    }
+
+    static func == (lhs: DiffDisplayRow, rhs: DiffDisplayRow) -> Bool {
+        lhs.id == rhs.id && lhs.contentHash == rhs.contentHash
+    }
+}
+
+/// Compact revision for an ordered row collection. It is built when a model
+/// or rendered segment is created, then copied and compared in O(1).
+struct DiffDisplayRowsSignature: Equatable, Hashable {
+    let count: Int
+    let contentHash: Int
+
+    init(_ rows: [DiffDisplayRow]) {
+        count = rows.count
+        var content = Hasher()
+        content.combine(count)
+        for row in rows {
+            content.combine(row.contentHash)
+        }
+        contentHash = content.finalize()
+    }
+}
+
+final class DiffDisplayRowsSnapshot {
+    let rows: [DiffDisplayRow]
+    let signature: DiffDisplayRowsSignature
+
+    init(rows: [DiffDisplayRow], signature: DiffDisplayRowsSignature? = nil) {
+        self.rows = rows
+        self.signature = signature ?? DiffDisplayRowsSignature(rows)
     }
 }
 
@@ -258,6 +302,7 @@ struct DiffDisplayGroup: Identifiable, Equatable {
     let rows: [DiffDisplayRow]
     let sharedContextBefore: DiffContextExpansionKey?
     let sharedContextAfter: DiffContextExpansionKey?
+    let rowsSignature: DiffDisplayRowsSignature
 
     /// Full-fidelity content fingerprint (row/line identity, text, kinds,
     /// inline spans, collapse structure). Precomputed once at build time and
@@ -279,7 +324,8 @@ struct DiffDisplayGroup: Identifiable, Equatable {
         sourceHunk: ParsedDiff.Hunk,
         rows: [DiffDisplayRow],
         sharedContextBefore: DiffContextExpansionKey? = nil,
-        sharedContextAfter: DiffContextExpansionKey? = nil
+        sharedContextAfter: DiffContextExpansionKey? = nil,
+        rowsSignature: DiffDisplayRowsSignature? = nil
     ) {
         self.id = id
         self.header = header
@@ -287,15 +333,16 @@ struct DiffDisplayGroup: Identifiable, Equatable {
         self.rows = rows
         self.sharedContextBefore = sharedContextBefore
         self.sharedContextAfter = sharedContextAfter
+        self.rowsSignature = rowsSignature ?? DiffDisplayRowsSignature(rows)
 
         var content = Hasher()
         content.combine(id)
         content.combine(header)
+        content.combine(sourceHunk.oldStart)
+        content.combine(sourceHunk.newStart)
         content.combine(sharedContextBefore)
         content.combine(sharedContextAfter)
-        for row in rows {
-            DiffDisplaySignatureBuilder.combineContent(row, into: &content)
-        }
+        content.combine(self.rowsSignature)
         contentHash = content.finalize()
 
         var structural = Hasher()
@@ -312,6 +359,10 @@ struct DiffDisplayGroup: Identifiable, Equatable {
 
         oldSideExtent = DiffDisplaySignatureBuilder.sideExtent(of: sourceHunk, side: .old)
         newSideExtent = DiffDisplaySignatureBuilder.sideExtent(of: sourceHunk, side: .new)
+    }
+
+    static func == (lhs: DiffDisplayGroup, rhs: DiffDisplayGroup) -> Bool {
+        lhs.id == rhs.id && lhs.contentHash == rhs.contentHash
     }
 }
 
@@ -342,6 +393,12 @@ struct DiffDisplayModel: Equatable {
         }
         structuralHash = structural.finalize()
     }
+
+    static func == (lhs: DiffDisplayModel, rhs: DiffDisplayModel) -> Bool {
+        lhs.filePath == rhs.filePath
+            && lhs.groups.count == rhs.groups.count
+            && lhs.contentHash == rhs.contentHash
+    }
 }
 
 /// Line-count extent of one side (old or new) of a diff hunk.
@@ -362,25 +419,35 @@ struct DiffHunkSideExtent: Equatable {
 /// `DiffDisplayGroup`/`DiffDisplayModel`. Kept in one place so the fidelity of
 /// the content hash mirrors the render-context cache key exactly.
 enum DiffDisplaySignatureBuilder {
-    static func combineContent(_ row: DiffDisplayRow, into hasher: inout Hasher) {
-        hasher.combine(row.id)
-        hasher.combine(row.kind)
-        combineContent(row.old, into: &hasher)
-        combineContent(row.new, into: &hasher)
-        hasher.combine(row.collapsedLineCount)
-        hasher.combine(row.collapsedRows.count)
-        for collapsed in row.collapsedRows {
-            combineContent(collapsed, into: &hasher)
+    static func contentHash(
+        id: String,
+        kind: DiffDisplayRow.Kind,
+        old: DiffDisplayLine?,
+        new: DiffDisplayLine?,
+        collapsedLineCount: Int,
+        collapsedRows: [DiffDisplayRow],
+        contextExpansion: DiffContextExpansionRow?
+    ) -> Int {
+        var content = Hasher()
+        content.combine(id)
+        content.combine(kind)
+        combineContent(old, into: &content)
+        combineContent(new, into: &content)
+        content.combine(collapsedLineCount)
+        content.combine(collapsedRows.count)
+        for collapsed in collapsedRows {
+            content.combine(collapsed.contentHash)
         }
-        if let expansion = row.contextExpansion {
-            hasher.combine(true)
-            hasher.combine(expansion.key.kind)
-            hasher.combine(expansion.boundary)
-            hasher.combine(expansion.remainingLineCount)
-            hasher.combine(expansion.edge)
+        if let contextExpansion {
+            content.combine(true)
+            content.combine(contextExpansion.key.kind)
+            content.combine(contextExpansion.boundary)
+            content.combine(contextExpansion.remainingLineCount)
+            content.combine(contextExpansion.edge)
         } else {
-            hasher.combine(false)
+            content.combine(false)
         }
+        return content.finalize()
     }
 
     private static func combineContent(_ line: DiffDisplayLine?, into hasher: inout Hasher) {
@@ -390,6 +457,9 @@ enum DiffDisplaySignatureBuilder {
         }
         hasher.combine(UInt8(1))
         hasher.combine(line.id)
+        hasher.combine(line.anchor.filePath)
+        hasher.combine(line.anchor.hunkIndex)
+        hasher.combine(line.anchor.rowIndex)
         hasher.combine(line.anchor.side)
         hasher.combine(line.anchor.oldLine)
         hasher.combine(line.anchor.newLine)
