@@ -549,6 +549,7 @@
 		67981D1D60512503BFD901C8 /* TreeSitterHighlighterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20556618656218B845371F37 /* TreeSitterHighlighterTests.swift */; };
 		6866301B0A6F1F7488819B98 /* LineEnding.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC4A215AF2876091E31F6F8A /* LineEnding.swift */; };
 		68D58F9361C2C31EE200479A /* ACPBrokerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A27D9BBDE49BF3A41FAFB7 /* ACPBrokerClient.swift */; };
+		69C592752249412BC8A6EF3C /* GGInboxHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DB6D67179D2557D3A255AA3 /* GGInboxHostTests.swift */; };
 		6A10E9DF8A052DBDFF477863 /* OpenCodeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEC2AE8D8A358AC0F83252CD /* OpenCodeInstaller.swift */; };
 		6A386E5CF4C958D9F90DF692 /* InstallSplitButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEFDCAF3F099FE539D9737E9 /* InstallSplitButton.swift */; };
 		6A5B87FF631136E5246D0F38 /* AgentLauncherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A43A7D90E591CFD18088C70 /* AgentLauncherModel.swift */; };
@@ -1850,6 +1851,7 @@
 		5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSearchBackend.swift; sourceTree = "<group>"; };
 		5DA887927D32EBA2252792D9 /* ReviewChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesTabView.swift; sourceTree = "<group>"; };
 		5DABE7D3F41C67D28CA2C2F9 /* RemoteImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteImageCache.swift; sourceTree = "<group>"; };
+		5DB6D67179D2557D3A255AA3 /* GGInboxHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGInboxHostTests.swift; sourceTree = "<group>"; };
 		5DC558BE723378DCC7AA5B55 /* ACPChatTypography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChatTypography.swift; sourceTree = "<group>"; };
 		5DD723B8C15EF2413C5D935D /* BlockedLanguageServerNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedLanguageServerNudgeResolver.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
@@ -3006,6 +3008,7 @@
 				E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */,
 				2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */,
 				4836677A0E66A8ADD2D9E89A /* GGConfigCodableTests.swift */,
+				5DB6D67179D2557D3A255AA3 /* GGInboxHostTests.swift */,
 				649D5CB480CE056B1C4457D6 /* GGInboxTabsTests.swift */,
 				70BDCB22C2FDC36F6022ADB3 /* GGStackCreateModeTests.swift */,
 				3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */,
@@ -6260,6 +6263,7 @@
 				BB3475BFADD030152EF48707 /* GGConfigCodableTests.swift in Sources */,
 				D179A669627D70CC3C8DC4A5 /* GGConfigReaderTests.swift in Sources */,
 				362A966BA9FED1E92B8410CC /* GGInboxHelpersTests.swift in Sources */,
+				69C592752249412BC8A6EF3C /* GGInboxHostTests.swift in Sources */,
 				490CB816CBED69EC7C886497 /* GGInboxModelsTests.swift in Sources */,
 				16B6CE9E05F7E9B72D191F0C /* GGInboxStoreTests.swift in Sources */,
 				77D7244E04B1949523699AEB /* GGInboxTabsTests.swift in Sources */,
