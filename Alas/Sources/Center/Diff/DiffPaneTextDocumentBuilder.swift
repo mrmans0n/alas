@@ -595,8 +595,13 @@ struct DiffPaneTextDocumentBuilder {
         return "Expand \(remainingLineCount) unchanged lines \(boundaryText)"
     }
 
-    static func expandableContextSymbolName(boundary: DiffContextBoundary?) -> String {
-        boundary == .above ? "chevron.up" : "chevron.down"
+    static func expandableContextSymbolName(
+        boundary: DiffContextBoundary?,
+        mode: ContextExpansionActionMode = .chunk
+    ) -> String {
+        let direction = boundary == .above ? "up" : "down"
+        let count = mode == .all ? ".2" : ""
+        return "chevron.\(direction)\(count)"
     }
 
     private static let expandableContextActionSeparator = "      "
