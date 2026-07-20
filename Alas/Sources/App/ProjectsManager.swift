@@ -327,8 +327,21 @@ final class ProjectsManager {
     @discardableResult
     func refreshWorktrees(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
-        let url = URL(fileURLWithPath: project.path)
+        let configuredURL = URL(fileURLWithPath: project.path)
+        let url: URL
+        // gg clean can remove the linked worktree stored as the project path.
+        // Query from another cached checkout so the deleted row can be reconciled.
+        if project.host == nil,
+           !FileManager.default.fileExists(atPath: configuredURL.path),
+           let survivingWorktree = worktreesByProject[projectId, default: []].first(where: {
+               FileManager.default.fileExists(atPath: $0.path.path)
+           }) {
+            url = survivingWorktree.path
+        } else {
+            url = configuredURL
+        }
         let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
+        let anchorChanged = url.standardizedFileURL != configuredURL.standardizedFileURL
 
         // Reconcile optimistic rows: preserve creating rows until the owner
         // task completes, while still replacing them with real rows when
@@ -378,10 +391,13 @@ final class ProjectsManager {
         let orderChanged = applyWorktreeOrdering(projectId: projectId)
 
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return false }
+        if anchorChanged {
+            projects[idx].path = url.path
+        }
         let live = Set(trees.map { canonical($0.path) })
         let before = projects[idx].hiddenWorktreePaths.count
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
-        return orderChanged || projects[idx].hiddenWorktreePaths.count != before
+        return anchorChanged || orderChanged || projects[idx].hiddenWorktreePaths.count != before
     }
 
     func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {

@@ -460,12 +460,15 @@ final class AppState {
     private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
     @ObservationIgnored
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
+    @ObservationIgnored
+    private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
-        terminalSessionOpener: TerminalSessionOpener? = nil
+        terminalSessionOpener: TerminalSessionOpener? = nil,
+        projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) }
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
@@ -475,6 +478,7 @@ final class AppState {
             AppState.showWarningAlert(title: title, message: message)
         }
         self.terminalSessionOpener = terminalSessionOpener
+        self.projectGitWatcherFactory = projectGitWatcherFactory
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -1182,10 +1186,10 @@ final class AppState {
                         path: newWorktree.path,
                         hidden: false
                     )
-                    let gcDropped = try await projectsManager.refreshWorktrees(projectId: project.id)
+                    _ = try await refreshProjectWorktrees(projectId: project.id)
                     guard projects.contains(where: { $0.id == projectId }) else { return }
                     projectsManager.setOperationState(id: optimistic.id, state: nil)
-                    if wasHidden || gcDropped {
+                    if wasHidden {
                         saveProjects()
                     }
 
@@ -1629,10 +1633,9 @@ final class AppState {
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()
         saveSpaces()
-        if await projectsManager.refreshAll() {
-            saveProjects()
-        }
-        startProjectGitWatcher(for: project)
+        _ = await refreshAllProjectTopologies()
+        let refreshedProject = projectsManager.projects.first { $0.id == project.id } ?? project
+        startProjectGitWatcher(for: refreshedProject)
     }
 
     func addProject(
@@ -1775,7 +1778,7 @@ final class AppState {
         var staleProjectIds: [String] = []
         for project in projects {
             do {
-                try await projectsManager.refreshWorktrees(projectId: project.id)
+                try await refreshProjectWorktrees(projectId: project.id)
             } catch {
                 guard project.host == nil else { continue }
                 guard !FileManager.default.fileExists(atPath: project.path) else { continue }
@@ -1817,7 +1820,7 @@ final class AppState {
             watcher.start()
             return
         }
-        let watcher = ProjectGitWatcher(repoPath: URL(fileURLWithPath: project.path))
+        let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
         watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: projectId) }
@@ -1853,15 +1856,45 @@ final class AppState {
         }
     }
 
+    @discardableResult
+    private func refreshProjectWorktrees(projectId: String) async throws -> Bool {
+        let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects
+            .filter { $0.id == projectId }
+            .map { ($0.id, $0.path) })
+        let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
+        if changed { saveProjects() }
+        restartProjectGitWatchers(previousPaths: previousPaths)
+        return changed
+    }
+
     func refreshProjectTopology(projectId: String) async {
         let beforeIds = allWorktreeIds()
-        if (try? await projectsManager.refreshWorktrees(projectId: projectId)) == true { saveProjects() }
+        _ = try? await refreshProjectWorktrees(projectId: projectId)
         let afterIds = allWorktreeIds()
         let addedIds = afterIds.subtracting(beforeIds)
         if !addedIds.isEmpty {
             tabs.loadAll(worktreeIds: Array(addedIds))
         }
         cleanupMissingWorktrees(beforeIds: beforeIds)
+    }
+
+    /// Refresh every project, persist any reconciled configuration, and move
+    /// existing watchers when a deleted linked-worktree anchor is replaced.
+    @discardableResult
+    func refreshAllProjectTopologies() async -> Bool {
+        let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
+        let changed = await projectsManager.refreshAll()
+        if changed { saveProjects() }
+        restartProjectGitWatchers(previousPaths: previousPaths)
+        return changed
+    }
+
+    private func restartProjectGitWatchers(previousPaths: [String: String]) {
+        for project in projectsManager.projects {
+            guard let previousPath = previousPaths[project.id], previousPath != project.path else { continue }
+            guard projectGitWatchers[project.id] != nil || remoteProjectWatchers[project.id] != nil else { continue }
+            startProjectGitWatcher(for: project)
+        }
     }
 
     func updateProject(
@@ -4356,9 +4389,7 @@ final class AppState {
         // Always clear the deleting state after a successful remove,
         // even if the subsequent refresh fails.
         projectsManager.setOperationState(id: worktree.id, state: nil)
-        if (try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)) == true {
-            saveProjects()
-        }
+        _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,

@@ -65,6 +65,52 @@ struct ProjectsManagerTests {
         #expect(trees.first?.branch == "main")
     }
 
+    @Test func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears() async throws {
+        let repo = try await makeRepo(name: "linked-anchor")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let service = WorktreeService()
+        let linkedPath = repo.appendingPathComponent("linked-anchor")
+        let projectId = "linked-anchor-project"
+        let linkedWorktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "linked-anchor-branch",
+            destination: linkedPath,
+            projectId: projectId
+        )
+        let project = ProjectConfig(
+            id: projectId,
+            name: "linked-anchor",
+            path: linkedPath.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+        try await manager.refreshWorktrees(projectId: projectId)
+        #expect(manager.worktrees(projectId: projectId).count == 2)
+
+        try await service.remove(
+            repoPath: repo,
+            worktree: linkedWorktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+        let projectChanged = try await manager.refreshWorktrees(projectId: projectId)
+
+        let remaining = manager.worktrees(projectId: projectId)
+        #expect(projectChanged)
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.path.standardizedFileURL == repo.standardizedFileURL)
+        let persistedPath = manager.projects.first.map { URL(fileURLWithPath: $0.path).standardizedFileURL }
+        #expect(persistedPath == repo.standardizedFileURL)
+
+        let restartedManager = ProjectsManager(persistedProjects: manager.projects)
+        try await restartedManager.refreshWorktrees(projectId: projectId)
+        let restartedWorktrees = restartedManager.worktrees(projectId: projectId)
+        #expect(restartedWorktrees.count == 1)
+        #expect(restartedWorktrees.first?.path.standardizedFileURL == repo.standardizedFileURL)
+    }
+
     @Test func remoteRegistrationReconcileUnregistersRemovedWorktreeRoots() {
         let project = ProjectConfig(
             id: "remote-project",

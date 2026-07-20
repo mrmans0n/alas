@@ -64,9 +64,7 @@ struct RootView: View {
             }
             .task {
                 state.startHarness()
-                if await state.projectsManager.refreshAll() {
-                    state.saveProjects()
-                }
+                _ = await state.refreshAllProjectTopologies()
                 // Worktrees now exist — load any persisted tab files for them. Init
                 // can't do this because refreshAll runs async after init.
                 state.reloadTabs()
@@ -662,10 +660,7 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
-                    let changed = await state.projectsManager.refreshAll()
-                    if changed {
-                        state.saveProjects()
-                    }
+                    _ = await state.refreshAllProjectTopologies()
                     state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
