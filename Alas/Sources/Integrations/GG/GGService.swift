@@ -276,6 +276,8 @@ private final class StderrAccumulator: @unchecked Sendable {
 struct GGService {
     var runner: GGCommandRunning = ProcessGGCommandRunner()
 
+    private static let supportedSchemaVersion = 1
+
     /// Returns the gg version string ("0.9.8") or nil when gg is not
     /// installed / not on the login-shell PATH.
     func probeVersion() async -> String? {
@@ -383,7 +385,146 @@ struct GGService {
     }
 
     func clean(worktreePath: String) async throws {
-        _ = try await runChecked(args: ["clean", "--all"], worktreePath: worktreePath)
+        let result = try await runAction(
+            ["clean", "--all", "--json"],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+        do {
+            _ = try decodeVersioned(GGCleanResponse.self, from: result)
+        } catch GGServiceError.malformedOutput {
+            // Exit 0 means clean completed. Older GG builds may not emit JSON.
+        }
+    }
+
+    func amendCurrent(worktreePath: String) async throws {
+        _ = try await runAction(
+            ["sc", "--staged-only"],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+    }
+
+    func absorbStaged(worktreePath: String) async throws {
+        _ = try await runAction(["absorb", "-s"], cwd: URL(fileURLWithPath: worktreePath))
+    }
+
+    func drop(worktreePath: String, target: String) async throws -> GGDropResult {
+        let result = try await runAction(
+            ["drop", target, "--yes", "--json"],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+        return try decodeVersioned(GGDropResponse.self, from: result).drop
+    }
+
+    func unstack(
+        worktreePath: String,
+        target: String,
+        name: String,
+        createWorktree: Bool
+    ) async throws -> GGUnstackResult {
+        var args = [
+            "unstack", "--target", target, "--name", name, "--no-tui", "--json",
+        ]
+        args.append(createWorktree ? "--worktree" : "--keep-current")
+        let result = try await runAction(args, cwd: URL(fileURLWithPath: worktreePath))
+        let wire = try decodeVersioned(GGUnstackResponse.self, from: result).unstack
+
+        let currentStack: String
+        if createWorktree {
+            currentStack = wire.currentStack ?? wire.originalStack
+        } else {
+            guard let reportedCurrent = wire.currentStack else {
+                throw GGServiceError.malformedOutput(
+                    "gg unstack --keep-current did not report current_stack. Update gg and try again."
+                )
+            }
+            guard reportedCurrent == wire.originalStack else {
+                throw GGServiceError.malformedOutput(
+                    "gg unstack --keep-current changed the current stack unexpectedly."
+                )
+            }
+            currentStack = reportedCurrent
+        }
+
+        return GGUnstackResult(
+            originalStack: wire.originalStack,
+            newStack: wire.newStack,
+            movedCommits: wire.movedEntries,
+            worktreePath: wire.worktreePath,
+            currentStack: currentStack
+        )
+    }
+
+    func reorder(worktreePath: String, order: [String]) async throws {
+        _ = try await runAction(
+            ["reorder", "--order", order.joined(separator: ",")],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+    }
+
+    func restack(worktreePath: String, dryRun: Bool) async throws -> GGRestackResult {
+        var args = ["restack", "--json"]
+        if dryRun { args.append("--dry-run") }
+        let result = try await runAction(args, cwd: URL(fileURLWithPath: worktreePath))
+        return try decodeVersioned(GGRestackResponse.self, from: result).restack
+    }
+
+    func rebase(worktreePath: String, target: String?) async throws {
+        let args = ["rebase"] + (target.map { [$0] } ?? [])
+        _ = try await runAction(args, cwd: URL(fileURLWithPath: worktreePath))
+    }
+
+    func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary] {
+        let result = try await runAction(
+            ["undo", "--list", "--json", "--limit", String(limit)],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+        return try decodeVersioned(GGUndoListResponse.self, from: result).operations
+    }
+
+    func undo(worktreePath: String, operationID: String) async throws -> GGUndoResult {
+        let args = ["undo", operationID, "--json"]
+        let cwd = URL(fileURLWithPath: worktreePath)
+        let result = try await invoke(args, cwd: cwd)
+        if result.exitCode == 127 {
+            throw GGServiceError.cliMissing
+        }
+        if result.exitCode != 0,
+           let refusal = try decodeUndoRefusal(from: result)
+        {
+            throw GGServiceError.undoRefused(
+                message: refusal.message,
+                hint: refusal.hints.isEmpty ? nil : refusal.hints.joined(separator: "\n")
+            )
+        }
+        guard result.exitCode == 0 else { throw actionError(from: result) }
+
+        let response = try decodeVersioned(GGUndoResponse.self, from: result)
+        if let refusal = response.refusal {
+            throw GGServiceError.undoRefused(
+                message: refusal.message,
+                hint: refusal.hints.isEmpty ? nil : refusal.hints.joined(separator: "\n")
+            )
+        }
+        guard response.status == "succeeded", let undone = response.undone else {
+            throw GGServiceError.malformedOutput("gg undo did not return the required undone operation.")
+        }
+        return GGUndoResult(undone: undone)
+    }
+
+    func describeSplit(worktreePath: String, target: String) async throws -> GGSplitDescription {
+        let result = try await runAction(
+            ["split", "--describe", "--commit", target, "--json"],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+        return try decodeVersioned(GGSplitDescription.self, from: result)
+    }
+
+    func applySplit(worktreePath: String, planURL: URL) async throws -> GGSplitApplyResult {
+        let result = try await runAction(
+            ["split", "--plan-json", planURL.path, "--json"],
+            cwd: URL(fileURLWithPath: worktreePath)
+        )
+        return try decodeVersioned(GGSplitApplyResult.self, from: result)
     }
 
     private func syncSupportsJSONL() async -> Bool {
@@ -408,22 +549,149 @@ struct GGService {
     /// Runs a gg command and maps a non-zero exit to `GGServiceError`, the
     /// same way `currentStack` does.
     private func runChecked(args: [String], worktreePath: String) async throws -> ProcessResult {
+        try await runAction(args, cwd: URL(fileURLWithPath: worktreePath))
+    }
+
+    private func invoke(_ args: [String], cwd: URL) async throws -> ProcessResult {
         let result: ProcessResult
         do {
-            result = try await runner.run(args: args, cwd: URL(fileURLWithPath: worktreePath))
+            result = try await runner.run(args: args, cwd: cwd)
         } catch let error as GGServiceError {
             throw error
         } catch {
             throw GGServiceError.commandFailed(stderr: String(describing: error))
         }
-        guard result.exitCode == 0 else {
-            if result.exitCode == 127 { throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr) }
-            if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
-                throw GGServiceError.commandFailed(stderr: message)
-            }
-            throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
-        }
         return result
+    }
+
+    private func runAction(_ args: [String], cwd: URL) async throws -> ProcessResult {
+        let result = try await invoke(args, cwd: cwd)
+        guard result.exitCode == 0 else { throw actionError(from: result) }
+        return result
+    }
+
+    private func actionError(from result: ProcessResult) -> GGServiceError {
+        if result.exitCode == 127 { return .cliMissing }
+        let parsed = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8))
+        let message = parsed
+            ?? result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = message.lowercased()
+
+        if normalized.contains("immutable commit") || normalized.contains("immutable target") {
+            return .immutableTargets(message: message)
+        }
+        if normalized.contains("dirty working") || normalized.contains("working tree is dirty") {
+            return .dirtyWorkingTree(message: message)
+        }
+        if normalized.contains("stale split plan") {
+            return .staleSplitPlan(message: message)
+        }
+        if normalized.contains("stale target") {
+            return .staleTarget(message: message)
+        }
+        if normalized.contains("conflict")
+            && (normalized.contains("continue") || normalized.contains("abort") || normalized.contains("paused"))
+        {
+            return .pausedConflict(message: message)
+        }
+        if normalized.contains("partial mutation") || normalized.contains("partially mutated") {
+            return .partialMutation(message: message)
+        }
+        return .commandFailed(stderr: message)
+    }
+
+    private func decodeVersioned<T: Decodable>(_ type: T.Type, from result: ProcessResult) throws -> T {
+        let data = Data(result.stdout.utf8)
+        let version: Int
+        do {
+            version = try JSONDecoder().decode(GGSchemaVersion.self, from: data).version
+        } catch {
+            throw GGServiceError.malformedOutput(String(describing: error))
+        }
+        guard version == Self.supportedSchemaVersion else {
+            throw GGServiceError.unsupportedSchema(version)
+        }
+        if let message = GGActionErrorMessage.parse(fromJSON: data) {
+            throw actionError(from: ProcessResult(exitCode: 1, stdout: result.stdout, stderr: message))
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        do {
+            return try decoder.decode(type, from: data)
+        } catch let error as GGServiceError {
+            throw error
+        } catch {
+            throw GGServiceError.malformedOutput(String(describing: error))
+        }
+    }
+
+    private func decodeUndoRefusal(from result: ProcessResult) throws -> GGUndoRefusal? {
+        do {
+            let response = try decodeVersioned(GGUndoResponse.self, from: result)
+            return response.status == "refused" ? response.refusal : nil
+        } catch let error as GGServiceError {
+            if case .unsupportedSchema = error { throw error }
+            return nil
+        }
+    }
+}
+
+private struct GGSchemaVersion: Decodable {
+    let version: Int
+}
+
+private struct GGCleanResponse: Decodable {
+    struct Clean: Decodable {
+        let cleaned: [String]
+        let skipped: [String]
+    }
+
+    let clean: Clean
+}
+
+private struct GGDropResponse: Decodable {
+    let drop: GGDropResult
+}
+
+private struct GGUnstackResponse: Decodable {
+    struct Unstack: Decodable {
+        let originalStack: String
+        let newStack: String
+        let movedEntries: [GGUnstackCommit]
+        let worktreePath: String?
+        let currentStack: String?
+    }
+
+    let unstack: Unstack
+}
+
+private struct GGRestackResponse: Decodable {
+    let restack: GGRestackResult
+}
+
+private struct GGUndoListResponse: Decodable {
+    let operations: [GGOperationSummary]
+}
+
+private struct GGUndoResponse: Decodable {
+    let status: String
+    let undone: GGOperationSummary?
+    let refusal: GGUndoRefusal?
+}
+
+private struct GGUndoRefusal: Decodable {
+    let message: String
+    let hints: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case message, hints
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        message = try container.decode(String.self, forKey: .message)
+        hints = try container.decodeIfPresent([String].self, forKey: .hints) ?? []
     }
 }
 

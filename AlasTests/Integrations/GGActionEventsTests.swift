@@ -67,6 +67,22 @@ struct GGActionEventsTests {
         #expect(GGActionErrorMessage.parse(fromJSON: Data(#"{"sync":{"entries":[{"position":4,"error":{"message":"push blocked"}}]}}"#.utf8)) == "[4] push blocked")
     }
 
+    @Test func extractsErrorsFromMutationResponseEnvelopes() {
+        for command in ["clean", "drop", "unstack", "restack", "split"] {
+            let json = #"{"\#(command)":{"error":{"message":"\#(command) blocked"}}}"#
+            #expect(
+                GGActionErrorMessage.parse(fromJSON: Data(json.utf8)) == "\(command) blocked",
+                "Failed to parse the \(command) error envelope."
+            )
+        }
+
+        #expect(
+            GGActionErrorMessage.parse(
+                fromJSON: Data(#"{"metadata":{"error":{"message":"diagnostic only"}}}"#.utf8)
+            ) == nil
+        )
+    }
+
     @Test func landDecodeThrowsMalformedOnGarbage() {
         #expect(throws: GGServiceError.self) {
             _ = try GGLandResult.decode(fromJSON: Data("nonsense".utf8))
