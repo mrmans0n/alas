@@ -347,11 +347,13 @@ struct GGService {
         let result = try await runChecked(args: args, worktreePath: worktreePath)
         do {
             return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
-        } catch {
-            // Exit 0 means the land completed; output-shape drift must not
+        } catch GGServiceError.malformedOutput {
+            // Exit 0 means the land completed; JSON-shape drift must not
             // surface as a failure after the PRs were already merged.
             return GGLandResult(landed: [])
         }
+        // A real in-band error (GGServiceError.commandFailed thrown by
+        // decode) and anything else still propagate.
     }
 
     func clean(worktreePath: String) async throws {

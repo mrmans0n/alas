@@ -163,4 +163,17 @@ struct GGServiceActionsTests {
         let result = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: "c-abc")
         #expect(result.landed.isEmpty)
     }
+
+    @Test func landDoesNotTolerateInBandErrorOnSuccessfulExit() async {
+        // Exit 0 with a well-formed JSON body that itself reports an
+        // in-band error must still surface as a failure: only JSON-shape
+        // drift is tolerated, not a genuine reported error.
+        let runner = RecordingGGRunner(
+            stdout: #"{"version":1,"land":{"landed":[],"error":{"message":"not approved"}}}"#,
+            exitCode: 0
+        )
+        await #expect(throws: GGServiceError.commandFailed(stderr: "not approved")) {
+            _ = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: nil)
+        }
+    }
 }
