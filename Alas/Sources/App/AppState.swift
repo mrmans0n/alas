@@ -736,6 +736,13 @@ final class AppState {
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
+        // Stack badges are keyed by worktree path; drop entries for
+        // worktrees that no longer exist so deleted stacks don't keep a
+        // stale ▲ badge forever.
+        let livePaths = Set(projectsManager.projects.flatMap { project in
+            projectsManager.worktrees(projectId: project.id).map(\.path.path)
+        })
+        GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
         if reconcileMissingSpaceProjects() {
             saveSpaces()
         }

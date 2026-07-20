@@ -757,6 +757,7 @@
 		950C937884477417569DC20B /* EmptyTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008E982C8526670670425AB8 /* EmptyTabView.swift */; };
 		9547580C9DFECD838C120B90 /* DiffReviewRenderEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 389D0EB957CCC8447DB9C4FE /* DiffReviewRenderEligibility.swift */; };
 		956B221EC4FF3A18C713A64F /* AppStateTabAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 279D43D7F43C40A004A2C4AC /* AppStateTabAvailabilityTests.swift */; };
+		95DAB9F9E361DFD0395CC4C2 /* GGStackSummaryStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EC4FE9500B277A3921C8AB2 /* GGStackSummaryStoreTests.swift */; };
 		960593EAB0380436038D1400 /* ACPSessionToolCallTruncationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2777D1596E51D8DCA8E7ABA3 /* ACPSessionToolCallTruncationTests.swift */; };
 		962361DC40B0707AB7CA6E75 /* session-update-tool-call-update-no-meta.json in Resources */ = {isa = PBXBuildFile; fileRef = 30BAC172C16C360F917B6EED /* session-update-tool-call-update-no-meta.json */; };
 		9624AE35A36692177C9EBD38 /* ACPSubmitIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A655F5AA40CA10A7685794F7 /* ACPSubmitIntent.swift */; };
@@ -1674,6 +1675,7 @@
 		3E10A1919A8DDC6A8DBB8B97 /* ChangedRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangedRow.swift; sourceTree = "<group>"; };
 		3E3ADEB5299C3FFB091D55EE /* session-update-tool-call-meta.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-tool-call-meta.json"; sourceTree = "<group>"; };
 		3E9864A515B0ED49C68739B6 /* ACPSetupChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSetupChecker.swift; sourceTree = "<group>"; };
+		3EC4FE9500B277A3921C8AB2 /* GGStackSummaryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackSummaryStoreTests.swift; sourceTree = "<group>"; };
 		3F1D8FEB5416139D8B2BA780 /* HoverFeatureRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverFeatureRenderingTests.swift; sourceTree = "<group>"; };
 		3F239EBD79AA346B7976B544 /* AdapterUpdateState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdapterUpdateState.swift; sourceTree = "<group>"; };
 		3F3914A1820E1098DA558CD0 /* ACPTerminalHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTerminalHostTests.swift; sourceTree = "<group>"; };
@@ -4606,6 +4608,7 @@
 				6C09F563CF8F2EC4EF2B42BC /* GGStackGateTests.swift */,
 				A948C5D9B5EB13DBAC21E538 /* GGStackModelsTests.swift */,
 				F0DCBE3FBD88DC56C81B8FDB /* GGStackReadinessModelTests.swift */,
+				3EC4FE9500B277A3921C8AB2 /* GGStackSummaryStoreTests.swift */,
 				8C28D64372B5B4C734A92533 /* GitHubCLIProviderTests.swift */,
 				48594A1746139E9C11B175FF /* GitHubCLIProviderVerdictTests.swift */,
 				C371360F83FE318A5B8AEDBF /* GitLabCLIProviderTests.swift */,
@@ -6239,6 +6242,7 @@
 				2111C060CDF39B78FEFECB7A /* GGStackGateTests.swift in Sources */,
 				7E2E0B87C53DBAAE4AEF81E9 /* GGStackModelsTests.swift in Sources */,
 				CA73C930734C839D8EA9088D /* GGStackReadinessModelTests.swift in Sources */,
+				95DAB9F9E361DFD0395CC4C2 /* GGStackSummaryStoreTests.swift in Sources */,
 				0B11B8038CBA3A6F05E34895 /* GatekeeperAssessorTests.swift in Sources */,
 				F3C9321ABD5230C4FA4F7D4E /* GatekeeperRemediatorTests.swift in Sources */,
 				8915EF49F1031BD55C419625 /* GeminiInstallerTests.swift in Sources */,

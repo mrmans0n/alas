@@ -9,4 +9,12 @@ import Observation
 final class GGStackSummaryStore {
     static let shared = GGStackSummaryStore()
     var summaries: [String: GGStackSummary] = [:]
+
+    /// Drops summaries for worktrees that no longer exist. Called after the
+    /// app's worktree cleanup pass; value-diffed to avoid invalidating
+    /// observers when nothing was pruned.
+    func prune(keepingPaths: Set<String>) {
+        let pruned = summaries.filter { keepingPaths.contains($0.key) }
+        if pruned.count != summaries.count { summaries = pruned }
+    }
 }
