@@ -1173,15 +1173,22 @@ final class DiffPaneCodeTextView: NSTextView {
         chevronSize: NSSize,
         chevronGap: CGFloat = 5,
         horizontalPadding: CGFloat = 12,
-        verticalInset: CGFloat = 2
+        verticalInset: CGFloat = DiffPaneTextDocumentBuilder.expandableContextPillVerticalInset
     ) -> NSRect {
         let anchorRect = textRect.isEmpty ? (firstLineRect.isEmpty ? rowRect : firstLineRect) : textRect
         let pillHeight = max(anchorRect.height + verticalInset * 2, 1)
         let chevronLeftX = textRect.minX - chevronGap - chevronSize.width
         let pillLeft = (chevronSize == .zero ? textRect.minX : chevronLeftX) - horizontalPadding
+        let idealY = anchorRect.midY - pillHeight / 2
+        let pillY: CGFloat
+        if !rowRect.isEmpty, rowRect.height >= pillHeight {
+            pillY = min(max(idealY, rowRect.minY), rowRect.maxY - pillHeight)
+        } else {
+            pillY = idealY
+        }
         return NSRect(
             x: pillLeft,
-            y: anchorRect.midY - pillHeight / 2,
+            y: pillY,
             width: textRect.maxX + horizontalPadding - pillLeft,
             height: pillHeight
         )
