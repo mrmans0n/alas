@@ -460,12 +460,15 @@ final class AppState {
     private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
     @ObservationIgnored
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
+    @ObservationIgnored
+    private let projectGitWatcherFactory: (URL) -> ProjectGitWatcher
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
-        terminalSessionOpener: TerminalSessionOpener? = nil
+        terminalSessionOpener: TerminalSessionOpener? = nil,
+        projectGitWatcherFactory: @escaping (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) }
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
@@ -475,6 +478,7 @@ final class AppState {
             AppState.showWarningAlert(title: title, message: message)
         }
         self.terminalSessionOpener = terminalSessionOpener
+        self.projectGitWatcherFactory = projectGitWatcherFactory
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -1817,7 +1821,7 @@ final class AppState {
             watcher.start()
             return
         }
-        let watcher = ProjectGitWatcher(repoPath: URL(fileURLWithPath: project.path))
+        let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
         watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: projectId) }
@@ -1855,7 +1859,12 @@ final class AppState {
 
     func refreshProjectTopology(projectId: String) async {
         let beforeIds = allWorktreeIds()
+        let previousProjectPath = projectsManager.projects.first { $0.id == projectId }?.path
         if (try? await projectsManager.refreshWorktrees(projectId: projectId)) == true { saveProjects() }
+        if let project = projectsManager.projects.first(where: { $0.id == projectId }),
+           project.path != previousProjectPath {
+            startProjectGitWatcher(for: project)
+        }
         let afterIds = allWorktreeIds()
         let addedIds = afterIds.subtracting(beforeIds)
         if !addedIds.isEmpty {

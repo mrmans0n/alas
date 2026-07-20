@@ -200,6 +200,62 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: linkedId).map(\.title) == ["persisted"])
     }
 
+    @Test func topologyRefreshRestartsWatcherWhenProjectAnchorChanges() async throws {
+        let repo = try await makeRepo(name: "topology-anchor-watcher")
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleanup-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+
+        let projectId = "topology-anchor-watcher"
+        let worktreeService = WorktreeService()
+        let linkedWorktree = try await worktreeService.add(
+            repoPath: repo,
+            base: "main",
+            branch: "linked-anchor",
+            destination: linked,
+            projectId: projectId
+        )
+        let project = ProjectConfig(
+            id: projectId,
+            name: "topology-anchor-watcher",
+            path: linked.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        var watchedPaths: [URL] = []
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
+            projectGitWatcherFactory: { path in
+                watchedPaths.append(path.standardizedFileURL)
+                return ProjectGitWatcher(
+                    repoPath: path,
+                    resolvedGitDir: repo.appendingPathComponent(".git"),
+                    resolvedWorktreeRoot: path,
+                    headDebounceInterval: 0.01,
+                    headDebounceMaxWait: 0.02,
+                    topologyDebounceInterval: 0.01,
+                    topologyDebounceMaxWait: 0.02,
+                    startStreamOverride: { _, _ in }
+                )
+            }
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: projectId)
+        state.startProjectGitWatcher(for: project)
+
+        try await worktreeService.remove(
+            repoPath: repo,
+            worktree: linkedWorktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+        await state.refreshProjectTopology(projectId: projectId)
+
+        #expect(watchedPaths.map(\.path) == [linked.standardizedFileURL.path, repo.standardizedFileURL.path])
+    }
+
     @Test func createWorktreeInsertsOptimisticRowImmediately() async throws {
         let repo = try await makeRepo(name: "create-opt")
         defer { try? FileManager.default.removeItem(at: repo) }
