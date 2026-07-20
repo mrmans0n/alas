@@ -25,12 +25,8 @@ extension GGCommandRunning {
                     }
                     if result.exitCode == 0 {
                         continuation.finish()
-                    } else if result.exitCode == 127 {
-                        continuation.finish(throwing: GGServiceError.cliMissing)
                     } else {
-                        continuation.finish(throwing: GGServiceError.commandFailed(
-                            stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                        ))
+                        continuation.finish(throwing: GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr))
                     }
                 } catch {
                     continuation.finish(throwing: error)
@@ -131,12 +127,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                         continuation.finish(throwing: ProcessError.timedOut(executable: executable, args: args, seconds: timeout))
                     } else if status == 0 {
                         continuation.finish()
-                    } else if status == 127 {
-                        continuation.finish(throwing: GGServiceError.cliMissing)
                     } else {
-                        continuation.finish(throwing: GGServiceError.commandFailed(
-                            stderr: stderrAccum.text().trimmingCharacters(in: .whitespacesAndNewlines)
-                        ))
+                        continuation.finish(throwing: GGServiceError.map(exitCode: status, stderr: stderrAccum.text()))
                     }
                 }
             }
@@ -310,13 +302,11 @@ struct GGService {
             throw GGServiceError.commandFailed(stderr: String(describing: error))
         }
         guard result.exitCode == 0 else {
-            if result.exitCode == 127 { throw GGServiceError.cliMissing }
+            if result.exitCode == 127 { throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr) }
             if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
                 throw GGServiceError.commandFailed(stderr: message)
             }
-            throw GGServiceError.commandFailed(
-                stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
         }
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8)).stack
     }
@@ -393,13 +383,11 @@ struct GGService {
             throw GGServiceError.commandFailed(stderr: String(describing: error))
         }
         guard result.exitCode == 0 else {
-            if result.exitCode == 127 { throw GGServiceError.cliMissing }
+            if result.exitCode == 127 { throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr) }
             if let message = GGActionErrorMessage.parse(fromJSON: Data(result.stdout.utf8)) {
                 throw GGServiceError.commandFailed(stderr: message)
             }
-            throw GGServiceError.commandFailed(
-                stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
         }
         return result
     }

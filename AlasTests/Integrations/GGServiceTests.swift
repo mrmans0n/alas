@@ -83,4 +83,10 @@ struct GGServiceTests {
             _ = try await GGService(runner: runner).currentStack(worktreePath: "/tmp/wt")
         }
     }
+
+    @Test func mapConvertsExitCodesToErrors() {
+        #expect(GGServiceError.map(exitCode: 127, stderr: "anything") == .cliMissing)
+        #expect(GGServiceError.map(exitCode: 1, stderr: "  boom \n") == .commandFailed(stderr: "boom"))
+        #expect(GGServiceError.map(exitCode: 2, stderr: "") == .commandFailed(stderr: ""))
+    }
 }
