@@ -327,7 +327,17 @@ final class ProjectsManager {
     @discardableResult
     func refreshWorktrees(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
-        let url = URL(fileURLWithPath: project.path)
+        let configuredURL = URL(fileURLWithPath: project.path)
+        let url: URL
+        if project.host == nil,
+           !FileManager.default.fileExists(atPath: configuredURL.path),
+           let survivingWorktree = worktreesByProject[projectId, default: []].first(where: {
+               FileManager.default.fileExists(atPath: $0.path.path)
+           }) {
+            url = survivingWorktree.path
+        } else {
+            url = configuredURL
+        }
         let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
 
         // Reconcile optimistic rows: preserve creating rows until the owner
