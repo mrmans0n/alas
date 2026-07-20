@@ -311,10 +311,11 @@ extension DiffReviewFileSectionModel {
     /// stale-load-rejection and reset logic off that id (see
     /// `contextStateSignature`), so treating two different providers as
     /// equal would let a swapped-in file keep serving a previous provider's
-    /// in-flight/expanded context.
+    /// in-flight/expanded context. `parsedDiff` is intentionally excluded:
+    /// `displayModel` is the complete derived payload this view renders and
+    /// already carries its precomputed full-content revision.
     func hasSameRenderableContent(as other: DiffReviewFileSectionModel) -> Bool {
         summary == other.summary
-            && parsedDiff == other.parsedDiff
             && displayModel == other.displayModel
             && placeholderMessage == other.placeholderMessage
             && (openFile == nil) == (other.openFile == nil)

@@ -52,6 +52,21 @@ enum DiffInlineCommentLayout {
     struct RowSegment: Equatable, Identifiable {
         let id: String
         let rows: [DiffDisplayRow]
+        let rowsSignature: DiffDisplayRowsSignature
+
+        init(
+            id: String,
+            rows: [DiffDisplayRow],
+            rowsSignature: DiffDisplayRowsSignature? = nil
+        ) {
+            self.id = id
+            self.rows = rows
+            self.rowsSignature = rowsSignature ?? DiffDisplayRowsSignature(rows)
+        }
+
+        static func == (lhs: RowSegment, rhs: RowSegment) -> Bool {
+            lhs.id == rhs.id && lhs.rowsSignature == rhs.rowsSignature
+        }
     }
 
     enum Block: Equatable, Identifiable {
@@ -73,15 +88,31 @@ enum DiffInlineCommentLayout {
         threads: [DiffInlineCommentThread],
         annotations: [DiffInlineAnnotation] = []
     ) -> [Block] {
-        guard !visibleRows.isEmpty else { return [] }
+        blocks(
+            visibleRows: DiffDisplayRowsSnapshot(rows: visibleRows),
+            threads: threads,
+            annotations: annotations
+        )
+    }
+
+    static func blocks(
+        visibleRows: DiffDisplayRowsSnapshot,
+        threads: [DiffInlineCommentThread],
+        annotations: [DiffInlineAnnotation] = []
+    ) -> [Block] {
+        guard !visibleRows.rows.isEmpty else { return [] }
         guard !threads.isEmpty, !annotations.isEmpty else {
             if threads.isEmpty && annotations.isEmpty {
-                return [.rows(RowSegment(id: "seg-0", rows: visibleRows))]
+                return [.rows(RowSegment(
+                    id: "seg-0",
+                    rows: visibleRows.rows,
+                    rowsSignature: visibleRows.signature
+                ))]
             }
             // Fall through to general logic with only threads or only annotations
-            return blocksInternal(visibleRows: visibleRows, threads: threads, annotations: annotations)
+            return blocksInternal(visibleRows: visibleRows.rows, threads: threads, annotations: annotations)
         }
-        return blocksInternal(visibleRows: visibleRows, threads: threads, annotations: annotations)
+        return blocksInternal(visibleRows: visibleRows.rows, threads: threads, annotations: annotations)
     }
 
     private static func blocksInternal(

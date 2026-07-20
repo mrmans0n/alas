@@ -76,6 +76,21 @@ struct DiffReviewRenderableContentEqualityTests {
         #expect(!lhs.hasSameRenderableContent(as: rhs))
     }
 
+    @Test func parsedDiffDoesNotParticipateWhenRenderedContentIsUnchanged() {
+        let lhs = fileModel(path: "a.swift")
+        let rhs = DiffReviewFileSectionModel(
+            summary: lhs.summary,
+            parsedDiff: ParsedDiff(hunks: []),
+            displayModel: lhs.displayModel,
+            placeholderMessage: lhs.placeholderMessage,
+            openFile: lhs.openFile,
+            contextProvider: lhs.contextProvider,
+            stagedMutationActions: lhs.stagedMutationActions
+        )
+
+        #expect(lhs.hasSameRenderableContent(as: rhs))
+    }
+
     @Test func differentSummaryIsNotEqual() {
         let lhs = fileModel(path: "a.swift", additions: 1)
         let rhs = fileModel(path: "a.swift", additions: 2)
