@@ -341,6 +341,7 @@ final class ProjectsManager {
             url = configuredURL
         }
         let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
+        let anchorChanged = url.standardizedFileURL != configuredURL.standardizedFileURL
 
         // Reconcile optimistic rows: preserve creating rows until the owner
         // task completes, while still replacing them with real rows when
@@ -390,10 +391,13 @@ final class ProjectsManager {
         let orderChanged = applyWorktreeOrdering(projectId: projectId)
 
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return false }
+        if anchorChanged {
+            projects[idx].path = url.path
+        }
         let live = Set(trees.map { canonical($0.path) })
         let before = projects[idx].hiddenWorktreePaths.count
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
-        return orderChanged || projects[idx].hiddenWorktreePaths.count != before
+        return anchorChanged || orderChanged || projects[idx].hiddenWorktreePaths.count != before
     }
 
     func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {

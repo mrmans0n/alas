@@ -95,11 +95,20 @@ struct ProjectsManagerTests {
             deleteBranchIfMerged: false,
             force: false
         )
-        try await manager.refreshWorktrees(projectId: projectId)
+        let projectChanged = try await manager.refreshWorktrees(projectId: projectId)
 
         let remaining = manager.worktrees(projectId: projectId)
+        #expect(projectChanged)
         #expect(remaining.count == 1)
         #expect(remaining.first?.path.standardizedFileURL == repo.standardizedFileURL)
+        let persistedPath = manager.projects.first.map { URL(fileURLWithPath: $0.path).standardizedFileURL }
+        #expect(persistedPath == repo.standardizedFileURL)
+
+        let restartedManager = ProjectsManager(persistedProjects: manager.projects)
+        try await restartedManager.refreshWorktrees(projectId: projectId)
+        let restartedWorktrees = restartedManager.worktrees(projectId: projectId)
+        #expect(restartedWorktrees.count == 1)
+        #expect(restartedWorktrees.first?.path.standardizedFileURL == repo.standardizedFileURL)
     }
 
     @Test func remoteRegistrationReconcileUnregistersRemovedWorktreeRoots() {
