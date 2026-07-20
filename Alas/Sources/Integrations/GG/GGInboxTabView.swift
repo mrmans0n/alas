@@ -21,9 +21,8 @@ enum GGInboxWorktreeResolver {
         username: String?,
         worktrees: [(id: String, branch: String)]
     ) -> String? {
-        if let username,
-           let hit = worktrees.first(where: { $0.branch == "\(username)/\(stackName)" }) {
-            return hit.id
+        if let username {
+            return worktrees.first(where: { $0.branch == "\(username)/\(stackName)" })?.id
         }
         return worktrees.first(where: { $0.branch.hasSuffix("/\(stackName)") })?.id
     }

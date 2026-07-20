@@ -17,6 +17,13 @@ struct GGInboxHelpersTests {
         #expect(GGInboxWorktreeResolver.worktreeId(stackName: "missing", username: nil, worktrees: worktrees) == nil)
     }
 
+    @Test func resolverReturnsNilWhenUsernameKnownButOnlyForeignMatch() {
+        // Known username, no exact <username>/<stack> worktree, only a
+        // different user's same-named stack checked out → no navigation.
+        let worktrees = [(id: "w1", branch: "other/auth")]
+        #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: "nacho", worktrees: worktrees) == nil)
+    }
+
     @Test func resolverDoesNotMatchBareOrPartialNames() {
         let worktrees = [
             (id: "w1", branch: "auth"),            // no slash — not gg convention
