@@ -747,6 +747,7 @@ final class AppState {
             projectsManager.worktrees(projectId: project.id).map(\.path.path)
         })
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
+        GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         if reconcileMissingSpaceProjects() {
             saveSpaces()
         }
