@@ -62,6 +62,9 @@ struct SidebarView: View {
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
                                 onRemoveProject: { onRemoveProject(project.id) },
+                                onOpenGGInbox: state.ggInboxAvailable(projectId: project.id)
+                                    ? { state.openGGInbox(projectId: project.id) }
+                                    : nil,
                                 onResetSort: {
                                     state.projectsManager.resetWorktreeOrder(projectId: project.id)
                                     state.saveProjects()

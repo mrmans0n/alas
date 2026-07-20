@@ -601,4 +601,29 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
         #expect(state.ggActionState.syncProgress.isEmpty)
     }
+
+    @Test func syncErrorSuppressesSuccessSummary() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let ndjson = [
+            #"{"event":"start","total_entries":1}"#,
+            #"{"event":"push_done","position":1,"forced":false}"#,
+            #"{"event":"error","message":"push rejected"}"#,
+            #"{"event":"summary"}"#,
+        ].joined(separator: "\n")
+        state.ggService = GGService(runner: NDJSONSyncFakeGGRunner(ndjson: ndjson))
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
+
+        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        var iterations = 0
+        while state.ggActionState.inFlightAction != nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            iterations += 1
+            if iterations > 500 { break }
+        }
+
+        #expect(state.ggActionState.lastError != nil)
+        #expect(state.ggActionState.lastActionSummary == nil)
+    }
 }

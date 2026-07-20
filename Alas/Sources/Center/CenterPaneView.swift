@@ -296,6 +296,9 @@ struct CenterPaneView: View {
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
                             .id(s.id)
+                    case .ggInbox(let s):
+                        GGInboxTabView(state: state, tabState: s)
+                            .id(s.id)
                     }
                 }
             }

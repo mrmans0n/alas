@@ -19,6 +19,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case reviewPR(ReviewPRTabState)
     case fileSnapshot(FileSnapshotTabState)
     case fileHistory(FileHistoryTabState)
+    case ggInbox(GGInboxTabState)
 
     var id: TabID {
         switch self {
@@ -38,6 +39,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewPR(let s):     return s.id
         case .fileSnapshot(let s): return s.id
         case .fileHistory(let s):  return s.id
+        case .ggInbox(let s):      return s.id
         }
     }
 
@@ -59,6 +61,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewPR(let s):     return s.displayTitle
         case .fileSnapshot(let s): return s.title
         case .fileHistory(let s):  return s.title
+        case .ggInbox(let s):      return s.title
         }
     }
 
@@ -80,6 +83,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewPR:     return "list.bullet.rectangle.portrait.fill"
         case .fileSnapshot: return "doc.text.magnifyingglass"
         case .fileHistory:  return "clock.arrow.circlepath"
+        case .ggInbox:      return "branch"
         }
     }
 

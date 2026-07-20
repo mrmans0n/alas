@@ -747,6 +747,7 @@ final class AppState {
             projectsManager.worktrees(projectId: project.id).map(\.path.path)
         })
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
+        GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         if reconcileMissingSpaceProjects() {
             saveSpaces()
         }
@@ -5387,6 +5388,46 @@ final class AppState {
         }
         let tab = tabs.openOrFocusFileHistory(worktreeId: worktree.id, relativePath: relativePath)
         tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+    }
+
+    /// The phase-3 gg gate for a project: gg feature on, CLI installed, and
+    /// the project (local, not remote) has gg enabled.
+    func ggInboxAvailable(projectId: String) -> Bool {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return false }
+        return config.changes.stackedDiffsEnabled
+            && GGAvailability.shared.isInstalled
+            && GGStackGate.projectEnabled(
+                masterEnabled: true, ggInstalled: true,
+                mode: project.ggMode, repoPath: project.path,
+                isRemoteProject: project.host != nil
+            )
+    }
+
+    /// Chooses which of the target project's worktrees hosts its inbox tab:
+    /// the currently-selected worktree when it belongs to the project,
+    /// otherwise the project's first worktree. Nil when the project has none.
+    nonisolated static func inboxHostWorktreeId(
+        selectedWorktreeId: String?,
+        projectWorktreeIds: [String]
+    ) -> String? {
+        if let selectedWorktreeId, projectWorktreeIds.contains(selectedWorktreeId) {
+            return selectedWorktreeId
+        }
+        return projectWorktreeIds.first
+    }
+
+    /// Opens (or focuses) the gg inbox tab for `projectId` in the currently
+    /// selected worktree's tab strip, falling back to the project's first
+    /// worktree when the current selection belongs to a different project.
+    func openGGInbox(projectId: String) {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return }
+        let projectWorktreeIds = projectsManager.visibleWorktrees(projectId: projectId).map(\.id)
+        guard let worktreeId = Self.inboxHostWorktreeId(
+            selectedWorktreeId: selectedWorktreeId,
+            projectWorktreeIds: projectWorktreeIds
+        ) else { return }
+        tabs.openOrFocusGGInbox(worktreeId: worktreeId, projectId: projectId, projectName: project.name)
+        selectWorktree(id: worktreeId)
     }
 }
 
