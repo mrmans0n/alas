@@ -140,9 +140,12 @@ struct NewWorktreeDialog: View {
         }
         .onChange(of: projectId) { _, _ in
             applyLaunchDefaults(for: projectId)
-            loadBranchesForSelectedProject()
             createAsGGStack = Self.stackModeSurvives(createAsGGStack, availability: ggStackAvailability)
-            if let pinned = stackPinnedBase { base = pinned }
+            // Seed the base for the new project synchronously so the picker
+            // never shows the previous project's value; the async branch load
+            // refines it (guarded: it skips pinned bases and user edits).
+            base = stackPinnedBase ?? state.config.worktrees.baseBranch
+            loadBranchesForSelectedProject()
         }
         .onChange(of: branch) { _, _ in
             createErrorMessage = nil
