@@ -64,8 +64,17 @@ final class GGStackActionState {
         return parts.joined(separator: " · ")
     }
 
-    static func landSummaryLine(landedCount: Int) -> String? {
-        guard landedCount > 0 else { return nil }
-        return "Landed \(landedCount) PR\(landedCount == 1 ? "" : "s")"
+    /// One-line result for a completed land. Distinguishes merged PRs from
+    /// entries only queued into a merge train (GitLab auto-merge: gg reports
+    /// `queued`/`already_queued`), so the drawer never claims a queued MR was
+    /// landed. Nil when nothing landed.
+    static func landSummaryLine(from landed: [GGLandedEntry]) -> String? {
+        guard !landed.isEmpty else { return nil }
+        let queued = landed.filter { $0.action == "queued" || $0.action == "already_queued" }.count
+        let merged = landed.count - queued
+        var parts: [String] = []
+        if merged > 0 { parts.append("Landed \(merged) PR\(merged == 1 ? "" : "s")") }
+        if queued > 0 { parts.append("Queued \(queued) PR\(queued == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

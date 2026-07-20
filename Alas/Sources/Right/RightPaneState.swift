@@ -1069,7 +1069,7 @@ final class RightPaneState {
                     return
                 }
                 let result = try await ggService.land(worktreePath: worktree.path.path, until: until)
-                if let summary = GGStackActionState.landSummaryLine(landedCount: result.landed.count) {
+                if let summary = GGStackActionState.landSummaryLine(from: result.landed) {
                     ggActionState.setActionSummary(summary)
                 }
             } catch let error as GGServiceError {

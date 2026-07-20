@@ -70,8 +70,23 @@ struct GGStackActionStateTests {
     }
 
     @Test func landSummaryLine() {
-        #expect(GGStackActionState.landSummaryLine(landedCount: 0) == nil)
-        #expect(GGStackActionState.landSummaryLine(landedCount: 1) == "Landed 1 PR")
-        #expect(GGStackActionState.landSummaryLine(landedCount: 3) == "Landed 3 PRs")
+        #expect(GGStackActionState.landSummaryLine(from: []) == nil)
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1),
+        ]) == "Landed 1 PR")
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1),
+            GGLandedEntry(position: 2, prNumber: 2),
+            GGLandedEntry(position: 3, prNumber: 3),
+        ]) == "Landed 3 PRs")
+        // Queued (GitLab merge-train) entries are reported separately, not as landed.
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1, action: "merged"),
+            GGLandedEntry(position: 2, prNumber: 2, action: "queued"),
+            GGLandedEntry(position: 3, prNumber: 3, action: "already_queued"),
+        ]) == "Landed 1 PR · Queued 2 PRs")
+        #expect(GGStackActionState.landSummaryLine(from: [
+            GGLandedEntry(position: 1, prNumber: 1, action: "queued"),
+        ]) == "Queued 1 PR")
     }
 }

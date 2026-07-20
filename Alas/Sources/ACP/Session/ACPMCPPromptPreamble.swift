@@ -81,12 +81,16 @@ enum ACPMCPPromptPreamble {
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
-        lines.append(
-            "This session runs inside Alas, the user's macOS workspace app. "
-            + "MCP servers are attached to this session. Some agent harnesses "
-            + "defer MCP tools behind tool search, so they may not appear in "
-            + "your direct tool inventory — they ARE available; use your tool "
-            + "discovery/search mechanism to load them.")
+        if builtInInjected || !userServerNames.isEmpty {
+            lines.append(
+                "This session runs inside Alas, the user's macOS workspace app. "
+                + "MCP servers are attached to this session. Some agent harnesses "
+                + "defer MCP tools behind tool search, so they may not appear in "
+                + "your direct tool inventory — they ARE available; use your tool "
+                + "discovery/search mechanism to load them.")
+        } else {
+            lines.append("This session runs inside Alas, the user's macOS workspace app.")
+        }
         if builtInInjected {
             let sessionTools = isDelegated
                 ? "session_list/session_send"

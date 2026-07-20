@@ -152,13 +152,15 @@ struct ACPMCPPromptPreambleTests {
         #expect(!text.contains("git-gud"))
     }
 
-    @Test func stackOnlyPreambleIsEmitted() {
+    @Test func stackOnlyPreambleIsEmitted() throws {
         // No built-in, no user servers — but a stack context alone still
-        // produces a preamble.
-        #expect(ACPMCPPromptPreamble.text(
+        // produces a preamble. It must not claim MCP tools are attached.
+        let text = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: false, isDelegated: false, userServerNames: [], mode: .mcp,
             ggStack: .init(stackName: "s", entryCount: 1, ggMCPAttached: false)
-        ) != nil)
+        ))
+        #expect(!text.contains("MCP servers are attached"))
+        #expect(text.contains("gg stacked-diffs"))
     }
 
     @Test func nilGGStackKeepsExistingBehavior() {
