@@ -4,9 +4,14 @@ import Testing
 
 struct GGInboxHelpersTests {
     @Test func resolverPrefersExactUsernameBranch() {
+        // A same-named-stack branch from a different user ("other/auth")
+        // is now a genuine ambiguity case (see worktreeIdReturnsNil... below)
+        // and must not be mixed into this fixture, so the distractor here
+        // is a different stack entirely — this test isolates "picks the
+        // exact <username>/<stackName> match among several worktrees."
         let worktrees = [
             (id: "w1", branch: "nacho/auth"),
-            (id: "w2", branch: "other/auth"),
+            (id: "w2", branch: "nacho/perf"),
         ]
         #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: "nacho", worktrees: worktrees) == "w1")
     }
@@ -32,47 +37,29 @@ struct GGInboxHelpersTests {
         #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: nil, worktrees: worktrees) == nil)
     }
 
-    @Test func ambiguousStackNamesDetectsDuplicatesAcrossBuckets() throws {
-        let json = #"""
-        {"version":1,"total_items":2,
-         "buckets":{
-           "ready_to_land":[{"stack_name":"auth","position":1,"sha":"aaa","title":"Alice's auth","pr_number":1,"pr_url":"https://example.test/1"}],
-           "changes_requested":[],
-           "blocked_on_ci":[],
-           "awaiting_review":[{"stack_name":"auth","position":1,"sha":"bbb","title":"Bob's auth","pr_number":2,"pr_url":"https://example.test/2"}],
-           "behind_base":[],
-           "draft":[{"stack_name":"perf","position":1,"sha":"ccc","title":"Unique stack","pr_number":3,"pr_url":"https://example.test/3"}]},
-         "stack_errors":[]}
-        """#
-        let snapshot = try GGInboxSnapshot.decode(fromJSON: Data(json.utf8))
-        #expect(GGInboxWorktreeResolver.ambiguousStackNames(in: snapshot.buckets) == ["auth"])
+    @Test func hasAmbiguousLocalOwnersTrueWithTwoMatchingBranches() {
+        let worktrees = [(id: "w1", branch: "alice/auth"), (id: "w2", branch: "bob/auth")]
+        #expect(GGInboxWorktreeResolver.hasAmbiguousLocalOwners(stackName: "auth", worktrees: worktrees))
     }
 
-    @Test func ambiguousStackNamesEmptyWhenAllUnique() throws {
-        let json = #"""
-        {"version":1,"total_items":1,
-         "buckets":{
-           "ready_to_land":[{"stack_name":"auth","position":1,"sha":"aaa","title":"t","pr_number":1,"pr_url":"https://example.test/1"}],
-           "changes_requested":[],"blocked_on_ci":[],"awaiting_review":[],"behind_base":[],"draft":[]},
-         "stack_errors":[]}
-        """#
-        let snapshot = try GGInboxSnapshot.decode(fromJSON: Data(json.utf8))
-        #expect(GGInboxWorktreeResolver.ambiguousStackNames(in: snapshot.buckets).isEmpty)
+    @Test func hasAmbiguousLocalOwnersFalseWithOneMatch() {
+        let worktrees = [(id: "w1", branch: "bob/auth"), (id: "w2", branch: "bob/perf")]
+        #expect(!GGInboxWorktreeResolver.hasAmbiguousLocalOwners(stackName: "auth", worktrees: worktrees))
     }
 
-    @Test func ambiguousStackNamesCountsStackErrorsToo() throws {
-        let json = #"""
-        {"version":1,"total_items":1,
-         "buckets":{
-           "ready_to_land":[],"changes_requested":[],"blocked_on_ci":[],
-           "awaiting_review":[{"stack_name":"auth","position":1,"sha":"bbb","title":"Bob's auth","pr_number":2,"pr_url":"https://example.test/2"}],
-           "behind_base":[],"draft":[]},
-         "stack_errors":[{"stack_name":"auth","error":"branch missing"}]}
-        """#
-        let snapshot = try GGInboxSnapshot.decode(fromJSON: Data(json.utf8))
-        #expect(GGInboxWorktreeResolver.ambiguousStackNames(
-            in: snapshot.buckets, stackErrors: snapshot.stackErrors
-        ) == ["auth"])
+    @Test func worktreeIdReturnsNilWhenMultipleLocalBranchesShareStackName() {
+        // Even though "bob/auth" is an exact match for username "bob", a
+        // second local branch for the same stack name ("alice/auth") means
+        // this specific row can't be safely attributed — must dim, not guess.
+        let worktrees = [(id: "w1", branch: "alice/auth"), (id: "w2", branch: "bob/auth")]
+        #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: "bob", worktrees: worktrees) == nil)
+    }
+
+    @Test func worktreeIdResolvesNormallyWhenOnlyOneLocalBranchMatches() {
+        // A stack's multiple positions/PRs never affect this — the check is
+        // purely about distinct local branches, not row count.
+        let worktrees = [(id: "w1", branch: "bob/auth")]
+        #expect(GGInboxWorktreeResolver.worktreeId(stackName: "auth", username: "bob", worktrees: worktrees) == "w1")
     }
 
     @Test func updatedLabel() {

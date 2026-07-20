@@ -21,35 +21,27 @@ enum GGInboxWorktreeResolver {
         username: String?,
         worktrees: [(id: String, branch: String)]
     ) -> String? {
+        guard !hasAmbiguousLocalOwners(stackName: stackName, worktrees: worktrees) else { return nil }
         if let username {
             return worktrees.first(where: { $0.branch == "\(username)/\(stackName)" })?.id
         }
         return worktrees.first(where: { $0.branch.hasSuffix("/\(stackName)") })?.id
     }
 
-    /// Stack names gg reports more than once across the whole snapshot —
-    /// e.g. two locally-inferred usernames both have a same-named stack
-    /// checked out. gg's JSON carries only `stack_name` per entry, no owning
-    /// username or branch, so a duplicated name can't be safely attributed
-    /// to any one worktree. Counts BOTH successfully-classified bucket
-    /// entries and `stack_errors` (a per-user stack that failed to load is
-    /// still a distinct occurrence of that name). Rows with an ambiguous
-    /// name are dimmed rather than risk navigating to the wrong person's
-    /// worktree.
-    static func ambiguousStackNames(
-        in buckets: GGInboxBuckets,
-        stackErrors: [GGInboxStackError] = []
-    ) -> Set<String> {
-        var counts: [String: Int] = [:]
-        for bucket in GGInboxBucket.allCases {
-            for entry in bucket.entries(in: buckets) {
-                counts[entry.stackName, default: 0] += 1
-            }
-        }
-        for error in stackErrors {
-            counts[error.stackName, default: 0] += 1
-        }
-        return Set(counts.filter { $0.value > 1 }.map(\.key))
+    /// True when more than one local worktree branch matches gg's
+    /// `<username>/<stackName>` convention for this stack name — i.e. more
+    /// than one person's stack shares the name. gg infers per-entry
+    /// ownership from local branches (its `infer_stack_usernames` scans them
+    /// for the naming convention), and its inbox JSON carries only
+    /// `stack_name` with no owner, so a second matching branch means a given
+    /// row can't be safely attributed to either one. This is independent of
+    /// how many inbox rows reference the name — a single stack with several
+    /// positions/PRs is normal and must never be treated as ambiguous.
+    static func hasAmbiguousLocalOwners(
+        stackName: String,
+        worktrees: [(id: String, branch: String)]
+    ) -> Bool {
+        worktrees.filter { $0.branch.hasSuffix("/\(stackName)") }.count > 1
     }
 }
 
@@ -282,13 +274,6 @@ struct GGInboxTabView: View {
 
     private func resolveWorktreeId(_ entry: GGInboxEntry) -> String? {
         guard let project else { return nil }
-        if let snapshot = inboxState.snapshot,
-           GGInboxWorktreeResolver.ambiguousStackNames(
-               in: snapshot.buckets,
-               stackErrors: snapshot.stackErrors
-           ).contains(entry.stackName) {
-            return nil
-        }
         let worktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
             .map { (id: $0.id, branch: $0.branch) }
         return GGInboxWorktreeResolver.worktreeId(
@@ -305,7 +290,7 @@ struct GGInboxTabView: View {
     }
 
     private func refresh() {
-        guard let project else { return }
+        guard let project, state.ggInboxAvailable(projectId: project.id) else { return }
         Task { @MainActor in
             await store.refresh(projectId: project.id, repoPath: project.path, service: service)
         }
