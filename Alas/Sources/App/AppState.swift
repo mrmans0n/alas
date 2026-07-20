@@ -5421,7 +5421,7 @@ final class AppState {
     /// worktree when the current selection belongs to a different project.
     func openGGInbox(projectId: String) {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
-        let projectWorktreeIds = projectsManager.worktrees(projectId: projectId).map(\.id)
+        let projectWorktreeIds = projectsManager.visibleWorktrees(projectId: projectId).map(\.id)
         guard let worktreeId = Self.inboxHostWorktreeId(
             selectedWorktreeId: selectedWorktreeId,
             projectWorktreeIds: projectWorktreeIds

@@ -248,7 +248,7 @@ struct GGInboxTabView: View {
 
     private func resolveWorktreeId(_ entry: GGInboxEntry) -> String? {
         guard let project else { return nil }
-        let worktrees = state.projectsManager.worktrees(projectId: project.id)
+        let worktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
             .map { (id: $0.id, branch: $0.branch) }
         return GGInboxWorktreeResolver.worktreeId(
             stackName: entry.stackName,
