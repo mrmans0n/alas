@@ -141,6 +141,7 @@ struct NewWorktreeDialog: View {
         .onChange(of: projectId) { _, _ in
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
+            createAsGGStack = Self.stackModeSurvives(createAsGGStack, availability: ggStackAvailability)
             if let pinned = stackPinnedBase { base = pinned }
         }
         .onChange(of: branch) { _, _ in
@@ -361,6 +362,21 @@ struct NewWorktreeDialog: View {
         guard !projectsEmpty, !branchEmpty, branchValidation == nil else { return false }
         if requiresAcpAgent, !hasAcpAgent { return false }
         return true
+    }
+
+    /// Stack mode only survives while the selected project still offers it.
+    /// Switching to a repo where gg stacks aren't enabled (or `branch_username`
+    /// is unresolved, so availability is `.disabled`/`.hidden` rather than
+    /// `.enabled`) clears the toggle — otherwise Create would silently produce a
+    /// plain branch named after the intended stack, since `effectiveBranch`
+    /// falls back to the raw field when availability isn't `.enabled`.
+    nonisolated static func stackModeSurvives(
+        _ on: Bool,
+        availability: GGStackCreateMode.Availability
+    ) -> Bool {
+        guard on else { return false }
+        if case .enabled = availability { return true }
+        return false
     }
 
     nonisolated static func resolvedPresetProject(
