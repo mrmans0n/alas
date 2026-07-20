@@ -5,6 +5,11 @@ import Foundation
 @Suite(.serialized)
 @MainActor
 struct AppStateCleanupTests {
+    enum AnchorRefreshPath {
+        case refreshAll
+        case clearProjectsWithoutWorktrees
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         var config: AppConfig? = nil
         var projectsFile: ProjectsFile? = nil
@@ -200,7 +205,8 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: linkedId).map(\.title) == ["persisted"])
     }
 
-    @Test func refreshAllRestartsWatcherWhenProjectAnchorChanges() async throws {
+    @Test(arguments: [AnchorRefreshPath.refreshAll, .clearProjectsWithoutWorktrees])
+    func refreshRestartsWatcherWhenProjectAnchorChanges(_ refreshPath: AnchorRefreshPath) async throws {
         let repo = try await makeRepo(name: "topology-anchor-watcher")
         let linked = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleanup-linked-\(UUID().uuidString)")
@@ -251,7 +257,13 @@ struct AppStateCleanupTests {
             deleteBranchIfMerged: false,
             force: false
         )
-        await state.refreshAllProjectTopologies()
+        switch refreshPath {
+        case .refreshAll:
+            await state.refreshAllProjectTopologies()
+        case .clearProjectsWithoutWorktrees:
+            let removed = await state.clearProjectsWithoutWorktrees()
+            #expect(removed == 0)
+        }
 
         #expect(watchedPaths.map(\.path) == [linked.standardizedFileURL.path, repo.standardizedFileURL.path])
     }
