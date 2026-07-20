@@ -129,4 +129,41 @@ struct ACPMCPPromptPreambleTests {
             builtInInjected: true, isDelegated: false, userServerNames: []))
         #expect(text.contains("MCP server \"alas\""))
     }
+
+    @Test func ggStackContextRendersNamedForm() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp,
+            ggStack: .init(stackName: "auth-flow", entryCount: 3, ggMCPAttached: true)
+        ))
+        #expect(text.contains("gg stacked-diffs stack \"auth-flow\" (3 entries)"))
+        #expect(text.contains("gg absorb"))
+        #expect(text.contains("gg sync"))
+        #expect(text.contains("never push stack branches directly with `git push`"))
+        #expect(text.contains("git-gud")) // MCP mention when attached
+    }
+
+    @Test func ggStackContextGenericFormAndNoMCPMention() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .cli(serverAvailability: .available),
+            ggStack: .init(stackName: nil, entryCount: nil, ggMCPAttached: false)
+        ))
+        #expect(text.contains("gg stacked-diffs"))
+        #expect(!text.contains("\"auth-flow\""))
+        #expect(!text.contains("git-gud"))
+    }
+
+    @Test func stackOnlyPreambleIsEmitted() {
+        // No built-in, no user servers — but a stack context alone still
+        // produces a preamble.
+        #expect(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: [], mode: .mcp,
+            ggStack: .init(stackName: "s", entryCount: 1, ggMCPAttached: false)
+        ) != nil)
+    }
+
+    @Test func nilGGStackKeepsExistingBehavior() {
+        #expect(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: [], mode: .mcp
+        ) == nil)
+    }
 }
