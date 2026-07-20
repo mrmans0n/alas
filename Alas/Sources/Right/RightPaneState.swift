@@ -1068,7 +1068,10 @@ final class RightPaneState {
                     ggActionState.setError("This stack is no longer ready to land.")
                     return
                 }
-                _ = try await ggService.land(worktreePath: worktree.path.path, until: until)
+                let result = try await ggService.land(worktreePath: worktree.path.path, until: until)
+                if let summary = GGStackActionState.landSummaryLine(landedCount: result.landed.count) {
+                    ggActionState.setActionSummary(summary)
+                }
             } catch let error as GGServiceError {
                 ggActionState.setError(error.userMessage)
             } catch {
@@ -1096,6 +1099,10 @@ final class RightPaneState {
                 for try await event in ggService.sync(worktreePath: worktree.path.path) {
                     ggActionState.appendSyncEvent(event)
                     if case .error(let message) = event { ggActionState.setError(message) }
+                }
+                if let summary = GGStackActionState.syncSummaryLine(from: ggActionState.syncProgress) {
+                    ggActionState.setActionSummary(summary)
+                    ggActionState.clearSyncProgress()
                 }
             } catch let error as GGServiceError {
                 if ggActionState.lastError == nil { ggActionState.setError(error.userMessage) }

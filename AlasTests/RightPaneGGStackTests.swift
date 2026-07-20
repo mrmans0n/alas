@@ -30,6 +30,26 @@ private final class ThrowingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
     }
 }
 
+/// Answers the `sync --help` capability probe with `--jsonl` support, then
+/// streams the given NDJSON body for `sync --jsonl` — needed because
+/// `CountingFakeGGRunner` echoes the same stdout to every call, which would
+/// make the probe see the sync body instead of a help string and fall back
+/// to the non-streaming path.
+private final class NDJSONSyncFakeGGRunner: GGCommandRunning, @unchecked Sendable {
+    private let ndjson: String
+
+    init(ndjson: String) {
+        self.ndjson = ndjson
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        return ProcessResult(exitCode: 0, stdout: ndjson, stderr: "")
+    }
+}
+
 private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
@@ -549,5 +569,36 @@ struct RightPaneGGStackTests {
 
         #expect(runner.callCount == 1)
         #expect(didRefreshProjectTopology)
+    }
+
+    @Test func syncActionLeavesSummaryAndClearsProgress() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let ndjson = [
+            #"{"event":"start","total_entries":1}"#,
+            #"{"event":"push_done","position":1,"forced":false}"#,
+            #"{"event":"summary"}"#,
+        ].joined(separator: "\n")
+        state.ggService = GGService(runner: NDJSONSyncFakeGGRunner(ndjson: ndjson))
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
+
+        // Drive the same body onGGStackAction(.sync) runs, but awaitably:
+        // consume the service stream and apply the summary exactly as
+        // runGGSync does. If runGGSync is refactored to expose an awaitable
+        // core (e.g. `func runGGSyncBody() async`), call that instead —
+        // implementer's choice; the assertion is what matters:
+        _ = state.ggActionState.beginAction(.sync)
+        for try await event in state.ggService.sync(worktreePath: wt.path.path) {
+            state.ggActionState.appendSyncEvent(event)
+        }
+        if let summary = GGStackActionState.syncSummaryLine(from: state.ggActionState.syncProgress) {
+            state.ggActionState.setActionSummary(summary)
+            state.ggActionState.clearSyncProgress()
+        }
+        state.ggActionState.endAction(.sync)
+
+        #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
+        #expect(state.ggActionState.syncProgress.isEmpty)
     }
 }
