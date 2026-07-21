@@ -19,18 +19,26 @@ struct ACPMCPStatusState: Equatable {
     let preambleDetail: String?
     let externalRows: [Row]?
     let showsAdapterInstallAction: Bool
+    let hasBuiltInWarning: Bool
+    let showsSwitchToHTTPAction: Bool
 
     init?(
         summary: MCPAttachmentSummary?,
         currentServers: [ProjectMCPServer],
         preamblePending: Bool = false,
         preambleSent: Bool = false,
-        externalStatus: ACPMCPExternalStatus? = nil
+        externalStatus: ACPMCPExternalStatus? = nil,
+        builtInRegistration: MCPServerRegistration = .unknown,
+        transport: AlasMCPTransport = .stdio
     ) {
         guard let summary,
               !summary.statuses.isEmpty || !currentServers.isEmpty else {
             return nil
         }
+
+        let builtInNotRegistered = (builtInRegistration == .notRegistered)
+        hasBuiltInWarning = builtInNotRegistered
+        showsSwitchToHTTPAction = builtInNotRegistered && transport == .stdio
 
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)

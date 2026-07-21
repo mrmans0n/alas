@@ -168,4 +168,38 @@ struct ACPMCPStatusPolicyTests {
         let classic = try #require(ACPMCPStatusState(summary: summary, currentServers: []))
         #expect(classic.externalRows == nil)
     }
+
+    private func builtInSummary() -> MCPAttachmentSummary {
+        let status = MCPAttachmentServerStatus(
+            id: BuiltInAlasMCP.statusId, name: "alas",
+            transport: .stdio, disposition: .requested)
+        return MCPAttachmentSummary(statuses: [status], configurationFingerprint: "fp")
+    }
+
+    @Test("notRegistered on stdio offers the HTTP switch")
+    func offersSwitch() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(), currentServers: [],
+            builtInRegistration: .notRegistered, transport: .stdio)
+        #expect(state?.hasBuiltInWarning == true)
+        #expect(state?.showsSwitchToHTTPAction == true)
+    }
+
+    @Test("notRegistered on http warns without the switch")
+    func warnsNoSwitchOnHTTP() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(), currentServers: [],
+            builtInRegistration: .notRegistered, transport: .http)
+        #expect(state?.hasBuiltInWarning == true)
+        #expect(state?.showsSwitchToHTTPAction == false)
+    }
+
+    @Test("registered shows no warning")
+    func registeredNoWarning() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(), currentServers: [],
+            builtInRegistration: .registered, transport: .stdio)
+        #expect(state?.hasBuiltInWarning == false)
+        #expect(state?.showsSwitchToHTTPAction == false)
+    }
 }
