@@ -1,5 +1,22 @@
 import Foundation
 
+/// Warning state for the built-in "alas" MCP server on the current attach.
+/// Drives the status control's warning treatment and whether the
+/// "switch to HTTP transport" action is offered.
+enum BuiltInMCPWarning: Equatable {
+    /// The built-in server is registered (or not requested) — no warning.
+    case none
+    /// Attached over stdio, not registered, and the adapter supports HTTP:
+    /// switching transport is a viable remedy.
+    case canSwitchToHTTP
+    /// Already attached over HTTP but still not registered — switching
+    /// transport would not help.
+    case alreadyHTTP
+    /// Attached over stdio, not registered, and the adapter has no HTTP MCP
+    /// support, so offering the switch would loop back to stdio.
+    case httpUnsupported
+}
+
 /// Presentation-only state for the MCP attachment status control. The
 /// planner's summary never retains resolved commands, environment values, or
 /// headers, and this policy deliberately keeps the same boundary.
@@ -19,18 +36,42 @@ struct ACPMCPStatusState: Equatable {
     let preambleDetail: String?
     let externalRows: [Row]?
     let showsAdapterInstallAction: Bool
+    let builtInWarning: BuiltInMCPWarning
+    let hasBuiltInWarning: Bool
+    let showsSwitchToHTTPAction: Bool
 
     init?(
         summary: MCPAttachmentSummary?,
         currentServers: [ProjectMCPServer],
         preamblePending: Bool = false,
         preambleSent: Bool = false,
-        externalStatus: ACPMCPExternalStatus? = nil
+        externalStatus: ACPMCPExternalStatus? = nil,
+        builtInRegistration: MCPServerRegistration = .unknown,
+        adapterSupportsHTTP: Bool = true
     ) {
         guard let summary,
               !summary.statuses.isEmpty || !currentServers.isEmpty else {
             return nil
         }
+
+        // Derive the transport from what the session actually attached with —
+        // the built-in status row — not the (possibly newer) config preference.
+        let attachedBuiltInTransport = summary.statuses
+            .first { $0.id == BuiltInAlasMCP.statusId }?.transport
+        if builtInRegistration != .notRegistered {
+            builtInWarning = .none
+        } else if attachedBuiltInTransport == .http {
+            // Already on HTTP and still not registered — the switch cannot help.
+            builtInWarning = .alreadyHTTP
+        } else if adapterSupportsHTTP {
+            builtInWarning = .canSwitchToHTTP
+        } else {
+            // stdio + not registered, but the adapter has no HTTP MCP support:
+            // switching would fall back to stdio again and loop.
+            builtInWarning = .httpUnsupported
+        }
+        hasBuiltInWarning = builtInWarning != .none
+        showsSwitchToHTTPAction = builtInWarning == .canSwitchToHTTP
 
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)
@@ -113,6 +154,16 @@ struct ACPMCPStatusState: Equatable {
         }
         if isStale {
             parts.append("New settings apply on reconnect.")
+        }
+        switch builtInWarning {
+        case .none:
+            break
+        case .canSwitchToHTTP:
+            parts.append("Alas MCP server not started — switch to HTTP transport")
+        case .httpUnsupported:
+            parts.append("Alas MCP server not started and this agent has no HTTP MCP support")
+        case .alreadyHTTP:
+            parts.append("Alas MCP server not started over HTTP")
         }
         return parts.joined(separator: ", ")
     }

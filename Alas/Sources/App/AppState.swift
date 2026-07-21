@@ -61,6 +61,8 @@ final class AppState {
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
+    let mcpRegistrationRegistry = MCPRegistrationRegistry()
+    let mcpHTTPSupervisor = AlasMCPHTTPSupervisor()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     let acpAdapterInstallCoordinator = ACPAdapterInstallCoordinator()
 
@@ -2051,6 +2053,22 @@ final class AppState {
         harness.socketServer.onCLIRequest = { [weak self] request in
             guard let self else { return .error("Alas is not available.") }
             return await self.handleCLIRequest(request)
+        }
+        // The socket server dispatches this on the main queue, so the closure
+        // is already main-actor context.
+        harness.socketServer.onMCPHello = { [weak self] hello in
+            guard let self else { return }
+            self.mcpRegistrationRegistry.recordHello(
+                sessionId: hello.sessionId, transport: hello.transport
+            )
+            // Heal immediately if a slow/lazy harness registered after the
+            // grace check already flipped the row to notRegistered.
+            for manager in self.acpManagers.values {
+                if let session = manager.liveSession(for: hello.sessionId) {
+                    session.builtInMCPRegistration = .registered
+                    break
+                }
+            }
         }
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
@@ -4819,7 +4837,7 @@ final class AppState {
                     configuredServers: project.mcpServers
                 )
             },
-            builtInMCPProvider: { [weak self] worktreePath, sessionId in
+            builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
                 guard let self else { return nil }
                 // installExecutables is idempotent (byte-compares before
                 // writing); a nil binaryPath (no bundle, e.g. tests) means
@@ -4834,15 +4852,61 @@ final class AppState {
                 if let parentSessionId {
                     self.delegatedSessionParents[sessionId] = parentSessionId
                 }
+                let configuredServers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+                if self.config.harness.alasMCPTransport == .http,
+                   adapterSupportsHTTP,
+                   let binaryPath, let socketPath = self.harness.socketServer.socketPath,
+                   BuiltInAlasMCP.shouldInject(
+                       enabled: self.config.harness.exposeAlasMCP,
+                       configuredServers: configuredServers,
+                       binaryPath: binaryPath,
+                       socketPath: socketPath
+                   ) {
+                    if let endpoint = await self.mcpHTTPSupervisor.endpoint(
+                        binaryPath: binaryPath,
+                        socketPath: socketPath,
+                        worktreePath: worktreePath,
+                        sessionId: sessionId,
+                        parentSessionId: parentSessionId
+                    ) {
+                        return BuiltInAlasMCP.injection(
+                            enabled: self.config.harness.exposeAlasMCP,
+                            configuredServers: configuredServers,
+                            binaryPath: binaryPath,
+                            socketPath: self.harness.socketServer.socketPath,
+                            worktreePath: worktreePath,
+                            sessionId: sessionId,
+                            parentSessionId: parentSessionId,
+                            httpEndpoint: endpoint
+                        )
+                    }
+                    // Supervisor couldn't get a port — fall through to stdio
+                    // (better than no tools).
+                }
+                // Reaching the non-HTTP path means this attach is not using an
+                // HTTP server (stdio preference, adapter without HTTP MCP
+                // support, disabled, or user-overridden). Tear down any HTTP
+                // process a previous attach of this session spawned so it does
+                // not linger bound on localhost. No-op when none is running.
+                self.mcpHTTPSupervisor.end(sessionId: sessionId)
                 return BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
-                    configuredServers: self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
+                    configuredServers: configuredServers,
                     binaryPath: binaryPath,
                     socketPath: self.harness.socketServer.socketPath,
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     parentSessionId: parentSessionId
                 )
+            },
+            isBuiltInMCPRegistered: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.isRegistered(sessionId: sessionId) ?? false
+            },
+            clearMCPRegistration: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
+            },
+            onSessionEnded: { [weak self] sessionId in
+                self?.mcpHTTPSupervisor.end(sessionId: sessionId)
             },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,

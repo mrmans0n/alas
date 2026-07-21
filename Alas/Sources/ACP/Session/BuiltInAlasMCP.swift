@@ -15,6 +15,25 @@ enum BuiltInAlasMCP {
         let isDelegated: Bool
     }
 
+    /// An HTTP endpoint for the built-in server. When provided, `injection`
+    /// emits an `.http` wire entry (with a bearer auth header) instead of the
+    /// default `.stdio` entry.
+    struct HTTPEndpoint: Equatable {
+        let url: String
+        let token: String
+    }
+
+    /// Whether the built-in server should be injected at all, independent of
+    /// transport. Mirrors the guards in `injection`; used by the HTTP path to
+    /// avoid spawning a supervised process for a server that will be suppressed.
+    static func shouldInject(enabled: Bool, configuredServers: [ProjectMCPServer],
+                             binaryPath: String?, socketPath: String?) -> Bool {
+        guard enabled, binaryPath != nil, socketPath != nil else { return false }
+        return !configuredServers.contains {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
+        }
+    }
+
     /// The wire entry + status row for the built-in server, or nil when it
     /// must not be injected: globally disabled, the managed binary or app
     /// socket is unavailable, or the project already configures a server
@@ -26,15 +45,27 @@ enum BuiltInAlasMCP {
         socketPath: String?,
         worktreePath: String,
         sessionId: String,
-        parentSessionId: String? = nil
+        parentSessionId: String? = nil,
+        httpEndpoint: HTTPEndpoint? = nil
     ) -> Injection? {
-        guard enabled, let binaryPath, let socketPath else { return nil }
-        let userOverride = configuredServers.contains {
-            $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
-        }
-        guard !userOverride else { return nil }
-        return Injection(
-            server: .stdio(
+        guard shouldInject(
+            enabled: enabled,
+            configuredServers: configuredServers,
+            binaryPath: binaryPath,
+            socketPath: socketPath
+        ), let binaryPath, let socketPath else { return nil }
+
+        let server: ACPMCPServer
+        let transport: MCPTransportKind
+        if let httpEndpoint {
+            server = .http(
+                name: serverName,
+                url: httpEndpoint.url,
+                headers: [.init(name: "Authorization", value: "Bearer \(httpEndpoint.token)")]
+            )
+            transport = .http
+        } else {
+            server = .stdio(
                 name: serverName,
                 command: binaryPath,
                 args: ["mcp"],
@@ -43,11 +74,16 @@ enum BuiltInAlasMCP {
                     .init(name: "ALAS_WORKTREE_DIR", value: worktreePath),
                     .init(name: "ALAS_SESSION_ID", value: sessionId),
                 ] + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
-            ),
+            )
+            transport = .stdio
+        }
+
+        return Injection(
+            server: server,
             status: .init(
                 id: statusId,
                 name: serverName,
-                transport: .stdio,
+                transport: transport,
                 disposition: .requested
             ),
             isDelegated: parentSessionId != nil

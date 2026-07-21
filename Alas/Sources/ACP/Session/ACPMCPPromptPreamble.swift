@@ -108,6 +108,12 @@ enum ACPMCPPromptPreamble {
             line += " Prefer these tools when the user asks to open/show files, "
                 + "manage worktrees, run or respond to reviews, or be notified."
             lines.append(line)
+            lines.append(
+                "If these MCP tools do not appear in your inventory (some harnesses "
+                + "restrict MCP servers by policy), the same actions are available via "
+                + "the `alas` CLI in your shell: `alas open`, `alas notify`, "
+                + "`alas wt …`, `alas review …` (comments/reply/resolve/finish), "
+                + "`alas session …`.")
         }
         if !userServerNames.isEmpty {
             lines.append("Additional MCP servers attached: "

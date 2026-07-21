@@ -7,6 +7,7 @@ struct ACPMCPStatusControl: View {
     @ObservedObject var session: ACPSession
     let currentServers: [ProjectMCPServer]
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
+    var onSwitchToHTTP: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
 
@@ -16,7 +17,9 @@ struct ACPMCPStatusControl: View {
             currentServers: currentServers,
             preamblePending: session.pendingMCPPreamble != nil,
             preambleSent: session.mcpPreambleSent,
-            externalStatus: session.mcpExternalStatus
+            externalStatus: session.mcpExternalStatus,
+            builtInRegistration: session.builtInMCPRegistration,
+            adapterSupportsHTTP: session.adapterSupportsHTTPMCP
         )
     }
 
@@ -30,7 +33,7 @@ struct ACPMCPStatusControl: View {
                         .font(.system(size: 11, weight: .medium))
                     Text("MCP \(status.requestedCount)")
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    if status.skippedCount > 0 {
+                    if status.skippedCount > 0 || status.hasBuiltInWarning {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 9))
                     }
@@ -53,13 +56,17 @@ struct ACPMCPStatusControl: View {
             .help(status.accessibilitySummary)
             .accessibilityLabel(status.accessibilitySummary)
             .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-                ACPMCPStatusPopover(status: status, onInstallPiMCPAdapter: onInstallPiMCPAdapter)
+                ACPMCPStatusPopover(
+                    status: status,
+                    onInstallPiMCPAdapter: onInstallPiMCPAdapter,
+                    onSwitchToHTTP: onSwitchToHTTP
+                )
             }
         }
     }
 
     private func foregroundColor(for status: ACPMCPStatusState) -> Color {
-        if status.isStale || status.skippedCount > 0 {
+        if status.isStale || status.skippedCount > 0 || status.hasBuiltInWarning {
             return theme.color("warn")
         }
         return theme.color("accent")
@@ -75,6 +82,7 @@ private struct ACPMCPStatusPopover: View {
 
     let status: ACPMCPStatusState
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
+    var onSwitchToHTTP: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var installState: InstallState = .idle
 
@@ -98,6 +106,21 @@ private struct ACPMCPStatusPopover: View {
                         .font(.system(size: 10, weight: .semibold))
                     Text("New settings apply on reconnect.")
                         .font(.system(size: 11))
+                }
+                .foregroundStyle(theme.color("warn"))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.color("warn").opacity(0.10))
+            }
+
+            if status.hasBuiltInWarning {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("The agent harness didn't start the Alas MCP server — it may be blocked by an enterprise MCP policy (stdio servers are commonly restricted).")
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(theme.color("warn"))
                 .padding(.horizontal, 12)
@@ -133,6 +156,28 @@ private struct ACPMCPStatusPopover: View {
 
             if status.showsAdapterInstallAction {
                 installActionRow
+            }
+
+            if status.showsSwitchToHTTPAction {
+                VStack(alignment: .leading, spacing: 6) {
+                    AlasButton(title: "Switch to HTTP transport", style: .subtle) {
+                        onSwitchToHTTP?()
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            } else if status.hasBuiltInWarning {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 10))
+                    Text("Already using HTTP; check whether your agent policy allows http://localhost MCP servers.")
+                        .font(.system(size: 10.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(theme.color("fg-muted"))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if let detail = status.preambleDetail {

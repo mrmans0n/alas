@@ -31,7 +31,8 @@ final class ACPSessionManager: ObservableObject {
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
     typealias BuiltInMCPProvider = @MainActor (
         _ worktreePath: String,
-        _ sessionId: ACPSession.ID
+        _ sessionId: ACPSession.ID,
+        _ adapterSupportsHTTP: Bool
     ) async -> BuiltInAlasMCP.Injection?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable for that worktree. Mirrors
@@ -83,6 +84,18 @@ final class ACPSessionManager: ObservableObject {
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
+    /// Reports whether the built-in MCP server announced itself (hello) for a
+    /// local session id. Read after the post-attach grace to decide between
+    /// `.registered` and `.notRegistered`.
+    private let isBuiltInMCPRegistered: (@MainActor (String) -> Bool)?
+    /// Clears any recorded hello for a local session id so each attach epoch
+    /// re-proves registration.
+    private let clearMCPRegistration: (@MainActor (String) -> Void)?
+    /// Invoked when a session is permanently removed (`deleteSession`) so the
+    /// owner can release per-session resources — e.g. terminating a supervised
+    /// `alas mcp --http` process. Not called on `closeSession` (a transient
+    /// in-memory unload where a later reattach is expected).
+    private let onSessionEnded: (@MainActor (ACPSession.ID) -> Void)?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable. Fetched per attach, mirroring
     /// `builtInMCPProvider`.
@@ -113,6 +126,10 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    /// Per-session attach counter. The built-in MCP registration grace timer
+    /// captures the epoch at attach and only writes the row if it still matches,
+    /// so a timer from a superseded attach can never clobber the current state.
+    private var mcpRegistrationAttachEpoch: [ACPSession.ID: Int] = [:]
     #if DEBUG
     /// Number of attached runners. Public-but-namespaced read accessor for
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
@@ -360,6 +377,9 @@ final class ACPSessionManager: ObservableObject {
          brokerServiceFactory: ACPBrokerServiceFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
+         isBuiltInMCPRegistered: (@MainActor (String) -> Bool)? = nil,
+         clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
+         onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil)
     {
@@ -377,6 +397,9 @@ final class ACPSessionManager: ObservableObject {
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.builtInMCPProvider = builtInMCPProvider
+        self.isBuiltInMCPRegistered = isBuiltInMCPRegistered
+        self.clearMCPRegistration = clearMCPRegistration
+        self.onSessionEnded = onSessionEnded
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
@@ -844,6 +867,7 @@ final class ACPSessionManager: ObservableObject {
 
     func deleteSession(id: ACPSession.ID) {
         killRemoteHelperACPProcIfPossible(sessionId: id)
+        onSessionEnded?(id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
@@ -2356,6 +2380,11 @@ extension ACPSessionManager {
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
+                // A failed/aborted attach may have already spawned the supervised
+                // `alas mcp --http` helper (the provider runs before session
+                // creation). Tear it down so it doesn't linger bound on
+                // localhost; a later reattach respawns it. No-op for stdio sessions.
+                onSessionEnded?(sessionId)
             }
         }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
@@ -2519,6 +2548,7 @@ extension ACPSessionManager {
             )
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
+            session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
             let mcpPlan = MCPAttachmentPlanner.plan(.init(
@@ -2534,7 +2564,35 @@ extension ACPSessionManager {
             // skip it entirely instead of reporting it unavailable on every
             // connect.
             let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let builtInMCP = remoteHost == nil ? await builtInMCPProvider?(worktreePath, sessionId) : nil
+            let builtInMCP = remoteHost == nil
+                ? await builtInMCPProvider?(worktreePath, sessionId, initialized.mcpCapabilities.http)
+                : nil
+            // `.external` adapters (e.g. Pi) ignore the ACP `mcpServers` wire
+            // config entirely and reach Alas tools through the injected CLI
+            // environment instead, so the built-in server never spawns/connects
+            // and no `mcp_hello` ever arrives. Running the detection there would
+            // always resolve `.notRegistered` and wrongly offer an HTTP switch
+            // the adapter would also ignore — so skip registration tracking for
+            // external adapters.
+            let usesWireMCP: Bool = {
+                if case .external = spec.mcpInjection { return false }
+                return true
+            }()
+            let shouldTrackBuiltInRegistration = builtInMCP != nil && usesWireMCP
+            // Bump the attach epoch so a grace timer left over from a previous
+            // attach of this session can never write the current row.
+            let mcpRegistrationEpoch = (mcpRegistrationAttachEpoch[sessionId] ?? 0) + 1
+            mcpRegistrationAttachEpoch[sessionId] = mcpRegistrationEpoch
+            if shouldTrackBuiltInRegistration {
+                clearMCPRegistration?(sessionId)
+            }
+            // Reset to `.unknown` on every attach: either we are about to track
+            // (the grace timer starts after session creation succeeds, below),
+            // or the built-in server isn't requested this attach (disabled,
+            // user-overridden, or an external adapter), in which case any stale
+            // `.notRegistered` from a prior attach must be cleared so the status
+            // control stops warning about a server that is no longer requested.
+            session.builtInMCPRegistration = .unknown
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {
@@ -2877,6 +2935,27 @@ extension ACPSessionManager {
                 )
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
+                }
+            }
+            // Start the built-in MCP registration grace ONLY now — session
+            // creation/restoration above has succeeded, which is when the
+            // adapter actually received `wireMCPServers` and could spawn or
+            // connect the built-in server. Arming it at composition time risks a
+            // slow auth or a >12s restore marking a healthy session
+            // `.notRegistered` before the harness ever saw the config. Guarded
+            // by the attach epoch so a stale timer cannot clobber a newer row; a
+            // late hello still heals the row via AppState.onMCPHello.
+            if shouldTrackBuiltInRegistration {
+                Task { @MainActor [weak self, weak session] in
+                    try? await Task.sleep(for: .seconds(12))
+                    guard let self, let session,
+                          self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch
+                    else { return }
+                    // Don't downgrade a row that already registered.
+                    if session.builtInMCPRegistration == .registered { return }
+                    let helloSeen = self.isBuiltInMCPRegistered?(sessionId) ?? false
+                    session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
+                        helloSeen: helloSeen, graceElapsed: true)
                 }
             }
             if createdFreshRemoteSession {

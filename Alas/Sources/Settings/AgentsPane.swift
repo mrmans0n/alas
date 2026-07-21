@@ -65,6 +65,16 @@ struct AgentsPane: View {
                                 desc: "Give chat agents an MCP server with Alas actions: open files, manage worktrees, and open reviews. Applies to newly connected sessions.") {
                         AlasToggle(on: state.bind(\.harness.exposeAlasMCP))
                     }
+                    SettingsRow(name: "Alas MCP transport",
+                                desc: "How the built-in Alas MCP server is delivered. Use HTTP if your agent restricts stdio MCP servers by policy.") {
+                        Picker("", selection: state.bind(\.harness.alasMCPTransport)) {
+                            Text("Standard I/O (default)").tag(AlasMCPTransport.stdio)
+                            Text("HTTP (localhost)").tag(AlasMCPTransport.http)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .disabled(!state.config.harness.exposeAlasMCP)
+                    }
                     SettingsRow(
                         name: "Terminal / Harness",
                         desc: "Configure harness notifications and install hooks."

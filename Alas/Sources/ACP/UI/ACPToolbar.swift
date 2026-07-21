@@ -22,7 +22,19 @@ struct ACPToolbar: View {
             ACPMCPStatusControl(
                 session: session,
                 currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
-                onInstallPiMCPAdapter: { await state.installPiMCPAdapter() }
+                onInstallPiMCPAdapter: { await state.installPiMCPAdapter() },
+                onSwitchToHTTP: {
+                    state.config.harness.alasMCPTransport = .http
+                    _ = state.saveConfig()
+                    // A live session is `.ready`, for which `reattach` is a
+                    // no-op — so detach then attach (the same flow as the
+                    // explicit Reconnect action) to actually apply the new
+                    // transport now instead of on some later disconnect.
+                    Task {
+                        await manager.detach(sessionId: session.id)
+                        await manager.attach(to: session.id, freshlyCreated: false)
+                    }
+                }
             )
             ACPRecoveryPill(session: session)
             if let currentGoal = session.currentGoal {

@@ -168,4 +168,83 @@ struct ACPMCPStatusPolicyTests {
         let classic = try #require(ACPMCPStatusState(summary: summary, currentServers: []))
         #expect(classic.externalRows == nil)
     }
+
+    private func builtInSummary(transport: MCPTransportKind = .stdio) -> MCPAttachmentSummary {
+        let status = MCPAttachmentServerStatus(
+            id: BuiltInAlasMCP.statusId, name: "alas",
+            transport: transport, disposition: .requested)
+        return MCPAttachmentSummary(
+            statuses: [status],
+            configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: []))
+    }
+
+    @Test("notRegistered on stdio offers the HTTP switch when the adapter supports http")
+    func offersSwitch() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered,
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == .canSwitchToHTTP)
+        #expect(state?.hasBuiltInWarning == true)
+        #expect(state?.showsSwitchToHTTPAction == true)
+    }
+
+    @Test("notRegistered on stdio without http support warns but hides the switch")
+    func warnsNoSwitchWhenAdapterLacksHTTP() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered,
+            adapterSupportsHTTP: false)
+        #expect(state?.builtInWarning == .httpUnsupported)
+        #expect(state?.hasBuiltInWarning == true)
+        #expect(state?.showsSwitchToHTTPAction == false)
+    }
+
+    @Test("notRegistered on http warns without the switch")
+    func warnsNoSwitchOnHTTP() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(transport: .http), currentServers: [],
+            builtInRegistration: .notRegistered,
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == .alreadyHTTP)
+        #expect(state?.hasBuiltInWarning == true)
+        #expect(state?.showsSwitchToHTTPAction == false)
+    }
+
+    @Test("accessibility summary reflects the built-in warning")
+    func accessibilitySummaryReflectsBuiltInWarning() {
+        let canSwitch = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered, adapterSupportsHTTP: true)
+        #expect(canSwitch?.accessibilitySummary
+            == "MCP: 1 requested, Alas MCP server not started — switch to HTTP transport")
+
+        let unsupported = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered, adapterSupportsHTTP: false)
+        #expect(unsupported?.accessibilitySummary
+            == "MCP: 1 requested, Alas MCP server not started and this agent has no HTTP MCP support")
+
+        let alreadyHTTP = ACPMCPStatusState(
+            summary: builtInSummary(transport: .http), currentServers: [],
+            builtInRegistration: .notRegistered, adapterSupportsHTTP: true)
+        #expect(alreadyHTTP?.accessibilitySummary
+            == "MCP: 1 requested, Alas MCP server not started over HTTP")
+
+        let registered = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .registered, adapterSupportsHTTP: true)
+        #expect(registered?.accessibilitySummary == "MCP: 1 requested")
+    }
+
+    @Test("registered shows no warning")
+    func registeredNoWarning() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .registered,
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == BuiltInMCPWarning.none)
+        #expect(state?.hasBuiltInWarning == false)
+        #expect(state?.showsSwitchToHTTPAction == false)
+    }
 }
