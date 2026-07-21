@@ -62,6 +62,7 @@ final class AppState {
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
+    let mcpHTTPSupervisor = AlasMCPHTTPSupervisor()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     let acpAdapterInstallCoordinator = ACPAdapterInstallCoordinator()
 
@@ -4839,9 +4840,33 @@ final class AppState {
                 if let parentSessionId {
                     self.delegatedSessionParents[sessionId] = parentSessionId
                 }
+                let configuredServers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+                if self.config.harness.alasMCPTransport == .http,
+                   let binaryPath, let socketPath = self.harness.socketServer.socketPath {
+                    if let endpoint = await self.mcpHTTPSupervisor.endpoint(
+                        binaryPath: binaryPath,
+                        socketPath: socketPath,
+                        worktreePath: worktreePath,
+                        sessionId: sessionId,
+                        parentSessionId: parentSessionId
+                    ) {
+                        return BuiltInAlasMCP.injection(
+                            enabled: self.config.harness.exposeAlasMCP,
+                            configuredServers: configuredServers,
+                            binaryPath: binaryPath,
+                            socketPath: self.harness.socketServer.socketPath,
+                            worktreePath: worktreePath,
+                            sessionId: sessionId,
+                            parentSessionId: parentSessionId,
+                            httpEndpoint: endpoint
+                        )
+                    }
+                    // Supervisor couldn't get a port — fall through to stdio
+                    // (better than no tools).
+                }
                 return BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
-                    configuredServers: self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
+                    configuredServers: configuredServers,
                     binaryPath: binaryPath,
                     socketPath: self.harness.socketServer.socketPath,
                     worktreePath: worktreePath,
