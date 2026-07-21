@@ -1,8 +1,8 @@
 import Foundation
 
-/// Pure presentation model for the stack-mode drawer. Computes the title,
-/// summary chip, fact rows, action buttons (+ enablement), and live sync
-/// progress rows from the stack and its action state. No I/O — unit-tested.
+/// Pure presentation policy for the stack drawer. GG remains authoritative
+/// at execution time; this model only selects the action the current snapshot
+/// calls for and describes its effect.
 struct GGStackReadinessModel: Equatable {
     struct Fact: Equatable, Identifiable {
         let label: String
@@ -14,6 +14,7 @@ struct GGStackReadinessModel: Equatable {
         enum Emphasis: Equatable { case primary, normal }
         let kind: GGStackActionKind
         let title: String
+        let detail: String?
         let isEnabled: Bool
         let isInFlight: Bool
         let emphasis: Emphasis
@@ -23,17 +24,25 @@ struct GGStackReadinessModel: Equatable {
     let title: String
     let summaryChip: String
     let facts: [Fact]
-    let actions: [Action]
+    let primaryActions: [Action]
+    let overflowActions: [Action]
     let progressRows: [String]
     let isPaused: Bool
     let actionSummary: String?
+    let localChangesNote: String?
+
+    /// Compatibility for callers that need to reason about every action.
+    var actions: [Action] { primaryActions + overflowActions }
 
     @MainActor
     static func make(
         stack: GGStack,
         action: GGStackActionState,
         liveBehindBase: Int? = nil,
-        hasBlockingGitOperation: Bool = false
+        hasBlockingGitOperation: Bool = false,
+        effectiveConfig: GGEffectiveConfig = .defaults,
+        localChanges: GGLocalChangeStatistics = .zero,
+        undoCandidate: GGUndoCandidate? = nil
     ) -> GGStackReadinessModel {
         let merged = stack.entries.filter { $0.prState == .merged }.count
         let unsynced = max(0, stack.totalCommits - stack.syncedCommits)
@@ -41,6 +50,7 @@ struct GGStackReadinessModel: Equatable {
         let isPaused = action.pausedOperation != nil
         let inFlight = action.inFlightAction
         let busy = inFlight != nil || hasBlockingGitOperation
+        let rebaseThreshold = effectiveConfig.syncBehindThreshold
 
         let summaryChip: String = {
             if isPaused { return "paused" }
@@ -49,45 +59,93 @@ struct GGStackReadinessModel: Equatable {
             return "\(merged)/\(stack.totalCommits) merged"
         }()
 
-        let facts: [Fact] = [
+        let facts = [
             Fact(label: "Commits", value: "\(stack.totalCommits)"),
             Fact(label: "Merged", value: "\(merged)"),
             Fact(label: "Unsynced", value: "\(unsynced)"),
             Fact(label: "Behind base", value: "\(behind)"),
         ]
 
-        let actions: [Action]
+        let primaryActions: [Action]
         if isPaused {
-            actions = [
-                Action(kind: .continueOp, title: "Continue", isEnabled: !busy,
-                       isInFlight: inFlight == .continueOp, emphasis: .primary),
-                Action(kind: .abortOp, title: "Abort", isEnabled: !busy,
-                       isInFlight: inFlight == .abortOp, emphasis: .normal),
+            primaryActions = [
+                makeAction(.continueOp, title: "Continue", enabled: !busy, inFlight: inFlight, emphasis: .primary),
+                makeAction(.abortOp, title: "Abort", enabled: !busy, inFlight: inFlight),
+            ]
+        } else if behind > 0,
+                  rebaseThreshold > 0,
+                  !effectiveConfig.syncAutoRebase,
+                  behind >= rebaseThreshold {
+            primaryActions = [
+                makeAction(
+                    .rebase,
+                    title: "Rebase onto \(stack.base)",
+                    enabled: !busy,
+                    inFlight: inFlight,
+                    emphasis: .primary
+                ),
+            ]
+        } else if unsynced > 0 || behind > 0 || stack.entries.contains(where: { $0.prState == nil }) {
+            primaryActions = [
+                makeAction(
+                    .sync,
+                    title: "Sync stack",
+                    detail: rebaseThreshold > 0
+                        && effectiveConfig.syncAutoRebase
+                        && behind >= rebaseThreshold
+                        ? "Includes rebase onto \(stack.base)"
+                        : nil,
+                    enabled: !busy,
+                    inFlight: inFlight,
+                    emphasis: .primary
+                ),
+            ]
+        } else if hasLandablePrefix(stack) {
+            primaryActions = [
+                makeAction(.land, title: "Land ready", enabled: !busy, inFlight: inFlight, emphasis: .primary),
             ]
         } else {
-            let canSync = behind == 0
-            let canCheckLandReadiness = stack.entries.contains { $0.prState == .open }
-            let hasMerged = merged > 0
-            actions = [
-                Action(kind: .sync, title: "Sync stack", isEnabled: !busy && canSync,
-                       isInFlight: inFlight == .sync, emphasis: .primary),
-                Action(kind: .land, title: "Land ready", isEnabled: !busy && canCheckLandReadiness,
-                       isInFlight: inFlight == .land, emphasis: .normal),
-                Action(kind: .clean, title: "Clean all", isEnabled: !busy && hasMerged,
-                       isInFlight: inFlight == .clean, emphasis: .normal),
-            ]
+            primaryActions = []
         }
 
+        let mutableRegionCanReorder = stack.entries
+            .split(whereSeparator: { $0.prState == .merged })
+            .contains { $0.count > 1 }
+        let overflowActions: [Action] = isPaused ? [] : [
+            makeAction(
+                .reorder,
+                title: "Reorder Stack…",
+                enabled: !busy && mutableRegionCanReorder && stack.entries.allSatisfy { $0.ggId != nil },
+                inFlight: inFlight
+            ),
+            makeAction(.restack, title: "Restack…", enabled: !busy, inFlight: inFlight),
+            makeAction(
+                .undo,
+                title: "Undo Last GG Operation",
+                enabled: !busy && undoCandidate != nil,
+                inFlight: inFlight
+            ),
+            makeAction(
+                .clean,
+                title: "Clean Merged Commits…",
+                enabled: !busy && merged > 0,
+                inFlight: inFlight
+            ),
+        ]
+
         let syncIsRelevant = inFlight == .sync || action.pausedOperation?.pausedBy == .sync
-        let actionSummary = (inFlight == .sync) ? nil : action.lastActionSummary
         return GGStackReadinessModel(
             title: "Stack · \(stack.name)",
             summaryChip: summaryChip,
             facts: facts,
-            actions: actions,
+            primaryActions: primaryActions,
+            overflowActions: overflowActions,
             progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
             isPaused: isPaused,
-            actionSummary: actionSummary
+            actionSummary: inFlight == .sync ? nil : action.lastActionSummary,
+            localChangesNote: primaryActions.contains(where: { $0.kind == .sync }) && localChanges.hasChanges
+                ? "Local changes are not included"
+                : nil
         )
     }
 
@@ -101,16 +159,44 @@ struct GGStackReadinessModel: Equatable {
             title: "Stack operation",
             summaryChip: "paused",
             facts: [],
-            actions: [
-                Action(kind: .continueOp, title: "Continue", isEnabled: !busy,
-                       isInFlight: inFlight == .continueOp, emphasis: .primary),
-                Action(kind: .abortOp, title: "Abort", isEnabled: !busy,
-                       isInFlight: inFlight == .abortOp, emphasis: .normal),
+            primaryActions: [
+                makeAction(.continueOp, title: "Continue", enabled: !busy, inFlight: inFlight, emphasis: .primary),
+                makeAction(.abortOp, title: "Abort", enabled: !busy, inFlight: inFlight),
             ],
+            overflowActions: [],
             progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
             isPaused: true,
-            actionSummary: nil
+            actionSummary: nil,
+            localChangesNote: nil
         )
+    }
+
+    private static func makeAction(
+        _ kind: GGStackActionKind,
+        title: String,
+        detail: String? = nil,
+        enabled: Bool,
+        inFlight: GGStackActionKind?,
+        emphasis: Action.Emphasis = .normal
+    ) -> Action {
+        Action(
+            kind: kind,
+            title: title,
+            detail: detail,
+            isEnabled: enabled,
+            isInFlight: inFlight == kind,
+            emphasis: emphasis
+        )
+    }
+
+    private static func hasLandablePrefix(_ stack: GGStack) -> Bool {
+        for entry in stack.entries.sorted(by: { $0.position < $1.position }) {
+            if entry.prState == .merged { continue }
+            return entry.prState == .open
+                && entry.approved
+                && (entry.ciStatus == nil || entry.ciStatus == .success)
+        }
+        return false
     }
 
     private static func progressRows(from events: [GGSyncEvent]) -> [String] {

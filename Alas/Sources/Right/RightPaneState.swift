@@ -103,6 +103,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Current gg stack for this worktree's branch; nil when gating fails
     /// or the branch is not a stack. Loaded during performRefresh.
     var ggStack: GGStack? = nil
+    var ggEffectiveConfig: GGEffectiveConfig = .defaults
     /// Injected by RightPaneStore — resolves gates 1–3 (master toggle,
     /// gg installed, per-project mode) against app-level state.
     var ggGateProvider: (@MainActor () -> Bool)? = nil
@@ -113,10 +114,14 @@ final class RightPaneState: GGSplitCommitServicing {
     @ObservationIgnored
     var selectWorktreeAtPathAfterGGMutation: (@MainActor (String) async -> Void)? = nil
     var ggService = GGService() {
-        didSet { ggMutationCoordinatorStorage = nil }
+        didSet {
+            ggMutationCoordinatorStorage = nil
+            didAttemptGGUndoRestore = false
+        }
     }
     @ObservationIgnored
     private var ggMutationCoordinatorStorage: GGMutationCoordinator? = nil
+    @ObservationIgnored private var didAttemptGGUndoRestore = false
     /// Backing store for the stack drawer's mutation UI (in-flight action,
     /// sync progress, paused/error state). Not snapshot-derived, so
     /// `markSnapshotUnknown()` does not reset it.
@@ -143,6 +148,10 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
+    /// A refresh result may still arrive after its task was cancelled. Only
+    /// the most recently started GG refresh may publish snapshot-derived
+    /// stack state.
+    @ObservationIgnored private var ggStackRefreshGeneration: UInt = 0
 
     var currentGGStackCommitsKey: String {
         "\(currentBranch)|" + ggStackSourceCommits.map(\.sha).joined(separator: "|")
@@ -237,6 +246,19 @@ final class RightPaneState: GGSplitCommitServicing {
     @ObservationIgnored var pendingGGUnstackPrepared: GGPreparedMutation? = nil
     var pendingGGCleanAll: Bool = false
     @ObservationIgnored private var pendingGGCleanPrepared: GGPreparedMutation? = nil
+    var pendingGGReorder: GGReorderPresentation? = nil
+    var pendingGGRestack: GGRestackPresentation? = nil
+
+    var ggLocalChangeStatistics: GGLocalChangeStatistics {
+        GGLocalChangeStatistics(
+            staged: changes.filter { $0.stage == .staged }.count,
+            unstaged: changes.filter { $0.stage == .unstaged }.count
+        )
+    }
+
+    var ggUndoCandidate: GGUndoCandidate? {
+        ggMutationCoordinator.undoCandidate
+    }
 
     /// The split target of an in-flight `.applySplit`, if any, so a split tab
     /// can tell whether the running split is its own apply or another tab's.
@@ -390,7 +412,8 @@ final class RightPaneState: GGSplitCommitServicing {
                     guard let self else { return }
                     GGInboxStore.shared.invalidate(projectId: self.worktree.projectId)
                 },
-                selectWorktreeAtPath: { [weak self] path in await self?.selectWorktreeAtPathAfterGGMutation?(path) }
+                selectWorktreeAtPath: { [weak self] path in await self?.selectWorktreeAtPathAfterGGMutation?(path) },
+                currentBranch: { [weak self] in self?.currentBranch }
             )
         )
         ggMutationCoordinatorStorage = coordinator
@@ -868,6 +891,8 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     func refreshGGStack() async {
         let snapshotGeneration = snapshotInvalidationGeneration
+        ggStackRefreshGeneration &+= 1
+        let refreshGeneration = ggStackRefreshGeneration
         let gated = ggGateProvider?() ?? false
         guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
             ggStackCommitsKey = nil
@@ -880,9 +905,20 @@ final class RightPaneState: GGSplitCommitServicing {
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
+            if gated {
+                await reconcileGGUndoCandidateIfNeeded()
+            } else {
+                // The gg gate can read false transiently before the startup
+                // `GGAvailability` probe resolves. Only hide the candidate;
+                // keep the persisted marker so a valid recovery Undo survives
+                // until the gate is known to be intentionally disabled and the
+                // later re-check can restore or reject it.
+                ggMutationCoordinator.suspendUndoCandidate()
+            }
             return
         }
         reconcilePausedOperation()
+        ggEffectiveConfig = GGConfigReader.effectiveConfig(repoPath: worktree.path.path)
         // `gg ls --json` reaches out to gh/glab for PR state — skip when
         // the branch and commit set are unchanged since the last query. PR-
         // state churn from the outside world refreshes on the next commits
@@ -892,7 +928,10 @@ final class RightPaneState: GGSplitCommitServicing {
         // to share the same commits (e.g. right after `git checkout -b`)
         // must not reuse the old branch's cached stack.
         let key = currentGGStackCommitsKey
-        guard key != ggStackCommitsKey else { return }
+        guard key != ggStackCommitsKey else {
+            await reconcileGGUndoCandidateIfNeeded()
+            return
+        }
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
             // A newer refresh, or a `markSnapshotUnknown()` invalidation,
@@ -900,13 +939,16 @@ final class RightPaneState: GGSplitCommitServicing {
             // invalidation's own reset) will write the current state;
             // writing here would race it with a stale result.
             if Task.isCancelled { return }
-            guard snapshotGeneration == snapshotInvalidationGeneration else { return }
+            guard snapshotGeneration == snapshotInvalidationGeneration,
+                  refreshGeneration == ggStackRefreshGeneration
+            else { return }
             ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
             let summary = stack?.summary
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
             }
+            await reconcileGGUndoCandidateIfNeeded()
         } catch {
             // A transient gg/provider failure (gh/glab auth hiccup, network
             // blip, etc.) must not cache the *failed* key `key` — it stays
@@ -925,13 +967,35 @@ final class RightPaneState: GGSplitCommitServicing {
             // later return to that same branch/commit set as "already
             // cached" and skip re-fetching the now-cleared stack.
             if Task.isCancelled { return }
-            guard snapshotGeneration == snapshotInvalidationGeneration else { return }
+            guard snapshotGeneration == snapshotInvalidationGeneration,
+                  refreshGeneration == ggStackRefreshGeneration
+            else { return }
             ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
+            // The cached stack we just dropped belonged to a different key, so
+            // the current stack identity is unknown until a refresh succeeds.
+            // Hide any recovery candidate (keeping its marker) so the drawer
+            // does not offer an Undo scoped to the previous stack; it is
+            // rebuilt once a later reconcile validates against the new stack.
+            ggMutationCoordinator.suspendUndoCandidate()
         }
+    }
+
+    private func reconcileGGUndoCandidateIfNeeded() async {
+        let coordinator = ggMutationCoordinator
+        guard !didAttemptGGUndoRestore || coordinator.hasUndoStateToReconcile else { return }
+        if Self.ggUndoRecoveryIsBlockedByGenericGitOperation(
+            operationInProgress: GGStackGate.operationInProgress(repoPath: worktree.path.path),
+            alasGGOperationInProgress: GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
+        ) {
+            coordinator.suspendUndoCandidate()
+            return
+        }
+        didAttemptGGUndoRestore = true
+        await coordinator.restoreUndoCandidate(currentStackName: ggStack?.name)
     }
 
     /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
@@ -1007,12 +1071,98 @@ final class RightPaneState: GGSplitCommitServicing {
         case .absorbStaged:
             runGGMutation(.absorbStaged)
         case .restack:
-            runGGMutation(.restack)
+            requestGGRestack()
         case .rebase:
-            runGGMutation(.rebase(target: nil))
-        case .drop, .unstack, .reorder, .undo, .split:
+            guard let stackBase = ggStack?.base else {
+                ggActionState.setError("The stack base is no longer available. Refresh and try again.")
+                return
+            }
+            runGGMutation(.rebase(target: Self.ggManualRebaseTarget(
+                stackBase: stackBase,
+                behindBase: behindBase
+            )))
+        case .reorder:
+            requestGGReorder()
+        case .undo:
+            guard let candidate = ggUndoCandidate else { return }
+            runGGMutation(.undo(operationID: candidate.operationID))
+        case .drop, .unstack, .split:
             break
         }
+    }
+
+    func requestGGReorder() {
+        guard let stack = ggStack,
+              stack.entries.allSatisfy({ $0.ggId != nil })
+        else {
+            ggActionState.setError("Every stack commit needs a GG ID before it can be reordered.")
+            return
+        }
+        let entries = stack.entries.sorted(by: { $0.position < $1.position }).map { entry in
+            let id = entry.ggId!
+            return entry.prState == .merged
+                ? GGReorderEntry.immutable(id: id, title: entry.title)
+                : GGReorderEntry.mutable(id: id, title: entry.title)
+        }
+        let model = GGReorderModel(entries: entries)
+        Task { @MainActor in
+            do {
+                let prepared = try await ggMutationCoordinator.prepare(.reorder(order: model.orderedIDs))
+                pendingGGReorder = GGReorderPresentation(snapshot: prepared.snapshot, model: model)
+            } catch {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
+        }
+    }
+
+    func cancelGGReorder() {
+        pendingGGReorder = nil
+    }
+
+    func submitGGReorder(_ model: GGReorderModel) async throws {
+        guard let pending = pendingGGReorder,
+              model.hasChanges
+        else { throw GGMutationError.staleConfirmation }
+        guard mergeOp.current == nil else { throw GGMutationError.blockingGitOperation }
+        try await ggMutationCoordinator.apply(
+            .reorder(order: model.orderedIDs),
+            confirmedAgainst: pending.snapshot
+        )
+        pendingGGReorder = nil
+    }
+
+    func requestGGRestack() {
+        Task { @MainActor in
+            do {
+                pendingGGRestack = GGRestackPresentation(
+                    prepared: try await ggMutationCoordinator.prepareRestackPreview()
+                )
+            } catch {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
+        }
+    }
+
+    func cancelGGRestack() {
+        pendingGGRestack = nil
+    }
+
+    func submitGGRestack() async throws {
+        guard let pending = pendingGGRestack, pending.hasWork else {
+            throw GGMutationError.staleConfirmation
+        }
+        guard mergeOp.current == nil else { throw GGMutationError.blockingGitOperation }
+        // The stack identity only carries the base name + head SHA, so a base
+        // ref that advanced since the preview was built would still match.
+        // Re-run the dry-run plan and require it to equal the reviewed one, so
+        // Apply can't rewrite against a different parent than the user saw.
+        let revalidated = try await ggMutationCoordinator.prepareRestackPreview()
+        guard revalidated.plan == pending.prepared.plan else {
+            pendingGGRestack = GGRestackPresentation(prepared: revalidated)
+            throw GGMutationError.staleConfirmation
+        }
+        try await ggMutationCoordinator.apply(.restack, confirmedAgainst: revalidated.snapshot)
+        pendingGGRestack = nil
     }
 
     func requestGGLand(_ request: GGLandRequest) {

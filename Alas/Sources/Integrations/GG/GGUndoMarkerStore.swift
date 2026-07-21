@@ -3,10 +3,16 @@ import Foundation
 struct GGUndoMarker: Codable, Equatable, Sendable {
     let operationID: String
     let removedFinalStackCommit: Bool
+    /// Branch the recovery was recorded on. Used to scope a final-drop
+    /// recovery (where the stack becomes empty, so `currentStackName` is nil)
+    /// to the branch where the drop happened. Optional for backward
+    /// compatibility with markers persisted before this field existed.
+    let branch: String?
 
-    init(operationID: String, removedFinalStackCommit: Bool = false) {
+    init(operationID: String, removedFinalStackCommit: Bool = false, branch: String? = nil) {
         self.operationID = operationID
         self.removedFinalStackCommit = removedFinalStackCommit
+        self.branch = branch
     }
 }
 

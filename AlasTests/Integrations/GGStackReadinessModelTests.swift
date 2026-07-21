@@ -31,19 +31,89 @@ struct GGStackReadinessModelTests {
         #expect(model.facts.contains { $0.label == "Merged" && $0.value == "1" })
     }
 
-    @Test func syncEnabledWhenBaseIsCurrent() {
+    @Test func unsyncedStackSelectsSyncPrimary() {
         let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: nil)]), action: GGStackActionState())
-        let sync = model.actions.first { $0.kind == .sync }
-        #expect(sync?.isEnabled == true)
+        #expect(model.primaryActions.map(\.kind) == [.sync])
     }
 
-    @Test func syncDisabledWhenBaseIsBehind() {
+    @Test func autoRebaseKeepsSyncPrimaryWhileBehind() {
         let model = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: nil)], behind: 1),
-            action: GGStackActionState()
+            action: GGStackActionState(),
+            effectiveConfig: .init(syncAutoRebase: true, syncBehindThreshold: 1),
+            localChanges: .zero
         )
-        let sync = model.actions.first { $0.kind == .sync }
-        #expect(sync?.isEnabled == false)
+        #expect(model.primaryActions.map(\.kind) == [.sync])
+        #expect(model.primaryActions[0].detail == "Includes rebase onto main")
+    }
+
+    @Test func autoRebaseBelowThresholdKeepsSyncDetailPlain() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: nil)], behind: 1),
+            action: GGStackActionState(),
+            effectiveConfig: .init(syncAutoRebase: true, syncBehindThreshold: 3),
+            localChanges: .zero
+        )
+        #expect(model.primaryActions.map(\.kind) == [.sync])
+        #expect(model.primaryActions[0].detail == nil)
+    }
+
+    @Test func thresholdSelectsManualRebase() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: nil)], behind: 2),
+            action: GGStackActionState(),
+            effectiveConfig: .init(syncAutoRebase: false, syncBehindThreshold: 2),
+            localChanges: .zero
+        )
+        #expect(model.primaryActions.map(\.kind) == [.rebase])
+        #expect(model.primaryActions[0].title == "Rebase onto main")
+    }
+
+    @Test func belowThresholdKeepsSyncPrimary() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: nil)], behind: 1),
+            action: GGStackActionState(),
+            effectiveConfig: .init(syncAutoRebase: false, syncBehindThreshold: 2),
+            localChanges: .zero
+        )
+        #expect(model.primaryActions.map(\.kind) == [.sync])
+    }
+
+    @Test func zeroThresholdAlwaysUsesPlainSyncRegardlessOfAutoRebase() {
+        for autoRebase in [false, true] {
+            let model = GGStackReadinessModel.make(
+                stack: stack([entry(position: 1, prState: nil)], behind: 3),
+                action: GGStackActionState(),
+                effectiveConfig: .init(
+                    syncAutoRebase: autoRebase,
+                    syncBehindThreshold: 0
+                )
+            )
+
+            #expect(model.primaryActions.map(\.kind) == [.sync])
+            #expect(model.primaryActions[0].detail == nil)
+        }
+    }
+
+    @Test func syncWithLocalChangesStatesTheyAreExcluded() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: nil)]),
+            action: GGStackActionState(),
+            effectiveConfig: .defaults,
+            localChanges: .init(staged: 1, unstaged: 2)
+        )
+        #expect(model.primaryActions.map(\.kind) == [.sync])
+        #expect(model.localChangesNote == "Local changes are not included")
+    }
+
+    @Test func publishableCommitSelectsSyncEvenWhenCommitCountIsSynced() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: nil)], synced: 1),
+            action: GGStackActionState(),
+            effectiveConfig: .defaults,
+            localChanges: .zero
+        )
+        #expect(model.primaryActions.map(\.kind) == [.sync])
     }
 
     @Test func syncUsesLiveBehindBaseOverride() {
@@ -54,7 +124,7 @@ struct GGStackReadinessModelTests {
             liveBehindBase: 2
         )
 
-        #expect(model.actions.first { $0.kind == .sync }?.isEnabled == false)
+        #expect(model.primaryActions.map(\.kind) == [.rebase])
         #expect(model.facts.contains { $0.label == "Behind base" && $0.value == "2" })
         #expect(model.summaryChip.contains("2"))
     }
@@ -102,30 +172,49 @@ struct GGStackReadinessModelTests {
         ))
     }
 
-    @Test func landReadyEnabledWithOpenEntryForFreshVerification() {
+    @Test func freshLandableStackSelectsLandPrimary() {
+        let ready = GGStackReadinessModel.make(
+            stack: stack(
+                [entry(position: 1, prState: .open, approved: true, ci: .success)],
+                synced: 1
+            ),
+            action: GGStackActionState()
+        )
+        #expect(ready.primaryActions.map(\.kind) == [.land])
+
         let staleProviderState = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open, approved: false, ci: .success)]),
             action: GGStackActionState()
         )
-        #expect(staleProviderState.actions.first { $0.kind == .land }?.isEnabled == true)
+        #expect(staleProviderState.primaryActions.map(\.kind) == [.sync])
 
         let noOpenEntries = GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .merged)]),
+            stack: stack([entry(position: 1, prState: .merged)], synced: 1),
             action: GGStackActionState()
         )
-        #expect(noOpenEntries.actions.first { $0.kind == .land }?.isEnabled == false)
+        #expect(noOpenEntries.primaryActions.isEmpty)
     }
 
-    @Test func cleanEnabledOnlyWithMergedEntry() {
-        let noMerged = GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .open)]), action: GGStackActionState()
-        )
-        #expect(noMerged.actions.first { $0.kind == .clean }?.isEnabled == false)
-
+    @Test func overflowOrderKeepsLifecycleActionsSeparateFromPrimary() {
         let merged = GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .merged)]), action: GGStackActionState()
+            stack: stack([entry(position: 1, prState: .merged)], synced: 1), action: GGStackActionState()
         )
-        #expect(merged.actions.first { $0.kind == .clean }?.isEnabled == true)
+        #expect(merged.overflowActions.map(\.kind) == [.reorder, .restack, .undo, .clean])
+        #expect(merged.overflowActions.first { $0.kind == .clean }?.isEnabled == true)
+    }
+
+    @Test func undoOverflowIsEnabledOnlyForCoordinatorCandidate() {
+        let operation = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["reorder"], touchedRemote: false, isUndoable: true
+        )
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .merged)], synced: 1),
+            action: GGStackActionState(),
+            undoCandidate: GGUndoCandidate(operation: operation)
+        )
+
+        #expect(model.overflowActions.first { $0.kind == .undo }?.isEnabled == true)
     }
 
     @Test func pausedSwapsToContinueAbort() {
@@ -133,7 +222,7 @@ struct GGStackReadinessModelTests {
         action.setPaused(GGPausedOperation(pausedBy: .land))
         let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: .open)]), action: action)
         #expect(model.isPaused)
-        #expect(model.actions.map(\.kind) == [.continueOp, .abortOp])
+        #expect(model.primaryActions.map(\.kind) == [.continueOp, .abortOp])
     }
 
     @Test func pausedFallbackOffersContinueAbortWithoutStack() {
@@ -142,7 +231,7 @@ struct GGStackReadinessModelTests {
         let model = GGStackReadinessModel.makePausedFallback(action: action)
         #expect(model?.isPaused == true)
         #expect(model?.summaryChip == "paused")
-        #expect(model?.actions.map(\.kind) == [.continueOp, .abortOp])
+        #expect(model?.primaryActions.map(\.kind) == [.continueOp, .abortOp])
     }
 
     @Test func inFlightActionMarksButtonAndDisablesOthers() {
@@ -151,10 +240,9 @@ struct GGStackReadinessModelTests {
         let model = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open, approved: true, ci: .success)]), action: action
         )
-        let sync = model.actions.first { $0.kind == .sync }
+        let sync = model.primaryActions.first { $0.kind == .sync }
         #expect(sync?.isInFlight == true)
-        // Other actions disabled while one is in flight.
-        #expect(model.actions.first { $0.kind == .land }?.isEnabled == false)
+        #expect(model.overflowActions.allSatisfy { !$0.isEnabled })
     }
 
     @Test func summaryChipPriorityPausedThenUnsyncedThenBehindThenMerged() {
@@ -207,7 +295,7 @@ struct GGStackReadinessModelTests {
         action.setPaused(GGPausedOperation(pausedBy: .sync)) // watcher-driven filesystem probe picks up the pause
         let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: .open)]), action: action)
         #expect(model.isPaused)
-        #expect(model.actions.map(\.kind) == [.continueOp, .abortOp])
+        #expect(model.primaryActions.map(\.kind) == [.continueOp, .abortOp])
         #expect(!model.progressRows.isEmpty)
     }
 

@@ -21,11 +21,21 @@ private func waitUntil(
 @MainActor
 private final class RecordingGGMutationExecutor: GGMutationExecuting {
     var requests: [GGMutationRequest] = []
+    var clientOperationIDs: [String?] = []
     var result: GGMutationExecutionResult = .none
     var error: Error?
     var newestOperation: GGOperationSummary?
     var operationLists: [[GGOperationSummary]] = []
     var operationListCallCount = 0
+    var restackPreview = GGRestackResult(
+        stackName: "feature", totalEntries: 2, entriesRestacked: 1, entriesOK: 1,
+        dryRun: true,
+        steps: [GGRestackStep(
+            position: 2, ggID: "change-2", title: "Head", action: "restack",
+            currentParent: "old", expectedParent: "base"
+        )]
+    )
+    var restackPreviewCallCount = 0
     var blockExecution = false
     var syncEvents: [GGSyncEvent] = [.start(totalEntries: 1), .summary]
     private var executionContinuation: CheckedContinuation<Void, Never>?
@@ -33,9 +43,11 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
     func execute(
         _ request: GGMutationRequest,
         worktreePath: String,
+        clientOperationID: String?,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
         requests.append(request)
+        clientOperationIDs.append(clientOperationID)
         if request == .sync {
             for event in syncEvents { onSyncEvent(event) }
         }
@@ -54,9 +66,31 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
         return newestOperation.map { [$0] } ?? []
     }
 
+    func previewRestack(worktreePath: String) async throws -> GGRestackResult {
+        restackPreviewCallCount += 1
+        if let error { throw error }
+        return restackPreview
+    }
+
     func resumeExecution() {
         executionContinuation?.resume()
         executionContinuation = nil
+    }
+}
+
+@MainActor
+private final class GGClientOperationCapabilityBox {
+    var isSupported: Bool
+    init(_ isSupported: Bool) { self.isSupported = isSupported }
+}
+
+@MainActor
+private final class GGClientOperationTokenGenerator {
+    private var count = 0
+
+    func next() -> String {
+        count += 1
+        return "alas:test-\(count)"
     }
 }
 
@@ -96,23 +130,32 @@ private final class GGMutationHarness {
     let service = RecordingGGMutationExecutor()
     let markers = RecordingUndoMarkerStore()
     let actionState = GGStackActionState()
+    let clientOperationCapability: GGClientOperationCapabilityBox
+    let tokenGenerator: GGClientOperationTokenGenerator
     var stacks: [GGStackSnapshot]
     var loadError: Error?
     var loadCount = 0
     var refreshes: [Refresh] = []
     var selectedPaths: [String] = []
     var worktreeExists = true
+    var currentBranch: String? = "feature"
     var onRefreshStack: (() async -> Void)?
     private(set) var coordinator: GGMutationCoordinator!
 
-    init(stacks: [GGStackSnapshot]) {
+    init(stacks: [GGStackSnapshot], supportsClientOperationID: Bool = false) {
         self.stacks = stacks
+        let capability = GGClientOperationCapabilityBox(supportsClientOperationID)
+        clientOperationCapability = capability
+        let generator = GGClientOperationTokenGenerator()
+        tokenGenerator = generator
         coordinator = GGMutationCoordinator(
             worktreeId: "wt",
             worktreePath: "/repo/wt",
             service: service,
             actionState: actionState,
             undoMarkerStore: markers,
+            clientOperationIDCapability: { capability.isSupported },
+            clientOperationIDGenerator: { generator.next() },
             context: GGMutationContext(
                 loadFreshStack: { [unowned self] in
                     if let loadError { throw loadError }
@@ -131,7 +174,8 @@ private final class GGMutationHarness {
                     return worktreeExists
                 },
                 invalidateInbox: { [unowned self] in refreshes.append(.inbox) },
-                selectWorktreeAtPath: { [unowned self] path in selectedPaths.append(path) }
+                selectWorktreeAtPath: { [unowned self] path in selectedPaths.append(path) },
+                currentBranch: { [unowned self] in currentBranch }
             )
         )
     }
@@ -279,6 +323,131 @@ struct GGMutationCoordinatorTests {
 
         #expect(harness.service.requests.isEmpty)
         #expect(harness.refreshes.isEmpty)
+    }
+
+    @Test func splitPreflightMatchesAnAbbreviatedSHAWhenNoGGIDIsAvailable() async throws {
+        let entries = [
+            GGStackEntry(position: 1, sha: "base", title: "Base", ggId: "change-1"),
+            GGStackEntry(
+                position: 2,
+                sha: "abcdef1",
+                title: "Target",
+                isCurrent: true
+            ),
+        ]
+        let harness = GGMutationHarness(stacks: [stack(head: "abcdef1", entries: entries)])
+        let request = GGMutationRequest.applySplit(
+            planURL: URL(fileURLWithPath: "/tmp/plan.json"),
+            target: GGSplitTargetIdentity(
+                ggID: nil,
+                sha: "abcdef1234567890",
+                tree: "tree"
+            ),
+            planToken: "token"
+        )
+
+        let prepared = try await harness.coordinator.prepare(request)
+
+        #expect(prepared.request == request)
+    }
+
+    @Test func splitPreflightDoesNotFallBackToSHAWhenAGGIDIsPresent() async {
+        let entries = [
+            GGStackEntry(position: 1, sha: "base", title: "Base", ggId: "change-1"),
+            GGStackEntry(
+                position: 2,
+                sha: "abcdef1",
+                title: "Target",
+                ggId: "change-2",
+                isCurrent: true
+            ),
+        ]
+        let harness = GGMutationHarness(stacks: [stack(head: "abcdef1", entries: entries)])
+        let request = GGMutationRequest.applySplit(
+            planURL: URL(fileURLWithPath: "/tmp/plan.json"),
+            target: GGSplitTargetIdentity(
+                ggID: "changed-id",
+                sha: "abcdef1234567890",
+                tree: "tree"
+            ),
+            planToken: "token"
+        )
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            _ = try await harness.coordinator.prepare(request)
+        }
+    }
+
+    @Test func preflightFailurePreservesExistingUndoState() async {
+        let candidate = GGOperationSummary(
+            id: "op_existing", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:existing", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: candidate.id, worktreeId: "wt")
+        harness.service.newestOperation = candidate
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await harness.coordinator.apply(.drop(target: "missing"), confirmedAgainst: nil)
+        }
+
+        #expect(harness.coordinator.undoCandidate?.operationID == candidate.id)
+        #expect(harness.markers.operationID(worktreeId: "wt") == candidate.id)
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func reorderRequiresCompleteGGIDOrderAndKeepsImmutableRowsFixed() async throws {
+        let entries = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Merged", ggId: "change-1",
+                prNumber: 1, prState: .merged
+            ),
+            GGStackEntry(position: 2, sha: "b", title: "Two", ggId: "change-2"),
+            GGStackEntry(position: 3, sha: "c", title: "Three", ggId: "change-3", isCurrent: true),
+        ]
+        let harness = GGMutationHarness(stacks: [stack(head: "c", entries: entries)])
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            _ = try await harness.coordinator.prepare(.reorder(order: ["change-2", "change-3"]))
+        }
+        await #expect(throws: GGMutationError.immutableTarget(
+            reason: "Merged commits must remain fixed while reordering."
+        )) {
+            _ = try await harness.coordinator.prepare(
+                .reorder(order: ["change-2", "change-1", "change-3"])
+            )
+        }
+
+        let prepared = try await harness.coordinator.prepare(
+            .reorder(order: ["change-1", "change-3", "change-2"])
+        )
+        #expect(prepared.request == .reorder(order: ["change-1", "change-3", "change-2"]))
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func reorderRejectsForgedOrderThatCrossesAnImmutableBoundary() async {
+        let entries = [
+            GGStackEntry(position: 1, sha: "a", title: "Lower", ggId: "change-1"),
+            GGStackEntry(
+                position: 2, sha: "b", title: "Merged", ggId: "change-2",
+                prNumber: 2, prState: .merged
+            ),
+            GGStackEntry(position: 3, sha: "c", title: "Upper", ggId: "change-3", isCurrent: true),
+        ]
+        let harness = GGMutationHarness(stacks: [stack(head: "c", entries: entries)])
+
+        await #expect(throws: GGMutationError.immutableTarget(
+            reason: "Commits cannot move across an immutable boundary."
+        )) {
+            _ = try await harness.coordinator.prepare(
+                .reorder(order: ["change-3", "change-2", "change-1"])
+            )
+        }
+
+        #expect(harness.service.requests.isEmpty)
     }
 
     @Test func applyRechecksLandReadinessWhenProviderStateChanges() async throws {
@@ -448,21 +617,736 @@ struct GGMutationCoordinatorTests {
         #expect(harness.actionState.inFlightAction == nil)
     }
 
-    @Test func localSuccessPersistsNewestUndoableOperationAndLaterMutationClearsIt() async throws {
-        let harness = GGMutationHarness(stacks: [stack(head: "a"), stack(head: "a")])
-        let operation = GGOperationSummary(
-            id: "op_1", kind: "sc", status: .completed, createdAtMs: 1,
-            args: ["sc"], touchedRemote: false, isUndoable: true
+    @Test func continueConflictPreservesTheOriginalPausedAction() async {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", operationID: "op_paused")])
+        harness.actionState.setPaused(GGPausedOperation(pausedBy: .restack))
+        harness.service.error = GGServiceError.pausedConflict(message: "Resolve conflicts")
+
+        await #expect(throws: GGServiceError.pausedConflict(message: "Resolve conflicts")) {
+            try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
+        }
+
+        #expect(harness.actionState.pausedOperation == GGPausedOperation(pausedBy: .restack))
+    }
+
+    @Test func abortFailurePreservesTheOriginalPausedAction() async {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", operationID: "op_paused")])
+        harness.actionState.setPaused(GGPausedOperation(pausedBy: .sync))
+        harness.service.error = GGServiceError.commandFailed(stderr: "abort failed")
+
+        await #expect(throws: GGServiceError.commandFailed(stderr: "abort failed")) {
+            try await harness.coordinator.apply(.abortOperation, confirmedAgainst: nil)
+        }
+
+        #expect(harness.actionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
+    }
+
+    @Test func restackAlwaysPreviewsBeforeApplyAndUsesTheSameStackIdentity() async throws {
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "a"),
+            stack(head: "a"),
+            stack(head: "a"),
+        ])
+
+        let prepared = try await harness.coordinator.prepareRestackPreview()
+        #expect(harness.service.restackPreviewCallCount == 1)
+        #expect(prepared.plan.dryRun)
+        #expect(prepared.snapshot.headSHA == "a")
+        #expect(harness.service.requests.isEmpty)
+
+        try await harness.coordinator.apply(.restack, confirmedAgainst: prepared.snapshot)
+        #expect(harness.service.requests == [.restack])
+    }
+
+    @Test func restackRejectsAPreviewWhenTheStackChangesDuringTheDryRun() async {
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "a"),
+            stack(head: "b"),
+        ])
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            _ = try await harness.coordinator.prepareRestackPreview()
+        }
+
+        #expect(harness.service.restackPreviewCallCount == 1)
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func restackRejectsApplyWhenStackChangedAfterPreview() async throws {
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "a"),
+            stack(head: "a"),
+            stack(head: "b"),
+        ])
+
+        let prepared = try await harness.coordinator.prepareRestackPreview()
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await harness.coordinator.apply(.restack, confirmedAgainst: prepared.snapshot)
+        }
+
+        #expect(harness.service.restackPreviewCallCount == 1)
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func restackRejectsNonDryRunOrWrongStackPreviewPayload() async {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.service.restackPreview = GGRestackResult(
+            stackName: "other", totalEntries: 1, entriesRestacked: 1, entriesOK: 0,
+            dryRun: false, steps: []
         )
-        harness.service.operationLists = [[], [operation]]
+
+        await #expect(throws: GGServiceError.malformedOutput(
+            "gg returned a restack plan for a different stack."
+        )) {
+            _ = try await harness.coordinator.prepareRestackPreview()
+        }
+
+        #expect(harness.service.restackPreviewCallCount == 1)
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func localSuccessPersistsNewestUndoableOperationAndLaterMutationClearsIt() async throws {
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a"), stack(head: "a")],
+            supportsClientOperationID: true
+        )
+        let operation = GGOperationSummary(
+            id: "op_1", kind: "squash", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:test-1", "sc"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        harness.service.operationLists = [[operation]]
         try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
         #expect(harness.markers.operationID(worktreeId: "wt") == "op_1")
+        #expect(harness.coordinator.undoCandidate?.operationID == "op_1")
+        #expect(harness.service.clientOperationIDs == ["alas:test-1"])
 
         harness.service.operationLists = []
         harness.service.error = GGServiceError.commandFailed(stderr: "failed")
         await #expect(throws: GGServiceError.commandFailed(stderr: "failed")) {
             try await harness.coordinator.apply(.checkout(target: "change-1"), confirmedAgainst: nil)
         }
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.coordinator.undoCandidate == nil)
+    }
+
+    @Test func decodedSquashOperationExposesUndoAfterAmend() async throws {
+        let payload = Data(#"{"id":"op_1","kind":"squash","status":"committed","created_at_ms":1,"args":["--client-operation-id","alas:test-1","sc","--staged-only"],"stack_name":"feature","touched_remote":false,"is_undoable":true}"#.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let operation = try decoder.decode(GGOperationSummary.self, from: payload)
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        harness.service.newestOperation = operation
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: operation))
+        #expect(harness.markers.operationID(worktreeId: "wt") == operation.id)
+    }
+
+    @Test func localOperationWithoutStackNameDoesNotExposeUnusableUndo() async throws {
+        let operation = GGOperationSummary(
+            id: "op_1", kind: "squash", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:test-1", "sc"],
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        harness.service.newestOperation = operation
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func suspendingUndoCandidateKeepsItAvailableAfterGitRecovery() async {
+        let operation = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: operation.id, worktreeId: "wt")
+        harness.service.newestOperation = operation
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        harness.coordinator.suspendUndoCandidate()
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == operation.id)
+    }
+
+    @Test func finalDropRecoveryRestoresOnRecordedBranch() async {
+        let operation = GGOperationSummary(
+            id: "op_drop", kind: "drop", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "drop", "change-1"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.currentBranch = "feature"
+        harness.markers.set(
+            GGUndoMarker(operationID: operation.id, removedFinalStackCommit: true, branch: "feature"),
+            worktreeId: "wt"
+        )
+        harness.service.newestOperation = operation
+
+        // Empty stack after the final drop → currentStackName is nil.
+        await harness.coordinator.restoreUndoCandidate(currentStackName: nil)
+
+        #expect(harness.coordinator.undoCandidate?.operationID == "op_drop")
+        #expect(harness.markers.operationID(worktreeId: "wt") == "op_drop")
+    }
+
+    @Test func finalDropRecoveryClearedAfterCheckoutToAnotherBranch() async {
+        let operation = GGOperationSummary(
+            id: "op_drop", kind: "drop", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "drop", "change-1"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.currentBranch = "unrelated-branch"
+        harness.markers.set(
+            GGUndoMarker(operationID: operation.id, removedFinalStackCommit: true, branch: "feature"),
+            worktreeId: "wt"
+        )
+        harness.service.newestOperation = operation
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: nil)
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func unsupportedGGMutatesNormallyWithoutUndoCorrelation() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.service.newestOperation = GGOperationSummary(
+            id: "op_external", kind: "squash", status: .completed, createdAtMs: 1,
+            args: ["sc"], touchedRemote: false, isUndoable: true
+        )
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+
+        #expect(harness.service.requests == [.amendCurrent])
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 0)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.coordinator.undoCandidate == nil)
+    }
+
+    @Test func unrelatedNewestOperationCannotClaimGeneratedClientToken() async throws {
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        harness.service.newestOperation = GGOperationSummary(
+            id: "op_external", kind: "reorder", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:other", "alas:test-1"],
+            touchedRemote: false, isUndoable: true
+        )
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+
+        #expect(harness.service.clientOperationIDs == ["alas:test-1"])
+        #expect(harness.service.operationListCallCount == 1)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.coordinator.undoCandidate == nil)
+    }
+
+    @Test func dynamicCapabilityCanEnableCorrelationWithoutRecreatingCoordinator() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 0)
+
+        harness.clientOperationCapability.isSupported = true
+        let matching = GGOperationSummary(
+            id: "op_1", kind: "squash", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:test-1", "sc"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        harness.service.newestOperation = matching
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+
+        #expect(harness.service.clientOperationIDs == [nil, "alas:test-1"])
+        #expect(harness.service.operationListCallCount == 1)
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: matching))
+    }
+
+    @Test func continueCorrelatesTheCompletedPausedOperationWithoutSendingANewToken() async throws {
+        let completed = GGOperationSummary(
+            id: "op_paused", kind: "restack", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:original", "restack"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a", operationID: "op_paused")],
+            supportsClientOperationID: true
+        )
+        harness.service.newestOperation = completed
+
+        try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
+
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 1)
+        #expect(harness.markers.operationID(worktreeId: "wt") == completed.id)
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: completed))
+    }
+
+    @Test func continueRejectsANewerOperationThanThePausedOperation() async throws {
+        let newer = GGOperationSummary(
+            id: "op_external", kind: "reorder", status: .completed, createdAtMs: 3,
+            args: ["--client-operation-id", "alas:external", "reorder"],
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a", operationID: "op_paused")],
+            supportsClientOperationID: true
+        )
+        harness.service.newestOperation = newer
+
+        try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
+
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 1)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.coordinator.undoCandidate == nil)
+    }
+
+    @Test func continueRejectsThePausedOperationWithoutAnAlasClientToken() async throws {
+        let legacy = GGOperationSummary(
+            id: "op_paused", kind: "restack", status: .completed, createdAtMs: 2,
+            args: ["restack"], touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a", operationID: "op_paused")],
+            supportsClientOperationID: true
+        )
+        harness.service.newestOperation = legacy
+
+        try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
+
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 1)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.coordinator.undoCandidate == nil)
+    }
+
+    @Test func abortNeverSendsATokenOrQueriesForUndo() async throws {
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a", operationID: "op_paused")],
+            supportsClientOperationID: true
+        )
+        harness.service.newestOperation = GGOperationSummary(
+            id: "op_paused", kind: "restack", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:original", "restack"],
+            touchedRemote: false, isUndoable: true
+        )
+
+        try await harness.coordinator.apply(.abortOperation, confirmedAgainst: nil)
+
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 0)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.coordinator.undoCandidate == nil)
+    }
+
+    @Test func relaunchRestoresOnlyMatchingPersistedLocalUndoableOperation() async {
+        let matching = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: "op_1", worktreeId: "wt")
+        harness.service.newestOperation = matching
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: matching))
+        #expect(harness.service.operationListCallCount == 1)
+    }
+
+    @Test func relaunchClearsMarkerWhenNewestOperationDoesNotMatch() async {
+        let newest = GGOperationSummary(
+            id: "op_2", kind: "reorder", status: .completed, createdAtMs: 2,
+            args: ["reorder"], touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: "op_1", worktreeId: "wt")
+        harness.service.newestOperation = newest
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func relaunchRejectsLegacyMarkerWithoutAlasClientCorrelation() async {
+        let legacy = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["reorder"], touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: legacy.id, worktreeId: "wt")
+        harness.service.newestOperation = legacy
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func relaunchRejectsUndoOperationFromAnotherStack() async {
+        let otherStack = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "other",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: otherStack.id, worktreeId: "wt")
+        harness.service.newestOperation = otherStack
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func relaunchClearsOrdinaryUndoWhenThereIsNoCurrentStack() async {
+        let operation = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: operation.id, worktreeId: "wt")
+        harness.service.newestOperation = operation
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: nil)
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+        #expect(harness.service.operationListCallCount == 0)
+    }
+
+    @Test func remoteTouchedAndRemoteMutationsNeverExposeUndo() async throws {
+        let remoteTouched = GGOperationSummary(
+            id: "op_1", kind: "drop", status: .completed, createdAtMs: 1,
+            args: ["drop"], touchedRemote: true, isUndoable: true
+        )
+        let local = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        local.service.operationLists = [[GGOperationSummary(
+            id: remoteTouched.id, kind: remoteTouched.kind, status: remoteTouched.status,
+            createdAtMs: remoteTouched.createdAtMs,
+            args: ["--client-operation-id", "alas:test-1", "drop"],
+            touchedRemote: true, isUndoable: true
+        )]]
+        try await local.coordinator.apply(.drop(target: "change-2"), confirmedAgainst: nil)
+        #expect(local.coordinator.undoCandidate == nil)
+        #expect(local.markers.operationID(worktreeId: "wt") == nil)
+        #expect(local.service.operationListCallCount == 1)
+
+        let sync = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        sync.service.operationLists = [[GGOperationSummary(
+            id: "op_sync", kind: "sync", status: .completed, createdAtMs: 1,
+            args: ["sync"], touchedRemote: false, isUndoable: true
+        )]]
+        try await sync.coordinator.apply(.sync, confirmedAgainst: nil)
+        #expect(sync.service.clientOperationIDs == [nil])
+        #expect(sync.service.operationListCallCount == 0)
+        #expect(sync.coordinator.undoCandidate == nil)
+
+        let landEntries = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Ready", ggId: "change-1",
+                prNumber: 7, prState: .open, approved: true, ciStatus: .success,
+                isCurrent: true
+            ),
+        ]
+        let land = GGMutationHarness(
+            stacks: [stack(head: "a", entries: landEntries)],
+            supportsClientOperationID: true
+        )
+        try await land.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
+        #expect(land.service.clientOperationIDs == [nil])
+        #expect(land.service.operationListCallCount == 0)
+        #expect(land.coordinator.undoCandidate == nil)
+    }
+
+    @Test func nonRewriteLocalMutationsNeverReceiveTokensOrExposeUndo() async throws {
+        let requests: [GGMutationRequest] = [
+            .checkout(target: "change-1"),
+            .unstack(target: "change-2", name: "upper", createWorktree: false),
+            .clean,
+        ]
+        for request in requests {
+            let harness = GGMutationHarness(
+                stacks: [stack(head: "a")], supportsClientOperationID: true
+            )
+            if case .unstack = request {
+                harness.service.result = .unstack(.init(
+                    originalStack: "feature", newStack: "upper", movedCommits: [],
+                    worktreePath: nil, currentStack: "feature"
+                ))
+            }
+            harness.service.newestOperation = GGOperationSummary(
+                id: "op_1", kind: "checkout", status: .completed, createdAtMs: 1,
+                args: ["--client-operation-id", "alas:test-1", "checkout"],
+                touchedRemote: false, isUndoable: true
+            )
+
+            try await harness.coordinator.apply(request, confirmedAgainst: nil)
+
+            #expect(harness.service.clientOperationIDs == [nil])
+            #expect(harness.service.operationListCallCount == 0)
+            #expect(harness.coordinator.undoCandidate == nil)
+        }
+    }
+
+    @Test func cleanRefreshesPerWorktreeSurfacesAfterTopologyWhenWorktreeStillExists() async throws {
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+
+        try await harness.coordinator.apply(.clean, confirmedAgainst: nil)
+
+        #expect(harness.refreshes == [
+            .topology, .worktreeExistenceCheck, .stack, .gitChanges, .providerReviews, .inbox,
+        ])
+        #expect(harness.service.clientOperationIDs == [nil])
+        #expect(harness.service.operationListCallCount == 0)
+    }
+
+    @Test func cleanSkipsPerWorktreeRefreshesWhenTopologyRemovedTheWorktree() async throws {
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        harness.worktreeExists = false
+
+        try await harness.coordinator.apply(.clean, confirmedAgainst: nil)
+
+        #expect(harness.refreshes == [.topology, .worktreeExistenceCheck, .inbox])
+    }
+
+    @Test func restoreRejectsAlasTaggedNonRewriteOperation() async {
+        let checkout = GGOperationSummary(
+            id: "op_checkout", kind: "checkout", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "mv"],
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: checkout.id, worktreeId: "wt")
+        harness.service.newestOperation = checkout
+
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func continueRejectsPausedNonRewriteOperation() async throws {
+        let unstack = GGOperationSummary(
+            id: "op_paused", kind: "unstack", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:original", "unstack"],
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a", operationID: "op_paused")],
+            supportsClientOperationID: true
+        )
+        harness.service.newestOperation = unstack
+
+        try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
+
+        #expect(harness.service.operationListCallCount == 1)
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func streamedSyncErrorIsNotOverwrittenByGenericProcessFailure() async {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.service.syncEvents = [.error(message: "push rejected by protected branch")]
+        harness.service.error = GGServiceError.commandFailed(stderr: "")
+
+        await #expect(throws: GGServiceError.commandFailed(stderr: "")) {
+            try await harness.coordinator.apply(.sync, confirmedAgainst: nil)
+        }
+
+        #expect(harness.actionState.lastError == "push rejected by protected branch")
+    }
+
+    @Test func undoRechecksNewestOperationImmediatelyBeforeLaunch() async {
+        let candidate = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let later = GGOperationSummary(
+            id: "op_2", kind: "restack", status: .completed, createdAtMs: 2,
+            args: ["restack"], touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: candidate.id, worktreeId: "wt")
+        harness.service.operationLists = [[candidate], [later]]
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await harness.coordinator.apply(.undo(operationID: candidate.id), confirmedAgainst: nil)
+        }
+
+        #expect(harness.service.requests.isEmpty)
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func undoRefusalSurfacesGGRecoveryHintWithoutFallbackRollback() async {
+        let candidate = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.markers.set(operationID: candidate.id, worktreeId: "wt")
+        harness.service.operationLists = [[candidate], [candidate], [candidate]]
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+        harness.service.error = GGServiceError.undoRefused(
+            message: "This operation touched remote state.",
+            hint: "Restore the affected branch manually."
+        )
+
+        await #expect(throws: GGServiceError.undoRefused(
+            message: "This operation touched remote state.",
+            hint: "Restore the affected branch manually."
+        )) {
+            try await harness.coordinator.apply(.undo(operationID: candidate.id), confirmedAgainst: nil)
+        }
+
+        #expect(harness.service.requests == [.undo(operationID: candidate.id)])
+        #expect(harness.actionState.lastError == "This operation touched remote state.\nRestore the affected branch manually.")
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: candidate))
+        #expect(harness.markers.operationID(worktreeId: "wt") == candidate.id)
+    }
+
+    @Test func undoOfLastDroppedStackCommitRunsFromTheUndoLogWithoutACurrentStack() async throws {
+        let candidate = GGOperationSummary(
+            id: "op_drop", kind: "drop", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "drop", "change-1"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let noCurrentStack = GGStackSnapshot(version: 1, stack: nil)
+        let harness = GGMutationHarness(stacks: [noCurrentStack])
+        harness.markers.set(
+            GGUndoMarker(operationID: candidate.id, removedFinalStackCommit: true),
+            worktreeId: "wt"
+        )
+        harness.service.operationLists = [[candidate], [candidate]]
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        try await harness.coordinator.apply(.undo(operationID: candidate.id), confirmedAgainst: nil)
+
+        #expect(harness.service.requests == [.undo(operationID: candidate.id)])
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func lastDropPersistsNoStackEvidenceBeforeRefreshReconcilesUndo() async throws {
+        let candidate = GGOperationSummary(
+            id: "op_drop", kind: "drop", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:test-1", "drop", "change-1"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "only")], supportsClientOperationID: true
+        )
+        harness.service.result = .drop(GGDropResult(
+            dropped: [GGDropCommit(position: 1, sha: "only", title: "Only")],
+            remaining: 0
+        ))
+        harness.service.operationLists = [[candidate], [candidate]]
+        harness.onRefreshStack = {
+            await harness.coordinator.restoreUndoCandidate(currentStackName: nil)
+        }
+
+        try await harness.coordinator.apply(.drop(target: "change-2"), confirmedAgainst: nil)
+
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: candidate))
+        #expect(harness.markers.marker(worktreeId: "wt") == GGUndoMarker(
+            operationID: candidate.id, removedFinalStackCommit: true, branch: "feature"
+        ))
+        #expect(harness.service.requests == [.drop(target: "change-2")])
+    }
+
+    @Test func undoRejectsNewestOperationFromAnotherCurrentStack() async {
+        let candidate = GGOperationSummary(
+            id: "op_1", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "reorder"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let otherStack = GGStackSnapshot(
+            version: 1,
+            stack: GGStack(
+                name: "other", base: "main", totalCommits: 1, syncedCommits: 0,
+                currentPosition: 1, behindBase: 0,
+                entries: [GGStackEntry(
+                    position: 1, sha: "other-head", title: "Other",
+                    ggId: "other-change", isCurrent: true
+                )]
+            )
+        )
+        let harness = GGMutationHarness(stacks: [otherStack])
+        harness.markers.set(operationID: candidate.id, worktreeId: "wt")
+        harness.service.operationLists = [[candidate], [candidate]]
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await harness.coordinator.apply(.undo(operationID: candidate.id), confirmedAgainst: nil)
+        }
+
+        #expect(harness.service.requests.isEmpty)
+        #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func undoWithoutACurrentStackRejectsOrdinaryDropWithoutFinalCommitEvidence() async {
+        let candidate = GGOperationSummary(
+            id: "op_1", kind: "drop", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:persisted", "drop", "change-1"],
+            stackName: "feature",
+            touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(stacks: [GGStackSnapshot(version: 1, stack: nil)])
+        harness.markers.set(operationID: candidate.id, worktreeId: "wt")
+        harness.service.operationLists = [[candidate], [candidate]]
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await harness.coordinator.apply(.undo(operationID: candidate.id), confirmedAgainst: nil)
+        }
+
+        #expect(harness.service.requests.isEmpty)
+        #expect(harness.coordinator.undoCandidate == nil)
         #expect(harness.markers.operationID(worktreeId: "wt") == nil)
     }
 

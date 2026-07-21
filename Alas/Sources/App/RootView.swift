@@ -543,6 +543,46 @@ private struct RootGGPresentationHandlers: ViewModifier {
                 }
                 .environment(\.theme, state.themeStore.current)
             }
+            .sheet(
+                item: Binding(
+                    get: { state.rightPaneStore.stateWithPendingGGReorder()?.pendingGGReorder },
+                    set: { if $0 == nil { state.rightPaneStore.stateWithPendingGGReorder()?.cancelGGReorder() } }
+                )
+            ) { presentation in
+                GGReorderSheet(
+                    presentation: presentation,
+                    onApply: { model in
+                        guard let owner = state.rightPaneStore.stateWithPendingGGReorder() else {
+                            throw GGMutationError.staleConfirmation
+                        }
+                        try await owner.submitGGReorder(model)
+                    },
+                    onCancel: {
+                        state.rightPaneStore.stateWithPendingGGReorder()?.cancelGGReorder()
+                    }
+                )
+                .environment(\.theme, state.themeStore.current)
+            }
+            .sheet(
+                item: Binding(
+                    get: { state.rightPaneStore.stateWithPendingGGRestack()?.pendingGGRestack },
+                    set: { if $0 == nil { state.rightPaneStore.stateWithPendingGGRestack()?.cancelGGRestack() } }
+                )
+            ) { presentation in
+                GGRestackSheet(
+                    presentation: presentation,
+                    onApply: {
+                        guard let currentOwner = state.rightPaneStore.stateWithPendingGGRestack() else {
+                            throw GGMutationError.staleConfirmation
+                        }
+                        try await currentOwner.submitGGRestack()
+                    },
+                    onCancel: {
+                        state.rightPaneStore.stateWithPendingGGRestack()?.cancelGGRestack()
+                    }
+                )
+                .environment(\.theme, state.themeStore.current)
+            }
     }
 }
 

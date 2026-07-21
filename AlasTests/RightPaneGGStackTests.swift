@@ -2,6 +2,47 @@ import Foundation
 import Testing
 @testable import Alas
 
+struct GGReorderModelTests {
+    @Test func moveIsLimitedToContiguousMutableRegion() {
+        var model = GGReorderModel(entries: [
+            .mutable(id: "a", title: "A"),
+            .mutable(id: "b", title: "B"),
+            .immutable(id: "c", title: "C"),
+            .mutable(id: "d", title: "D"),
+        ])
+
+        #expect(model.move(from: 0, to: 1) == .moved)
+        #expect(model.orderedIDs == ["b", "a", "c", "d"])
+        #expect(model.move(from: 1, to: 3) == .immutableBoundary)
+        #expect(model.orderedIDs == ["b", "a", "c", "d"])
+        #expect(model.move(from: 2, to: 1) == .immutableBoundary)
+    }
+
+    @Test func moveAllowsTheEndInsertionOffsetOfAMutableRegion() {
+        var model = GGReorderModel(entries: [
+            .mutable(id: "a", title: "A"),
+            .mutable(id: "b", title: "B"),
+            .immutable(id: "merged", title: "Merged"),
+            .mutable(id: "c", title: "C"),
+        ])
+
+        #expect(model.move(from: 0, to: 2) == .moved)
+        #expect(model.orderedIDs == ["b", "a", "merged", "c"])
+    }
+
+    @Test func reorderAlwaysSubmitsCompleteExactIdentifierOrderAndHasNoDropAction() {
+        var model = GGReorderModel(entries: [
+            .immutable(id: "merged", title: "Merged"),
+            .mutable(id: "one", title: "One"),
+            .mutable(id: "two", title: "Two"),
+        ])
+
+        #expect(model.move(from: 2, to: 1) == .moved)
+        #expect(model.orderedIDs == ["merged", "two", "one"])
+        #expect(model.availableActions == [.apply, .cancel])
+    }
+}
+
 /// Counts `run(...)` calls so tests can assert `refreshGGStack()` skips the
 /// gg CLI when gated closed / not stack-shaped, and dedupes when the commit
 /// set is unchanged since the last query.
@@ -27,6 +68,28 @@ private final class ThrowingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         callCount += 1
         throw GGServiceError.commandFailed(stderr: "boom")
+    }
+}
+
+/// Delays the first stack read so a later refresh can publish a newer stack
+/// before the stale watcher result returns.
+private final class DelayedStackGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var callCount = 0
+    private let staleResult: ProcessResult
+    private let freshResult: ProcessResult
+
+    init(staleResult: ProcessResult, freshResult: ProcessResult) {
+        self.staleResult = staleResult
+        self.freshResult = freshResult
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        callCount += 1
+        if callCount == 1 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return staleResult
+        }
+        return freshResult
     }
 }
 
@@ -102,6 +165,129 @@ private final class CleanMutationFakeGGRunner: GGCommandRunning, @unchecked Send
     }
 }
 
+private final class RecordingLifecycleGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var arguments: [[String]] = []
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        arguments.append(args)
+        if args == ["undo", "--list", "--json", "--limit", "1"] {
+            return ProcessResult(
+                exitCode: 0,
+                stdout: #"{"version":1,"operations":[]}"#,
+                stderr: ""
+            )
+        }
+        return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+    }
+}
+
+private final class AdvancingUndoGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var lsCallCount = 0
+    private(set) var undoListCallCount = 0
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["ls", "--json"] {
+            lsCallCount += 1
+            return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        }
+        if args == ["undo", "--list", "--json", "--limit", "1"] {
+            undoListCallCount += 1
+            let id = undoListCallCount == 1 ? "op_1" : "op_2"
+            return ProcessResult(
+                exitCode: 0,
+                stdout: """
+                {"version":1,"operations":[{"id":"\(id)","kind":"reorder","status":"committed","created_at_ms":1,"args":["--client-operation-id","alas:persisted","reorder"],"stack_name":"agent-inbox","touched_remote":false,"is_undoable":true}]}
+                """,
+                stderr: ""
+            )
+        }
+        return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+    }
+}
+
+/// Serves a valid stack + undo candidate on the first `ls`, then throws on the
+/// next `ls` to simulate a stale-key refresh failure after switching branches.
+private final class FailSecondLsUndoGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var lsCallCount = 0
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["ls", "--json"] {
+            lsCallCount += 1
+            if lsCallCount >= 2 {
+                throw GGServiceError.commandFailed(stderr: "boom")
+            }
+            return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        }
+        if args == ["undo", "--list", "--json", "--limit", "1"] {
+            return ProcessResult(
+                exitCode: 0,
+                stdout: """
+                {"version":1,"operations":[{"id":"op_1","kind":"reorder","status":"committed","created_at_ms":1,"args":["--client-operation-id","alas:persisted","reorder"],"stack_name":"agent-inbox","touched_remote":false,"is_undoable":true}]}
+                """,
+                stderr: ""
+            )
+        }
+        return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+    }
+}
+
+private final class NoCurrentStackUndoGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var undoListCallCount = 0
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["ls", "--json"] {
+            return ProcessResult(exitCode: 0, stdout: #"{"version":1,"stacks":[]}"#, stderr: "")
+        }
+        if args == ["undo", "--list", "--json", "--limit", "1"] {
+            undoListCallCount += 1
+            return ProcessResult(
+                exitCode: 0,
+                stdout: #"{"version":1,"operations":[{"id":"op_drop","kind":"drop","status":"committed","created_at_ms":1,"args":["--client-operation-id","alas:persisted","drop","change-1"],"stack_name":"agent-inbox","touched_remote":false,"is_undoable":true}]}"#,
+                stderr: ""
+            )
+        }
+        return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+    }
+}
+
+private final class PausedContinueGGRunner: GGCommandRunning, @unchecked Sendable {
+    let snapshotOperationID: String?
+    let listedOperationID: String
+    private(set) var continueCallCount = 0
+    private(set) var undoListCallCount = 0
+
+    init(snapshotOperationID: String?, listedOperationID: String) {
+        self.snapshotOperationID = snapshotOperationID
+        self.listedOperationID = listedOperationID
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["ls", "--json"] {
+            let operationField = snapshotOperationID.map { #", "operation_id": "\#($0)""# } ?? ""
+            let payload = GGStackModelsTests.fixture.replacingOccurrences(
+                of: #""version": 1"#,
+                with: #""version": 1\#(operationField)"#
+            )
+            return ProcessResult(exitCode: 0, stdout: payload, stderr: "")
+        }
+        if args == ["continue"] {
+            continueCallCount += 1
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        if args == ["undo", "--list", "--json", "--limit", "1"] {
+            undoListCallCount += 1
+            return ProcessResult(
+                exitCode: 0,
+                stdout: """
+                {"version":1,"operations":[{"id":"\(listedOperationID)","kind":"restack","status":"committed","created_at_ms":1,"args":["--client-operation-id","alas:original","restack"],"stack_name":"agent-inbox","touched_remote":false,"is_undoable":true}]}
+                """,
+                stderr: ""
+            )
+        }
+        return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+    }
+}
+
 @MainActor
 struct RightPaneGGStackTests {
     private struct MemoryStore: PersistenceStoreProtocol {
@@ -147,6 +333,285 @@ struct RightPaneGGStackTests {
         #expect(ChangesTabView.stackAction(for: .newStackCommit) == nil)
         #expect(ChangesTabView.stackAction(for: .amendCurrent) == .amendCurrent)
         #expect(ChangesTabView.stackAction(for: .absorbIntoStack) == .absorbStaged)
+    }
+
+    @Test func manualRebaseActionTargetsTheProbedBehindBaseRef() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: wt.path) }
+        let runner = RecordingLifecycleGGRunner()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggStack = try GGStackSnapshot.decode(
+            fromJSON: Data(GGStackModelsTests.fixture.utf8)
+        ).stack
+        state.behindBase = GitService.BehindStatus(
+            ref: "origin/main",
+            sha: "base-sha",
+            count: 2,
+            probedAt: Date()
+        )
+
+        state.onGGStackAction(.rebase, appState: AppState(store: MemoryStore()))
+        for _ in 0..<500 where !runner.arguments.contains(["rebase", "origin/main"]) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(runner.arguments.contains(["rebase", "origin/main"]))
+        #expect(!runner.arguments.contains(["rebase", "main"]))
+    }
+
+    @Test func manualRebaseIgnoresBehindRefForADifferentStackBase() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: wt.path) }
+        let runner = RecordingLifecycleGGRunner()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        let releaseFixture = GGStackModelsTests.fixture.replacingOccurrences(
+            of: #""base": "main""#,
+            with: #""base": "release""#
+        )
+        state.ggStack = try GGStackSnapshot.decode(fromJSON: Data(releaseFixture.utf8)).stack
+        state.behindBase = GitService.BehindStatus(
+            ref: "origin/main",
+            sha: "base-sha",
+            count: 2,
+            probedAt: Date()
+        )
+
+        state.onGGStackAction(.rebase, appState: AppState(store: MemoryStore()))
+        for _ in 0..<500 where !runner.arguments.contains(["rebase", "release"]) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(runner.arguments.contains(["rebase", "release"]))
+        #expect(!runner.arguments.contains(["rebase", "origin/main"]))
+    }
+
+    @Test func manualRebaseUsesRemoteQualifiedRefOnlyForTheExactStackBase() {
+        let qualifiedRelease = GitService.BehindStatus(
+            ref: "origin/release",
+            sha: "base-sha",
+            count: 2,
+            probedAt: Date()
+        )
+        let nestedRelease = GitService.BehindStatus(
+            ref: "origin/team/release",
+            sha: "base-sha",
+            count: 2,
+            probedAt: Date()
+        )
+
+        #expect(RightPaneState.ggManualRebaseTarget(
+            stackBase: "release",
+            behindBase: qualifiedRelease
+        ) == "origin/release")
+        #expect(RightPaneState.ggManualRebaseTarget(
+            stackBase: "release",
+            behindBase: nestedRelease
+        ) == "release")
+        #expect(RightPaneState.ggManualRebaseTarget(
+            stackBase: "team/release",
+            behindBase: nestedRelease
+        ) == "origin/team/release")
+    }
+
+    @Test func genericGitRecoveryBlocksOnlyTheGGUndoPresentation() {
+        #expect(RightPaneState.ggUndoRecoveryIsBlockedByGenericGitOperation(
+            operationInProgress: true,
+            alasGGOperationInProgress: false
+        ))
+        #expect(!RightPaneState.ggUndoRecoveryIsBlockedByGenericGitOperation(
+            operationInProgress: false,
+            alasGGOperationInProgress: false
+        ))
+        #expect(!RightPaneState.ggUndoRecoveryIsBlockedByGenericGitOperation(
+            operationInProgress: true,
+            alasGGOperationInProgress: true
+        ))
+    }
+
+    @Test func prepareFailurePresentsGGServiceUserMessage() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: ThrowingFakeGGRunner())
+        let entry = try #require(try GGStackSnapshot.decode(
+            fromJSON: Data(GGStackModelsTests.fixture.utf8)
+        ).stack?.entries.first)
+
+        state.requestGGDrop(entry)
+        for _ in 0..<500 where state.ggActionState.lastError == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(state.ggActionState.lastError == "boom")
+    }
+
+    @Test func applyPreflightFailurePresentsGGServiceUserMessage() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: ThrowingFakeGGRunner())
+
+        state.requestGGCheckout(target: "change-1")
+        for _ in 0..<500 where state.ggActionState.lastError == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(state.ggActionState.lastError == "boom")
+    }
+
+    @Test func unchangedStackKeyStillReloadsEffectiveConfig() async throws {
+        let wt = makeWorktree()
+        let configURL = wt.path.appendingPathComponent(".git/gg/config.json")
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: wt.path) }
+        try #"{"defaults":{"sync_auto_rebase":false,"sync_behind_threshold":2}}"#
+            .write(to: configURL, atomically: true, encoding: .utf8)
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "q", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggEffectiveConfig == .init(syncAutoRebase: false, syncBehindThreshold: 2))
+        try #"{"defaults":{"sync_auto_rebase":true,"sync_behind_threshold":7}}"#
+            .write(to: configURL, atomically: true, encoding: .utf8)
+
+        await state.refreshGGStack()
+
+        #expect(state.ggEffectiveConfig == .init(syncAutoRebase: true, syncBehindThreshold: 7))
+        #expect(runner.callCount == 1)
+    }
+
+    @Test func unchangedStackKeyReconcilesUndoAgainstExternalLaterOperation() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer {
+            GGUndoMarkerStore().clear(worktreeId: wt.id)
+            try? FileManager.default.removeItem(at: wt.path)
+        }
+        let markerStore = GGUndoMarkerStore()
+        markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
+        let runner = AdvancingUndoGGRunner()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "u", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggUndoCandidate?.operationID == "op_1")
+        #expect(markerStore.marker(worktreeId: wt.id)?.operationID == "op_1")
+
+        await state.refreshGGStack()
+
+        #expect(state.ggUndoCandidate == nil)
+        #expect(markerStore.marker(worktreeId: wt.id) == nil)
+        #expect(runner.lsCallCount == 1)
+        #expect(runner.undoListCallCount == 2)
+    }
+
+    @Test func relaunchRestoresFinalDropUndoWhenCurrentBranchHasNoStack() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer {
+            GGUndoMarkerStore().clear(worktreeId: wt.id)
+            try? FileManager.default.removeItem(at: wt.path)
+        }
+        GGUndoMarkerStore().set(
+            GGUndoMarker(operationID: "op_drop", removedFinalStackCommit: true),
+            worktreeId: wt.id
+        )
+        let runner = NoCurrentStackUndoGGRunner()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "u", count: 40), stackShaped: true),
+        ]
+
+        await state.refreshGGStack()
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggUndoCandidate?.operationID == "op_drop")
+        #expect(runner.undoListCallCount == 1)
+    }
+
+    @Test func continueUsesExactPausedOperationIDFromProductionSnapshotPath() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git/rebase-merge"),
+            withIntermediateDirectories: true
+        )
+        defer {
+            GGUndoMarkerStore().clear(worktreeId: wt.id)
+            try? FileManager.default.removeItem(at: wt.path)
+        }
+        let runner = PausedContinueGGRunner(
+            snapshotOperationID: "op_paused",
+            listedOperationID: "op_paused"
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        // Seed the gg gate and a stack-shaped commit set so the post-continue
+        // refresh loads the `agent-inbox` stack and reconciles the undo
+        // candidate against a matching scope, rather than treating the gate as
+        // closed and suspending it.
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "c", count: 40), stackShaped: true)]
+        state.ggActionState.setPaused(GGPausedOperation(pausedBy: .restack))
+
+        state.onGGStackAction(.continueOp, appState: AppState(store: MemoryStore()))
+        for _ in 0..<500 where runner.continueCallCount == 0 || state.ggUndoCandidate == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(runner.continueCallCount == 1)
+        #expect(state.ggUndoCandidate?.operationID == "op_paused")
+    }
+
+    @Test func continueNeverSynthesizesMissingPausedOperationID() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git/rebase-merge"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: wt.path) }
+        let runner = PausedContinueGGRunner(
+            snapshotOperationID: nil,
+            listedOperationID: "in-progress"
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggActionState.setPaused(GGPausedOperation(pausedBy: .restack))
+
+        state.onGGStackAction(.continueOp, appState: AppState(store: MemoryStore()))
+        for _ in 0..<500 where runner.continueCallCount == 0 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(runner.continueCallCount == 1)
+        #expect(runner.undoListCallCount == 0)
+        #expect(state.ggUndoCandidate == nil)
     }
 
     @Test func ggOwnedPresentationUsesCommitTerminology() {
@@ -266,6 +731,64 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.pausedOperation == nil)
     }
 
+    @Test func gateClosedHidesUndoRecoveryButPreservesMarker() async throws {
+        let wt = makeWorktree()
+        defer { GGUndoMarkerStore().clear(worktreeId: wt.id) }
+        let markerStore = GGUndoMarkerStore()
+        markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
+        state.ggService = GGService(runner: AdvancingUndoGGRunner())
+
+        await state.refreshGGStack()
+        #expect(state.ggUndoCandidate?.operationID == "op_1")
+
+        // The gg gate can read closed transiently before the startup
+        // availability probe resolves. Hide the candidate but keep the marker
+        // so a valid recovery Undo is not destroyed by that race.
+        state.ggGateProvider = { false }
+        await state.refreshGGStack()
+
+        #expect(state.ggUndoCandidate == nil)
+        #expect(markerStore.marker(worktreeId: wt.id)?.operationID == "op_1")
+    }
+
+    @Test func failedStackRefreshHidesUndoRecoveryButPreservesMarker() async throws {
+        let wt = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: wt.path.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer {
+            GGUndoMarkerStore().clear(worktreeId: wt.id)
+            try? FileManager.default.removeItem(at: wt.path)
+        }
+        let markerStore = GGUndoMarkerStore()
+        markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
+        let runner = FailSecondLsUndoGGRunner()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggUndoCandidate?.operationID == "op_1")
+
+        // Switch to a different stack-shaped branch: the commits key changes and
+        // the `gg ls` refresh for it fails, so the cached stack is dropped and
+        // the current identity is unknown. The candidate must be hidden (not
+        // offered for the previous stack) while the marker survives for a later
+        // reconcile to rebuild.
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "b", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggUndoCandidate == nil)
+        #expect(markerStore.marker(worktreeId: wt.id)?.operationID == "op_1")
+        #expect(runner.lsCallCount == 2)
+    }
+
     @Test func activeGGOperationPreservesPausedWhenStackShapeDisappears() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-paused-unshaped-\(UUID().uuidString)")
@@ -375,6 +898,50 @@ struct RightPaneGGStackTests {
         // retry rather than being skipped by the unchanged-key guard.
         await state.refreshGGStack()
         #expect(runner.callCount == 2)
+    }
+
+    @Test func transientStackLoadFailurePreservesUndoRecoveryMarker() async throws {
+        let wt = makeWorktree()
+        defer { GGUndoMarkerStore().clear(worktreeId: wt.id) }
+        let markerStore = GGUndoMarkerStore()
+        markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: ThrowingFakeGGRunner())
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+
+        #expect(state.ggUndoCandidate == nil)
+        #expect(markerStore.marker(worktreeId: wt.id)?.operationID == "op_1")
+    }
+
+    @Test func staleWatcherStackLoadCannotOverwriteNewerRefresh() async throws {
+        let wt = makeWorktree()
+        let stale = ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        let fresh = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture.replacingOccurrences(of: "agent-inbox", with: "fresh-stack"),
+            stderr: ""
+        )
+        let runner = DelayedStackGGRunner(staleResult: stale, freshResult: fresh)
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "z", count: 40), stackShaped: true)]
+
+        let staleRefresh = Task { @MainActor in await state.refreshGGStack() }
+        for _ in 0..<500 where runner.callCount == 0 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(runner.callCount == 1)
+
+        state.ggStackCommitsKey = nil
+        await state.refreshGGStack()
+        #expect(state.ggStack?.name == "fresh-stack")
+
+        await staleRefresh.value
+        #expect(state.ggStack?.name == "fresh-stack")
     }
 
     /// A stack loaded for one branch must not keep rendering after the user
