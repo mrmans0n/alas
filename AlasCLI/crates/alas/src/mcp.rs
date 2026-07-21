@@ -749,8 +749,14 @@ fn parse_http_request(bytes: &[u8]) -> Option<HttpRequest> {
         let value = value.trim();
         if name.eq_ignore_ascii_case("authorization") {
             let scheme = "bearer ";
-            if value.len() >= scheme.len() && value[..scheme.len()].eq_ignore_ascii_case(scheme) {
-                bearer = Some(value[scheme.len()..].trim().to_string());
+            // `value.get(..len)` returns None on a non-char boundary instead of
+            // panicking, so a multibyte char in the first bytes of a malicious
+            // pre-auth header can't crash the accept thread. When it's Some, the
+            // offset is a valid boundary and the tail slice is safe.
+            if let Some(prefix) = value.get(..scheme.len()) {
+                if prefix.eq_ignore_ascii_case(scheme) {
+                    bearer = Some(value[scheme.len()..].trim().to_string());
+                }
             }
         } else if name.eq_ignore_ascii_case("content-length") {
             content_length = value.parse().ok()?;
@@ -959,6 +965,15 @@ mod tests {
         let req = parse_http_request(raw.as_bytes()).unwrap();
         assert_eq!(req.bearer.as_deref(), Some("TOK"));
         assert_eq!(req.body, "{}");
+    }
+
+    #[test]
+    fn multibyte_authorization_does_not_panic() {
+        // A multibyte char within the first bytes of the header value must not
+        // cause a non-char-boundary slice panic; it simply isn't a bearer.
+        let raw = "POST /mcp HTTP/1.1\r\nAuthorization: Béarer x\r\nContent-Length: 0\r\n\r\n";
+        let req = parse_http_request(raw.as_bytes()).unwrap();
+        assert_eq!(req.bearer, None);
     }
 
     #[test]
