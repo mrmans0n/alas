@@ -4887,6 +4887,9 @@ final class AppState {
             clearMCPRegistration: { [weak self] sessionId in
                 self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
             },
+            onSessionEnded: { [weak self] sessionId in
+                self?.mcpHTTPSupervisor.end(sessionId: sessionId)
+            },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,
                       let project = self.projects.first(where: { $0.id == worktree.projectId }),

@@ -53,6 +53,22 @@ struct ACPSessionManagerRetentionTests {
         #expect(mgr.sessions[id] != nil)
     }
 
+    @Test("onSessionEnded fires on deleteSession but not closeSession")
+    func onSessionEndedFiresOnDeleteOnly() {
+        let path = NSTemporaryDirectory() + "ended-\(UUID()).sqlite"
+        let store = try! ACPSessionStore(path: path)
+        var ended: [ACPSession.ID] = []
+        let mgr = ACPSessionManager(
+            worktreeId: "w1", worktreePath: "/tmp", store: store,
+            onSessionEnded: { ended.append($0) })
+        let closed = mgr.createSession(agentId: "claude").id
+        mgr.closeSession(id: closed)
+        #expect(ended.isEmpty)
+        let deleted = mgr.createSession(agentId: "claude").id
+        mgr.deleteSession(id: deleted)
+        #expect(ended == [deleted])
+    }
+
     @Test("closeSession overrides retention and tears down")
     func closeOverrides() {
         let mgr = makeManager()

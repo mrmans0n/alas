@@ -91,6 +91,11 @@ final class ACPSessionManager: ObservableObject {
     /// Clears any recorded hello for a local session id so each attach epoch
     /// re-proves registration.
     private let clearMCPRegistration: (@MainActor (String) -> Void)?
+    /// Invoked when a session is permanently removed (`deleteSession`) so the
+    /// owner can release per-session resources — e.g. terminating a supervised
+    /// `alas mcp --http` process. Not called on `closeSession` (a transient
+    /// in-memory unload where a later reattach is expected).
+    private let onSessionEnded: (@MainActor (ACPSession.ID) -> Void)?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable. Fetched per attach, mirroring
     /// `builtInMCPProvider`.
@@ -370,6 +375,7 @@ final class ACPSessionManager: ObservableObject {
          builtInMCPProvider: BuiltInMCPProvider? = nil,
          isBuiltInMCPRegistered: (@MainActor (String) -> Bool)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
+         onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil)
     {
@@ -389,6 +395,7 @@ final class ACPSessionManager: ObservableObject {
         self.builtInMCPProvider = builtInMCPProvider
         self.isBuiltInMCPRegistered = isBuiltInMCPRegistered
         self.clearMCPRegistration = clearMCPRegistration
+        self.onSessionEnded = onSessionEnded
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
@@ -856,6 +863,7 @@ final class ACPSessionManager: ObservableObject {
 
     func deleteSession(id: ACPSession.ID) {
         killRemoteHelperACPProcIfPossible(sessionId: id)
+        onSessionEnded?(id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
