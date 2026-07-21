@@ -4871,6 +4871,12 @@ final class AppState {
                     // Supervisor couldn't get a port — fall through to stdio
                     // (better than no tools).
                 }
+                // Reaching the non-HTTP path means this attach is not using an
+                // HTTP server (stdio preference, adapter without HTTP MCP
+                // support, disabled, or user-overridden). Tear down any HTTP
+                // process a previous attach of this session spawned so it does
+                // not linger bound on localhost. No-op when none is running.
+                self.mcpHTTPSupervisor.end(sessionId: sessionId)
                 return BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: configuredServers,
