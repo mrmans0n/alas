@@ -411,6 +411,7 @@
 		497D21A67A062CE6282008CD /* PathsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295319DB8544C170DDD6328D /* PathsTests.swift */; };
 		49A112CA4183D8FAEA84294A /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = 0714DCAA9EC181C239773440 /* TreeSitterBash */; };
 		49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C0DDAE33A9928438C65182 /* DebounceTimer.swift */; };
+		4A99239BAD338EDCE7BE5F0E /* GGMutationModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1276253D1FB205BC9B5AEDF1 /* GGMutationModelsTests.swift */; };
 		4AFE4A55AF808EEFE3AA4DE2 /* ACPDelegatedSessionsPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE0235A58C8825D42F1C406C /* ACPDelegatedSessionsPolicyTests.swift */; };
 		4B2031FB61782327D5279F98 /* FileTreeBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 339EA6ACAF180AADEC12841F /* FileTreeBuilder.swift */; };
 		4B8A7F326E4DBD17C9D95E1E /* CommitHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02E429B37288215EBC89571 /* CommitHeaderView.swift */; };
@@ -1452,6 +1453,7 @@
 		11DB4509E8835E63F9532E43 /* AppStateFocusMainWorktreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFocusMainWorktreeTests.swift; sourceTree = "<group>"; };
 		120D10644A278775A9AE1990 /* ImageDiffViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffViewTests.swift; sourceTree = "<group>"; };
 		1271747193D1594AEA596278 /* AlasCLICommandRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLICommandRouter.swift; sourceTree = "<group>"; };
+		1276253D1FB205BC9B5AEDF1 /* GGMutationModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGMutationModelsTests.swift; sourceTree = "<group>"; };
 		1281A3235F08DC8A95D015A9 /* ACPSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionTests.swift; sourceTree = "<group>"; };
 		12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePreviewTabView.swift; sourceTree = "<group>"; };
 		12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontFamilyPicker.swift; sourceTree = "<group>"; };
@@ -4626,6 +4628,7 @@
 				98D60242BE2239AE96629EBC /* GGInboxStoreTests.swift */,
 				611F2522E4A89EA38B0779AC /* GGInstallControllerTests.swift */,
 				8C5274DFD1921985B585C291 /* GGMCPInjectionTests.swift */,
+				1276253D1FB205BC9B5AEDF1 /* GGMutationModelsTests.swift */,
 				7532F1267DB3F18530C9AD84 /* GGServiceActionsTests.swift */,
 				DF688C3B9D43B4F5FF48F7D3 /* GGServiceInboxTests.swift */,
 				2F74F721E41ADB3EC7906DC1 /* GGServiceTests.swift */,
@@ -6273,6 +6276,7 @@
 				77D7244E04B1949523699AEB /* GGInboxTabsTests.swift in Sources */,
 				6E2597E7FB61606C9A9F04AC /* GGInstallControllerTests.swift in Sources */,
 				40EEB77C4E857AF1FBD7692A /* GGMCPInjectionTests.swift in Sources */,
+				4A99239BAD338EDCE7BE5F0E /* GGMutationModelsTests.swift in Sources */,
 				AA9C6D213883037790F00042 /* GGServiceActionsTests.swift in Sources */,
 				10D0D26BCE0EF4D8677CEA79 /* GGServiceInboxTests.swift in Sources */,
 				7A9F0DE5D1E5B5DFC9991474 /* GGServiceTests.swift in Sources */,

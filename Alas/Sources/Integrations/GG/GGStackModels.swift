@@ -7,6 +7,13 @@ enum GGServiceError: Error, Equatable {
     case commandFailed(stderr: String)
     case malformedOutput(String)
     case unsupportedSchema(Int)
+    case immutableTargets(message: String)
+    case dirtyWorkingTree(message: String)
+    case staleTarget(message: String)
+    case staleSplitPlan(message: String)
+    case pausedConflict(message: String)
+    case partialMutation(message: String)
+    case undoRefused(message: String, hint: String?)
 }
 
 extension GGServiceError {
@@ -16,7 +23,18 @@ extension GGServiceError {
         case .cliMissing: return "gg is not installed."
         case .commandFailed(let stderr): return stderr.isEmpty ? "gg command failed." : stderr
         case .malformedOutput(let message): return message
-        case .unsupportedSchema(let version): return "Unsupported gg output (schema \(version))."
+        case .unsupportedSchema(let version):
+            return "Unsupported gg output (schema \(version)). Update gg and try again."
+        case .immutableTargets(let message),
+             .dirtyWorkingTree(let message),
+             .staleTarget(let message),
+             .staleSplitPlan(let message),
+             .pausedConflict(let message),
+             .partialMutation(let message):
+            return message
+        case .undoRefused(let message, let hint):
+            guard let hint, !hint.isEmpty else { return message }
+            return "\(message)\n\(hint)"
         }
     }
 

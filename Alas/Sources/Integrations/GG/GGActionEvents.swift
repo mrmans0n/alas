@@ -84,6 +84,16 @@ enum GGSyncEvent: Equatable {
 }
 
 enum GGActionErrorMessage {
+    private static let responseEnvelopeKeys = [
+        "land",
+        "sync",
+        "clean",
+        "drop",
+        "unstack",
+        "restack",
+        "split",
+    ]
+
     static func parse(fromJSON data: Data) -> String? {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         if let line = String(data: data, encoding: .utf8),
@@ -96,8 +106,11 @@ enum GGActionErrorMessage {
 
     static func parse(from object: [String: Any]) -> String? {
         if let message = message(from: object["error"]) { return message }
-        if let land = object["land"] as? [String: Any], let message = parse(from: land) { return message }
-        if let sync = object["sync"] as? [String: Any], let message = parse(from: sync) { return message }
+        for key in responseEnvelopeKeys {
+            if let envelope = object[key] as? [String: Any], let message = parse(from: envelope) {
+                return message
+            }
+        }
         if let entries = object["entries"] as? [[String: Any]] {
             for entry in entries {
                 if let message = message(from: entry["error"]) {
@@ -117,6 +130,15 @@ enum GGActionErrorMessage {
             if let nested = message(from: object["error"]) { return nested }
         }
         return String(describing: error)
+    }
+}
+
+enum GGErrorPresentation {
+    static func message(for error: Error) -> String {
+        if let serviceError = error as? GGServiceError {
+            return serviceError.userMessage
+        }
+        return error.localizedDescription
     }
 }
 
