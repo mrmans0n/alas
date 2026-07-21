@@ -26,9 +26,10 @@ enum GGStackGate {
     }
 
     /// True when a git rebase/merge/cherry-pick/revert is in progress in the
-    /// worktree — i.e. a gg `sync`/`land` paused on a conflict. `gg ls
-    /// --json` cannot report this, so the drawer's Continue/Abort state is
-    /// driven by this cheap filesystem probe and self-corrects each refresh.
+    /// worktree — i.e. a gg mutation paused on a conflict. The drawer's
+    /// Continue/Abort presentation is driven by this cheap filesystem probe;
+    /// `gg ls --json` separately supplies the exact operation ID used for
+    /// post-Continue Undo correlation.
     /// Uses `worktreeGitDir`, not `commonGitDir`: these markers are written
     /// to the private per-worktree git dir, not the dir shared across
     /// worktrees.
