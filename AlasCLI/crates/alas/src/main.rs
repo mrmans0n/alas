@@ -99,8 +99,7 @@ fn run_mcp(mode: McpMode) -> ExitCode {
     };
     let result = match mode {
         McpMode::Stdio => mcp::serve(&env),
-        // TODO(E2): route to mcp::serve_http once the HTTP transport lands.
-        McpMode::Http => mcp::serve(&env),
+        McpMode::Http => mcp::serve_http(&env),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

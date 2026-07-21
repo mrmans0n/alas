@@ -714,11 +714,206 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A parsed HTTP/1.1 request. Only the fields the MCP transport needs are
+/// kept; everything else in the request is ignored.
+struct HttpRequest {
+    method: String,
+    path: String,
+    bearer: Option<String>,
+    body: String,
+}
+
+/// Parse an HTTP/1.1 request from raw bytes. Returns None when the request is
+/// incomplete (headers not yet terminated, or fewer body bytes than
+/// Content-Length) or malformed. Headers are matched case-insensitively; the
+/// bearer token is taken from `Authorization: Bearer <token>`.
+fn parse_http_request(bytes: &[u8]) -> Option<HttpRequest> {
+    let split = bytes.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&bytes[..split]).ok()?;
+    let body_bytes = &bytes[split + 4..];
+
+    let mut lines = head.split("\r\n");
+    let mut request_line = lines.next()?.split_whitespace();
+    let method = request_line.next()?.to_string();
+    let path = request_line.next()?.to_string();
+    // The HTTP version token must be present for a well-formed request line.
+    request_line.next()?;
+
+    let mut bearer = None;
+    let mut content_length: usize = 0;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("authorization") {
+            let scheme = "bearer ";
+            if value.len() >= scheme.len() && value[..scheme.len()].eq_ignore_ascii_case(scheme) {
+                bearer = Some(value[scheme.len()..].trim().to_string());
+            }
+        } else if name.eq_ignore_ascii_case("content-length") {
+            content_length = value.parse().ok()?;
+        }
+    }
+
+    if body_bytes.len() < content_length {
+        return None;
+    }
+    let body = String::from_utf8_lossy(&body_bytes[..content_length]).into_owned();
+    Some(HttpRequest {
+        method,
+        path,
+        bearer,
+        body,
+    })
+}
+
+/// Build a minimal HTTP/1.1 response. Content-Length is the body's byte
+/// length; the connection is always closed after one response.
+fn http_response(status: u16, content_type: &str, body: &str) -> String {
+    let reason = match status {
+        200 => "OK",
+        202 => "Accepted",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        _ => "OK",
+    };
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+        len = body.len(),
+    )
+}
+
+/// HTTP transport for the same MCP server as `serve`. Binds an ephemeral
+/// localhost port, prints `PORT <n>` on stdout so the app can wire up
+/// `http://localhost:<n>/mcp`, and requires a bearer token matching
+/// `ALAS_MCP_HTTP_TOKEN` on every request. Single-threaded: alas tool calls
+/// are quick and connections are served one at a time with `Connection: close`.
+pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    let token = std::env::var("ALAS_MCP_HTTP_TOKEN").unwrap_or_default();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    println!("PORT {}", listener.local_addr()?.port());
+    std::io::stdout().flush()?;
+
+    let mut hello_sent = false;
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!("alas: mcp http accept error: {err}");
+                continue;
+            }
+        };
+        if let Err(err) = handle_http_connection(env, &mut stream, &token, &mut hello_sent) {
+            // A single bad connection must not take down the server.
+            eprintln!("alas: mcp http connection error: {err}");
+        }
+    }
+    Ok(())
+}
+
+fn handle_http_connection(
+    env: &McpEnv,
+    stream: &mut std::net::TcpStream,
+    token: &str,
+    hello_sent: &mut bool,
+) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let request = loop {
+        if buf.len() > MAX_REQUEST_BYTES {
+            break Err(());
+        }
+        if let Some(req) = parse_http_request(&buf) {
+            break Ok(Some(req));
+        }
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            // Peer hung up: accept whatever completed, else treat as malformed.
+            break Ok(parse_http_request(&buf));
+        }
+        buf.extend_from_slice(&chunk[..read]);
+    };
+
+    let response = match request {
+        Ok(Some(req)) => build_http_response(env, &req, token, hello_sent),
+        Ok(None) | Err(()) => http_response(400, "text/plain", "bad request"),
+    };
+    stream.write_all(response.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn build_http_response(
+    env: &McpEnv,
+    req: &HttpRequest,
+    token: &str,
+    hello_sent: &mut bool,
+) -> String {
+    // No token configured, or a mismatch, is a flat 401 with no detail so the
+    // response never distinguishes "no token here" from "wrong token".
+    if token.is_empty() || req.bearer.as_deref() != Some(token) {
+        return http_response(401, "text/plain", "");
+    }
+    if req.method != "POST" || !req.path.starts_with("/mcp") {
+        return http_response(404, "text/plain", "not found");
+    }
+
+    // Announce startup once, on the first authenticated `initialize`, mirroring
+    // the stdio server's best-effort hello.
+    if !*hello_sent {
+        if let Ok(value) = serde_json::from_str::<Value>(&req.body) {
+            if value.get("method").and_then(Value::as_str) == Some("initialize") {
+                alas_client::send_hello(&env.socket, &env.session_id, "http");
+                *hello_sent = true;
+            }
+        }
+    }
+
+    match handle_line_with_parent(
+        &req.body,
+        &env.worktree_dir,
+        env.parent_session_id.as_deref(),
+        |cmd| dispatch(env, cmd),
+    ) {
+        Some(reply) => http_response(200, "application/json", &reply.to_string()),
+        // Notifications (e.g. notifications/initialized) get no JSON-RPC reply.
+        None => http_response(202, "application/json", ""),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{command_for_tool, dispatch, env_from, handle_line, McpEnv, PROTOCOL_VERSION};
+    use super::{
+        command_for_tool, dispatch, env_from, handle_line, http_response, parse_http_request,
+        McpEnv, PROTOCOL_VERSION,
+    };
     use alas_client::Response;
     use serde_json::{json, Value};
+
+    #[test]
+    fn parses_post_body_and_token() {
+        let raw = "POST /mcp HTTP/1.1\r\nAuthorization: Bearer TOK\r\nContent-Length: 2\r\n\r\n{}";
+        let req = parse_http_request(raw.as_bytes()).unwrap();
+        assert_eq!(req.bearer.as_deref(), Some("TOK"));
+        assert_eq!(req.body, "{}");
+    }
+
+    #[test]
+    fn builds_json_http_response() {
+        let resp = http_response(200, "application/json", "{\"ok\":true}");
+        assert!(resp.starts_with("HTTP/1.1 200"));
+        assert!(resp.contains("Content-Length: 11"));
+        assert!(resp.ends_with("{\"ok\":true}"));
+    }
 
     fn ok_dispatch(_: &alas_client::Command) -> Result<Response, alas_client::TransportError> {
         Ok(Response {
