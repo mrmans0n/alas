@@ -1,6 +1,10 @@
 import SwiftUI
 
 struct WorktreeRowView: View {
+    static func stackSummaryTooltip(merged: Int, total: Int) -> String {
+        "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
+    }
+
     let worktree: Worktree
     let isSelected: Bool
     let isMain: Bool
@@ -101,7 +105,7 @@ struct WorktreeRowView: View {
                             Text("▲ \(stack.merged)/\(stack.total)")
                                 .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundColor(theme.color("accent"))
-                                .help("gg stack · \(stack.merged) of \(stack.total) entries merged")
+                                .help(Self.stackSummaryTooltip(merged: stack.merged, total: stack.total))
                         }
                         if let summary = harnessSummary {
                             Spacer()

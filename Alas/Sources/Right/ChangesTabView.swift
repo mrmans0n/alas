@@ -18,6 +18,18 @@ struct ChangesTabView: View {
     }
 
     private var preparationModel: ChangesPreparationModel {
+        if isGGDrawerActive {
+            return ChangesPreparationModel.makeGG(
+                changes: rps.changes,
+                hasDraft: draftNonEmpty,
+                capabilities: GGAvailability.shared.capabilities,
+                mutationDisabledReason: ggPreparationMutationDisabledReason,
+                newCommitDisabledReason: Self.ggNewStackCommitDisabledReason(
+                    stack: rps.ggStack,
+                    currentHeadSHA: rps.currentHeadSHA
+                )
+            )
+        }
         let readiness = ReviewReadinessModel(
             snapshot: rps.reviewLoop.snapshot,
             lastError: rps.reviewLoop.lastError,
@@ -53,6 +65,47 @@ struct ChangesTabView: View {
 
     private var isGGDrawerActive: Bool {
         Self.shouldShowGGDrawer(stack: rps.ggStack, pausedGGOperation: rps.ggActionState.pausedOperation)
+    }
+
+    private var ggPreparationMutationDisabledReason: String? {
+        Self.ggPreparationMutationDisabledReason(
+            hasStack: rps.ggStack != nil,
+            pausedOperation: rps.ggActionState.pausedOperation,
+            inFlightAction: rps.ggActionState.inFlightAction,
+            mergeOperation: rps.mergeOp.current
+        )
+    }
+
+    static func ggPreparationMutationDisabledReason(
+        hasStack: Bool,
+        pausedOperation: GGPausedOperation?,
+        inFlightAction: GGStackActionKind?,
+        mergeOperation: MergeOperation?
+    ) -> String? {
+        if !hasStack || pausedOperation != nil {
+            return "Continue or abort the paused GG operation first."
+        }
+        if inFlightAction != nil {
+            return "Another GG operation is running."
+        }
+        if mergeOperation != nil {
+            return "Finish the current Git operation first."
+        }
+        return nil
+    }
+
+    static func ggNewStackCommitDisabledReason(
+        stack: GGStack?,
+        currentHeadSHA: String
+    ) -> String? {
+        guard !currentHeadSHA.isEmpty,
+              let head = stack?.entries.max(by: { $0.position < $1.position }),
+              !head.sha.isEmpty,
+              currentHeadSHA.hasPrefix(head.sha) || head.sha.hasPrefix(currentHeadSHA)
+        else {
+            return "Checkout the stack head to create a new stack commit."
+        }
+        return nil
     }
 
     private var scrollContent: some View {
@@ -100,13 +153,13 @@ struct ChangesTabView: View {
             )
 
             if Self.shouldShowChangesPreparationCard(
-                preparationIsVisible: preparationModel.isVisible,
-                ggDrawerIsActive: isGGDrawerActive
+                preparationIsVisible: preparationModel.isVisible
             ) {
                 ChangesPreparationCard(
                     model: preparationModel,
                     onReviewChanges: openReviewChangesTab,
                     onDraftCommit: openDraftTab,
+                    onGGAction: handleGGPreparationAction,
                     onReviewRequestAction: { action in
                         rps.handleReviewReadinessAction(action, appState: appState)
                     }
@@ -244,10 +297,17 @@ struct ChangesTabView: View {
     }
 
     static func shouldShowChangesPreparationCard(
-        preparationIsVisible: Bool,
-        ggDrawerIsActive: Bool
+        preparationIsVisible: Bool
     ) -> Bool {
-        preparationIsVisible && !ggDrawerIsActive
+        preparationIsVisible
+    }
+
+    static func stackAction(for action: GGChangesPreparationAction) -> GGStackActionKind? {
+        switch action {
+        case .newStackCommit: nil
+        case .amendCurrent: .amendCurrent
+        case .absorbIntoStack: .absorbStaged
+        }
     }
 
     private var hasDraftTab: Bool {
@@ -273,6 +333,18 @@ struct ChangesTabView: View {
 
     private func openDraftTab() {
         _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
+    }
+
+    private func handleGGPreparationAction(_ action: GGChangesPreparationAction) {
+        if action == .newStackCommit {
+            _ = appState.tabs.openOrFocusDraftCommit(
+                worktreeId: rps.worktree.id,
+                resetAmend: true
+            )
+            return
+        }
+        guard let stackAction = Self.stackAction(for: action) else { return }
+        rps.onGGStackAction(stackAction, appState: appState)
     }
 
     private func openReviewChangesTab() {

@@ -134,6 +134,52 @@ struct RightPaneGGStackTests {
         )
     }
 
+    @Test func prepareCardRemainsVisibleAlongsideGGDrawer() {
+        #expect(ChangesTabView.shouldShowChangesPreparationCard(
+            preparationIsVisible: true
+        ))
+        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
+            preparationIsVisible: false
+        ))
+    }
+
+    @Test func ggPreparationDestinationsRouteToExistingActions() {
+        #expect(ChangesTabView.stackAction(for: .newStackCommit) == nil)
+        #expect(ChangesTabView.stackAction(for: .amendCurrent) == .amendCurrent)
+        #expect(ChangesTabView.stackAction(for: .absorbIntoStack) == .absorbStaged)
+    }
+
+    @Test func ggOwnedPresentationUsesCommitTerminology() {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.start(totalEntries: 2))
+        let stack = GGStack(
+            name: "feature",
+            base: "main",
+            totalCommits: 2,
+            syncedCommits: 0,
+            currentPosition: 2,
+            behindBase: 0,
+            entries: []
+        )
+        let drawer = GGStackReadinessModel.make(stack: stack, action: action)
+
+        #expect(drawer.facts.first?.label == "Commits")
+        #expect(drawer.progressRows.first == "Syncing 2 commits…")
+        #expect(GGInboxTabView.commitCountLabel(1) == "1 commit")
+        #expect(GGInboxTabView.commitCountLabel(2) == "2 commits")
+        #expect(CommitRow.ggCheckoutTitle == "Checkout Commit")
+        #expect(GGMutationConfirmation.clean(mergedCommits: 2).message.contains("2 merged commits"))
+
+        let typedStrings = drawer.facts.map(\.label)
+            + drawer.progressRows
+            + [GGInboxTabView.commitCountLabel(2), CommitRow.ggCheckoutTitle]
+            + [GGMutationConfirmation.clean(mergedCommits: 2).message]
+        #expect(typedStrings.allSatisfy {
+            !$0.lowercased().contains("entry") && !$0.lowercased().contains("entries")
+        })
+    }
+
     /// A real repo with `main` pushed to a bare remote, then a `nacho/stack`
     /// branch carrying one GG-ID-trailered commit — also fully pushed, so
     /// `@{u}` == HEAD and the branch has nothing left unpushed.

@@ -1,6 +1,22 @@
 import Foundation
 
+enum GGChangesPreparationAction: Equatable, Sendable {
+    case newStackCommit
+    case amendCurrent
+    case absorbIntoStack
+}
+
 struct ChangesPreparationModel: Equatable {
+    struct StagedStats: Equatable, Sendable {
+        let files: Int
+        let insertions: Int
+        let deletions: Int
+
+        static let zero = StagedStats(files: 0, insertions: 0, deletions: 0)
+
+        var hasChanges: Bool { files > 0 }
+    }
+
     struct ReviewAction: Equatable {
         let title: String
         let fileCount: Int
@@ -25,12 +41,28 @@ struct ChangesPreparationModel: Equatable {
         let emphasis: ReviewReadinessModel.Action.Emphasis
     }
 
+    struct GGAction: Equatable {
+        let kind: GGChangesPreparationAction
+        let title: String
+        let stats: StagedStats
+        let hasNonEmptyDraft: Bool
+        let disabledReason: String?
+
+        var isEnabled: Bool { disabledReason == nil }
+    }
+
     let reviewAction: ReviewAction?
     let draftAction: DraftAction?
     let reviewRequestActions: [ReviewRequestAction]
+    let ggActions: [GGAction]
+
+    var primaryAction: ReviewAction? { reviewAction }
 
     var isVisible: Bool {
-        reviewAction != nil || draftAction != nil || !reviewRequestActions.isEmpty
+        if !ggActions.isEmpty {
+            return reviewAction != nil || ggAction(.newStackCommit)?.isEnabled == true
+        }
+        return reviewAction != nil || draftAction != nil || !reviewRequestActions.isEmpty
     }
 
     init(
@@ -69,6 +101,7 @@ struct ChangesPreparationModel: Equatable {
 
         reviewAction = builtReviewAction
         draftAction = builtDraftAction
+        ggActions = []
         let builtActions = Self.compactReviewRequestActions(from: readinessActions)
         let effectiveAheadCommitCount = local?.aheadCommitCount ?? aheadCommitCount
         reviewRequestActions = Self.applyingHideRules(
@@ -78,6 +111,119 @@ struct ChangesPreparationModel: Equatable {
             local: local,
             aheadCommitCount: effectiveAheadCommitCount
         )
+    }
+
+    static func makeGG(
+        changes: [ChangedFile],
+        hasDraft: Bool,
+        capabilities: GGCapabilities,
+        mutationDisabledReason: String? = nil,
+        newCommitDisabledReason: String? = nil
+    ) -> ChangesPreparationModel {
+        let summary = ReviewChangesTriggerSummary.summary(for: changes)
+        let stagedChanges = changes.filter { $0.stage == .staged }
+        let staged = StagedStats(
+            files: stagedChanges.count,
+            insertions: stagedChanges.reduce(0) { $0 + $1.add },
+            deletions: stagedChanges.reduce(0) { $0 + $1.del }
+        )
+        return makeGG(
+            staged: staged,
+            hasDraft: hasDraft,
+            capabilities: capabilities,
+            mutationDisabledReason: mutationDisabledReason,
+            newCommitDisabledReason: newCommitDisabledReason,
+            reviewSummary: summary
+        )
+    }
+
+    static func makeGG(
+        staged: StagedStats,
+        hasDraft: Bool,
+        capabilities: GGCapabilities,
+        mutationDisabledReason: String? = nil,
+        newCommitDisabledReason: String? = nil
+    ) -> ChangesPreparationModel {
+        let summary = staged.hasChanges
+            ? ReviewChangesTriggerSummary(
+                fileCount: staged.files,
+                additions: staged.insertions,
+                deletions: staged.deletions
+            )
+            : nil
+        return makeGG(
+            staged: staged,
+            hasDraft: hasDraft,
+            capabilities: capabilities,
+            mutationDisabledReason: mutationDisabledReason,
+            newCommitDisabledReason: newCommitDisabledReason,
+            reviewSummary: summary
+        )
+    }
+
+    func ggAction(_ kind: GGChangesPreparationAction) -> GGAction? {
+        ggActions.first { $0.kind == kind }
+    }
+
+    private static func makeGG(
+        staged: StagedStats,
+        hasDraft: Bool,
+        capabilities: GGCapabilities,
+        mutationDisabledReason: String?,
+        newCommitDisabledReason: String?,
+        reviewSummary: ReviewChangesTriggerSummary?
+    ) -> ChangesPreparationModel {
+        let reviewAction = reviewSummary.map {
+            ReviewAction(
+                title: "Review current changes",
+                fileCount: $0.fileCount,
+                additions: $0.additions,
+                deletions: $0.deletions
+            )
+        }
+        let effectiveNewCommitDisabledReason = mutationDisabledReason
+            ?? newCommitDisabledReason
+            ?? (staged.hasChanges || hasDraft ? nil : "Stage changes first")
+        let rewriteDisabledReason = mutationDisabledReason
+            ?? (staged.hasChanges ? nil : "Stage changes first")
+        let amendDisabledReason = mutationDisabledReason ?? (
+            capabilities.stagedOnlyAmend
+                ? rewriteDisabledReason
+                : "Update GG to amend staged changes safely"
+        )
+        return ChangesPreparationModel(
+            reviewAction: reviewAction,
+            ggActions: [
+                GGAction(
+                    kind: .newStackCommit,
+                    title: "New stack commit",
+                    stats: staged,
+                    hasNonEmptyDraft: hasDraft,
+                    disabledReason: effectiveNewCommitDisabledReason
+                ),
+                GGAction(
+                    kind: .amendCurrent,
+                    title: "Amend current",
+                    stats: staged,
+                    hasNonEmptyDraft: false,
+                    disabledReason: amendDisabledReason
+                ),
+                GGAction(
+                    kind: .absorbIntoStack,
+                    title: "Absorb into stack",
+                    stats: staged,
+                    hasNonEmptyDraft: false,
+                    disabledReason: rewriteDisabledReason
+                ),
+            ]
+        )
+    }
+
+    private init(reviewAction: ReviewAction?, ggActions: [GGAction]) {
+        self.reviewAction = reviewAction
+        draftAction = nil
+        reviewRequestActions = []
+        self.ggActions = ggActions
     }
 
     private static func compactReviewRequestActions(

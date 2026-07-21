@@ -99,6 +99,10 @@ struct GGInboxTabView: View {
         }
     }
 
+    static func commitCountLabel(_ count: Int) -> String {
+        "\(count) commit\(count == 1 ? "" : "s")"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -115,7 +119,7 @@ struct GGInboxTabView: View {
             Text(tabState.title).font(.system(size: 13, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             if let snapshot = inboxState.snapshot {
-                Text("\(snapshot.totalItems)")
+                Text(Self.commitCountLabel(snapshot.totalItems))
                     .font(.system(size: 11, weight: .medium)).monospacedDigit()
                     .foregroundColor(theme.color("fg-dim"))
             }
@@ -202,7 +206,7 @@ struct GGInboxTabView: View {
                 Text(bucket.title.uppercased())
                     .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
                     .foregroundColor(theme.color("fg-muted"))
-                Text("\(entries.count)")
+                Text(Self.commitCountLabel(entries.count))
                     .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
                     .foregroundColor(theme.color(bucket.themeToken))
             }

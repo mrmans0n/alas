@@ -50,7 +50,7 @@ struct GGStackReadinessModel: Equatable {
         }()
 
         let facts: [Fact] = [
-            Fact(label: "Entries", value: "\(stack.totalCommits)"),
+            Fact(label: "Commits", value: "\(stack.totalCommits)"),
             Fact(label: "Merged", value: "\(merged)"),
             Fact(label: "Unsynced", value: "\(unsynced)"),
             Fact(label: "Behind base", value: "\(behind)"),
@@ -116,7 +116,7 @@ struct GGStackReadinessModel: Equatable {
     private static func progressRows(from events: [GGSyncEvent]) -> [String] {
         events.compactMap { event in
             switch event {
-            case .start(let total): return "Syncing \(total) entr\(total == 1 ? "y" : "ies")…"
+            case .start(let total): return "Syncing \(total) commit\(total == 1 ? "" : "s")…"
             case .entryStarted(let pos, let title): return "[\(pos)] \(title)"
             case .pushStarted(let pos): return "[\(pos)] pushing…"
             case .pushDone(let pos, _): return "[\(pos)] pushed"

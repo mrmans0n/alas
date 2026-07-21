@@ -18,6 +18,7 @@ struct ChangesPreparationCard: View {
     let model: ChangesPreparationModel
     let onReviewChanges: () -> Void
     let onDraftCommit: () -> Void
+    let onGGAction: (GGChangesPreparationAction) -> Void
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
 
     @Environment(\.theme) private var theme
@@ -28,7 +29,13 @@ struct ChangesPreparationCard: View {
             if let reviewAction = model.reviewAction {
                 primaryReviewButton(reviewAction)
             }
-            if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
+            if !model.ggActions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(model.ggActions, id: \.kind) { action in
+                        ggDestinationButton(action)
+                    }
+                }
+            } else if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
                 ViewThatFits(in: .horizontal) {
                     secondaryActionsHorizontal
                     secondaryActionsVertical
@@ -150,6 +157,75 @@ struct ChangesPreparationCard: View {
             action: { onReviewRequestAction(action.kind) }
         )
         .accessibilityIdentifier("changes-preparation-review-request")
+    }
+
+    private func ggDestinationButton(_ action: ChangesPreparationModel.GGAction) -> some View {
+        Button {
+            onGGAction(action.kind)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
+                    Text(action.title)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 0)
+                }
+                Text(ggSubtitle(for: action))
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!action.isEnabled)
+        .opacity(action.isEnabled ? 1 : 0.5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(theme.color("bg-2").opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
+        )
+        .help(action.disabledReason ?? action.title)
+        .accessibilityIdentifier("changes-preparation-gg-\(ggIdentifier(for: action.kind))")
+    }
+
+    private func ggSubtitle(for action: ChangesPreparationModel.GGAction) -> String {
+        if let disabledReason = action.disabledReason {
+            return disabledReason
+        }
+        if action.kind == .newStackCommit, action.hasNonEmptyDraft, !action.stats.hasChanges {
+            return "Draft ready"
+        }
+        return ChangesPreparationCardText.draftStats(
+            stagedCount: action.stats.files,
+            additions: action.stats.insertions,
+            deletions: action.stats.deletions
+        )
+    }
+
+    private func ggIconName(for action: GGChangesPreparationAction) -> String {
+        switch action {
+        case .newStackCommit: "commit"
+        case .amendCurrent: "arrow.uturn.backward.circle"
+        case .absorbIntoStack: "arrow.down.to.line.compact"
+        }
+    }
+
+    private func ggIdentifier(for action: GGChangesPreparationAction) -> String {
+        switch action {
+        case .newStackCommit: "new"
+        case .amendCurrent: "amend"
+        case .absorbIntoStack: "absorb"
+        }
     }
 
     private func secondaryButton(

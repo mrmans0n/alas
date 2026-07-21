@@ -6,6 +6,13 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WorktreeRowHeightTests {
+    @Test func ggStackTooltipUsesCommitTerminology() {
+        #expect(WorktreeRowView.stackSummaryTooltip(merged: 1, total: 1)
+            == "gg stack · 1 of 1 commit merged")
+        #expect(WorktreeRowView.stackSummaryTooltip(merged: 2, total: 3)
+            == "gg stack · 2 of 3 commits merged")
+    }
+
     @Test func rowHeightIsStableWithAndWithoutBadge() throws {
         let withoutBadge = try renderHeight(harnessSummary: nil)
         let withBadge = try renderHeight(harnessSummary: .init(

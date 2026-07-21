@@ -815,18 +815,30 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusDraftCommit(worktreeId: String) -> Tab {
+    func openOrFocusDraftCommit(worktreeId: String, resetAmend: Bool = false) -> Tab {
         let baseState = DraftCommitTabState(worktreeId: worktreeId)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
-           case .draftCommit(let existing) = file.tabs[idx] {
+           case .draftCommit(var existing) = file.tabs[idx] {
+            if resetAmend {
+                existing.prepareForNewCommit()
+                file.tabs[idx] = .draftCommit(existing)
+            }
             file.activeTabId = existing.id
             byWorktree[worktreeId] = file
             persist(worktreeId)
             return file.tabs[idx]
         }
         // No live tab — restore from the stash if present, otherwise start fresh.
-        let state = byWorktree[worktreeId]?.stashedDraft ?? baseState
+        var state = byWorktree[worktreeId]?.stashedDraft ?? baseState
+        if resetAmend {
+            state.prepareForNewCommit()
+            if var file = byWorktree[worktreeId], file.stashedDraft != nil {
+                file.stashedDraft = state
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+            }
+        }
         let tab = Tab.draftCommit(state)
         append(tab, to: worktreeId)
         return tab

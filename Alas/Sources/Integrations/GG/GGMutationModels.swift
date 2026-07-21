@@ -70,6 +70,26 @@ enum GGMutationConfirmation: Equatable, Sendable {
     case unstack(target: String, movedCommits: Int, lowerStack: String, newStack: String)
     case land(target: String, readyCommits: Int)
     case clean(mergedCommits: Int)
+
+    var message: String {
+        switch self {
+        case .drop(let target, let rewrittenDescendants, let hasOpenReview):
+            let descendants = Self.commitCount(rewrittenDescendants, qualifier: "descendant")
+            let reviewWarning = hasOpenReview ? " The selected commit has an open review." : ""
+            return "Drop \(target) and rewrite \(descendants).\(reviewWarning)"
+        case .unstack(_, let movedCommits, let lowerStack, let newStack):
+            return "Move \(Self.commitCount(movedCommits)) from \(lowerStack) to \(newStack)."
+        case .land(let target, let readyCommits):
+            return "Land \(Self.commitCount(readyCommits, qualifier: "ready")) through \(target)."
+        case .clean(let mergedCommits):
+            return "Clean \(Self.commitCount(mergedCommits, qualifier: "merged"))."
+        }
+    }
+
+    private static func commitCount(_ count: Int, qualifier: String? = nil) -> String {
+        let prefix = qualifier.map { "\($0) " } ?? ""
+        return "\(count) \(prefix)commit\(count == 1 ? "" : "s")"
+    }
 }
 
 enum GGMutationError: Error, Equatable {

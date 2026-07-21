@@ -245,6 +245,11 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
     var bodyText: String
     var amend: Bool
     var selectedPath: String?
+    private var presentationRevision: Int?
+
+    var presentationID: String {
+        "\(id):presentation:\(presentationRevision ?? 0)"
+    }
 
     init(
         worktreeId: String,
@@ -259,6 +264,12 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         self.bodyText = bodyText
         self.amend = amend
         self.selectedPath = selectedPath
+        self.presentationRevision = nil
+    }
+
+    mutating func prepareForNewCommit() {
+        amend = false
+        presentationRevision = (presentationRevision ?? 0) + 1
     }
 }
 
