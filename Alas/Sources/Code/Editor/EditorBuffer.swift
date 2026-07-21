@@ -432,12 +432,18 @@ final class EditorBuffer {
             restoredContent = true
             conflict = .changedOnDisk
         }
-        // If we restored a hot-exit snapshot or replayed pending user edits,
-        // the buffer now shows editable text content even though the on-disk
-        // file may have failed UTF-8 decode. Don't leave `loadKind` as
-        // `.notUTF8` or `EditorTabView` will swap to the binary placeholder
-        // and hide the user's recoverable draft.
-        if restoredContent { loadKind = .loaded }
+        // If we restored a hot-exit snapshot or replayed pending user edits
+        // *and* the on-disk load failed (binary/unreadable/missing), the
+        // buffer now shows editable text content that the user authored.
+        // Don't leave `loadKind` as `.notUTF8`/`.missing` (or `EditorTabView`
+        // swaps to the binary placeholder and hides the draft), and clear
+        // `readOnly` so the draft is editable and saveable. Skip this for
+        // successful loads: symlinks and external files are legitimately
+        // read-only even when the user typed before the load completed.
+        if restoredContent, loadKind != .loaded {
+            loadKind = .loaded
+            readOnly = false
+        }
         if checkConflictOnRestore {
             checkForConflictOnRestore()
         }

@@ -472,7 +472,10 @@ struct EditorTabView: View {
     }
 
     private var isBinary: Bool {
-        appState.tabs.peekBuffer(tabId: tabId)?.loadKind == .notUTF8
+        if externalAbsolutePath != nil {
+            return appState.tabs.peekExternalBuffer(tabId: tabId)?.loadKind == .notUTF8
+        }
+        return appState.tabs.peekBuffer(tabId: tabId)?.loadKind == .notUTF8
     }
 
     private var binaryPlaceholder: some View {

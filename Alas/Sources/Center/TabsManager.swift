@@ -1466,6 +1466,17 @@ final class TabsManager {
         tabBuffers[tabId]
     }
 
+    /// Non-creating lookup for an external editor buffer. Returns nil if no
+    /// external buffer has been registered for this tab (or if the tab isn't
+    /// an external editor tab). Used by read-only checks (e.g.
+    /// `EditorTabView.isBinary`) to avoid the side-effecting creation in
+    /// `externalBuffer(...)` while still detecting the load kind of external
+    /// files that went through the editor path (unknown-extension binaries).
+    func peekExternalBuffer(tabId: TabID) -> EditorBuffer? {
+        guard let entry = externalTabURLs[tabId] else { return nil }
+        return bufferStore.peekExternalBuffer(worktreeId: entry.worktreeId, absoluteURL: entry.url)
+    }
+
     private func indexRestoredPathBufferIfAvailable(worktreeId: String, tabId: TabID, buffer: EditorBuffer) {
         guard tabBuffers[tabId] === buffer else { return }
         let key = BufferKey(worktreeId: worktreeId, relativePath: buffer.relativePath)
