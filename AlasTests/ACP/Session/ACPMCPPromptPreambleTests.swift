@@ -23,6 +23,18 @@ struct ACPMCPPromptPreambleTests {
         #expect(!text.contains("Additional MCP servers"))
     }
 
+    @Test("mcp mode notes the alas CLI fallback for blocked servers")
+    func mcpMentionsCLIFallback() {
+        let text = ACPMCPPromptPreamble.text(
+            builtInInjected: true,
+            isDelegated: false,
+            userServerNames: [],
+            mode: .mcp
+        )
+        #expect(text?.contains("alas") == true)
+        #expect(text?.contains("`alas` CLI") == true)
+    }
+
     @Test("delegated preamble omits session_new and explains delegation")
     func delegated() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
