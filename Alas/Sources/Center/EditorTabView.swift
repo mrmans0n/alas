@@ -37,6 +37,7 @@ private enum EditorFindPresentation: Equatable {
 }
 
 struct EditorTabView: View {
+    let worktree: Worktree
     let worktreePath: URL
     let relativePath: String
     let worktreeId: String
@@ -66,54 +67,99 @@ struct EditorTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            breadcrumb
-            if externalAbsolutePath == nil {
-                let buffer = appState.tabs.buffer(
-                    worktreeId: worktreeId,
-                    tabId: tabId,
-                    worktreeRoot: worktreePath,
-                    relativePath: relativePath
-                )
-                EditorConflictBanner(buffer: buffer)
-            }
-            InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
-            BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
-            if findPresentation != .hidden {
-                EditorFindBarView(
-                    findText: $findText,
-                    replaceText: $replaceText,
-                    isCaseSensitive: $isCaseSensitive,
-                    findFieldFocused: $findFieldFocused,
-                    replaceFieldFocused: $replaceFieldFocused,
-                    showsReplace: findPresentation == .replace,
-                    statusText: findStatusText,
-                    canReplace: canReplaceMatches,
-                    onFindChanged: refreshFindFromUserInput,
-                    onToggleCaseSensitive: toggleCaseSensitive,
-                    onFind: navigateFind,
-                    onReplace: replaceCurrentMatch,
-                    onReplaceAll: replaceAllMatches,
-                    onDone: closeFindBar
-                )
-            }
-            CodeEditorView(
-                worktreeId: worktreeId,
-                worktreeRoot: worktreePath,
-                relativePath: relativePath,
-                tabId: tabId,
-                revealLine: revealLine,
-                revealEndLine: revealEndLine,
-                revealCharacter: revealCharacter,
-                revealRevision: revealRevision,
-                appState: appState,
-                externalAbsolutePath: externalAbsolutePath,
-                originatingRelativePath: originatingRelativePath,
-                fontFamily: appState.config.code.fontFamily,
-                fontSize: appState.config.code.fontSize,
-                showLineNumbers: appState.config.code.showLineNumbers,
-                onTextViewAttached: { attachFindController(to: $0) },
-                onTextViewDetached: { detachFindController(from: $0) }
+            BreadcrumbView(
+                relativePath: breadcrumbRelativePath,
+                onRevealInFiles: onRevealInFiles,
+                menuItems: { index, pathPrefix in
+                    let isLast = index == breadcrumbRelativePath.split(separator: "/").count - 1
+                    if isLast {
+                        return .file(BreadcrumbFileMenu(
+                            onViewAtHEAD: externalAbsolutePath == nil
+                                ? { appState.openFileSnapshotAtHEAD(relativePath: relativePath, worktreeId: worktreeId) }
+                                : nil,
+                            onCompareWithHEAD: externalAbsolutePath == nil
+                                ? { appState.openDiffTab(
+                                    forFileInWorktree: worktree,
+                                    relativePath: relativePath,
+                                    originalPath: nil,
+                                    compareWithHEAD: true
+                                  ) }
+                                : nil,
+                            onFileHistory: externalAbsolutePath == nil
+                                ? { appState.openFileHistory(relativePath: relativePath, worktreeId: worktreeId) }
+                                : nil,
+                            onCopyRelativePath: externalAbsolutePath == nil ? { Clipboard.copy(relativePath) } : nil,
+                            onCopyFullPath: { Clipboard.copy(absoluteFilePath) },
+                            onRevealInFinder: { FileSystemOpen.reveal(url: absoluteFileURL) },
+                            onOpenWithSystem: { FileSystemOpen.open(url: absoluteFileURL) }
+                        ))
+                    } else {
+                        let folderURL: URL
+                        if externalAbsolutePath != nil {
+                            folderURL = URL(fileURLWithPath: pathPrefix)
+                        } else {
+                            folderURL = worktreePath.appendingPathComponent(pathPrefix)
+                        }
+                        return .folder(BreadcrumbFolderMenu(
+                            onRevealInFinder: { FileSystemOpen.reveal(url: folderURL) },
+                            onFocusInFiles: { onRevealInFiles(pathPrefix) },
+                            onCopyFullPath: { Clipboard.copy(folderURL.path) }
+                        ))
+                    }
+                },
+                trailing: AnyView(statusBadge)
             )
+            if isBinary {
+                binaryPlaceholder
+            } else {
+                if externalAbsolutePath == nil {
+                    let buffer = appState.tabs.buffer(
+                        worktreeId: worktreeId,
+                        tabId: tabId,
+                        worktreeRoot: worktreePath,
+                        relativePath: relativePath
+                    )
+                    EditorConflictBanner(buffer: buffer)
+                }
+                InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
+                BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
+                if findPresentation != .hidden {
+                    EditorFindBarView(
+                        findText: $findText,
+                        replaceText: $replaceText,
+                        isCaseSensitive: $isCaseSensitive,
+                        findFieldFocused: $findFieldFocused,
+                        replaceFieldFocused: $replaceFieldFocused,
+                        showsReplace: findPresentation == .replace,
+                        statusText: findStatusText,
+                        canReplace: canReplaceMatches,
+                        onFindChanged: refreshFindFromUserInput,
+                        onToggleCaseSensitive: toggleCaseSensitive,
+                        onFind: navigateFind,
+                        onReplace: replaceCurrentMatch,
+                        onReplaceAll: replaceAllMatches,
+                        onDone: closeFindBar
+                    )
+                }
+                CodeEditorView(
+                    worktreeId: worktreeId,
+                    worktreeRoot: worktreePath,
+                    relativePath: relativePath,
+                    tabId: tabId,
+                    revealLine: revealLine,
+                    revealEndLine: revealEndLine,
+                    revealCharacter: revealCharacter,
+                    revealRevision: revealRevision,
+                    appState: appState,
+                    externalAbsolutePath: externalAbsolutePath,
+                    originatingRelativePath: originatingRelativePath,
+                    fontFamily: appState.config.code.fontFamily,
+                    fontSize: appState.config.code.fontSize,
+                    showLineNumbers: appState.config.code.showLineNumbers,
+                    onTextViewAttached: { attachFindController(to: $0) },
+                    onTextViewDetached: { detachFindController(from: $0) }
+                )
+            }
         }
         .background(theme.color("bg-1"))
         .onDisappear {
@@ -412,39 +458,49 @@ struct EditorTabView: View {
         return worktreePath.appendingPathComponent(relativePath).path
     }
 
-    private var breadcrumb: some View {
-        let components = relativePath.split(separator: "/")
-        let lastIndex = components.count - 1
-        return HStack(spacing: 6) {
-            if components.isEmpty {
-                Text("").font(.system(size: 11, design: .monospaced))
-            } else {
-                ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
-                    let pathPrefix = components[0...i].joined(separator: "/")
-                    Text(String(comp))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
-                        .onTapGesture {
-                            onRevealInFiles(String(pathPrefix))
-                        }
-                        .onHover { inside in
-                            if inside {
-                                NSCursor.pointingHand.push()
-                            } else {
-                                NSCursor.pointingHand.pop()
-                            }
-                        }
-                    if i < lastIndex {
-                        Text("/").foregroundColor(theme.color("fg-faint"))
-                    }
-                }
-            }
-            Spacer()
-            statusBadge
+    private var breadcrumbRelativePath: String {
+        externalAbsolutePath ?? relativePath
+    }
+
+    private var absoluteFilePath: String {
+        if let abs = externalAbsolutePath { return abs }
+        return worktreePath.appendingPathComponent(relativePath).path
+    }
+
+    private var absoluteFileURL: URL {
+        URL(fileURLWithPath: absoluteFilePath)
+    }
+
+    private var isBinary: Bool {
+        guard externalAbsolutePath == nil else {
+            return appState.tabs.peekBuffer(tabId: tabId)?.loadKind == .notUTF8
         }
-        .padding(.horizontal, 12).frame(height: 28)
-        .background(theme.color("bg-1"))
-        .overlay(Divider().opacity(0.5), alignment: .bottom)
+        let buffer = appState.tabs.buffer(
+            worktreeId: worktreeId, tabId: tabId,
+            worktreeRoot: worktreePath, relativePath: relativePath
+        )
+        return buffer.loadKind == .notUTF8
+    }
+
+    private var binaryPlaceholder: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.fill")
+                .font(.system(size: 30))
+                .foregroundColor(theme.color("fg-faint"))
+            Text((breadcrumbRelativePath as NSString).lastPathComponent)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            Text("Binary file")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+            HStack(spacing: 10) {
+                Button("Open with System") { FileSystemOpen.open(url: absoluteFileURL) }
+                Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteFileURL) }
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var statusBadge: some View {

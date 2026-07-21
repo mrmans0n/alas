@@ -159,7 +159,8 @@ struct CenterPaneView: View {
                                             appState: state,
                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         } else {
-                            EditorTabView(worktreePath: worktree.path,
+                            EditorTabView(worktree: worktree,
+                                          worktreePath: worktree.path,
                                           relativePath: s.relativePath,
                                           worktreeId: worktree.id,
                                           tabId: s.id,
