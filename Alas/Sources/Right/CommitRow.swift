@@ -184,10 +184,10 @@ struct CommitRow: View {
                     GGCIDot(status: stackEntry.ciStatus)
                 }
                 if let chip = GGStackChipModel.model(for: stackEntry, kind: codeHostKind) {
-                    GGStackChip(model: chip)
+                    GGStackChip(model: chip, onTap: onGGOpenPR)
+                        .layoutPriority(1)
                 }
             }
-            Spacer(minLength: 0)
         }
     }
 

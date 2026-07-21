@@ -34,4 +34,14 @@ struct GGStackChipModelTests {
         #expect(GGStackChipModel.model(for: entry(prState: .closed), kind: .github)?.colorToken == "del")
         #expect(GGStackChipModel.model(for: entry(prState: nil), kind: .github)?.colorToken == "fg-faint")
     }
+
+    @Test func helpLabelUsesHostTerminology() {
+        #expect(GGStackChipModel.model(for: entry(), kind: .github)?.helpLabel == "Open PR #840")
+        #expect(GGStackChipModel.model(for: entry(), kind: .gitlab)?.helpLabel == "Open MR !840")
+        #expect(GGStackChipModel.model(for: entry(), kind: nil)?.helpLabel == "Open PR #840")
+    }
+
+    @Test func helpLabelOmitsApprovalCheckmark() {
+        #expect(GGStackChipModel.model(for: entry(approved: true), kind: .github)?.helpLabel == "Open PR #840")
+    }
 }
