@@ -252,3 +252,155 @@ Inside an Alas-spawned terminal:
 4. Click the sparkle button with an enabled AI tool.
 5. Confirm title/body are filled with Summary and Testing sections.
 6. Toggle Draft, then create the PR from a disposable branch or cancel before submission during local-only testing.
+
+## Native GG Workflows
+
+Use a disposable GG repository with at least three mutable stack commits and a
+remote test repository. Keep a terminal open in the selected worktree so Git
+and GG state can be checked independently after every action.
+
+### Non-GG Prepare
+
+1. Select a non-GG worktree with one staged file and one unstaged file.
+2. Expand Prepare and confirm the existing review and commit-draft actions are present, without GG destinations.
+3. Review the current changes and confirm both staged and unstaged changes appear in the local Changes review.
+4. Create a commit from the staged change and confirm the unstaged file remains under Changes.
+5. Confirm no GG stack drawer or GG mutation status appears.
+
+### GG Prepare
+
+Prerequisite: use the paired native-client GG build with `sc --staged-only` and `--client-operation-id` support. Amend and immediate Undo are capability-gated when either contract is unavailable.
+
+1. Select a GG worktree checked out at the stack head (required for `New stack commit`) with one staged file and one unstaged file.
+2. Confirm Prepare and the GG stack drawer are visible at the same time.
+3. Confirm Prepare shows `Review current changes`, `New stack commit`, `Amend current`, and `Absorb into stack` in that order.
+4. Run `Review current changes` and confirm both staged and unstaged changes appear in the local Changes review.
+5. Open `New stack commit`, commit the staged change, and confirm the stack refreshes while the unstaged file remains under Changes.
+
+### GG staged-only Amend
+
+1. In a GG worktree, stage one file and leave a second file unstaged.
+2. Expand Prepare and select `Amend current`.
+3. Confirm the current stack commit includes only the staged diff.
+4. Confirm the unstaged file remains under Changes and the stack refreshes.
+5. Run `Undo Last GG Operation` and confirm the prior stack commit is restored.
+
+### GG staged-only Absorb
+
+1. In a GG worktree with at least two matching stack commits, stage hunks that GG can absorb and leave another file unstaged.
+2. Expand Prepare and select `Absorb into stack`.
+3. Confirm GG assigns only the staged hunks to the matching stack commits.
+4. Confirm the unstaged file remains under Changes and the rewritten stack commits refresh.
+5. Run `Undo Last GG Operation` and confirm the pre-absorb stack is restored.
+
+### GG PR review versus local Review Commit
+
+1. Sync a stack commit so it has a mapped PR or MR, then open that commit's context menu.
+2. In the `GG` submenu, select `Review PR in Alas...` or `Review MR in Alas...` and confirm Alas opens the provider review with its remote diff and comments.
+3. Return to the commit context menu and select the top-level `Review Commit…` action.
+4. Confirm the top-level action starts a local agent review of that stack commit rather than opening the provider review.
+5. Confirm `Open PR in Browser` or `Open MR in Browser` still opens the mapped provider page.
+
+### GG Drop Commit
+
+1. Choose a mutable middle stack commit with at least one descendant and open `GG` > `Drop Commit...`.
+2. Confirm the prompt names the selected stack commit, gives the descendant rewrite count, and warns if it has an open PR or MR.
+3. Confirm the operation and verify only the selected stack commit is removed while its descendants remain in rewritten form.
+4. Confirm the stack, Changes, review state, and GG Inbox refresh.
+5. Run `Undo Last GG Operation` and confirm the dropped stack commit and descendant identities are restored.
+
+### GG Split Stack with a worktree
+
+1. On a stack with commits above the split point, open that stack commit's `GG` submenu and select `Split Stack Here...`.
+2. Confirm the sheet shows the selected stack commit, lower stack, derived editable destination name, exact moved-commit count, and `Create a new worktree` selected (the checkbox is only enabled when the GG build supports keeping the invoking worktree; on older builds it stays selected but disabled).
+3. Leave `Create a new worktree` selected and apply the operation.
+4. Confirm Alas refreshes project topology, creates and selects the destination worktree, and shows the moved stack commits there.
+5. Confirm the original worktree remains on the lower stack with only its retained stack commits.
+
+### GG Split Stack without a worktree
+
+1. With a GG version that supports keeping the invoking worktree, open `GG` > `Split Stack Here...` above the bottom stack commit.
+2. Clear `Create a new worktree`, choose a valid destination name, and apply the operation.
+3. Confirm Alas reports `New stack created without a worktree` and does not add or select a worktree.
+4. Confirm the invoking worktree remains checked out on the lower stack.
+5. Confirm the lower stack and GG Inbox refresh and the destination stack is discoverable through GG.
+
+### GG Split Commit unavailable
+
+1. Put a GG build that lacks either `split --describe` or `split --plan-json` first on Alas's `PATH`, then restart Alas.
+2. Open a mutable stack commit's `GG` submenu.
+3. Confirm `Split Commit...` is disabled and exposes `Update GG to use native Split Commit`.
+4. Confirm Checkout, Drop, Split Stack, and Land actions retain their normal availability.
+5. Restore a protocol-capable GG build and restart Alas before continuing.
+
+### GG Split Commit success
+
+1. With a GG build that supports both structured Split flags, choose a mutable stack commit containing at least two selectable text hunks and open `GG` > `Split Commit...`.
+2. Select a non-empty proper subset for the new lower stack commit and enter non-empty messages for both resulting stack commits.
+3. Confirm the first and remainder previews partition the selected and unselected hunks correctly.
+4. Apply the split and confirm two stack commits replace the target, descendants refresh, and the temporary plan file is not left on disk.
+5. Confirm `Undo Last GG Operation` restores the original stack commit and descendants.
+
+### GG Split Commit stale-plan preservation
+
+1. Open `GG` > `Split Commit...`, select hunks, and edit both messages without applying.
+2. In another terminal, rewrite or replace the target stack commit so its GG ID, SHA, tree, or diff no longer matches the open editor.
+3. Return to Alas and apply the split.
+4. Confirm Alas rejects the apply and performs no rewrite. Changing the target's GG ID, SHA, or tree changes the stack identity, so expect the generic `stack changed` rejection; a stale plan against an unchanged identity is what surfaces the split-plan-stale report.
+5. Confirm the selection and both edited messages remain intact until `Reload` or `Cancel` is chosen explicitly.
+
+### GG Reorder within mutable regions
+
+1. Prepare a stack with at least two mutable stack commits on each side of a merged stack commit.
+2. Open the stack drawer menu and select `Reorder Stack…`.
+3. Drag mutable stack commits within one contiguous mutable region and confirm the preview shows the complete resulting order.
+4. Confirm an immutable stack commit stays fixed and a drag across its boundary is rejected; confirm the sheet offers no Drop action.
+5. Apply a valid order and verify GG receives that exact stable-ID order and the refreshed stack matches it.
+
+### GG Restack preview
+
+1. Prepare a stack whose parent relationships require repair, then select `Restack…` from the stack drawer menu.
+2. Confirm Alas runs the dry-run first and displays each planned rewrite with its current and expected parent before offering Apply.
+3. Cancel and confirm the stack is unchanged, then reopen the preview.
+4. Change the stack externally before applying and confirm Alas rejects the stale preview without rewriting.
+5. Reopen a fresh preview, apply it, and confirm the resulting stack matches the displayed plan; when the dry-run has no work, confirm Apply is disabled.
+
+### GG config-aware Sync and Rebase
+
+1. Put the stack behind its base branch, set effective `sync_auto_rebase` to `true` and `sync_behind_threshold` to a positive value no greater than the current behind count, refresh, and confirm `Sync stack` remains primary with `Includes rebase onto <base>` (the rebase detail only appears once the behind count meets the threshold).
+2. Run Sync and confirm GG applies its effective sync policy, including the rebase, without Alas adding force or policy overrides.
+3. Set effective `sync_auto_rebase` to `false` and `sync_behind_threshold` to a value of at least `2`, no greater than the current behind count, then refresh.
+4. Confirm `Rebase onto <base>` replaces Sync; run it and confirm the normal GG rebase executes without force.
+5. Put the stack behind again by a positive count less than `sync_behind_threshold` and confirm `Sync stack` is primary instead of Rebase.
+
+### GG paused Continue and Abort
+
+1. Start a local GG rewrite that produces conflicts and confirm the operation pauses instead of being rolled back automatically.
+2. Confirm the stack drawer replaces other primary actions with `Continue` and `Abort`, and the existing Conflicts section exposes the conflicted files.
+3. Resolve the conflicts and select `Continue`; confirm the original GG operation completes and all affected views refresh.
+4. Produce another paused rewrite, select `Abort`, and confirm GG restores its pre-operation state.
+5. Confirm neither recovery path is treated as a new unrelated Undo candidate.
+
+### GG local Undo
+
+1. With a GG build that supports client operation IDs, perform a successful local Amend, Absorb, Drop, Split, Reorder, or Restack operation in Alas.
+2. Confirm `Undo Last GG Operation` becomes enabled and remains available after collapsing the drawer and after relaunching Alas.
+3. Select Undo and confirm Alas revalidates the newest GG operation before executing it.
+4. Confirm the prior stack state is restored and all stack, Changes, review, and Inbox surfaces refresh.
+5. Perform another local mutation and confirm the older operation is no longer offered for Undo.
+
+### GG remote Undo refusal
+
+1. Complete a Sync or Land operation and confirm it does not create an enabled `Undo Last GG Operation` action.
+2. Perform a local undoable rewrite so Undo appears, then change the related remote state from another client before selecting Undo.
+3. Select Undo and allow GG to reject the now remote-ineligible or stale operation.
+4. Confirm Alas displays GG's recovery hint and does not attempt a force, alternate rollback, or silent local reset.
+5. Confirm the refusal keeps the recovery candidate and marker intact (Alas does not clear them on a remote-state refusal), so if GG still lists the same operation the drawer keeps offering it; a fresh local mutation is what supersedes it, and each Undo attempt re-validates before executing.
+
+### GG Sync with uncommitted changes
+
+1. Prepare an unsynced GG stack that is not behind its base (or is behind by less than `sync_behind_threshold` with `sync_auto_rebase = false`), so `Sync stack` is the primary action rather than Rebase, then leave an unrelated tracked file modified and an untracked file in the worktree.
+2. Expand the stack drawer and confirm `Sync stack` remains available with `Local changes are not included`.
+3. Run Sync and confirm only committed stack content is published.
+4. Confirm both local files remain unchanged under Changes after the stack and provider state refresh.
+5. If GG refuses because the stack base became stale, confirm Alas refreshes and presents Rebase without automatically retrying Sync.
