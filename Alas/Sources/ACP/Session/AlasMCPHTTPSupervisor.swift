@@ -58,8 +58,9 @@ final class AlasMCPHTTPSupervisor {
         }
 
         // Read the first line (the PORT announcement) off the pipe, bounded by a
-        // short timeout so a wedged process can't hang the attach.
-        let port = await Self.readPortLine(from: stdoutPipe, timeout: .seconds(5))
+        // short timeout so a wedged process can't hang the attach. On timeout the
+        // reader is unblocked by terminating the process (see readPortLine).
+        let port = await Self.readPortLine(from: stdoutPipe, process: process, timeout: .seconds(5))
         guard let port else {
             process.terminate()
             return nil
@@ -82,7 +83,17 @@ final class AlasMCPHTTPSupervisor {
 
     /// Read lines from `pipe` until one parses as a PORT announcement, or the
     /// timeout elapses. Runs the blocking read off the main actor.
-    nonisolated private static func readPortLine(from pipe: Pipe, timeout: Duration) async -> Int? {
+    ///
+    /// `handle.availableData` ignores cooperative cancellation, so a plain
+    /// `cancelAll()` cannot interrupt a wedged process that never prints `PORT`
+    /// and never closes stdout. Instead, when the timeout fires we terminate the
+    /// process and close the read handle: both force `availableData` to return
+    /// empty (EOF), so the reader task finishes and the group returns promptly.
+    nonisolated private static func readPortLine(
+        from pipe: Pipe,
+        process: Process,
+        timeout: Duration
+    ) async -> Int? {
         let handle = pipe.fileHandleForReading
         return await withTaskGroup(of: Int?.self) { group in
             group.addTask {
@@ -100,6 +111,10 @@ final class AlasMCPHTTPSupervisor {
             }
             group.addTask {
                 try? await Task.sleep(for: timeout)
+                // A process that won't announce its port is useless: kill it and
+                // close the pipe so the blocking reader unblocks via EOF.
+                process.terminate()
+                try? handle.close()
                 return nil
             }
             let result = await group.next() ?? nil
