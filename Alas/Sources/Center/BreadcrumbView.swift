@@ -40,6 +40,7 @@ struct BreadcrumbView: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
+        let isAbsolute = relativePath.hasPrefix("/")
         let components = relativePath.split(separator: "/")
         let lastIndex = components.count - 1
         return HStack(spacing: 6) {
@@ -47,16 +48,21 @@ struct BreadcrumbView: View {
                 Text("").font(.system(size: 11, design: .monospaced))
             } else {
                 ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
-                    let pathPrefix = components[0...i].joined(separator: "/")
+                    // Preserve the leading slash for absolute paths so that
+                    // `pathPrefix` resolves correctly when fed back to folder
+                    // menu actions (Reveal / Focus / Copy). Without this,
+                    // `/tmp/a.zip` would produce `tmp` as the first prefix.
+                    let joined = components[0...i].joined(separator: "/")
+                    let pathPrefix = isAbsolute ? "/" + joined : joined
                     Text(String(comp))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
-                        .onTapGesture { onRevealInFiles(String(pathPrefix)) }
+                        .onTapGesture { onRevealInFiles(pathPrefix) }
                         .onHover { inside in
                             if inside { NSCursor.pointingHand.push() }
                             else { NSCursor.pointingHand.pop() }
                         }
-                        .contextMenu { menu(for: i, pathPrefix: String(pathPrefix)) }
+                        .contextMenu { menu(for: i, pathPrefix: pathPrefix) }
                     if i < lastIndex {
                         Text("/").foregroundColor(theme.color("fg-faint"))
                     }

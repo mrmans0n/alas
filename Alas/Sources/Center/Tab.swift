@@ -96,10 +96,22 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
         case .stashDiff(let s):    return s.file.path
         case .imagePreview(let s): return s.relativePath
-        case .binaryPreview(let s): return s.relativePath
+        case .binaryPreview(let s): return s.relativePath.hasPrefix("/") ? nil : s.relativePath
         case .mergeConflict(let s): return s.relativePath
         case .fileSnapshot(let s): return s.relativePath
         case .fileHistory(let s):  return s.relativePath
+        default:                   return nil
+        }
+    }
+
+    /// Absolute path for file-backed tabs whose path is not worktree-relative
+    /// (external editor tabs, external binary previews). Used by tab-bar
+    /// actions that resolve a URL for system-open / reveal-in-Finder without
+    /// going through `worktree.path.appendingPathComponent`.
+    var absoluteFilePath: String? {
+        switch self {
+        case .editor(let s):       return s.isExternal ? s.externalAbsolutePath : nil
+        case .binaryPreview(let s): return s.relativePath.hasPrefix("/") ? s.relativePath : nil
         default:                   return nil
         }
     }

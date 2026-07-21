@@ -1939,6 +1939,7 @@ final class EditorBuffer {
                     if self.storage.string != self.originalText, mtime != self.originalMtime {
                         self.conflict = .changedOnDisk
                     }
+                    self.loadKind = .loaded
                     self.startWatching()
                     self.openRemoteLSPIfNeeded()
                     return
@@ -1948,6 +1949,7 @@ final class EditorBuffer {
                 }
                 self.originalMtime = mtime
                 self.markRemoteFileEditable()
+                self.loadKind = .loaded
                 self.startWatching()
                 self.openRemoteLSPIfNeeded()
             }

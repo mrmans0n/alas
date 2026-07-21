@@ -54,24 +54,26 @@ struct CenterPaneView: View {
                     NSPasteboard.general.setString(rel, forType: .string)
                 },
                 onOpenWithSystem: { id in
-                    guard let tab = tabs.first(where: { $0.id == id }),
-                          let rel = tab.relativeFilePath else { return }
+                    guard let tab = tabs.first(where: { $0.id == id }) else { return }
                     let url: URL
-                    if rel.hasPrefix("/") {
-                        url = URL(fileURLWithPath: rel)
-                    } else {
+                    if let abs = tab.absoluteFilePath {
+                        url = URL(fileURLWithPath: abs)
+                    } else if let rel = tab.relativeFilePath {
                         url = worktree.path.appendingPathComponent(rel)
+                    } else {
+                        return
                     }
                     FileSystemOpen.open(url: url)
                 },
                 onRevealInFinder: { id in
-                    guard let tab = tabs.first(where: { $0.id == id }),
-                          let rel = tab.relativeFilePath else { return }
+                    guard let tab = tabs.first(where: { $0.id == id }) else { return }
                     let url: URL
-                    if rel.hasPrefix("/") {
-                        url = URL(fileURLWithPath: rel)
-                    } else {
+                    if let abs = tab.absoluteFilePath {
+                        url = URL(fileURLWithPath: abs)
+                    } else if let rel = tab.relativeFilePath {
                         url = worktree.path.appendingPathComponent(rel)
+                    } else {
+                        return
                     }
                     FileSystemOpen.reveal(url: url)
                 },
