@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-07-21
+
+### ✨ Features
+
+- Add typed `git-gud` stack mutation commands and stack-aware change preparation (#871, #873).
+- Add native `git-gud` stack lifecycle workflows, split commit editor, and commit workflow menu (#874, #875, #876).
+- Add graceful binary file handling and breadcrumb context menus (#881).
+- Add ACP go-to-newest affordance in chat (#883).
+- Add localhost HTTP transport and registration detection for the built-in Alas MCP server (#884).
+
+### 🐛 Fixes
+
+- Align `git-gud` workflow capability policies (#878).
+- Right-align stack PR chips and make them clickable (#882).
+
+### 🏗️ Internal
+
+- Centralize the `git-gud` mutation lifecycle (#872).
+- Add native workflow acceptance checks (#877).
+- Update Rust crate `libc` to v0.2.188 (#880).
+
 ## [0.12.2] - 2026-07-21
 
 ### 🐛 Fixes
