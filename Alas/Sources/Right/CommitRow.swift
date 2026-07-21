@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CommitRow: View {
+    static let ggCheckoutTitle = "Checkout Commit"
+
     enum ContextMenuAction: Hashable {
         case edit
         case review
@@ -77,7 +79,7 @@ struct CommitRow: View {
                     Button("Open \(codeHostKind?.reviewRequestLabel ?? "PR")") { onGGOpenPR() }
                 }
                 if let onGGCheckout {
-                    Button("Checkout Entry") { onGGCheckout() }
+                    Button(Self.ggCheckoutTitle) { onGGCheckout() }
                 }
                 if let onGGLandUntil {
                     Button("Land Until Here…") { onGGLandUntil() }

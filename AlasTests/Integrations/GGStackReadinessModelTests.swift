@@ -27,7 +27,7 @@ struct GGStackReadinessModelTests {
             action: GGStackActionState()
         )
         #expect(model.title == "Stack · feat")
-        #expect(model.facts.contains { $0.label == "Entries" && $0.value == "2" })
+        #expect(model.facts.contains { $0.label == "Commits" && $0.value == "2" })
         #expect(model.facts.contains { $0.label == "Merged" && $0.value == "1" })
     }
 

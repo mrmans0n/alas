@@ -32,6 +32,79 @@ struct DraftCommitTabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
+    @Test func openOrFocusDraftCommitForNewCommit_resetsLiveAmendBeforeFocusing() {
+        let worktreeId = "draft-commit-tabs-mgr-new-live"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.subject = "Keep this message"
+            state.bodyText = "Keep this body"
+            state.amend = true
+        }
+        guard case .draftCommit(let mountedState) = mgr.tabs(forWorktree: worktreeId).first else {
+            Issue.record("expected mounted draftCommit tab")
+            return
+        }
+
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId, resetAmend: true)
+
+        guard case .draftCommit(let state) = reopened else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(state.subject == "Keep this message")
+        #expect(state.bodyText == "Keep this body")
+        #expect(state.amend == false)
+        #expect(state.presentationID != mountedState.presentationID)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+    }
+
+    @Test func openOrFocusDraftCommitForGenericDraft_preservesLiveAmend() {
+        let worktreeId = "draft-commit-tabs-mgr-generic-live"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.amend = true
+        }
+        guard case .draftCommit(let mountedState) = mgr.tabs(forWorktree: worktreeId).first else {
+            Issue.record("expected mounted draftCommit tab")
+            return
+        }
+
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+
+        guard case .draftCommit(let state) = reopened else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(state.amend == true)
+        #expect(state.presentationID == mountedState.presentationID)
+    }
+
+    @Test func openOrFocusDraftCommitForNewCommit_resetsStashedAmendBeforeOpening() {
+        let worktreeId = "draft-commit-tabs-mgr-new-stashed"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.subject = "Keep this stashed message"
+            state.amend = true
+        }
+        mgr.close(worktreeId: worktreeId, tabId: first.id)
+
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId, resetAmend: true)
+
+        guard case .draftCommit(let state) = reopened else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(state.subject == "Keep this stashed message")
+        #expect(state.amend == false)
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.amend == false)
+    }
+
     @Test func updateDraftCommit_persistsSubjectAndBody() {
         let worktreeId = "draft-commit-tabs-mgr-update"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

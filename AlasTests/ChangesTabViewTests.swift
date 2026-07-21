@@ -20,19 +20,48 @@ struct ChangesTabViewTests {
         ))
     }
 
-    @Test func changesPreparationCardHiddenWhenGGDrawerIsActive() {
+    @Test func changesPreparationCardVisibilityDoesNotDependOnGGDrawer() {
         #expect(ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: true,
-            ggDrawerIsActive: false
+            preparationIsVisible: true
         ))
         #expect(!ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: true,
-            ggDrawerIsActive: true
+            preparationIsVisible: false
         ))
-        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: false,
-            ggDrawerIsActive: false
-        ))
+    }
+
+    @Test func regularGitOperationDisablesGGPreparationMutations() {
+        let reason = ChangesTabView.ggPreparationMutationDisabledReason(
+            hasStack: true,
+            pausedOperation: nil,
+            inFlightAction: nil,
+            mergeOperation: .merge(sourceBranch: "main")
+        )
+
+        #expect(reason == "Finish the current Git operation first.")
+    }
+
+    @Test func newStackCommitRequiresActualStackHeadCheckout() {
+        let stack = stack(currentPosition: 1)
+
+        #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            stack: stack,
+            currentHeadSHA: "1111111111111111111111111111111111111111"
+        ) == "Checkout the stack head to create a new stack commit.")
+        #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            stack: stack,
+            currentHeadSHA: "2222222222222222222222222222222222222222"
+        ) == nil)
+    }
+
+    @Test func newStackCommitIsConservativelyDisabledWithoutVerifiableHead() {
+        #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            stack: stack(currentPosition: nil, entries: []),
+            currentHeadSHA: "1111111111111111111111111111111111111111"
+        ) == "Checkout the stack head to create a new stack commit.")
+        #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            stack: stack(currentPosition: 2),
+            currentHeadSHA: ""
+        ) == "Checkout the stack head to create a new stack commit.")
     }
 
     @Test func ggDrawerActiveForStackOrPausedOperation() {
@@ -53,5 +82,32 @@ struct ChangesTabViewTests {
             stack: nil,
             pausedGGOperation: GGPausedOperation(pausedBy: .sync)
         ))
+    }
+
+    private func stack(
+        currentPosition: Int?,
+        entries: [GGStackEntry] = [
+            GGStackEntry(
+                position: 1,
+                sha: "1111111",
+                title: "First",
+                isCurrent: true
+            ),
+            GGStackEntry(
+                position: 2,
+                sha: "2222222",
+                title: "Second"
+            ),
+        ]
+    ) -> GGStack {
+        GGStack(
+            name: "feat",
+            base: "main",
+            totalCommits: entries.count,
+            syncedCommits: 0,
+            currentPosition: currentPosition,
+            behindBase: nil,
+            entries: entries
+        )
     }
 }

@@ -229,7 +229,7 @@ struct CenterPaneView: View {
                             tabState: draftState,
                             appState: state
                         )
-                        .id(draftState.id)
+                        .id(draftState.presentationID)
                         .task(id: rightPaneActivationKey) {
                             activateRightPaneStateForCenterTab()
                         }
