@@ -796,23 +796,49 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
     use std::net::TcpListener;
 
     let token = std::env::var("ALAS_MCP_HTTP_TOKEN").unwrap_or_default();
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    println!("PORT {}", listener.local_addr()?.port());
+
+    // Bind IPv4 loopback first so the OS picks the port, then reuse that same
+    // port for IPv6 loopback. We advertise `http://localhost:<port>` (the
+    // enterprise allowlist matches the literal `http://localhost:*`, not
+    // `127.0.0.1`), and `localhost` resolves to `::1` before `127.0.0.1` on
+    // many modern clients (Node/undici, which the claude ACP adapter uses).
+    // Serving both loopback families on the same port keeps the server
+    // reachable regardless of resolution order — while staying loopback-only.
+    let v4_listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = v4_listener.local_addr()?.port();
+
+    // Best-effort: a missing or busy IPv6 loopback must not sink the server.
+    let v6_listener = match TcpListener::bind(("::1", port)) {
+        Ok(listener) => Some(listener),
+        Err(err) => {
+            eprintln!("alas: mcp http ipv6 bind failed on port {port}: {err}");
+            None
+        }
+    };
+
+    println!("PORT {port}");
     std::io::stdout().flush()?;
 
-    for stream in listener.incoming() {
-        let mut stream = match stream {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!("alas: mcp http accept error: {err}");
-                continue;
+    fn serve_one(env: &McpEnv, listener: TcpListener, token: &str) {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    if let Err(err) = handle_http_connection(env, &mut stream, token) {
+                        // A single bad connection must not take down the server.
+                        eprintln!("alas: mcp http connection error: {err}");
+                    }
+                }
+                Err(err) => eprintln!("alas: mcp http accept error: {err}"),
             }
-        };
-        if let Err(err) = handle_http_connection(env, &mut stream, &token) {
-            // A single bad connection must not take down the server.
-            eprintln!("alas: mcp http connection error: {err}");
         }
     }
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| serve_one(env, v4_listener, &token));
+        if let Some(v6) = v6_listener {
+            scope.spawn(|| serve_one(env, v6, &token));
+        }
+    });
     Ok(())
 }
 
