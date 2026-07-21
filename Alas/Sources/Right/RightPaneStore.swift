@@ -177,6 +177,14 @@ final class RightPaneStore {
                 else { return }
                 app.focusGlobalWorktree(id: target.id, projectId: worktree.projectId)
             }
+            new.requestGGSplitCommit = { [weak self] entry in
+                guard let app = self?.appState else { return }
+                _ = app.tabs.openGGSplitCommit(
+                    worktreeId: worktree.id,
+                    targetGGID: entry.ggId,
+                    targetSHA: entry.sha
+                )
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in

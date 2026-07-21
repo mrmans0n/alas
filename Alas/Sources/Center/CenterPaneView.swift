@@ -331,6 +331,58 @@ struct CenterPaneView: View {
                     case .ggInbox(let s):
                         GGInboxTabView(state: state, tabState: s)
                             .id(s.id)
+                    case .ggSplitCommit(let s):
+                        let capabilities = GGAvailability.shared.capabilities
+                        if let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id) {
+                            let hasBlockingGitOperation = rightPaneState.mergeOp.current != nil
+                            let ggActionState = rightPaneState.ggActionState
+                            let targetEntry = s.targetEntry(in: rightPaneState.ggStack)
+                            // A `.split` in flight for *this tab's own target* is its
+                            // own Apply; it stays "available" (the view manages it via
+                            // `isApplying`) so the workflowAvailable-keyed `.id` below
+                            // doesn't recreate the editor mid-apply and discard its
+                            // inline error. Any other in-flight mutation — including a
+                            // split started from a different tab — still gates it off.
+                            let ownSplitApplying = ggActionState.inFlightAction == .split
+                                && (rightPaneState.activeSplitTargetIdentity
+                                    .map { s.matches(splitTarget: $0) } ?? false)
+                            let otherActionInFlight = ggActionState.inFlightAction != nil
+                                && !ownSplitApplying
+                            let workflowAvailable = rightPaneState.ggGateProvider?() == true
+                                && targetEntry != nil
+                                && targetEntry?.prState != .merged
+                                && !otherActionInFlight
+                                && ggActionState.pausedOperation == nil
+                            GGSplitCommitTabView(
+                                tabState: s,
+                                rightPaneState: rightPaneState,
+                                capabilities: capabilities,
+                                workflowAvailable: workflowAvailable,
+                                hasBlockingGitOperation: hasBlockingGitOperation,
+                                initialDraft: state.tabs.ggSplitCommitDraft(worktreeId: worktree.id, tabId: s.id),
+                                codeFontFamily: state.config.code.fontFamily,
+                                codeFontSize: CGFloat(state.config.code.fontSize),
+                                onCancel: {
+                                    state.tabs.close(worktreeId: worktree.id, tabId: s.id)
+                                },
+                                onDraftChange: { draft in
+                                    state.tabs.updateGGSplitCommitDraft(
+                                        worktreeId: worktree.id,
+                                        tabId: s.id,
+                                        draft: draft
+                                    )
+                                }
+                            )
+                            .id("\(s.id):\(capabilities.structuredSplit):\(workflowAvailable):\(hasBlockingGitOperation)")
+                            .task(id: rightPaneActivationKey) {
+                                activateRightPaneStateForCenterTab()
+                            }
+                        } else {
+                            ProgressView()
+                                .task(id: rightPaneActivationKey) {
+                                    activateRightPaneStateForCenterTab()
+                                }
+                        }
                     }
                 }
             }

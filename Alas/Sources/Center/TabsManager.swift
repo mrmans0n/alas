@@ -60,6 +60,9 @@ final class TabsManager {
         var language: String?
     }
     private var externalLSPInfo: [TabID: ExternalLSPInfo] = [:]
+    /// Session-only split drafts survive view recreation when the user switches
+    /// tabs, but are deliberately not persisted as part of the tab identity.
+    private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -101,6 +104,20 @@ final class TabsManager {
     func activeTab(forWorktree id: String) -> Tab? {
         guard let activeId = activeTabId(forWorktree: id) else { return nil }
         return tabs(forWorktree: id).first(where: { $0.id == activeId })
+    }
+
+    func ggSplitCommitDraft(worktreeId: String, tabId: TabID) -> GGSplitCommitDraft? {
+        guard tabs(forWorktree: worktreeId).contains(where: { $0.id == tabId }) else { return nil }
+        return ggSplitCommitDrafts[tabId]
+    }
+
+    func updateGGSplitCommitDraft(
+        worktreeId: String,
+        tabId: TabID,
+        draft: GGSplitCommitDraft
+    ) {
+        guard tabs(forWorktree: worktreeId).contains(where: { $0.id == tabId }) else { return }
+        ggSplitCommitDrafts[tabId] = draft
     }
 
     func moveTab(worktreeId: String, fromId: TabID, toId: TabID) {
@@ -756,6 +773,25 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openGGSplitCommit(
+        worktreeId: String,
+        targetGGID: String?,
+        targetSHA: String
+    ) -> TabID {
+        let state = GGSplitCommitTabState(
+            worktreeId: worktreeId,
+            targetGGID: targetGGID,
+            targetSHA: targetSHA
+        )
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return state.id
+        }
+        append(.ggSplitCommit(state), to: worktreeId)
+        return state.id
+    }
+
+    @discardableResult
     func openOrFocusReviewSession(worktreeId: String, record: ReviewSessionRecord) -> Tab {
         let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
         if var file = byWorktree[worktreeId],
@@ -1150,6 +1186,7 @@ final class TabsManager {
         captureDraftIfNeeded(&file, removingTabId: tabId)
         let wasActive = file.activeTabId == tabId
         file.tabs.remove(at: idx)
+        ggSplitCommitDrafts.removeValue(forKey: tabId)
         if case .terminal(let state) = tab {
             for leaf in state.root.leaves() {
                 terminalRuntimeTitles.removeValue(forKey: leaf.id)
@@ -1187,6 +1224,7 @@ final class TabsManager {
         guard let kept = file.tabs.first(where: { $0.id == tabId }) else { return [] }
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
+            ggSplitCommitDrafts.removeValue(forKey: id)
         }
         file.tabs = [kept]
         file.activeTabId = tabId
@@ -1200,6 +1238,7 @@ final class TabsManager {
         let closed = file.tabs.map(\.id)
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
+            ggSplitCommitDrafts.removeValue(forKey: id)
         }
         file.tabs = []
         file.activeTabId = nil
@@ -1214,6 +1253,7 @@ final class TabsManager {
         let closed = file.tabs[0..<idx].map(\.id)
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
+            ggSplitCommitDrafts.removeValue(forKey: id)
         }
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
@@ -1230,6 +1270,7 @@ final class TabsManager {
         let closed = file.tabs[(idx + 1)...].map(\.id)
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
+            ggSplitCommitDrafts.removeValue(forKey: id)
         }
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId

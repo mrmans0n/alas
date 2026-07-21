@@ -21,6 +21,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case fileSnapshot(FileSnapshotTabState)
     case fileHistory(FileHistoryTabState)
     case ggInbox(GGInboxTabState)
+    case ggSplitCommit(GGSplitCommitTabState)
 
     var id: TabID {
         switch self {
@@ -42,6 +43,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileSnapshot(let s): return s.id
         case .fileHistory(let s):  return s.id
         case .ggInbox(let s):      return s.id
+        case .ggSplitCommit(let s): return s.id
         }
     }
 
@@ -65,6 +67,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileSnapshot(let s): return s.title
         case .fileHistory(let s):  return s.title
         case .ggInbox(let s):      return s.title
+        case .ggSplitCommit:       return "Split Commit"
         }
     }
 
@@ -88,6 +91,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileSnapshot: return "doc.text.magnifyingglass"
         case .fileHistory:  return "clock.arrow.circlepath"
         case .ggInbox:      return "branch"
+        case .ggSplitCommit: return "arrow.trianglehead.branch"
         }
     }
 
@@ -131,6 +135,63 @@ enum Tab: Codable, Equatable, Identifiable {
         default:
             return false
         }
+    }
+}
+
+enum GGSplitCommitTabPresentation: Equatable {
+    case available
+    case unavailable(reason: String)
+}
+
+struct GGSplitCommitTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let targetGGID: String?
+    let targetSHA: String
+
+    init(worktreeId: String, targetGGID: String?, targetSHA: String) {
+        self.id = "gg-split:\(worktreeId):\(targetGGID ?? targetSHA)"
+        self.worktreeId = worktreeId
+        self.targetGGID = targetGGID
+        self.targetSHA = targetSHA
+    }
+
+    func presentation(
+        capabilities: GGCapabilities,
+        workflowAvailable: Bool,
+        hasBlockingGitOperation: Bool = false
+    ) -> GGSplitCommitTabPresentation {
+        if !capabilities.structuredSplit {
+            return .unavailable(reason: GGSplitCommitModel.unavailableReason)
+        }
+        if hasBlockingGitOperation {
+            return .unavailable(reason: "Finish the current Git operation before splitting a commit.")
+        }
+        return workflowAvailable
+            ? .available
+            : .unavailable(reason: GGSplitCommitModel.workflowUnavailableReason)
+    }
+
+    func belongs(to stack: GGStack?) -> Bool {
+        targetEntry(in: stack) != nil
+    }
+
+    func targetEntry(in stack: GGStack?) -> GGStackEntry? {
+        guard let stack else { return nil }
+        if let targetGGID {
+            return stack.entries.first { $0.ggId == targetGGID }
+        }
+        return stack.entry(matchingCommitSHA: targetSHA)
+    }
+
+    /// Whether an in-flight split identity refers to this tab's own target,
+    /// so a `.split` action started here can be treated as this tab applying
+    /// rather than as another tab's operation.
+    func matches(splitTarget identity: GGSplitTargetIdentity) -> Bool {
+        if let ggID = identity.ggID, let targetGGID {
+            return ggID == targetGGID
+        }
+        return identity.sha == targetSHA
     }
 }
 
