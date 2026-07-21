@@ -14,6 +14,39 @@ private final class FakeGGRunner: GGCommandRunning, @unchecked Sendable {
     }
 }
 
+private actor SuspendedInboxRunner: GGCommandRunning {
+    private var started = false
+    private var continuation: CheckedContinuation<ProcessResult, Never>?
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        started = true
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func hasStarted() -> Bool { started }
+
+    func finish(with result: ProcessResult) {
+        continuation?.resume(returning: result)
+        continuation = nil
+    }
+}
+
+private enum GGInboxTestTimeout: Error {
+    case timedOut
+}
+
+@MainActor
+private func waitUntil(
+    timeout: TimeInterval = 2,
+    _ condition: () async -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !(await condition()) {
+        guard Date() < deadline else { throw GGInboxTestTimeout.timedOut }
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+}
+
 @MainActor
 struct GGInboxStoreTests {
     private static let emptyJSON = #"{"version":1,"total_items":0,"buckets":{"ready_to_land":[],"changes_requested":[],"blocked_on_ci":[],"awaiting_review":[],"behind_base":[],"draft":[]},"stack_errors":[]}"#
@@ -56,6 +89,76 @@ struct GGInboxStoreTests {
         #expect(GGInboxStore.isStale(fetchedAt: nil, now: now))
         #expect(GGInboxStore.isStale(fetchedAt: now.addingTimeInterval(-120), now: now))
         #expect(!GGInboxStore.isStale(fetchedAt: now.addingTimeInterval(-119), now: now))
+    }
+
+    @Test func invalidateExpiresFreshnessWithoutDiscardingVisibleSnapshot() async throws {
+        let store = GGInboxStore()
+        let runner = FakeGGRunner(result: ProcessResult(exitCode: 0, stdout: Self.emptyJSON, stderr: ""))
+        let fetchedAt = Date(timeIntervalSince1970: 1_000)
+        await store.refresh(projectId: "p1", repoPath: "/repo", service: GGService(runner: runner), now: { fetchedAt })
+
+        store.invalidate(projectId: "p1")
+
+        let state = try #require(store.states["p1"])
+        #expect(state.snapshot != nil)
+        #expect(state.fetchedAt == nil)
+        #expect(state.lastError == nil)
+    }
+
+    @Test func invalidateDuringRefreshPreventsOlderCompletionFromPublishing() async throws {
+        let store = GGInboxStore()
+        let runner = SuspendedInboxRunner()
+        let refresh = Task { @MainActor in
+            await store.refresh(
+                projectId: "p1",
+                repoPath: "/repo",
+                service: GGService(runner: runner),
+                now: { Date(timeIntervalSince1970: 2_000) }
+            )
+        }
+        try await waitUntil { await runner.hasStarted() }
+
+        store.invalidate(projectId: "p1")
+        await runner.finish(with: ProcessResult(exitCode: 0, stdout: Self.emptyJSON, stderr: ""))
+        await refresh.value
+
+        let state = try #require(store.states["p1"])
+        #expect(state.snapshot == nil)
+        #expect(state.fetchedAt == nil)
+        #expect(state.isRefreshing == false)
+    }
+
+    @Test func invalidateDuringRefreshRetainsPreviouslyVisibleSnapshot() async throws {
+        let store = GGInboxStore()
+        let oldRunner = FakeGGRunner(result: ProcessResult(exitCode: 0, stdout: Self.emptyJSON, stderr: ""))
+        await store.refresh(
+            projectId: "p1",
+            repoPath: "/repo",
+            service: GGService(runner: oldRunner),
+            now: { Date(timeIntervalSince1970: 1_000) }
+        )
+        let previousSnapshot = try #require(store.states["p1"]?.snapshot)
+
+        let runner = SuspendedInboxRunner()
+        let refresh = Task { @MainActor in
+            await store.refresh(
+                projectId: "p1",
+                repoPath: "/repo",
+                service: GGService(runner: runner),
+                now: { Date(timeIntervalSince1970: 2_000) }
+            )
+        }
+        try await waitUntil { await runner.hasStarted() }
+
+        store.invalidate(projectId: "p1")
+        let replacementJSON = Self.emptyJSON.replacingOccurrences(of: #""total_items":0"#, with: #""total_items":9"#)
+        await runner.finish(with: ProcessResult(exitCode: 0, stdout: replacementJSON, stderr: ""))
+        await refresh.value
+
+        let state = try #require(store.states["p1"])
+        #expect(state.snapshot == previousSnapshot)
+        #expect(state.fetchedAt == nil)
+        #expect(state.isRefreshing == false)
     }
 
     @Test func pruneDropsRemovedProjectsAndIsValueDiffed() {

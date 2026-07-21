@@ -50,6 +50,26 @@ private final class NDJSONSyncFakeGGRunner: GGCommandRunning, @unchecked Sendabl
     }
 }
 
+private final class ReentrantSyncFakeGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var syncCallCount = 0
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        if args == ["sync", "--jsonl"] {
+            syncCallCount += 1
+            let ndjson = [
+                #"{"event":"start","total_entries":1}"#,
+                #"{"event":"push_done","position":1,"forced":false}"#,
+                #"{"event":"summary"}"#,
+            ].joined(separator: "\n")
+            return ProcessResult(exitCode: 0, stdout: ndjson, stderr: "")
+        }
+        return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+    }
+}
+
 private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
@@ -61,6 +81,22 @@ private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendab
                 withIntermediateDirectories: true
             )
             return ProcessResult(exitCode: 1, stdout: "", stderr: "conflict")
+        }
+        return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+    }
+}
+
+private final class CleanMutationFakeGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var arguments: [[String]] = []
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        arguments.append(args)
+        if args == ["clean", "--all", "--json"] {
+            return ProcessResult(
+                exitCode: 0,
+                stdout: #"{"version":1,"clean":{"cleaned":[],"skipped":[]}}"#,
+                stderr: ""
+            )
         }
         return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
     }
@@ -537,7 +573,7 @@ struct RightPaneGGStackTests {
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
 
         state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
-        while state.ggActionState.inFlightAction != nil {
+        for _ in 0..<500 where state.ggActionState.pausedOperation == nil {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
@@ -551,23 +587,24 @@ struct RightPaneGGStackTests {
             withIntermediateDirectories: true
         )
         defer { try? FileManager.default.removeItem(at: wt.path) }
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: "", stderr: "")
-        )
+        let runner = CleanMutationFakeGGRunner()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
         var didRefreshProjectTopology = false
-        state.refreshProjectTopologyAfterGGClean = {
+        state.refreshProjectTopologyAfterGGMutation = {
             didRefreshProjectTopology = true
         }
 
         state.requestGGCleanAll()
+        for _ in 0..<500 where !state.pendingGGCleanAll && state.ggActionState.lastError == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         state.performGGCleanAll()
-        while state.ggActionState.inFlightAction != nil {
+        for _ in 0..<500 where !didRefreshProjectTopology && state.ggActionState.lastError == nil {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        #expect(runner.callCount == 1)
+        #expect(runner.arguments.filter { $0 == ["clean", "--all", "--json"] }.count == 1)
         #expect(didRefreshProjectTopology)
     }
 
@@ -602,6 +639,29 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.syncProgress.isEmpty)
     }
 
+    @Test func repeatedSyncInvocationIsSilentlyIgnoredAtUIBoundary() async throws {
+        let wt = makeWorktree()
+        let runner = ReentrantSyncFakeGGRunner()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggGateProvider = { true }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
+
+        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+
+        let deadline = Date().addingTimeInterval(2)
+        while state.ggActionState.lastActionSummary == nil,
+              state.ggActionState.lastError == nil,
+              Date() < deadline {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(runner.syncCallCount == 1)
+        #expect(state.ggActionState.lastError == nil)
+        #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
+    }
+
     @Test func syncErrorSuppressesSuccessSummary() async throws {
         let wt = makeWorktree()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
@@ -616,11 +676,8 @@ struct RightPaneGGStackTests {
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
 
         state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
-        var iterations = 0
-        while state.ggActionState.inFlightAction != nil {
+        for _ in 0..<500 where state.ggActionState.lastError == nil {
             try await Task.sleep(nanoseconds: 10_000_000)
-            iterations += 1
-            if iterations > 500 { break }
         }
 
         #expect(state.ggActionState.lastError != nil)

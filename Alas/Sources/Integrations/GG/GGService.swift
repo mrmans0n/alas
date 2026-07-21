@@ -310,6 +310,10 @@ struct GGService {
     /// Loads the current branch's stack via `gg ls --json`. Returns nil
     /// when the branch is not a gg stack (gg emits the all-stacks shape).
     func currentStack(worktreePath: String) async throws -> GGStack? {
+        try await currentStackSnapshot(worktreePath: worktreePath).stack
+    }
+
+    func currentStackSnapshot(worktreePath: String) async throws -> GGStackSnapshot {
         let result: ProcessResult
         do {
             result = try await runner.run(
@@ -328,7 +332,7 @@ struct GGService {
             }
             throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
         }
-        return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8)).stack
+        return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8))
     }
 
     /// Cross-stack triage snapshot from `gg inbox --json`. Runs at the

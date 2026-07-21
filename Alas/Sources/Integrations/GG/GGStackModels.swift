@@ -54,6 +54,37 @@ struct GGStackSnapshot: Decodable, Equatable {
     static let supportedSchemaVersion = 1
     let version: Int
     let stack: GGStack?
+    let operationID: String?
+
+    init(version: Int, stack: GGStack?, operationID: String? = nil) {
+        self.version = version
+        self.stack = stack
+        self.operationID = operationID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, stack
+        case operationID = "operationId"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        stack = try container.decodeIfPresent(GGStack.self, forKey: .stack)
+        operationID = try container.decodeIfPresent(String.self, forKey: .operationID)
+    }
+
+    var identity: GGStackIdentity? {
+        guard let stack,
+              let head = stack.entries.max(by: { $0.position < $1.position })
+        else { return nil }
+        return GGStackIdentity(
+            stackName: stack.name,
+            base: stack.base,
+            headSHA: head.sha,
+            operationID: operationID
+        )
+    }
 
     static func decode(fromJSON data: Data) throws -> GGStackSnapshot {
         let decoder = JSONDecoder()

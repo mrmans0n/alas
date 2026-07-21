@@ -1,3 +1,5 @@
+import Foundation
+
 struct GGEffectiveConfig: Equatable, Sendable {
     var syncAutoRebase: Bool
     var syncBehindThreshold: Int
@@ -10,6 +12,82 @@ struct GGCapabilities: Equatable, Sendable {
     var keepCurrentUnstack: Bool
     var clientOperationID: Bool = false
     var stagedOnlyAmend: Bool = false
+}
+
+enum GGMutationRequest: Equatable, Sendable {
+    case amendCurrent
+    case absorbStaged
+    case checkout(target: String)
+    case drop(target: String)
+    case unstack(target: String, name: String, createWorktree: Bool)
+    case reorder(order: [String])
+    case restack
+    case rebase(target: String?)
+    case sync
+    case land(target: String)
+    case clean
+    case continueOperation
+    case abortOperation
+    case undo(operationID: String)
+    case applySplit(planURL: URL, target: GGSplitTargetIdentity, planToken: String)
+
+    var actionKind: GGStackActionKind {
+        switch self {
+        case .amendCurrent: .amendCurrent
+        case .absorbStaged: .absorbStaged
+        case .checkout: .checkout
+        case .drop: .drop
+        case .unstack: .unstack
+        case .reorder: .reorder
+        case .restack: .restack
+        case .rebase: .rebase
+        case .sync: .sync
+        case .land: .land
+        case .clean: .clean
+        case .continueOperation: .continueOp
+        case .abortOperation: .abortOp
+        case .undo: .undo
+        case .applySplit: .split
+        }
+    }
+}
+
+struct GGStackIdentity: Equatable, Sendable {
+    var stackName: String
+    var base: String
+    var headSHA: String
+    var operationID: String?
+}
+
+struct GGPreparedMutation: Equatable, Sendable {
+    var request: GGMutationRequest
+    var snapshot: GGStackIdentity
+    var confirmation: GGMutationConfirmation?
+}
+
+enum GGMutationConfirmation: Equatable, Sendable {
+    case drop(target: String, rewrittenDescendants: Int, hasOpenReview: Bool)
+    case unstack(target: String, movedCommits: Int, lowerStack: String, newStack: String)
+    case land(target: String, readyCommits: Int)
+    case clean(mergedCommits: Int)
+}
+
+enum GGMutationError: Error, Equatable {
+    case operationInFlight
+    case staleConfirmation
+    case immutableTarget(reason: String)
+    case pausedOperation
+}
+
+extension GGMutationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .operationInFlight: "Another gg operation is already running."
+        case .staleConfirmation: "The stack changed. Review the updated state and try again."
+        case .immutableTarget(let reason): reason
+        case .pausedOperation: "Continue or abort the paused gg operation first."
+        }
+    }
 }
 
 struct GGDropResult: Codable, Equatable, Sendable {

@@ -492,11 +492,8 @@ private struct RootGGPresentationHandlers: ViewModifier {
                 Button("Cancel", role: .cancel) {
                     state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand()
                 }
-            } message: { request in
-                Text(RightPaneState.ggLandConfirmationMessage(
-                    for: request,
-                    stack: state.rightPaneStore.stateWithPendingGGLand()?.ggStack
-                ))
+            } message: { _ in
+                Text(state.rightPaneStore.stateWithPendingGGLand()?.pendingGGLandConfirmationMessage ?? "")
             }
             .confirmationDialog(
                 "Clean all merged stacks?",

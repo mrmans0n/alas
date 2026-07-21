@@ -206,23 +206,24 @@ struct RightPaneGGLandTests {
         ))
     }
 
-    @Test func requestAndCancelSetAndClearPending() {
+    @Test func requestWithoutCachedStackDoesNotStageLandConfirmation() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.requestGGLand(.ready)
-        #expect(state.pendingGGLand == .ready)
-        state.cancelGGLand()
         #expect(state.pendingGGLand == nil)
+        #expect(state.ggActionState.lastError == "This stack is no longer ready to land.")
     }
 
-    @Test func requestAndCancelCleanAllSetAndClearPending() {
+    @Test func cleanPreflightFailureDoesNotStageConfirmation() async throws {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.requestGGCleanAll()
-        #expect(state.pendingGGCleanAll)
-        state.cancelGGCleanAll()
+        for _ in 0..<100 where state.ggActionState.lastError == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(!state.pendingGGCleanAll)
+        #expect(state.ggActionState.lastError != nil)
     }
 }
