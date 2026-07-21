@@ -396,6 +396,29 @@ struct ACPMessageListPaginationTests {
         ))
     }
 
+    @Test("go-to-newest affordance shows only when tail-follow is paused")
+    func goToNewestAffordanceShowsOnlyWhenTailFollowPaused() {
+        #expect(!ACPMessageList.shouldShowGoToNewestAffordance(followsTranscriptTail: true))
+        #expect(ACPMessageList.shouldShowGoToNewestAffordance(followsTranscriptTail: false))
+    }
+
+    @Test("go-to-newest affordance resumes tail-follow with scheduled animated scroll")
+    func goToNewestAffordanceResumesTailFollowWithScheduledAnimatedScroll() {
+        #expect(ACPMessageList.goToNewestAffordanceAction() == ACPMessageList.GoToNewestAffordanceAction(
+            resumesTailFollow: true,
+            schedulesTailScroll: true,
+            animatedTailScroll: true
+        ))
+    }
+
+    @Test("go-to-newest affordance is positioned above composer-safe space")
+    func goToNewestAffordanceIsPositionedAboveComposerSafeSpace() {
+        #expect(ACPMessageList.goToNewestAffordanceBottomPadding(
+            composerSpacerHeight: 220,
+            gap: 12
+        ) == 232)
+    }
+
     @Test("deferred tail scrolls require active tail-follow")
     func deferredTailScrollsRequireActiveTailFollow() {
         #expect(ACPMessageList.shouldRunScheduledTailScroll(followsTranscriptTail: true))
