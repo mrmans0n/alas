@@ -2557,7 +2557,18 @@ extension ACPSessionManager {
             let builtInMCP = remoteHost == nil
                 ? await builtInMCPProvider?(worktreePath, sessionId, initialized.mcpCapabilities.http)
                 : nil
-            if builtInMCP != nil {
+            // `.external` adapters (e.g. Pi) ignore the ACP `mcpServers` wire
+            // config entirely and reach Alas tools through the injected CLI
+            // environment instead, so the built-in server never spawns/connects
+            // and no `mcp_hello` ever arrives. Running the detection there would
+            // always resolve `.notRegistered` and wrongly offer an HTTP switch
+            // the adapter would also ignore — so skip registration tracking for
+            // external adapters.
+            let usesWireMCP: Bool = {
+                if case .external = spec.mcpInjection { return false }
+                return true
+            }()
+            if builtInMCP != nil, usesWireMCP {
                 clearMCPRegistration?(sessionId)
                 session.builtInMCPRegistration = .unknown
                 // Grace after attach: MCP servers register at session creation,
