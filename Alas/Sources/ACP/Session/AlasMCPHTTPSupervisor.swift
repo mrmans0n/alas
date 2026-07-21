@@ -110,9 +110,16 @@ final class AlasMCPHTTPSupervisor {
                 }
             }
             group.addTask {
-                try? await Task.sleep(for: timeout)
-                // A process that won't announce its port is useless: kill it and
-                // close the pipe so the blocking reader unblocks via EOF.
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    // Cancelled because the reader already got the port — the
+                    // process is healthy; must NOT terminate it.
+                    return nil
+                }
+                // Genuine timeout: a process that won't announce its port is
+                // useless. Kill it and close the pipe so the blocking reader
+                // unblocks via EOF.
                 process.terminate()
                 try? handle.close()
                 return nil
