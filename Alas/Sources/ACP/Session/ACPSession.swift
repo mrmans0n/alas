@@ -97,6 +97,9 @@ final class ACPSession: ObservableObject, Identifiable {
     /// (`ACPMCPInjectionSupport.external`): how Alas tools and user MCP
     /// servers actually reach this agent. Recomputed on every attach.
     @Published var mcpExternalStatus: ACPMCPExternalStatus?
+    /// Registration state of the built-in "alas" MCP server for the current
+    /// attach. Drives the MCP status control's warning + transport-switch action.
+    @Published var builtInMCPRegistration: MCPServerRegistration = .unknown
     /// Runtime-only auth method selected by the user in the sign-in banner.
     /// The next attach consumes it by calling ACP `authenticate` after
     /// initialize and before session creation/loading.
