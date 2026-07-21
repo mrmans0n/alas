@@ -169,18 +169,18 @@ struct ACPMCPStatusPolicyTests {
         #expect(classic.externalRows == nil)
     }
 
-    private func builtInSummary() -> MCPAttachmentSummary {
+    private func builtInSummary(transport: MCPTransportKind = .stdio) -> MCPAttachmentSummary {
         let status = MCPAttachmentServerStatus(
             id: BuiltInAlasMCP.statusId, name: "alas",
-            transport: .stdio, disposition: .requested)
+            transport: transport, disposition: .requested)
         return MCPAttachmentSummary(statuses: [status], configurationFingerprint: "fp")
     }
 
     @Test("notRegistered on stdio offers the HTTP switch")
     func offersSwitch() {
         let state = ACPMCPStatusState(
-            summary: builtInSummary(), currentServers: [],
-            builtInRegistration: .notRegistered, transport: .stdio)
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered)
         #expect(state?.hasBuiltInWarning == true)
         #expect(state?.showsSwitchToHTTPAction == true)
     }
@@ -188,8 +188,8 @@ struct ACPMCPStatusPolicyTests {
     @Test("notRegistered on http warns without the switch")
     func warnsNoSwitchOnHTTP() {
         let state = ACPMCPStatusState(
-            summary: builtInSummary(), currentServers: [],
-            builtInRegistration: .notRegistered, transport: .http)
+            summary: builtInSummary(transport: .http), currentServers: [],
+            builtInRegistration: .notRegistered)
         #expect(state?.hasBuiltInWarning == true)
         #expect(state?.showsSwitchToHTTPAction == false)
     }
@@ -197,8 +197,8 @@ struct ACPMCPStatusPolicyTests {
     @Test("registered shows no warning")
     func registeredNoWarning() {
         let state = ACPMCPStatusState(
-            summary: builtInSummary(), currentServers: [],
-            builtInRegistration: .registered, transport: .stdio)
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .registered)
         #expect(state?.hasBuiltInWarning == false)
         #expect(state?.showsSwitchToHTTPAction == false)
     }

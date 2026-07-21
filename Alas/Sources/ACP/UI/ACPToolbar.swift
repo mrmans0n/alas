@@ -23,7 +23,6 @@ struct ACPToolbar: View {
                 session: session,
                 currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
                 onInstallPiMCPAdapter: { await state.installPiMCPAdapter() },
-                transport: state.config.harness.alasMCPTransport,
                 onSwitchToHTTP: {
                     state.config.harness.alasMCPTransport = .http
                     _ = state.saveConfig()

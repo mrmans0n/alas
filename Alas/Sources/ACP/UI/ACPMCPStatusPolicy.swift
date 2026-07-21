@@ -28,8 +28,7 @@ struct ACPMCPStatusState: Equatable {
         preamblePending: Bool = false,
         preambleSent: Bool = false,
         externalStatus: ACPMCPExternalStatus? = nil,
-        builtInRegistration: MCPServerRegistration = .unknown,
-        transport: AlasMCPTransport = .stdio
+        builtInRegistration: MCPServerRegistration = .unknown
     ) {
         guard let summary,
               !summary.statuses.isEmpty || !currentServers.isEmpty else {
@@ -38,7 +37,11 @@ struct ACPMCPStatusState: Equatable {
 
         let builtInNotRegistered = (builtInRegistration == .notRegistered)
         hasBuiltInWarning = builtInNotRegistered
-        showsSwitchToHTTPAction = builtInNotRegistered && transport == .stdio
+        // Derive the transport from what the session actually attached with —
+        // the built-in status row — not the (possibly newer) config preference.
+        let builtInTransport = summary.statuses
+            .first { $0.id == BuiltInAlasMCP.statusId }?.transport
+        showsSwitchToHTTPAction = builtInNotRegistered && builtInTransport == .stdio
 
         isStale = summary.configurationFingerprint
             != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)

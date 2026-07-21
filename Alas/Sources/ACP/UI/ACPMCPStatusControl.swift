@@ -7,7 +7,6 @@ struct ACPMCPStatusControl: View {
     @ObservedObject var session: ACPSession
     let currentServers: [ProjectMCPServer]
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
-    var transport: AlasMCPTransport = .stdio
     var onSwitchToHTTP: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
@@ -19,8 +18,7 @@ struct ACPMCPStatusControl: View {
             preamblePending: session.pendingMCPPreamble != nil,
             preambleSent: session.mcpPreambleSent,
             externalStatus: session.mcpExternalStatus,
-            builtInRegistration: session.builtInMCPRegistration,
-            transport: transport
+            builtInRegistration: session.builtInMCPRegistration
         )
     }
 
