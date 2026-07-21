@@ -272,6 +272,8 @@ struct CenterPaneView: View {
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
                                              onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                    case .binaryPreview:
+                        EmptyView()
                     case .mergeConflict(let s):
                         MergeConflictTabView(
                             state: state,

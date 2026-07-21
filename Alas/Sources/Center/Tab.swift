@@ -14,6 +14,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case reviewChanges(ReviewChangesTabState)
     case reviewSession(ReviewSessionTabState)
     case imagePreview(ImagePreviewTabState)
+    case binaryPreview(BinaryPreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
     case reviewPR(ReviewPRTabState)
@@ -34,6 +35,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewChanges(let s): return s.id
         case .reviewSession(let s): return s.id
         case .imagePreview(let s): return s.id
+        case .binaryPreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
         case .reviewPR(let s):     return s.id
@@ -56,6 +58,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewChanges:       return "Review Changes"
         case .reviewSession(let s): return s.title
         case .imagePreview(let s): return s.title
+        case .binaryPreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
         case .reviewPR(let s):     return s.displayTitle
@@ -78,6 +81,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewChanges: return "diff"
         case .reviewSession: return "text.badge.checkmark"
         case .imagePreview: return "image"
+        case .binaryPreview: return "doc.fill"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
         case .reviewPR:     return "list.bullet.rectangle.portrait.fill"
@@ -92,6 +96,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
         case .stashDiff(let s):    return s.file.path
         case .imagePreview(let s): return s.relativePath
+        case .binaryPreview(let s): return s.relativePath
         case .mergeConflict(let s): return s.relativePath
         case .fileSnapshot(let s): return s.relativePath
         case .fileHistory(let s):  return s.relativePath
@@ -474,6 +479,12 @@ struct StashDiffTabState: Codable, Equatable, Identifiable {
 }
 
 struct ImagePreviewTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    var title: String
+    var relativePath: String
+}
+
+struct BinaryPreviewTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String
