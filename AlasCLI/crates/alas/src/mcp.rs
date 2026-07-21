@@ -821,19 +821,32 @@ fn handle_http_connection(
     stream: &mut std::net::TcpStream,
     token: &str,
 ) -> std::io::Result<()> {
-    use std::io::{Read, Write};
+    use std::io::{ErrorKind, Read, Write};
+    use std::time::Duration;
+
+    // The accept loop is single-threaded, so a client that connects and never
+    // sends a complete request must not wedge every other session. Bound the
+    // (pre-auth) read with a timeout; on timeout we answer 400 and move on.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
 
     const MAX_REQUEST_BYTES: usize = 1024 * 1024;
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 8192];
     let request = loop {
         if buf.len() > MAX_REQUEST_BYTES {
-            break Err(());
+            break Err("bad request");
         }
         if let Some(req) = parse_http_request(&buf) {
             break Ok(Some(req));
         }
-        let read = stream.read(&mut chunk)?;
+        let read = match stream.read(&mut chunk) {
+            Ok(read) => read,
+            Err(err) if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {
+                // Client stalled mid-request; drop it so the loop stays free.
+                break Err("request timeout");
+            }
+            Err(err) => return Err(err),
+        };
         if read == 0 {
             // Peer hung up: accept whatever completed, else treat as malformed.
             break Ok(parse_http_request(&buf));
@@ -843,7 +856,8 @@ fn handle_http_connection(
 
     let response = match request {
         Ok(Some(req)) => build_http_response(env, &req, token),
-        Ok(None) | Err(()) => http_response(400, "text/plain", "bad request"),
+        Ok(None) => http_response(400, "text/plain", "bad request"),
+        Err(message) => http_response(400, "text/plain", message),
     };
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
