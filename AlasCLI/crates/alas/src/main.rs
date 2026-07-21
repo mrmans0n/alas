@@ -17,8 +17,8 @@ fn main() -> ExitCode {
         args = rewritten;
     }
 
-    if is_mcp_invocation(&args) {
-        return run_mcp();
+    if let Some(mode) = mcp_mode(&args) {
+        return run_mcp(mode);
     }
 
     let base = logical_base();
@@ -72,13 +72,24 @@ fn describe(err: &DispatchError) -> (String, u8) {
     }
 }
 
-/// `alas mcp` takes no further arguments; anything else falls through to
-/// the normal parser, which rejects it with usage text.
-fn is_mcp_invocation(args: &[String]) -> bool {
-    args.len() == 1 && args[0] == "mcp"
+#[derive(Debug, PartialEq)]
+enum McpMode {
+    Stdio,
+    Http,
 }
 
-fn run_mcp() -> ExitCode {
+/// `alas mcp` runs the stdio MCP server; `alas mcp --http` runs the same
+/// server over localhost HTTP. Anything else falls through to the normal
+/// parser, which rejects it with usage text.
+fn mcp_mode(args: &[String]) -> Option<McpMode> {
+    match args {
+        [only] if only == "mcp" => Some(McpMode::Stdio),
+        [first, second] if first == "mcp" && second == "--http" => Some(McpMode::Http),
+        _ => None,
+    }
+}
+
+fn run_mcp(mode: McpMode) -> ExitCode {
     let env = match mcp::env_from(|key| std::env::var(key).ok()) {
         Ok(env) => env,
         Err(message) => {
@@ -86,7 +97,12 @@ fn run_mcp() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match mcp::serve(&env) {
+    let result = match mode {
+        McpMode::Stdio => mcp::serve(&env),
+        // TODO(E2): route to mcp::serve_http once the HTTP transport lands.
+        McpMode::Http => mcp::serve(&env),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("alas: mcp io error: {err}");
@@ -140,10 +156,20 @@ mod tests {
     }
 
     #[test]
-    fn mcp_mode_is_detected_only_as_sole_argument() {
-        assert!(is_mcp_invocation(&["mcp".to_string()]));
-        assert!(!is_mcp_invocation(&["mcp".to_string(), "extra".to_string()]));
-        assert!(!is_mcp_invocation(&["open".to_string(), "mcp".to_string()]));
-        assert!(!is_mcp_invocation(&[]));
+    fn mcp_mode_detection() {
+        assert_eq!(mcp_mode(&["mcp".into()]), Some(McpMode::Stdio));
+        assert_eq!(mcp_mode(&["mcp".into(), "--http".into()]), Some(McpMode::Http));
+        assert_eq!(mcp_mode(&["open".into()]), None);
+    }
+
+    #[test]
+    fn mcp_mode_rejects_unexpected_shapes() {
+        assert_eq!(mcp_mode(&["mcp".into(), "extra".into()]), None);
+        assert_eq!(mcp_mode(&["open".into(), "mcp".into()]), None);
+        assert_eq!(mcp_mode(&[]), None);
+        assert_eq!(
+            mcp_mode(&["mcp".into(), "--http".into(), "extra".into()]),
+            None
+        );
     }
 }
