@@ -16,6 +16,8 @@ struct TabBarView: View {
     let onCloseToRight: (TabID) -> Void
     let onCopyPath: (TabID) -> Void
     let onCopyRelativePath: (TabID) -> Void
+    let onOpenWithSystem: (TabID) -> Void
+    let onRevealInFinder: (TabID) -> Void
     let onRenameTerminal: (TabID) -> Void
     let onRenameACPSession: (TabID) -> Void
     let onCopyACPSession: (TabID) -> Void
@@ -146,6 +148,8 @@ struct TabBarView: View {
             if tab.relativeFilePath != nil {
                 Button("Copy Path") { onCopyPath(tab.id) }
                 Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
+                Button("Open with System") { onOpenWithSystem(tab.id) }
+                Button("Reveal in Finder") { onRevealInFinder(tab.id) }
             }
         }
     }

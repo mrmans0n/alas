@@ -53,6 +53,28 @@ struct CenterPaneView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(rel, forType: .string)
                 },
+                onOpenWithSystem: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          let rel = tab.relativeFilePath else { return }
+                    let url: URL
+                    if rel.hasPrefix("/") {
+                        url = URL(fileURLWithPath: rel)
+                    } else {
+                        url = worktree.path.appendingPathComponent(rel)
+                    }
+                    FileSystemOpen.open(url: url)
+                },
+                onRevealInFinder: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          let rel = tab.relativeFilePath else { return }
+                    let url: URL
+                    if rel.hasPrefix("/") {
+                        url = URL(fileURLWithPath: rel)
+                    } else {
+                        url = worktree.path.appendingPathComponent(rel)
+                    }
+                    FileSystemOpen.reveal(url: url)
+                },
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
                 },
@@ -273,8 +295,10 @@ struct CenterPaneView: View {
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
                                              onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
-                    case .binaryPreview:
-                        EmptyView()
+                    case .binaryPreview(let s):
+                        BinaryPreviewTabView(worktreePath: worktree.path,
+                                             relativePath: s.relativePath,
+                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                     case .mergeConflict(let s):
                         MergeConflictTabView(
                             state: state,
