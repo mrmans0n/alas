@@ -27,7 +27,14 @@ struct ACPToolbar: View {
                 onSwitchToHTTP: {
                     state.config.harness.alasMCPTransport = .http
                     _ = state.saveConfig()
-                    Task { await manager.reattach(to: session.id) }
+                    // A live session is `.ready`, for which `reattach` is a
+                    // no-op — so detach then attach (the same flow as the
+                    // explicit Reconnect action) to actually apply the new
+                    // transport now instead of on some later disconnect.
+                    Task {
+                        await manager.detach(sessionId: session.id)
+                        await manager.attach(to: session.id, freshlyCreated: false)
+                    }
                 }
             )
             ACPRecoveryPill(session: session)
