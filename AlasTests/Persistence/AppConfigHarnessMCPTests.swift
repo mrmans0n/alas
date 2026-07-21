@@ -20,4 +20,18 @@ struct AppConfigHarnessMCPTests {
         let decoded = try JSONDecoder().decode(AppConfig.Harness.self, from: data)
         #expect(decoded.exposeAlasMCP == false)
     }
+
+    @Test("harness alasMCPTransport defaults to stdio when absent")
+    func alasMCPTransportDefaultsStdio() throws {
+        let json = Data(#"{"exposeAlasMCP":true}"#.utf8)
+        let harness = try JSONDecoder().decode(AppConfig.Harness.self, from: json)
+        #expect(harness.alasMCPTransport == .stdio)
+    }
+
+    @Test("harness alasMCPTransport decodes http")
+    func alasMCPTransportDecodesHTTP() throws {
+        let json = Data(#"{"alasMCPTransport":"http"}"#.utf8)
+        let harness = try JSONDecoder().decode(AppConfig.Harness.self, from: json)
+        #expect(harness.alasMCPTransport == .http)
+    }
 }

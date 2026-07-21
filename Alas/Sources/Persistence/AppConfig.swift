@@ -12,6 +12,15 @@ struct SidebarChromeOverride: Codable, Equatable {
     static let zero = SidebarChromeOverride(backgroundOpacity: 0, textContrast: 0)
 }
 
+/// How the built-in "alas" MCP server is delivered to local ACP sessions.
+/// stdio (default) is spawned by the agent harness; http is served by a
+/// supervised `alas mcp --http` process the app manages, for harnesses that
+/// restrict stdio MCP servers by policy.
+enum AlasMCPTransport: String, Codable, Equatable {
+    case stdio
+    case http
+}
+
 struct AppConfig: Codable, Equatable {
     var themeId: String
     var accent: String
@@ -236,12 +245,14 @@ struct AppConfig: Codable, Equatable {
         /// When true (default), every local ACP session gets the built-in
         /// "alas" MCP server exposing CLI actions (open, worktrees, review).
         var exposeAlasMCP: Bool
+        /// How the built-in "alas" MCP server is delivered. Default: stdio.
+        var alasMCPTransport: AlasMCPTransport
 
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault,
-                 exposeAlasMCP
+                 exposeAlasMCP, alasMCPTransport
         }
 
         init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
@@ -250,7 +261,8 @@ struct AppConfig: Codable, Equatable {
              confirmCloseChatTabs: Bool = false,
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
-             exposeAlasMCP: Bool = true)
+             exposeAlasMCP: Bool = true,
+             alasMCPTransport: AlasMCPTransport = .stdio)
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
@@ -260,6 +272,7 @@ struct AppConfig: Codable, Equatable {
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
             self.exposeAlasMCP = exposeAlasMCP
+            self.alasMCPTransport = alasMCPTransport
         }
 
         init(from decoder: Decoder) throws {
@@ -272,6 +285,7 @@ struct AppConfig: Codable, Equatable {
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
+            alasMCPTransport = (try? c.decode(AlasMCPTransport.self, forKey: .alasMCPTransport)) ?? .stdio
         }
     }
 
