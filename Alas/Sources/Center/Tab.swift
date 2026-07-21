@@ -115,6 +115,23 @@ enum Tab: Codable, Equatable, Identifiable {
         default:                   return nil
         }
     }
+
+    /// True for tabs that represent the live, current on-disk file at
+    /// `relativeFilePath` / `absoluteFilePath` — i.e. opening with the system
+    /// or revealing in Finder operates on the file the tab is actually
+    /// showing. False for `.stashDiff`, `.fileSnapshot`, and `.fileHistory`,
+    /// whose `relativeFilePath` points at a historical/stashed revision and
+    /// must not be handed to `NSWorkspace` as if it were the current file.
+    var supportsSystemOpenActions: Bool {
+        switch self {
+        case .editor, .imagePreview, .binaryPreview, .mergeConflict:
+            return true
+        case .stashDiff, .fileSnapshot, .fileHistory:
+            return false
+        default:
+            return false
+        }
+    }
 }
 
 struct FileSnapshotTabState: Codable, Equatable, Identifiable {

@@ -148,6 +148,8 @@ struct TabBarView: View {
             if tab.relativeFilePath != nil {
                 Button("Copy Path") { onCopyPath(tab.id) }
                 Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
+            }
+            if tab.supportsSystemOpenActions {
                 Button("Open with System") { onOpenWithSystem(tab.id) }
                 Button("Reveal in Finder") { onRevealInFinder(tab.id) }
             }
