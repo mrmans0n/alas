@@ -196,6 +196,35 @@ struct GGServiceActionsTests {
         #expect(!runner.lastArgs.contains("--force"))
     }
 
+    @MainActor
+    @Test func mutationExecutionPrefixesExactClientOperationID() async throws {
+        let runner = RecordingGGRunner()
+
+        _ = try await GGService(runner: runner).execute(
+            .amendCurrent,
+            worktreePath: "/repo",
+            clientOperationID: "alas:1234",
+            onSyncEvent: { _ in }
+        )
+
+        #expect(runner.calls == [["--client-operation-id", "alas:1234", "sc", "--staged-only"]])
+        #expect(runner.lastCwd == URL(fileURLWithPath: "/repo"))
+    }
+
+    @MainActor
+    @Test func mutationExecutionWithoutClientOperationIDPreservesLegacyArguments() async throws {
+        let runner = RecordingGGRunner()
+
+        _ = try await GGService(runner: runner).execute(
+            .amendCurrent,
+            worktreePath: "/repo",
+            clientOperationID: nil,
+            onSyncEvent: { _ in }
+        )
+
+        #expect(runner.calls == [["sc", "--staged-only"]])
+    }
+
     @Test func absorbStagedUsesStagedOnlyCommandInWorktree() async throws {
         let runner = RecordingGGRunner()
 

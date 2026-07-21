@@ -14,6 +14,15 @@ struct GGCapabilities: Equatable, Sendable {
     var stagedOnlyAmend: Bool = false
 }
 
+struct GGLocalChangeStatistics: Equatable, Sendable {
+    var staged: Int
+    var unstaged: Int
+
+    static let zero = GGLocalChangeStatistics(staged: 0, unstaged: 0)
+
+    var hasChanges: Bool { staged > 0 || unstaged > 0 }
+}
+
 enum GGMutationRequest: Equatable, Sendable {
     case amendCurrent
     case absorbStaged
@@ -65,6 +74,11 @@ struct GGPreparedMutation: Equatable, Sendable {
     var confirmation: GGMutationConfirmation?
 }
 
+struct GGPreparedRestack: Equatable, Sendable {
+    var plan: GGRestackResult
+    var snapshot: GGStackIdentity
+}
+
 enum GGMutationConfirmation: Equatable, Sendable {
     case drop(target: String, rewrittenDescendants: Int, hasOpenReview: Bool)
     case unstack(
@@ -103,6 +117,7 @@ enum GGMutationError: Error, Equatable {
     case staleConfirmation
     case immutableTarget(reason: String)
     case pausedOperation
+    case blockingGitOperation
 }
 
 extension GGMutationError: LocalizedError {
@@ -112,6 +127,7 @@ extension GGMutationError: LocalizedError {
         case .staleConfirmation: "The stack changed. Review the updated state and try again."
         case .immutableTarget(let reason): reason
         case .pausedOperation: "Continue or abort the paused gg operation first."
+        case .blockingGitOperation: "Finish the current Git operation first."
         }
     }
 }
@@ -260,6 +276,22 @@ struct GGOperationSummary: Codable, Equatable, Sendable {
 
 struct GGUndoResult: Codable, Equatable, Sendable {
     let undone: GGOperationSummary
+}
+
+struct GGUndoCandidate: Equatable, Sendable {
+    let operationID: String
+    let kind: String
+    let status: GGOperationStatus
+    let touchedRemote: Bool
+    let isUndoable: Bool
+
+    init(operation: GGOperationSummary) {
+        operationID = operation.id
+        kind = operation.kind
+        status = operation.status
+        touchedRemote = operation.touchedRemote
+        isUndoable = operation.isUndoable
+    }
 }
 
 struct GGSplitTargetIdentity: Codable, Equatable, Sendable {

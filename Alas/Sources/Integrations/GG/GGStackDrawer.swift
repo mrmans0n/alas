@@ -21,7 +21,31 @@ struct GGStackDrawer: View {
                 hasBlockingGitOperation: Self.hasBlockingGitOperation(
                     mergeOperation: rps.mergeOp.current,
                     pausedGGOperation: rps.ggActionState.pausedOperation
-                )
+                ),
+                effectiveConfig: rps.ggEffectiveConfig,
+                localChanges: rps.ggLocalChangeStatistics,
+                undoCandidate: rps.ggUndoCandidate
+            )
+        }
+        if rps.ggActionState.pausedOperation == nil, rps.ggUndoCandidate != nil {
+            let inFlight = rps.ggActionState.inFlightAction
+            return GGStackReadinessModel(
+                title: "Stack recovery",
+                summaryChip: "undo available",
+                facts: [],
+                primaryActions: [GGStackReadinessModel.Action(
+                    kind: .undo,
+                    title: "Undo Last GG Operation",
+                    detail: nil,
+                    isEnabled: inFlight == nil,
+                    isInFlight: inFlight == .undo,
+                    emphasis: .primary
+                )],
+                overflowActions: [],
+                progressRows: [],
+                isPaused: false,
+                actionSummary: rps.ggActionState.lastActionSummary,
+                localChangesNote: nil
             )
         }
         return GGStackReadinessModel.makePausedFallback(action: rps.ggActionState)
@@ -126,6 +150,7 @@ struct GGStackDrawer: View {
                     Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
                 actionRow(model)
+                actionDetails(model)
                 factsView(model)
             } else if !model.progressRows.isEmpty {
                 progressList(model)
@@ -137,6 +162,7 @@ struct GGStackDrawer: View {
                     Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
                 actionRow(model)
+                actionDetails(model)
                 factsView(model)
             }
         }
@@ -154,10 +180,9 @@ struct GGStackDrawer: View {
     private func actionRow(_ model: GGStackReadinessModel) -> some View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
-                ForEach(model.actions) { action in
+                ForEach(model.primaryActions) { action in
                     Button {
-                        if action.kind == .land { rps.requestGGLand(.ready) }
-                        else { rps.onGGStackAction(action.kind, appState: appState) }
+                        perform(action)
                     } label: {
                         HStack(spacing: 6) {
                             if action.isInFlight { Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10) }
@@ -174,9 +199,50 @@ struct GGStackDrawer: View {
                     .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
                     .help(action.title)
                 }
+                if !model.overflowActions.isEmpty {
+                    Menu {
+                        ForEach(model.overflowActions) { action in
+                            Button(action.title) { perform(action) }
+                                .disabled(!action.isEnabled)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.color("fg-muted"))
+                            .frame(width: 26, height: 26)
+                            .background(theme.color("bg-3").opacity(0.72))
+                            .clipShape(.rect(cornerRadius: 6))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 26, height: 26)
+                    .help("Stack actions")
+                }
             }
         }
         .scrollIndicators(.hidden)
+    }
+
+    @ViewBuilder
+    private func actionDetails(_ model: GGStackReadinessModel) -> some View {
+        if let detail = model.primaryActions.first?.detail {
+            Text(detail)
+                .font(.system(size: 10.5))
+                .foregroundStyle(theme.color("fg-dim"))
+        }
+        if let note = model.localChangesNote {
+            Text(note)
+                .font(.system(size: 10.5))
+                .foregroundStyle(theme.color("warn"))
+        }
+    }
+
+    private func perform(_ action: GGStackReadinessModel.Action) {
+        if action.kind == .land {
+            rps.requestGGLand(.ready)
+        } else {
+            rps.onGGStackAction(action.kind, appState: appState)
+        }
     }
 
     private func factsView(_ model: GGStackReadinessModel) -> some View {

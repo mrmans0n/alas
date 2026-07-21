@@ -64,7 +64,11 @@ struct ChangesTabView: View {
     }
 
     private var isGGDrawerActive: Bool {
-        Self.shouldShowGGDrawer(stack: rps.ggStack, pausedGGOperation: rps.ggActionState.pausedOperation)
+        Self.shouldShowGGDrawer(
+            stack: rps.ggStack,
+            pausedGGOperation: rps.ggActionState.pausedOperation,
+            hasUndoCandidate: rps.ggUndoCandidate != nil
+        )
     }
 
     private var ggPreparationMutationDisabledReason: String? {
@@ -287,8 +291,12 @@ struct ChangesTabView: View {
         mergeOperation != nil && pausedGGOperation == nil
     }
 
-    static func shouldShowGGDrawer(stack: GGStack?, pausedGGOperation: GGPausedOperation?) -> Bool {
-        stack != nil || pausedGGOperation != nil
+    static func shouldShowGGDrawer(
+        stack: GGStack?,
+        pausedGGOperation: GGPausedOperation?,
+        hasUndoCandidate: Bool
+    ) -> Bool {
+        stack != nil || pausedGGOperation != nil || hasUndoCandidate
     }
 
     static func shouldShowChangesPreparationCard(

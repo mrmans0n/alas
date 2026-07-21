@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 @MainActor
 struct GGMutationContext {
@@ -10,6 +11,8 @@ struct GGMutationContext {
     var worktreeExists: () -> Bool
     var invalidateInbox: () -> Void
     var selectWorktreeAtPath: (String) async -> Void
+    /// The worktree's current branch, used to scope final-drop undo recovery.
+    var currentBranch: () -> String?
 }
 
 enum GGMutationExecutionResult {
@@ -20,31 +23,36 @@ enum GGMutationExecutionResult {
     case split(GGSplitApplyResult)
 }
 
-private enum GGUndoBaseline {
-    case unavailable
-    case operationID(String?)
-}
-
 @MainActor
 protocol GGMutationExecuting {
     func execute(
         _ request: GGMutationRequest,
         worktreePath: String,
+        clientOperationID: String?,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary]
+    func previewRestack(worktreePath: String) async throws -> GGRestackResult
 }
 
 @MainActor
+@Observable
 final class GGMutationCoordinator {
     private let worktreeId: String
     private let worktreePath: String
     private let service: any GGMutationExecuting
     private let actionState: GGStackActionState
     private let undoMarkerStore: any GGUndoMarkerStoring
+    private let clientOperationIDCapability: () -> Bool
+    private let clientOperationIDGenerator: () -> String
     private let context: GGMutationContext
 
     private(set) var activeRequest: GGMutationRequest?
+    private(set) var undoCandidate: GGUndoCandidate?
+
+    var hasUndoStateToReconcile: Bool {
+        undoCandidate != nil || undoMarkerStore.marker(worktreeId: worktreeId) != nil
+    }
 
     init(
         worktreeId: String,
@@ -52,6 +60,12 @@ final class GGMutationCoordinator {
         service: any GGMutationExecuting,
         actionState: GGStackActionState,
         undoMarkerStore: any GGUndoMarkerStoring = GGUndoMarkerStore(),
+        clientOperationIDCapability: @escaping () -> Bool = {
+            GGAvailability.shared.capabilities.clientOperationID
+        },
+        clientOperationIDGenerator: @escaping () -> String = {
+            "alas:\(UUID().uuidString)"
+        },
         context: GGMutationContext
     ) {
         self.worktreeId = worktreeId
@@ -59,6 +73,8 @@ final class GGMutationCoordinator {
         self.service = service
         self.actionState = actionState
         self.undoMarkerStore = undoMarkerStore
+        self.clientOperationIDCapability = clientOperationIDCapability
+        self.clientOperationIDGenerator = clientOperationIDGenerator
         self.context = context
     }
 
@@ -69,6 +85,80 @@ final class GGMutationCoordinator {
 
         let snapshot = try await context.loadFreshStack()
         return try preflight(request, snapshot: snapshot)
+    }
+
+    func prepareRestackPreview() async throws -> GGPreparedRestack {
+        guard activeRequest == nil else { throw GGMutationError.operationInFlight }
+        activeRequest = .restack
+        defer { activeRequest = nil }
+
+        let before = try await context.loadFreshStack()
+        let prepared = try preflight(.restack, snapshot: before)
+        let plan = try await service.previewRestack(worktreePath: worktreePath)
+        guard plan.dryRun, plan.stackName == prepared.snapshot.stackName else {
+            throw GGServiceError.malformedOutput("gg returned a restack plan for a different stack.")
+        }
+        let after = try await context.loadFreshStack()
+        guard after.identity == prepared.snapshot else {
+            throw GGMutationError.staleConfirmation
+        }
+        return GGPreparedRestack(plan: plan, snapshot: prepared.snapshot)
+    }
+
+    func restoreUndoCandidate(currentStackName: String?) async {
+        guard let marker = undoMarkerStore.marker(worktreeId: worktreeId) else {
+            undoCandidate = nil
+            return
+        }
+        guard currentStackName != nil || marker.removedFinalStackCommit else {
+            undoCandidate = nil
+            undoMarkerStore.clear(worktreeId: worktreeId)
+            return
+        }
+        guard isRecoveryInScope(currentStackName: currentStackName, marker: marker) else {
+            undoCandidate = nil
+            undoMarkerStore.clear(worktreeId: worktreeId)
+            return
+        }
+        do {
+            let newest = try await service.listUndoOperations(worktreePath: worktreePath, limit: 1).first
+            guard let newest,
+                  newest.id == marker.operationID,
+                  newest.matchesUndoScope(currentStackName: currentStackName, marker: marker),
+                  newest.status == .completed,
+                  newest.isUndoable,
+                  !newest.touchedRemote,
+                  !newest.isUndo,
+                  newest.isSafeLocalRewrite,
+                  newest.hasAlasClientOperationID
+            else {
+                undoCandidate = nil
+                undoMarkerStore.clear(worktreeId: worktreeId)
+                return
+            }
+            undoCandidate = GGUndoCandidate(operation: newest)
+        } catch {
+            undoCandidate = nil
+        }
+    }
+
+    /// A final-drop recovery leaves the stack empty, so `currentStackName` is
+    /// nil both on the branch where the drop happened and on any other branch
+    /// the user later checks out. Scope it to the recorded branch so the
+    /// recovery isn't offered (or run) against an unrelated branch. Markers
+    /// without a recorded branch (legacy) keep the prior behavior.
+    private func isRecoveryInScope(currentStackName: String?, marker: GGUndoMarker) -> Bool {
+        guard currentStackName == nil, let markerBranch = marker.branch else { return true }
+        return markerBranch == context.currentBranch()
+    }
+
+    func clearUndoCandidate() {
+        undoCandidate = nil
+        undoMarkerStore.clear(worktreeId: worktreeId)
+    }
+
+    func suspendUndoCandidate() {
+        undoCandidate = nil
     }
 
     func apply(_ request: GGMutationRequest, confirmedAgainst identity: GGStackIdentity?) async throws {
@@ -133,38 +223,63 @@ final class GGMutationCoordinator {
             guard isRecoveryRequest else { throw error }
             snapshot = nil
         }
-
-        if isRecoveryRequest {
+        let continuedOperationID: String?
+        switch request {
+        case .continueOperation, .abortOperation:
             if let identity, snapshot?.identity != identity {
                 throw GGMutationError.staleConfirmation
             }
-        } else {
+            continuedOperationID = snapshot?.operationID
+        case .undo:
+            if let identity, snapshot?.identity != identity {
+                throw GGMutationError.staleConfirmation
+            }
+            continuedOperationID = nil
+        default:
             guard let snapshot else { throw GGMutationError.staleConfirmation }
             let prepared = try preflight(request, snapshot: snapshot)
             if let identity, prepared.snapshot != identity {
                 throw GGMutationError.staleConfirmation
             }
+            if let confirmation, prepared.confirmation != confirmation {
+                throw GGMutationError.staleConfirmation
+            }
+            continuedOperationID = prepared.snapshot.operationID
+        }
+        try await validateUndoRequest(request, currentStackName: snapshot?.stack?.name)
+        if !request.isUndo {
+            undoCandidate = nil
+            undoMarkerStore.clear(worktreeId: worktreeId)
         }
 
-        let undoBaseline = isRecoveryRequest
-            ? GGUndoBaseline.unavailable
-            : await captureUndoBaseline(for: request)
-        undoMarkerStore.clear(worktreeId: worktreeId)
+        let clientOperationID = request.generatesClientOperationID && clientOperationIDCapability()
+            ? clientOperationIDGenerator()
+            : nil
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktreePath)
 
         do {
             let result = try await service.execute(
                 request,
                 worktreePath: worktreePath,
+                clientOperationID: clientOperationID,
                 onSyncEvent: { [actionState] event in
                     actionState.appendSyncEvent(event)
                     if case .error(let message) = event { actionState.setError(message) }
                 }
             )
+            await recordUndoMarker(
+                after: request,
+                result: result,
+                clientOperationID: clientOperationID,
+                continuedOperationID: continuedOperationID
+            )
             recordSummary(for: request, result: result)
             reconcilePausedState(after: request, error: nil)
             await refresh(after: request, result: result)
-            await recordUndoMarker(after: request, baseline: undoBaseline)
+            if request.isUndo {
+                undoCandidate = nil
+                undoMarkerStore.clear(worktreeId: worktreeId)
+            }
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
             await refresh(after: request, result: .none)
@@ -234,8 +349,79 @@ final class GGMutationCoordinator {
         case .applySplit(_, let identity, _):
             let target = stack.splitTarget(matching: identity)
             guard target != nil else { throw GGMutationError.staleConfirmation }
+        case .reorder(let order):
+            let orderedEntries = stack.entries.sorted(by: { $0.position < $1.position })
+            let exactIDs = orderedEntries.compactMap(\.ggId)
+            guard exactIDs.count == stack.entries.count,
+                  order.count == exactIDs.count,
+                  Set(order).count == order.count,
+                  Set(order) == Set(exactIDs)
+            else { throw GGMutationError.staleConfirmation }
+            for (index, id) in exactIDs.enumerated()
+            where orderedEntries[index].prState == .merged && order[index] != id {
+                throw GGMutationError.immutableTarget(
+                    reason: "Merged commits must remain fixed while reordering."
+                )
+            }
+            try validateReorderRegionMembership(
+                originalIDs: exactIDs,
+                submittedIDs: order,
+                entries: orderedEntries
+            )
         default:
             break
+        }
+    }
+
+    private func validateReorderRegionMembership(
+        originalIDs: [String],
+        submittedIDs: [String],
+        entries: [GGStackEntry]
+    ) throws {
+        var regionStart = 0
+        for index in 0...entries.count {
+            let isBoundary = index == entries.count || entries[index].prState == .merged
+            guard isBoundary else { continue }
+            if regionStart < index,
+               Set(originalIDs[regionStart..<index]) != Set(submittedIDs[regionStart..<index]) {
+                throw GGMutationError.immutableTarget(
+                    reason: "Commits cannot move across an immutable boundary."
+                )
+            }
+            regionStart = index + 1
+        }
+    }
+
+    private func validateUndoRequest(
+        _ request: GGMutationRequest,
+        currentStackName: String?
+    ) async throws {
+        guard case .undo(let operationID) = request else { return }
+        guard let marker = undoMarkerStore.marker(worktreeId: worktreeId),
+              marker.operationID == operationID
+        else {
+            undoCandidate = nil
+            undoMarkerStore.clear(worktreeId: worktreeId)
+            throw GGMutationError.staleConfirmation
+        }
+        guard isRecoveryInScope(currentStackName: currentStackName, marker: marker) else {
+            undoCandidate = nil
+            undoMarkerStore.clear(worktreeId: worktreeId)
+            throw GGMutationError.staleConfirmation
+        }
+        let newest = try await service.listUndoOperations(worktreePath: worktreePath, limit: 1).first
+        guard let newest,
+              newest.id == operationID,
+              newest.matchesUndoScope(currentStackName: currentStackName, marker: marker),
+              newest.status == .completed,
+              newest.isUndoable,
+              !newest.touchedRemote,
+              !newest.isUndo,
+              newest.isSafeLocalRewrite
+        else {
+            undoCandidate = nil
+            undoMarkerStore.clear(worktreeId: worktreeId)
+            throw GGMutationError.staleConfirmation
         }
     }
 
@@ -365,26 +551,52 @@ final class GGMutationCoordinator {
         }
     }
 
-    private func captureUndoBaseline(for request: GGMutationRequest) async -> GGUndoBaseline {
-        guard !request.touchesRemote else { return .unavailable }
-        do {
-            let operationID = try await service.listUndoOperations(worktreePath: worktreePath, limit: 1).first?.id
-            return .operationID(operationID)
-        } catch {
-            return .unavailable
-        }
-    }
+    private func recordUndoMarker(
+        after request: GGMutationRequest,
+        result: GGMutationExecutionResult,
+        clientOperationID: String?,
+        continuedOperationID: String?
+    ) async {
+        guard request.recordsUndoCandidate else { return }
 
-    private func recordUndoMarker(after request: GGMutationRequest, baseline: GGUndoBaseline) async {
-        guard !request.touchesRemote,
-              case .operationID(let previousOperationID) = baseline,
-              let newest = (try? await service.listUndoOperations(worktreePath: worktreePath, limit: 1))?.first,
-              newest.id != previousOperationID,
+        let matchesRequest: (GGOperationSummary) -> Bool
+        if request == .continueOperation {
+            guard let continuedOperationID else { return }
+            matchesRequest = {
+                $0.id == continuedOperationID && $0.hasAlasClientOperationID
+            }
+        } else {
+            guard let clientOperationID else { return }
+            matchesRequest = { $0.hasClientOperationID(clientOperationID) }
+        }
+
+        guard let newest = (try? await service.listUndoOperations(
+                  worktreePath: worktreePath,
+                  limit: 1
+              ))?.first,
+              newest.stackName != nil,
               newest.status == .completed,
               newest.isUndoable,
-              !newest.touchedRemote
+              !newest.touchedRemote,
+              !newest.isUndo,
+              newest.isSafeLocalRewrite
         else { return }
-        undoMarkerStore.set(operationID: newest.id, worktreeId: worktreeId)
+        guard matchesRequest(newest) else { return }
+
+        let removedFinalStackCommit = if case .drop(let drop) = result {
+            drop.remaining == 0
+        } else {
+            false
+        }
+        undoMarkerStore.set(
+            GGUndoMarker(
+                operationID: newest.id,
+                removedFinalStackCommit: removedFinalStackCommit,
+                branch: context.currentBranch()
+            ),
+            worktreeId: worktreeId
+        )
+        undoCandidate = GGUndoCandidate(operation: newest)
     }
 }
 
@@ -415,6 +627,26 @@ private extension GGMutationRequest {
         default: false
         }
     }
+
+    var recordsUndoCandidate: Bool {
+        switch self {
+        case .amendCurrent, .absorbStaged, .drop, .reorder, .restack,
+             .rebase, .continueOperation, .applySplit:
+            true
+        default:
+            false
+        }
+    }
+
+    var generatesClientOperationID: Bool {
+        switch self {
+        case .amendCurrent, .absorbStaged, .drop, .reorder, .restack,
+             .rebase, .applySplit:
+            true
+        default:
+            false
+        }
+    }
 }
 
 private extension GGStack {
@@ -434,45 +666,104 @@ extension GGService: GGMutationExecuting {
     func execute(
         _ request: GGMutationRequest,
         worktreePath: String,
+        clientOperationID: String?,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
+        let service = clientOperationID.map {
+            GGService(runner: GGClientOperationRunner(base: runner, clientOperationID: $0))
+        } ?? self
         switch request {
         case .amendCurrent:
-            try await amendCurrent(worktreePath: worktreePath)
+            try await service.amendCurrent(worktreePath: worktreePath)
         case .absorbStaged:
-            try await absorbStaged(worktreePath: worktreePath)
+            try await service.absorbStaged(worktreePath: worktreePath)
         case .checkout(let target):
-            try await checkout(worktreePath: worktreePath, target: target)
+            try await service.checkout(worktreePath: worktreePath, target: target)
         case .drop(let target):
-            _ = try await drop(worktreePath: worktreePath, target: target)
+            return .drop(try await service.drop(worktreePath: worktreePath, target: target))
         case .unstack(let target, let name, let createWorktree):
-            return .unstack(try await unstack(
+            return .unstack(try await service.unstack(
                 worktreePath: worktreePath,
                 target: target,
                 name: name,
                 createWorktree: createWorktree
             ))
         case .reorder(let order):
-            try await reorder(worktreePath: worktreePath, order: order)
+            try await service.reorder(worktreePath: worktreePath, order: order)
         case .restack:
-            _ = try await restack(worktreePath: worktreePath, dryRun: false)
+            _ = try await service.restack(worktreePath: worktreePath, dryRun: false)
         case .rebase(let target):
-            try await rebase(worktreePath: worktreePath, target: target)
+            try await service.rebase(worktreePath: worktreePath, target: target)
         case .sync:
-            for try await event in sync(worktreePath: worktreePath) { onSyncEvent(event) }
+            for try await event in service.sync(worktreePath: worktreePath) { onSyncEvent(event) }
         case .land(let target):
-            return .land(try await land(worktreePath: worktreePath, until: target))
+            return .land(try await service.land(worktreePath: worktreePath, until: target))
         case .clean:
-            try await clean(worktreePath: worktreePath)
+            try await service.clean(worktreePath: worktreePath)
         case .continueOperation:
-            try await continueOp(worktreePath: worktreePath)
+            try await service.continueOp(worktreePath: worktreePath)
         case .abortOperation:
-            try await abortOp(worktreePath: worktreePath)
+            try await service.abortOp(worktreePath: worktreePath)
         case .undo(let operationID):
-            _ = try await undo(worktreePath: worktreePath, operationID: operationID)
+            _ = try await service.undo(worktreePath: worktreePath, operationID: operationID)
         case .applySplit(let planURL, _, _):
-            return .split(try await applySplit(worktreePath: worktreePath, planURL: planURL))
+            return .split(try await service.applySplit(worktreePath: worktreePath, planURL: planURL))
         }
         return .none
+    }
+
+    func previewRestack(worktreePath: String) async throws -> GGRestackResult {
+        try await restack(worktreePath: worktreePath, dryRun: true)
+    }
+}
+
+private struct GGClientOperationRunner: GGCommandRunning {
+    let base: any GGCommandRunning
+    let clientOperationID: String
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        try await base.run(
+            args: ["--client-operation-id", clientOperationID] + args,
+            cwd: cwd
+        )
+    }
+
+    func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
+        base.runStreaming(
+            args: ["--client-operation-id", clientOperationID] + args,
+            cwd: cwd
+        )
+    }
+}
+
+private extension GGOperationSummary {
+    func matchesUndoScope(currentStackName: String?, marker: GGUndoMarker) -> Bool {
+        if let currentStackName {
+            return stackName == currentStackName
+        }
+        return marker.removedFinalStackCommit && kind == "drop" && stackName != nil
+    }
+
+    var isSafeLocalRewrite: Bool {
+        switch kind {
+        case "squash", "absorb", "drop", "reorder", "restack", "rebase", "split":
+            true
+        default:
+            false
+        }
+    }
+
+    func hasClientOperationID(_ clientOperationID: String) -> Bool {
+        guard args.count >= 2 else { return false }
+        return args.indices.dropLast().contains { index in
+            args[index] == "--client-operation-id" && args[index + 1] == clientOperationID
+        }
+    }
+
+    var hasAlasClientOperationID: Bool {
+        guard args.count >= 2 else { return false }
+        return args.indices.dropLast().contains { index in
+            args[index] == "--client-operation-id" && args[index + 1].hasPrefix("alas:")
+        }
     }
 }

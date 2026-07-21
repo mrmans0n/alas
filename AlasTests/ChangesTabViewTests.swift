@@ -65,7 +65,9 @@ struct ChangesTabViewTests {
     }
 
     @Test func ggDrawerActiveForStackOrPausedOperation() {
-        #expect(!ChangesTabView.shouldShowGGDrawer(stack: nil, pausedGGOperation: nil))
+        #expect(!ChangesTabView.shouldShowGGDrawer(
+            stack: nil, pausedGGOperation: nil, hasUndoCandidate: false
+        ))
         #expect(ChangesTabView.shouldShowGGDrawer(
             stack: GGStack(
                 name: "feat",
@@ -76,11 +78,16 @@ struct ChangesTabViewTests {
                 behindBase: nil,
                 entries: []
             ),
-            pausedGGOperation: nil
+            pausedGGOperation: nil,
+            hasUndoCandidate: false
         ))
         #expect(ChangesTabView.shouldShowGGDrawer(
             stack: nil,
-            pausedGGOperation: GGPausedOperation(pausedBy: .sync)
+            pausedGGOperation: GGPausedOperation(pausedBy: .sync),
+            hasUndoCandidate: false
+        ))
+        #expect(ChangesTabView.shouldShowGGDrawer(
+            stack: nil, pausedGGOperation: nil, hasUndoCandidate: true
         ))
     }
 
