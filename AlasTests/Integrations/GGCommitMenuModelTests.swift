@@ -265,7 +265,7 @@ struct GGCommitMenuModelTests {
         let model = GGCommitMenuModel.make(context: context(capabilities: capabilities))
 
         #expect(model.item(for: .splitCommit)?.isEnabled == false)
-        #expect(model.item(for: .splitCommit)?.disabledReason == "Update GG to split commits in Alas.")
+        #expect(model.item(for: .splitCommit)?.disabledReason == "Update GG to use native Split Commit")
     }
 
     @Test func splitCommitStaysDisabledUntilItsEditorHandlerIsWired() {

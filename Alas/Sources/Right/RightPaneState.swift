@@ -27,7 +27,7 @@ private struct SyncFetchTarget: Hashable {
 
 @Observable
 @MainActor
-final class RightPaneState {
+final class RightPaneState: GGSplitCommitServicing {
     nonisolated static let remoteUntrackedContentFingerprintCommand = "git ls-files --others --exclude-standard -z | xargs -0 sh -c '[ \"$#\" -gt 0 ] || exit 0; git hash-object -- \"$@\"' sh 2>/dev/null"
 
     let worktree: Worktree
@@ -237,6 +237,15 @@ final class RightPaneState {
     @ObservationIgnored var pendingGGUnstackPrepared: GGPreparedMutation? = nil
     var pendingGGCleanAll: Bool = false
     @ObservationIgnored private var pendingGGCleanPrepared: GGPreparedMutation? = nil
+
+    /// The split target of an in-flight `.applySplit`, if any, so a split tab
+    /// can tell whether the running split is its own apply or another tab's.
+    var activeSplitTargetIdentity: GGSplitTargetIdentity? {
+        guard case let .applySplit(_, identity, _)? = ggMutationCoordinatorStorage?.activeRequest else {
+            return nil
+        }
+        return identity
+    }
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -1080,6 +1089,30 @@ final class RightPaneState {
     }
 
     @ObservationIgnored var requestGGSplitCommit: ((GGStackEntry) -> Void)? = nil
+
+    func loadDescription(target: GGSplitCommitTarget) async throws -> GGSplitLoadedDescription {
+        let before = try await ggService.currentStackSnapshot(worktreePath: worktree.path.path)
+        guard let identity = before.identity else { throw GGMutationError.staleConfirmation }
+        let description = try await ggService.describeSplit(
+            worktreePath: worktree.path.path,
+            target: target.commandTarget
+        )
+        let after = try await ggService.currentStackSnapshot(worktreePath: worktree.path.path)
+        guard after.identity == identity else { throw GGMutationError.staleConfirmation }
+        return GGSplitLoadedDescription(description: description, stackIdentity: identity)
+    }
+
+    func applySplit(
+        planURL: URL,
+        target: GGSplitTargetIdentity,
+        planToken: String,
+        confirmedAgainst identity: GGStackIdentity
+    ) async throws {
+        try await ggMutationCoordinator.apply(
+            .applySplit(planURL: planURL, target: target, planToken: planToken),
+            confirmedAgainst: identity
+        )
+    }
 
     func requestGGDrop(_ entry: GGStackEntry) {
         Task { @MainActor in

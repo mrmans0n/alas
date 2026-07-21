@@ -104,7 +104,8 @@ struct GGCommitMenuModel: Equatable {
         }
         let openAction = GGCommitAction.openProviderRequest(number: reviewNumber ?? 0)
         let splitReason = mutationReason
-            ?? (context.capabilities.structuredSplit ? nil : "Update GG to split commits in Alas.")
+            ?? (context.capabilities.structuredSplit ? nil : "Update GG to use native Split Commit")
+            ?? (context.canOpenSplitCommit ? nil : "Native Split Commit is unavailable.")
             ?? immutableReason
         let rewriteReason = mutationReason ?? immutableReason
         let unstackReason = rewriteReason ?? (
