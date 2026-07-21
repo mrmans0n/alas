@@ -18,6 +18,11 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onOpenWithSystem: (TabID) -> Void
     let onRevealInFinder: (TabID) -> Void
+    /// Whether system-open / reveal-in-Finder actions are available for this
+    /// worktree. False for remote worktrees (local `NSWorkspace` can't touch
+    /// them); the menu items are hidden when this is false so users don't see
+    /// enabled actions that silently no-op.
+    var systemActionsEnabled: Bool = true
     let onRenameTerminal: (TabID) -> Void
     let onRenameACPSession: (TabID) -> Void
     let onCopyACPSession: (TabID) -> Void
@@ -149,7 +154,7 @@ struct TabBarView: View {
                 Button("Copy Path") { onCopyPath(tab.id) }
                 Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
             }
-            if tab.supportsSystemOpenActions {
+            if tab.supportsSystemOpenActions && systemActionsEnabled {
                 Button("Open with System") { onOpenWithSystem(tab.id) }
                 Button("Reveal in Finder") { onRevealInFinder(tab.id) }
             }

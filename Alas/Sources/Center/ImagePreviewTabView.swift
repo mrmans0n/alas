@@ -49,8 +49,7 @@ struct ImagePreviewTabView: View {
         case .idle, .loading:
             previewMessage(title: "Loading Preview", detail: relativePath, icon: "photo")
         case .missing:
-            previewMessage(title: "File Not Found", detail: relativePath, icon: "exclamationmark.triangle",
-                           onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) })
+            previewMessage(title: "File Not Found", detail: relativePath, icon: "exclamationmark.triangle")
         case .decodeFailed:
             previewMessage(
                 title: "Cannot Preview Image",

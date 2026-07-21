@@ -79,6 +79,7 @@ struct CenterPaneView: View {
                     }
                     FileSystemOpen.reveal(url: url)
                 },
+                systemActionsEnabled: !worktree.path.isRemoteAlasPath,
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
                 },
