@@ -454,8 +454,7 @@ struct EditorTabView: View {
     }
 
     private var nudgeAbsolutePath: String {
-        if let abs = externalAbsolutePath { return abs }
-        return worktreePath.appendingPathComponent(relativePath).path
+        absoluteFilePath
     }
 
     private var breadcrumbRelativePath: String {
@@ -472,14 +471,7 @@ struct EditorTabView: View {
     }
 
     private var isBinary: Bool {
-        guard externalAbsolutePath == nil else {
-            return appState.tabs.peekBuffer(tabId: tabId)?.loadKind == .notUTF8
-        }
-        let buffer = appState.tabs.buffer(
-            worktreeId: worktreeId, tabId: tabId,
-            worktreeRoot: worktreePath, relativePath: relativePath
-        )
-        return buffer.loadKind == .notUTF8
+        appState.tabs.peekBuffer(tabId: tabId)?.loadKind == .notUTF8
     }
 
     private var binaryPlaceholder: some View {
