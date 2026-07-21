@@ -671,6 +671,7 @@
 		814193F0CC55B784481AA40A /* InstallSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A27D815CB567E3FEF2D3E6B /* InstallSourceTests.swift */; };
 		8147BF86F2E77D81BE885B8F /* ChangedRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E10A1919A8DDC6A8DBB8B97 /* ChangedRow.swift */; };
 		81D04C212B3AAA34F55069C5 /* ACPRemoteAdapterManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC147F9FE645065318A7B175 /* ACPRemoteAdapterManagement.swift */; };
+		81F6E32B97FCE84E5F986A31 /* MCPRegistrationRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5EA9E4B728B9C4FDA2E104 /* MCPRegistrationRegistry.swift */; };
 		82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2F41880B917155F7ADE622 /* MonospaceFontCatalog.swift */; };
 		823AA3E801A11C535C9438BD /* ACPPermissionScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4457B30E0C8A22BF06D0BC4B /* ACPPermissionScope.swift */; };
 		82544FFCF9960E0BA0FD2C7F /* ProcessMemoryProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9830BAAE86AA0A20A77731D /* ProcessMemoryProbeTests.swift */; };
@@ -939,6 +940,7 @@
 		B35BD3304D3A9EC5BABBC56E /* CommitRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D46BDE72E52818061452ECB /* CommitRowTests.swift */; };
 		B3B038297A419A0E8DF73440 /* RemoteDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16BDCBFE4C1EB1C8EA6D4D5 /* RemoteDevice.swift */; };
 		B3BA844FBD11333E74A05655 /* MarkdownImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE20A3822FC26672DFD552C /* MarkdownImageLoader.swift */; };
+		B3DEC3EEA46D77D7BE864A74 /* MCPRegistrationRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 935CE58001BA1459A556B397 /* MCPRegistrationRegistryTests.swift */; };
 		B40925F2FDA34DC0444D8632 /* EditorBufferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */; };
 		B40B75555598C42713157C5C /* TreeSitterCSS in Frameworks */ = {isa = PBXBuildFile; productRef = 3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */; };
 		B472D692A8D8D1C664EAC467 /* ACPSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1281A3235F08DC8A95D015A9 /* ACPSessionTests.swift */; };
@@ -1842,6 +1844,7 @@
 		5AA5809066E33EB30E09E0D8 /* RemoteWebAssetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWebAssetTests.swift; sourceTree = "<group>"; };
 		5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfigTests.swift; sourceTree = "<group>"; };
 		5B4239E76E57C63CD983437F /* RemoteZmxInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteZmxInstaller.swift; sourceTree = "<group>"; };
+		5B5EA9E4B728B9C4FDA2E104 /* MCPRegistrationRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPRegistrationRegistry.swift; sourceTree = "<group>"; };
 		5B72D621D704CB5B2CCA82C6 /* RemoteAppStateAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppStateAccessTests.swift; sourceTree = "<group>"; };
 		5B7B8B82A8D4F5B1F1DF1731 /* DiffReviewRenderContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRenderContext.swift; sourceTree = "<group>"; };
 		5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigHarnessMCPTests.swift; sourceTree = "<group>"; };
@@ -2120,6 +2123,7 @@
 		932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsFeature.swift; sourceTree = "<group>"; };
 		9346272D3AF9A7D78067C96F /* SettingsSaveNormalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSaveNormalizationTests.swift; sourceTree = "<group>"; };
 		934BCC470703CF2DF2303357 /* SectionHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionHeader.swift; sourceTree = "<group>"; };
+		935CE58001BA1459A556B397 /* MCPRegistrationRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPRegistrationRegistryTests.swift; sourceTree = "<group>"; };
 		93C3F02ECEA5D545FA268DB8 /* ACPSlashPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSlashPicker.swift; sourceTree = "<group>"; };
 		93CDC9895F48619E97461875 /* CodePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodePane.swift; sourceTree = "<group>"; };
 		93F451C90EC9036CA8A7A04C /* AgentBuiltins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuiltins.swift; sourceTree = "<group>"; };
@@ -3733,6 +3737,7 @@
 				6B7BEEA16E15CB254BD84F5F /* BuiltInAlasMCP.swift */,
 				87F9063CCA0DA839EB342993 /* CursorModelVariants.swift */,
 				AA6486CAD3FE633F9B6F4ABF /* MCPAttachmentPlanner.swift */,
+				5B5EA9E4B728B9C4FDA2E104 /* MCPRegistrationRegistry.swift */,
 				9F3A345F0B643467352DB5F3 /* ProcessKiller.swift */,
 				BFE0C069E5446132D39C4DE5 /* QueuedPrompt.swift */,
 			);
@@ -4322,6 +4327,7 @@
 				FE7A4A7B920C0E748973F282 /* BuiltInAlasMCPTests.swift */,
 				336ADD8484D99054ADDBA588 /* CursorModelVariantsTests.swift */,
 				532AA1B8AD5E8139D2EEE948 /* MCPAttachmentPlannerTests.swift */,
+				935CE58001BA1459A556B397 /* MCPRegistrationRegistryTests.swift */,
 				FC961032C642C166F17EFD99 /* QueuedPromptTests.swift */,
 			);
 			path = Session;
@@ -5705,6 +5711,7 @@
 				7339339EEA3D52B6F5BDE5F0 /* LocalACPBrokerService.swift in Sources */,
 				AC915AF49731E075051CA4FC /* MCPAttachmentPlanner.swift in Sources */,
 				01BB37E08A2DCC66374F643B /* MCPHelloEvent.swift in Sources */,
+				81F6E32B97FCE84E5F986A31 /* MCPRegistrationRegistry.swift in Sources */,
 				2C96C81EBF3C4B0951FA2A57 /* MarkdownFileType.swift in Sources */,
 				B3BA844FBD11333E74A05655 /* MarkdownImageLoader.swift in Sources */,
 				29418562DE5554B282C83D75 /* MarkdownParser.swift in Sources */,
@@ -6360,6 +6367,7 @@
 				DE41CB04CDC89D09346494A5 /* LineEndingTests.swift in Sources */,
 				C679AA50F077B1EBC0D4CC82 /* MCPAttachmentPlannerTests.swift in Sources */,
 				7FF3268907E59906B3862648 /* MCPHelloEventTests.swift in Sources */,
+				B3DEC3EEA46D77D7BE864A74 /* MCPRegistrationRegistryTests.swift in Sources */,
 				165300DDFFB445D8AAE7A5E5 /* MarkdownFileTypeTests.swift in Sources */,
 				6A5D19016FE0100CD54D24B2 /* MarkdownImageLoaderTests.swift in Sources */,
 				E2279478EBE8BF9CDC412EDE /* MarkdownParserTests.swift in Sources */,
