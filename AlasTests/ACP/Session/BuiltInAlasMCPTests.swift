@@ -81,6 +81,30 @@ struct BuiltInAlasMCPTests {
         #expect(injection?.status.transport == .http)
     }
 
+    @Test("shouldInject mirrors the injection guards")
+    func shouldInjectGuards() {
+        // Disabled or missing prerequisites suppress injection.
+        #expect(BuiltInAlasMCP.shouldInject(
+            enabled: false, configuredServers: [],
+            binaryPath: "/bin/alas", socketPath: "/tmp/s.sock") == false)
+        #expect(BuiltInAlasMCP.shouldInject(
+            enabled: true, configuredServers: [],
+            binaryPath: nil, socketPath: "/tmp/s.sock") == false)
+        #expect(BuiltInAlasMCP.shouldInject(
+            enabled: true, configuredServers: [],
+            binaryPath: "/bin/alas", socketPath: nil) == false)
+        // A project server named "alas" is an intentional override.
+        #expect(BuiltInAlasMCP.shouldInject(
+            enabled: true,
+            configuredServers: [.stdio(name: "  alas  ", command: "/dev/alas")],
+            binaryPath: "/bin/alas", socketPath: "/tmp/s.sock") == false)
+        // Otherwise the built-in should be injected.
+        #expect(BuiltInAlasMCP.shouldInject(
+            enabled: true,
+            configuredServers: [.stdio(name: "other", command: "npx")],
+            binaryPath: "/bin/alas", socketPath: "/tmp/s.sock") == true)
+    }
+
     @Test("injection marks delegated sessions")
     func injectionMarksDelegated() throws {
         let root = try #require(BuiltInAlasMCP.injection(

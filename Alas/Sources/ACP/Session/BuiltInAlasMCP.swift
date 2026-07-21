@@ -23,6 +23,17 @@ enum BuiltInAlasMCP {
         let token: String
     }
 
+    /// Whether the built-in server should be injected at all, independent of
+    /// transport. Mirrors the guards in `injection`; used by the HTTP path to
+    /// avoid spawning a supervised process for a server that will be suppressed.
+    static func shouldInject(enabled: Bool, configuredServers: [ProjectMCPServer],
+                             binaryPath: String?, socketPath: String?) -> Bool {
+        guard enabled, binaryPath != nil, socketPath != nil else { return false }
+        return !configuredServers.contains {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
+        }
+    }
+
     /// The wire entry + status row for the built-in server, or nil when it
     /// must not be injected: globally disabled, the managed binary or app
     /// socket is unavailable, or the project already configures a server
@@ -37,11 +48,12 @@ enum BuiltInAlasMCP {
         parentSessionId: String? = nil,
         httpEndpoint: HTTPEndpoint? = nil
     ) -> Injection? {
-        guard enabled, let binaryPath, let socketPath else { return nil }
-        let userOverride = configuredServers.contains {
-            $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
-        }
-        guard !userOverride else { return nil }
+        guard shouldInject(
+            enabled: enabled,
+            configuredServers: configuredServers,
+            binaryPath: binaryPath,
+            socketPath: socketPath
+        ), let binaryPath, let socketPath else { return nil }
 
         let server: ACPMCPServer
         let transport: MCPTransportKind

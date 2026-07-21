@@ -4842,7 +4842,13 @@ final class AppState {
                 }
                 let configuredServers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
                 if self.config.harness.alasMCPTransport == .http,
-                   let binaryPath, let socketPath = self.harness.socketServer.socketPath {
+                   let binaryPath, let socketPath = self.harness.socketServer.socketPath,
+                   BuiltInAlasMCP.shouldInject(
+                       enabled: self.config.harness.exposeAlasMCP,
+                       configuredServers: configuredServers,
+                       binaryPath: binaryPath,
+                       socketPath: socketPath
+                   ) {
                     if let endpoint = await self.mcpHTTPSupervisor.endpoint(
                         binaryPath: binaryPath,
                         socketPath: socketPath,
