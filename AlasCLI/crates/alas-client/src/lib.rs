@@ -534,6 +534,35 @@ fn send_with_timeout(
     serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed)
 }
 
+/// The one-shot registration ping `alas mcp` sends over the unix socket so
+/// the app knows the server actually started (stdio) or the adapter
+/// connected (http). Its own `kind`, distinct from the "cli" request path and
+/// the hook-event path.
+pub fn hello_payload(session_id: &str, transport: &str) -> serde_json::Value {
+    serde_json::json!({
+        "v": PROTOCOL_VERSION,
+        "kind": "mcp_hello",
+        "session_id": session_id,
+        "transport": transport,
+    })
+}
+
+/// Best-effort: send the hello and ignore the ack/errors — a failed hello
+/// must never stop the MCP server from serving.
+pub fn send_hello(socket: &Path, session_id: &str, transport: &str) {
+    let payload = match serde_json::to_vec(&hello_payload(session_id, transport)) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if let Ok(mut stream) = UnixStream::connect(socket) {
+        let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
+        let _ = stream.write_all(&payload);
+        let _ = stream.flush();
+        let mut buf = Vec::new();
+        let _ = stream.read_to_end(&mut buf);
+    }
+}
+
 /// How the CLI addresses the app: an exact pane (inside Alas) or a directory
 /// (anywhere else).
 #[derive(Debug, Clone, PartialEq)]
@@ -664,6 +693,15 @@ mod tests {
     fn absolutize_keeps_absolute_input() {
         let base = Path::new("/a/b");
         assert_eq!(absolutize(base, "/etc/hosts"), "/etc/hosts");
+    }
+
+    #[test]
+    fn hello_payload_shape() {
+        let v = hello_payload("SID-1", "stdio");
+        assert_eq!(v["v"], PROTOCOL_VERSION);
+        assert_eq!(v["kind"], "mcp_hello");
+        assert_eq!(v["session_id"], "SID-1");
+        assert_eq!(v["transport"], "stdio");
     }
 
     #[test]
