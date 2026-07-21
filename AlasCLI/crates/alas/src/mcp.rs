@@ -688,6 +688,10 @@ fn text_result(text: String, is_error: bool) -> Value {
 pub fn serve(env: &McpEnv) -> std::io::Result<()> {
     use std::io::{BufRead, Write};
 
+    // Announce startup so the app can tell an injected-but-spawned server from
+    // one the harness silently dropped. Best-effort; never blocks serving.
+    alas_client::send_hello(&env.socket, &env.session_id, "stdio");
+
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     for line in stdin.lock().lines() {
