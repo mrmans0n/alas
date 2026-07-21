@@ -44,4 +44,66 @@ struct OpenBinaryRoutingTests {
         let clipTab = mgr.tabs(forWorktree: wid).first { if case .binaryPreview(let s) = $0 { return s.relativePath == "clip.mp4" } else { return false } }
         #expect(active == clipTab?.id)
     }
+
+    @Test func openFileRoutesKnownBinaryToBinaryPreview() async throws {
+        let repo = try await makeRepo(name: "route-binary")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        state.openFile(relativePath: "clip.mp4", worktreeId: trees[0].id)
+
+        guard case .binaryPreview(let s) = state.activeTab else {
+            Issue.record("expected binaryPreview tab, got \(String(describing: state.activeTab))")
+            return
+        }
+        #expect(s.relativePath == "clip.mp4")
+    }
+
+    @Test func openFileStillRoutesImagesToImagePreview() async throws {
+        let repo = try await makeRepo(name: "route-image")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+
+        state.openFile(relativePath: "logo.png", worktreeId: trees[0].id)
+
+        guard case .imagePreview = state.activeTab else {
+            Issue.record("expected imagePreview tab")
+            return
+        }
+    }
+
+    @Test func openFileStillRoutesTextToEditor() async throws {
+        let repo = try await makeRepo(name: "route-text")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+
+        state.openFile(relativePath: "README.md", worktreeId: trees[0].id)
+
+        guard case .editor = state.activeTab else {
+            Issue.record("expected editor tab")
+            return
+        }
+    }
 }

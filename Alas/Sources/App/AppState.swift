@@ -2245,6 +2245,14 @@ final class AppState {
             },
             openExternalFile: { [weak self] url, worktreeId in
                 guard let self else { return }
+                if BinaryFileType.isKnownBinary(relativePath: url.path) {
+                    _ = self.tabs.openBinaryPreview(worktreeId: worktreeId, relativePath: url.path)
+                    if self.selectedWorktreeId != worktreeId,
+                       let worktree = self.worktree(withId: worktreeId) {
+                        self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
+                    }
+                    return
+                }
                 _ = self.tabs.openExternalEditor(
                     worktreeId: worktreeId,
                     absoluteURL: url,
@@ -3703,6 +3711,10 @@ final class AppState {
         if ImageFileType.isSupported(relativePath: relativePath),
            !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
+            return
+        }
+        if BinaryFileType.isKnownBinary(relativePath: relativePath) {
+            _ = tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: relativePath)
             return
         }
 
