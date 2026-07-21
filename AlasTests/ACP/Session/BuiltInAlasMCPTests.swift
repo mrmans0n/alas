@@ -72,7 +72,8 @@ struct BuiltInAlasMCPTests {
             sessionId: "S1",
             httpEndpoint: .init(url: "http://localhost:5599/mcp", token: "TOK"))
         guard case let .http(name, url, headers)? = injection?.server else {
-            Issue.record("expected http server"); return
+            Issue.record("expected http server")
+            return
         }
         #expect(name == "alas")
         #expect(url == "http://localhost:5599/mcp")
