@@ -342,6 +342,14 @@ final class RightPaneStore {
         states.values.first { $0.pendingGGLand != nil }
     }
 
+    func stateWithPendingGGDrop() -> RightPaneState? {
+        states.values.first { $0.pendingGGDrop != nil }
+    }
+
+    func stateWithPendingGGUnstack() -> RightPaneState? {
+        states.values.first { $0.pendingGGUnstack != nil }
+    }
+
     /// The first cached state with a pending gg clean-all confirmation.
     /// Mirrors the other cross-worktree confirmations so changing selection
     /// while the dialog is open resolves the state that requested it.

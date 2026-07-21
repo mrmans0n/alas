@@ -496,6 +496,23 @@ private struct RootGGPresentationHandlers: ViewModifier {
                 Text(state.rightPaneStore.stateWithPendingGGLand()?.pendingGGLandConfirmationMessage ?? "")
             }
             .confirmationDialog(
+                "Drop commit?",
+                isPresented: Binding(
+                    get: { state.rightPaneStore.stateWithPendingGGDrop() != nil },
+                    set: { if !$0 { state.rightPaneStore.stateWithPendingGGDrop()?.cancelGGDrop() } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Drop Commit", role: .destructive) {
+                    state.rightPaneStore.stateWithPendingGGDrop()?.performGGDrop()
+                }
+                Button("Cancel", role: .cancel) {
+                    state.rightPaneStore.stateWithPendingGGDrop()?.cancelGGDrop()
+                }
+            } message: {
+                Text(state.rightPaneStore.stateWithPendingGGDrop()?.pendingGGDrop?.message ?? "")
+            }
+            .confirmationDialog(
                 "Clean all merged stacks?",
                 isPresented: Binding(
                     get: { state.rightPaneStore.stateWithPendingGGCleanAll() != nil },
@@ -511,6 +528,20 @@ private struct RootGGPresentationHandlers: ViewModifier {
                 }
             } message: {
                 Text("Remove every merged gg stack and associated worktree in this repository.")
+            }
+            .sheet(
+                item: Binding(
+                    get: { state.rightPaneStore.stateWithPendingGGUnstack()?.pendingGGUnstack },
+                    set: { if $0 == nil { state.rightPaneStore.stateWithPendingGGUnstack()?.cancelGGUnstack() } }
+                )
+            ) { model in
+                GGUnstackSheet(model: model) { editedModel in
+                    guard let owner = state.rightPaneStore.stateWithPendingGGUnstack() else {
+                        throw GGMutationError.staleConfirmation
+                    }
+                    return try await owner.submitGGUnstack(editedModel)
+                }
+                .environment(\.theme, state.themeStore.current)
             }
     }
 }

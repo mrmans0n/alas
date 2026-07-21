@@ -273,14 +273,9 @@ struct ChangesTabView: View {
                 rps: rps,
                 ggStack: rps.ggStack,
                 stackCodeHostKind: rps.commitRemote?.kind,
-                onGGOpenPR: rps.commitRemote.map { remote in
-                    { entry in
-                        guard let number = entry.prNumber else { return }
-                        NSWorkspace.shared.open(remote.reviewRequestURL(number: number))
-                    }
-                },
-                onGGLandUntil: { entry in rps.requestGGLand(.until(entryId: entry.id, title: entry.title)) },
-                onGGCheckout: { entry in rps.requestGGCheckout(target: entry.id) }
+                onGGAction: { action, commit in
+                    rps.handleGGCommitAction(action, commit: commit, appState: appState)
+                }
             )
         }
     }

@@ -729,4 +729,33 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.lastError != nil)
         #expect(state.ggActionState.lastActionSummary == nil)
     }
+
+    @Test func commitMenuSelectionStalenessTracksStackSnapshotSourceKey() {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let source = commit(sha: String(repeating: "a", count: 40), stackShaped: true)
+        state.ggStackSourceCommits = [source]
+        state.ggStack = GGStack(
+            name: "feature",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: 0,
+            currentPosition: 1,
+            behindBase: 0,
+            entries: [
+                GGStackEntry(position: 1, sha: source.sha, title: source.subject, ggId: "change-1")
+            ]
+        )
+
+        #expect(CommitsSectionView.ggSelectionIsStale(rps: state))
+
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
+        #expect(!CommitsSectionView.ggSelectionIsStale(rps: state))
+    }
+
+    @Test func providerReviewResponseSurfacesOnlyErrors() {
+        #expect(RightPaneState.ggProviderReviewError(.ok) == nil)
+        #expect(RightPaneState.ggProviderReviewError(.text(["opened"])) == nil)
+        #expect(RightPaneState.ggProviderReviewError(.error("Review could not be opened")) == "Review could not be opened")
+    }
 }

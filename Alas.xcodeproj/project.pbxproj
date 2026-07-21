@@ -205,6 +205,7 @@
 		2659BA65A6CABBE800A06AB3 /* tool-call-content-diff.json in Resources */ = {isa = PBXBuildFile; fileRef = 9A187BD52742E8F4A6E52667 /* tool-call-content-diff.json */; };
 		2661C51A093174D940CB5733 /* ProviderReviewActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F9F77CC231E1131962F5A43 /* ProviderReviewActions.swift */; };
 		26F83C65E75B5F44024FEF1F /* ACPMentionPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E941397D0207F68135B3464D /* ACPMentionPickerTests.swift */; };
+		270146424B271EBDB8886DD2 /* GGUnstackSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02E6B12C5EC8FAA50202EEA /* GGUnstackSheet.swift */; };
 		272EE1BE3B1A4A3BFA7B2703 /* ACPManagedAdapterDescriptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA89D4C70102BCF7B6B2450B /* ACPManagedAdapterDescriptor.swift */; };
 		2731B28802538E4FD7CBB0EA /* AgentDefinitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAC7D583D292BB6D72670F0A /* AgentDefinitionTests.swift */; };
 		2735F19DF0AD717CA3CF3B23 /* WorktreeServiceCreatedAtTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA2F208DBC024A64D0ED065 /* WorktreeServiceCreatedAtTests.swift */; };
@@ -881,6 +882,7 @@
 		A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */; };
 		A8D21135BA6C2542E3820E19 /* TreeSitterHTML in Frameworks */ = {isa = PBXBuildFile; productRef = E1F30BF52DCE8CD60F19C921 /* TreeSitterHTML */; };
 		A8EE9207A828D4D1BAF1C1C1 /* ACPTranscriptLatestPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C70536C65F2A78F4935DCAD /* ACPTranscriptLatestPlanTests.swift */; };
+		A955D8E9871CA023ED98A095 /* GGCommitMenuModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98EE59978053FA18629BC280 /* GGCommitMenuModelTests.swift */; };
 		A95EC5D1544C32B61DE0B2C9 /* GGProjectMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C53EA4D34091E3711B0ED54 /* GGProjectMode.swift */; };
 		A962107126052DEF597CB7FA /* RemoteServerIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79A06E48E215BF7B9EC2408 /* RemoteServerIntegrationTests.swift */; };
 		A971C64CC3136E00C5FC158C /* DiffPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF32A1544E13321E9E223AFF /* DiffPaneView.swift */; };
@@ -1335,6 +1337,7 @@
 		FB9BAF6C82A1750E41594DB7 /* SelfUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69CF2E2BF116094A9FEE3F8D /* SelfUpdater.swift */; };
 		FBAB18AAEFB289EF765564C5 /* RightPaneSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */; };
 		FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */; };
+		FBFAB8DAB738CC7A21076D22 /* GGCommitMenuModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7C5CADC042EF509370EB87 /* GGCommitMenuModel.swift */; };
 		FC9BC95960AE236F82D69E0B /* ACPQuestionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4306DE43C5ADCC65310C1169 /* ACPQuestionPrompt.swift */; };
 		FCB5091692C10A45B4E5D6BB /* AppConfigWorktreeOrderingDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0458AFA9BCBC4484B084085 /* AppConfigWorktreeOrderingDecodeTests.swift */; };
 		FCC6BC72DF062AA572F5535F /* RemoteZmxInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93079B18AE14C7AA3516727D /* RemoteZmxInstallerTests.swift */; };
@@ -2163,6 +2166,7 @@
 		98A00D845A8B82E27B7D2352 /* SidebarVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarVisibilityTests.swift; sourceTree = "<group>"; };
 		98A7F35818C95A567DDA586A /* ACPSelectChipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSelectChipTests.swift; sourceTree = "<group>"; };
 		98D60242BE2239AE96629EBC /* GGInboxStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGInboxStoreTests.swift; sourceTree = "<group>"; };
+		98EE59978053FA18629BC280 /* GGCommitMenuModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGCommitMenuModelTests.swift; sourceTree = "<group>"; };
 		993FD1C9788DEA6AD643A444 /* GGMutationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGMutationModels.swift; sourceTree = "<group>"; };
 		99CD81CC540ACCF1132E62A8 /* ACPMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMCPServer.swift; sourceTree = "<group>"; };
 		99CD99C81057F377C5E249B7 /* StagedDiffLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagedDiffLoaderTests.swift; sourceTree = "<group>"; };
@@ -2194,6 +2198,7 @@
 		9FF41571C93C1C34A77951E2 /* GitRefNameInputFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitRefNameInputFilter.swift; sourceTree = "<group>"; };
 		9FF99EC1C513C5D76D690BC2 /* ReleaseChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseChecker.swift; sourceTree = "<group>"; };
 		A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictMarkerParserTests.swift; sourceTree = "<group>"; };
+		A02E6B12C5EC8FAA50202EEA /* GGUnstackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUnstackSheet.swift; sourceTree = "<group>"; };
 		A1503D1CB549B39E499EFAB8 /* DiffInlineAnnotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineAnnotationCard.swift; sourceTree = "<group>"; };
 		A172B476A5BF7E4016431E6A /* DiffReviewModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewModelsTests.swift; sourceTree = "<group>"; };
 		A1BC298112812E38C99E0B71 /* ACPAdapterUpdateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterUpdateStoreTests.swift; sourceTree = "<group>"; };
@@ -2408,6 +2413,7 @@
 		CA1C663053BAB6A85A664A52 /* ACPVisibleRowsCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPVisibleRowsCacheTests.swift; sourceTree = "<group>"; };
 		CA43AA9C8462D579E733B46C /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		CA7C5CADC042EF509370EB87 /* GGCommitMenuModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGCommitMenuModel.swift; sourceTree = "<group>"; };
 		CAB5BDBCB990CC0452BF9164 /* ReviewRequestDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRequestDraft.swift; sourceTree = "<group>"; };
 		CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentResultGroup.swift; sourceTree = "<group>"; };
 		CB020862232495EC1C5ECBEA /* WindowAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowAppearance.swift; sourceTree = "<group>"; };
@@ -4648,6 +4654,7 @@
 				1A25C83033616FE27526C945 /* GGActionEventsTests.swift */,
 				EF9480C66C4CDDB090A5F4FB /* GGAvailabilityTests.swift */,
 				4B58B29E5D4E497CEA3CE9BA /* GGCommandRunningStreamingTests.swift */,
+				98EE59978053FA18629BC280 /* GGCommitMenuModelTests.swift */,
 				B579717E28A31AA7575FE3E4 /* GGConfigReaderTests.swift */,
 				4C407678AABCFACDBB04B339 /* GGInboxHelpersTests.swift */,
 				52F3B3FDD90A41F9BCC0D5DD /* GGInboxModelsTests.swift */,
@@ -4912,6 +4919,7 @@
 			isa = PBXGroup;
 			children = (
 				F1F0EED235328724082B570B /* GGActionEvents.swift */,
+				CA7C5CADC042EF509370EB87 /* GGCommitMenuModel.swift */,
 				56A2D492EE89A160CD404985 /* GGConfigReader.swift */,
 				9D4DA46E3A858D293B9E6C34 /* GGInboxModels.swift */,
 				8C511B229168DDEA87173A41 /* GGInboxStore.swift */,
@@ -4931,6 +4939,7 @@
 				4D59124348BCE765816A0C6C /* GGStackReadinessModel.swift */,
 				B67F46F592EB999B0FEBFCDB /* GGStackSummaryStore.swift */,
 				724A473AB9439DAA535B33F8 /* GGUndoMarkerStore.swift */,
+				A02E6B12C5EC8FAA50202EEA /* GGUnstackSheet.swift */,
 			);
 			path = GG;
 			sourceTree = "<group>";
@@ -5633,6 +5642,7 @@
 				93B1DC70731B7F661D3AE26F /* FontSizeCommands.swift in Sources */,
 				B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */,
 				1F3EF4D7DFC6A640FA731EAA /* GGActionEvents.swift in Sources */,
+				FBFAB8DAB738CC7A21076D22 /* GGCommitMenuModel.swift in Sources */,
 				31A3E28F0B49F85D2F58AF8E /* GGConfigReader.swift in Sources */,
 				188AF4E4D85149D0535251F9 /* GGInboxModels.swift in Sources */,
 				E073EEE9E37052E17CB026A0 /* GGInboxStore.swift in Sources */,
@@ -5652,6 +5662,7 @@
 				8ADC05EBB9FE7D278508A941 /* GGStackReadinessModel.swift in Sources */,
 				DB1877ECE26010476924369F /* GGStackSummaryStore.swift in Sources */,
 				318F74C3CB02BFF1D06DF7DA /* GGUndoMarkerStore.swift in Sources */,
+				270146424B271EBDB8886DD2 /* GGUnstackSheet.swift in Sources */,
 				D5DD6DCD22D4984B296145EB /* GatekeeperAssessor.swift in Sources */,
 				1792FECCA58D7603BD4DBDE8 /* GatekeeperRemediator.swift in Sources */,
 				55A6D67E063518A3A757EE18 /* GeminiInstaller.swift in Sources */,
@@ -6304,6 +6315,7 @@
 				0081FC8497ADEC2FF4EF7D25 /* GGActionEventsTests.swift in Sources */,
 				192F93BD900B2DC13205E96E /* GGAvailabilityTests.swift in Sources */,
 				A00B9173561A37FD3B409BA9 /* GGCommandRunningStreamingTests.swift in Sources */,
+				A955D8E9871CA023ED98A095 /* GGCommitMenuModelTests.swift in Sources */,
 				BB3475BFADD030152EF48707 /* GGConfigCodableTests.swift in Sources */,
 				D179A669627D70CC3C8DC4A5 /* GGConfigReaderTests.swift in Sources */,
 				362A966BA9FED1E92B8410CC /* GGInboxHelpersTests.swift in Sources */,

@@ -101,9 +101,7 @@ struct CommitsSectionView: View {
     let rps: RightPaneState
     let ggStack: GGStack?
     let stackCodeHostKind: CodeHostKind?
-    let onGGOpenPR: ((GGStackEntry) -> Void)?
-    let onGGLandUntil: (GGStackEntry) -> Void
-    let onGGCheckout: (GGStackEntry) -> Void
+    let onGGAction: (GGCommitAction, CommitInfo) -> Void
 
     @Environment(\.theme) private var theme
 
@@ -179,6 +177,10 @@ struct CommitsSectionView: View {
             )
     }
 
+    static func ggSelectionIsStale(rps: RightPaneState) -> Bool {
+        rps.ggCommitSelectionIsStale
+    }
+
     @ViewBuilder
     private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
@@ -195,9 +197,8 @@ struct CommitsSectionView: View {
                     onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) },
-                    onGGOpenPR: ggStack?.entry(matchingCommitSHA: commit.sha).flatMap { e in onGGOpenPR.map { openPR in { openPR(e) } } },
-                    onGGLandUntil: ggLandUntilAction(for: commit),
-                    onGGCheckout: ggCheckoutAction(for: commit),
+                    ggMenu: ggMenu(for: commit),
+                    onGGAction: { action in onGGAction(action, commit) },
                     stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
                     codeHostKind: stackCodeHostKind
                 )
@@ -260,22 +261,26 @@ struct CommitsSectionView: View {
         .padding(.vertical, 6)
     }
 
-    private var ggRowMutationsEnabled: Bool {
-        Self.ggRowMutationsEnabled(
+    private func ggMenu(for commit: CommitInfo) -> GGCommitMenuModel? {
+        guard let stack = ggStack,
+              let entry = stack.entry(matchingCommitSHA: commit.sha)
+        else { return nil }
+        let providerReviewURL = entry.prNumber.flatMap { rps.commitRemote?.reviewRequestURL(number: $0) }
+        return GGCommitMenuModel.make(context: GGCommitMenuContext(
+            entry: entry,
+            stack: stack,
+            provider: stackCodeHostKind,
+            capabilities: GGAvailability.shared.capabilities,
             inFlightAction: rps.ggActionState.inFlightAction,
-            mergeOperation: rps.mergeOp.current,
-            pausedGGOperation: rps.ggActionState.pausedOperation
-        )
-    }
-
-    private func ggLandUntilAction(for commit: CommitInfo) -> (() -> Void)? {
-        guard ggRowMutationsEnabled, let entry = ggStack?.entry(matchingCommitSHA: commit.sha) else { return nil }
-        return { onGGLandUntil(entry) }
-    }
-
-    private func ggCheckoutAction(for commit: CommitInfo) -> (() -> Void)? {
-        guard ggRowMutationsEnabled, let entry = ggStack?.entry(matchingCommitSHA: commit.sha) else { return nil }
-        return { onGGCheckout(entry) }
+            pausedOperation: rps.ggActionState.pausedOperation,
+            hasBlockingGitOperation: GGStackDrawer.hasBlockingGitOperation(
+                mergeOperation: rps.mergeOp.current,
+                pausedGGOperation: rps.ggActionState.pausedOperation
+            ),
+            selectionIsStale: Self.ggSelectionIsStale(rps: rps),
+            canOpenSplitCommit: rps.requestGGSplitCommit != nil && rps.mergeOp.current == nil,
+            providerReviewURL: providerReviewURL
+        ))
     }
 
     private func openRemoteAction(for commit: CommitInfo, remote: CodeHostRemote?) -> (() -> Void)? {
