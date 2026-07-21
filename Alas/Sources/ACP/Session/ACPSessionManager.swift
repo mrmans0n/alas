@@ -2584,6 +2584,13 @@ extension ACPSessionManager {
                     session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
                         helloSeen: helloSeen, graceElapsed: true)
                 }
+            } else {
+                // No built-in wire server is tracked this attach (injection
+                // skipped because it's disabled/user-overridden, or an external
+                // adapter). Clear any stale `.notRegistered` from a prior attach
+                // so the status control stops warning about a server that is no
+                // longer requested.
+                session.builtInMCPRegistration = .unknown
             }
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
