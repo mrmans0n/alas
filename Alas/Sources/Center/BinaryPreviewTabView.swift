@@ -18,12 +18,12 @@ struct BinaryPreviewTabView: View {
                         return .file(BreadcrumbFileMenu(
                             onCopyRelativePath: { Clipboard.copy(relativePath) },
                             onCopyFullPath: { Clipboard.copy(absoluteURL.path) },
-                            onRevealInFinder: { FileSystemOpen.reveal(url: absoluteURL) },
-                            onOpenWithSystem: { FileSystemOpen.open(url: absoluteURL) }
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteURL) },
+                            onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
                         ))
                     } else {
                         return .folder(BreadcrumbFolderMenu(
-                            onRevealInFinder: { FileSystemOpen.reveal(url: folderURL(for: pathPrefix)) },
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: folderURL(for: pathPrefix)) },
                             onFocusInFiles: { onRevealInFiles(pathPrefix) },
                             onCopyFullPath: { Clipboard.copy(folderURL(for: pathPrefix).path) }
                         ))
@@ -33,6 +33,10 @@ struct BinaryPreviewTabView: View {
             placeholder
         }
         .background(theme.color("bg-1"))
+    }
+
+    private var isRemote: Bool {
+        worktreePath.isRemoteAlasPath
     }
 
     private var placeholder: some View {
@@ -46,11 +50,13 @@ struct BinaryPreviewTabView: View {
             Text("Binary file")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-dim"))
-            HStack(spacing: 10) {
-                Button("Open with System") { FileSystemOpen.open(url: absoluteURL) }
-                Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteURL) }
+            if !isRemote {
+                HStack(spacing: 10) {
+                    Button("Open with System") { FileSystemOpen.open(url: absoluteURL) }
+                    Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteURL) }
+                }
+                .padding(.top, 4)
             }
-            .padding(.top, 4)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

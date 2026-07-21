@@ -29,8 +29,6 @@ enum BinaryFileType {
         "so",
         "framework",
         "bin",
-        "dat",
-        "pak",
     ]
 
     static func isKnownBinary(relativePath: String) -> Bool {

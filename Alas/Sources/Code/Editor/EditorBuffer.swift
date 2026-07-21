@@ -416,9 +416,11 @@ final class EditorBuffer {
         checkConflictOnRestore: Bool = false
     ) {
         if case .cancelled = loadState { return }
+        var restoredContent = false
         if !isExternal,
            let snap = snapshot {
             applySnapshot(snap)
+            restoredContent = true
             if onRestoredPathChanged != nil,
                let restoredPathChange = consumeRestoredPathChange() {
                 onRestoredPathChanged?(restoredPathChange.oldPath, restoredPathChange.newPath)
@@ -427,8 +429,15 @@ final class EditorBuffer {
         }
         if !pendingUserEdits.isEmpty {
             replayPendingUserEdits(pendingUserEdits, fallbackText: preloadText)
+            restoredContent = true
             conflict = .changedOnDisk
         }
+        // If we restored a hot-exit snapshot or replayed pending user edits,
+        // the buffer now shows editable text content even though the on-disk
+        // file may have failed UTF-8 decode. Don't leave `loadKind` as
+        // `.notUTF8` or `EditorTabView` will swap to the binary placeholder
+        // and hide the user's recoverable draft.
+        if restoredContent { loadKind = .loaded }
         if checkConflictOnRestore {
             checkForConflictOnRestore()
         }

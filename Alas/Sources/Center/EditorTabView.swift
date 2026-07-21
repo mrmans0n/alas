@@ -72,6 +72,7 @@ struct EditorTabView: View {
                 onRevealInFiles: onRevealInFiles,
                 menuItems: { index, pathPrefix in
                     let isLast = index == breadcrumbRelativePath.split(separator: "/").count - 1
+                    let isRemote = worktreePath.isRemoteAlasPath
                     if isLast {
                         return .file(BreadcrumbFileMenu(
                             onViewAtHEAD: externalAbsolutePath == nil
@@ -90,8 +91,8 @@ struct EditorTabView: View {
                                 : nil,
                             onCopyRelativePath: externalAbsolutePath == nil ? { Clipboard.copy(relativePath) } : nil,
                             onCopyFullPath: { Clipboard.copy(absoluteFilePath) },
-                            onRevealInFinder: { FileSystemOpen.reveal(url: absoluteFileURL) },
-                            onOpenWithSystem: { FileSystemOpen.open(url: absoluteFileURL) }
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteFileURL) },
+                            onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteFileURL) }
                         ))
                     } else {
                         let folderURL: URL
@@ -101,7 +102,7 @@ struct EditorTabView: View {
                             folderURL = worktreePath.appendingPathComponent(pathPrefix)
                         }
                         return .folder(BreadcrumbFolderMenu(
-                            onRevealInFinder: { FileSystemOpen.reveal(url: folderURL) },
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: folderURL) },
                             onFocusInFiles: { onRevealInFiles(pathPrefix) },
                             onCopyFullPath: { Clipboard.copy(folderURL.path) }
                         ))
@@ -485,11 +486,13 @@ struct EditorTabView: View {
             Text("Binary file")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-dim"))
-            HStack(spacing: 10) {
-                Button("Open with System") { FileSystemOpen.open(url: absoluteFileURL) }
-                Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteFileURL) }
+            if !worktreePath.isRemoteAlasPath {
+                HStack(spacing: 10) {
+                    Button("Open with System") { FileSystemOpen.open(url: absoluteFileURL) }
+                    Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteFileURL) }
+                }
+                .padding(.top, 4)
             }
-            .padding(.top, 4)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

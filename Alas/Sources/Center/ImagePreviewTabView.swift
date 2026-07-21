@@ -19,12 +19,12 @@ struct ImagePreviewTabView: View {
                         return .file(BreadcrumbFileMenu(
                             onCopyRelativePath: { Clipboard.copy(relativePath) },
                             onCopyFullPath: { Clipboard.copy(absoluteURL.path) },
-                            onRevealInFinder: { FileSystemOpen.reveal(url: absoluteURL) },
-                            onOpenWithSystem: { FileSystemOpen.open(url: absoluteURL) }
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteURL) },
+                            onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
                         ))
                     } else {
                         return .folder(BreadcrumbFolderMenu(
-                            onRevealInFinder: { FileSystemOpen.reveal(url: worktreePath.appendingPathComponent(pathPrefix)) },
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: worktreePath.appendingPathComponent(pathPrefix)) },
                             onFocusInFiles: { onRevealInFiles(pathPrefix) },
                             onCopyFullPath: { Clipboard.copy(worktreePath.appendingPathComponent(pathPrefix).path) }
                         ))
@@ -39,6 +39,10 @@ struct ImagePreviewTabView: View {
         }
     }
 
+    private var isRemote: Bool {
+        worktreePath.isRemoteAlasPath
+    }
+
     @ViewBuilder
     private var content: some View {
         switch loadState {
@@ -46,17 +50,17 @@ struct ImagePreviewTabView: View {
             previewMessage(title: "Loading Preview", detail: relativePath, icon: "photo")
         case .missing:
             previewMessage(title: "File Not Found", detail: relativePath, icon: "exclamationmark.triangle",
-                           onOpenWithSystem: { FileSystemOpen.open(url: absoluteURL) })
+                           onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) })
         case .decodeFailed:
             previewMessage(
                 title: "Cannot Preview Image",
                 detail: "The file could not be decoded as an image.",
                 icon: "photo.badge.exclamationmark",
-                onOpenWithSystem: { FileSystemOpen.open(url: absoluteURL) }
+                onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
             )
         case .unsupported:
             previewMessage(title: "No Preview", detail: "This file type is not supported.", icon: "photo",
-                           onOpenWithSystem: { FileSystemOpen.open(url: absoluteURL) })
+                           onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) })
         case .loaded(let info):
             loadedPreview(info)
         }
@@ -86,10 +90,12 @@ struct ImagePreviewTabView: View {
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                 Spacer()
-                Button("Open with System") { FileSystemOpen.open(url: absoluteURL) }
-                    .buttonStyle(.borderless)
-                Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteURL) }
-                    .buttonStyle(.borderless)
+                if !isRemote {
+                    Button("Open with System") { FileSystemOpen.open(url: absoluteURL) }
+                        .buttonStyle(.borderless)
+                    Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteURL) }
+                        .buttonStyle(.borderless)
+                }
             }
             .padding(.horizontal, 12)
             .frame(height: 28)

@@ -54,7 +54,8 @@ struct CenterPaneView: View {
                     NSPasteboard.general.setString(rel, forType: .string)
                 },
                 onOpenWithSystem: { id in
-                    guard let tab = tabs.first(where: { $0.id == id }) else { return }
+                    guard !worktree.path.isRemoteAlasPath,
+                          let tab = tabs.first(where: { $0.id == id }) else { return }
                     let url: URL
                     if let abs = tab.absoluteFilePath {
                         url = URL(fileURLWithPath: abs)
@@ -66,7 +67,8 @@ struct CenterPaneView: View {
                     FileSystemOpen.open(url: url)
                 },
                 onRevealInFinder: { id in
-                    guard let tab = tabs.first(where: { $0.id == id }) else { return }
+                    guard !worktree.path.isRemoteAlasPath,
+                          let tab = tabs.first(where: { $0.id == id }) else { return }
                     let url: URL
                     if let abs = tab.absoluteFilePath {
                         url = URL(fileURLWithPath: abs)
