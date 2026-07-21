@@ -126,6 +126,10 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    /// Per-session attach counter. The built-in MCP registration grace timer
+    /// captures the epoch at attach and only writes the row if it still matches,
+    /// so a timer from a superseded attach can never clobber the current state.
+    private var mcpRegistrationAttachEpoch: [ACPSession.ID: Int] = [:]
     #if DEBUG
     /// Number of attached runners. Public-but-namespaced read accessor for
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
@@ -2568,30 +2572,21 @@ extension ACPSessionManager {
                 if case .external = spec.mcpInjection { return false }
                 return true
             }()
-            if builtInMCP != nil, usesWireMCP {
+            let shouldTrackBuiltInRegistration = builtInMCP != nil && usesWireMCP
+            // Bump the attach epoch so a grace timer left over from a previous
+            // attach of this session can never write the current row.
+            let mcpRegistrationEpoch = (mcpRegistrationAttachEpoch[sessionId] ?? 0) + 1
+            mcpRegistrationAttachEpoch[sessionId] = mcpRegistrationEpoch
+            if shouldTrackBuiltInRegistration {
                 clearMCPRegistration?(sessionId)
-                session.builtInMCPRegistration = .unknown
-                // Grace after attach: MCP servers register at session creation,
-                // so by now a working harness has announced ours. If not,
-                // surface notRegistered. A late hello still heals the row via
-                // AppState.onMCPHello.
-                Task { @MainActor [weak self, weak session] in
-                    try? await Task.sleep(for: .seconds(12))
-                    guard let self, let session else { return }
-                    // Don't downgrade a row that already registered.
-                    if session.builtInMCPRegistration == .registered { return }
-                    let helloSeen = self.isBuiltInMCPRegistered?(sessionId) ?? false
-                    session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
-                        helloSeen: helloSeen, graceElapsed: true)
-                }
-            } else {
-                // No built-in wire server is tracked this attach (injection
-                // skipped because it's disabled/user-overridden, or an external
-                // adapter). Clear any stale `.notRegistered` from a prior attach
-                // so the status control stops warning about a server that is no
-                // longer requested.
-                session.builtInMCPRegistration = .unknown
             }
+            // Reset to `.unknown` on every attach: either we are about to track
+            // (the grace timer starts after session creation succeeds, below),
+            // or the built-in server isn't requested this attach (disabled,
+            // user-overridden, or an external adapter), in which case any stale
+            // `.notRegistered` from a prior attach must be cleared so the status
+            // control stops warning about a server that is no longer requested.
+            session.builtInMCPRegistration = .unknown
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {
@@ -2934,6 +2929,27 @@ extension ACPSessionManager {
                 )
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
+                }
+            }
+            // Start the built-in MCP registration grace ONLY now — session
+            // creation/restoration above has succeeded, which is when the
+            // adapter actually received `wireMCPServers` and could spawn or
+            // connect the built-in server. Arming it at composition time risks a
+            // slow auth or a >12s restore marking a healthy session
+            // `.notRegistered` before the harness ever saw the config. Guarded
+            // by the attach epoch so a stale timer cannot clobber a newer row; a
+            // late hello still heals the row via AppState.onMCPHello.
+            if shouldTrackBuiltInRegistration {
+                Task { @MainActor [weak self, weak session] in
+                    try? await Task.sleep(for: .seconds(12))
+                    guard let self, let session,
+                          self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch
+                    else { return }
+                    // Don't downgrade a row that already registered.
+                    if session.builtInMCPRegistration == .registered { return }
+                    let helloSeen = self.isBuiltInMCPRegistered?(sessionId) ?? false
+                    session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
+                        helloSeen: helloSeen, graceElapsed: true)
                 }
             }
             if createdFreshRemoteSession {
