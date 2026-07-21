@@ -57,7 +57,10 @@ struct BreadcrumbView: View {
                     Text(String(comp))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
-                        .onTapGesture { onRevealInFiles(pathPrefix) }
+                        // Suppress tap-to-reveal-in-Files for absolute (external)
+                        // paths: `onRevealInFiles` treats paths as worktree-relative,
+                        // so feeding `/tmp/...` would expand a bogus node.
+                        .onTapGesture { if !isAbsolute { onRevealInFiles(pathPrefix) } }
                         .onHover { inside in
                             if inside { NSCursor.pointingHand.push() }
                             else { NSCursor.pointingHand.pop() }

@@ -103,7 +103,7 @@ struct EditorTabView: View {
                         }
                         return .folder(BreadcrumbFolderMenu(
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: folderURL) },
-                            onFocusInFiles: { onRevealInFiles(pathPrefix) },
+                            onFocusInFiles: externalAbsolutePath == nil ? { onRevealInFiles(pathPrefix) } : nil,
                             onCopyFullPath: { Clipboard.copy(folderURL.path) }
                         ))
                     }

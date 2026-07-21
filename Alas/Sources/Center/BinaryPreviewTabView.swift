@@ -24,7 +24,7 @@ struct BinaryPreviewTabView: View {
                     } else {
                         return .folder(BreadcrumbFolderMenu(
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: folderURL(for: pathPrefix)) },
-                            onFocusInFiles: { onRevealInFiles(pathPrefix) },
+                            onFocusInFiles: relativePath.hasPrefix("/") ? nil : { onRevealInFiles(pathPrefix) },
                             onCopyFullPath: { Clipboard.copy(folderURL(for: pathPrefix).path) }
                         ))
                     }
