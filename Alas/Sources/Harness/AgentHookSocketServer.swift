@@ -13,6 +13,7 @@ final class AgentHookSocketServer {
     private var listenTask: Task<Void, Never>?
     var onEvent: ((AgentHookEvent) -> Void)?
     var onCLIRequest: ((AlasCLIRequest) async -> AlasCLIResponse)?
+    var onMCPHello: ((MCPHelloEvent) -> Void)?
 
     static let maxPayloadSize = 65_536
 
@@ -147,6 +148,17 @@ final class AgentHookSocketServer {
                 response = .error("Alas CLI is not available.")
             }
             Self.sendResponse(clientFD: clientFD, response: response)
+            return
+        }
+
+        if Self.payloadKind(data) == "mcp_hello" {
+            if let hello = try? MCPHelloEvent.decode(from: data) {
+                Self.sendResponse(clientFD: clientFD, ok: true)
+                let handler = onMCPHello
+                DispatchQueue.main.async { handler?(hello) }
+            } else {
+                Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
+            }
             return
         }
 
