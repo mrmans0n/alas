@@ -18,7 +18,8 @@ struct ACPMCPStatusControl: View {
             preamblePending: session.pendingMCPPreamble != nil,
             preambleSent: session.mcpPreambleSent,
             externalStatus: session.mcpExternalStatus,
-            builtInRegistration: session.builtInMCPRegistration
+            builtInRegistration: session.builtInMCPRegistration,
+            adapterSupportsHTTP: session.adapterSupportsHTTPMCP
         )
     }
 

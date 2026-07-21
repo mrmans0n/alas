@@ -2543,6 +2543,7 @@ extension ACPSessionManager {
             )
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
+            session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
             let mcpPlan = MCPAttachmentPlanner.plan(.init(

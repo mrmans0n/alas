@@ -176,20 +176,35 @@ struct ACPMCPStatusPolicyTests {
         return MCPAttachmentSummary(statuses: [status], configurationFingerprint: "fp")
     }
 
-    @Test("notRegistered on stdio offers the HTTP switch")
+    @Test("notRegistered on stdio offers the HTTP switch when the adapter supports http")
     func offersSwitch() {
         let state = ACPMCPStatusState(
             summary: builtInSummary(transport: .stdio), currentServers: [],
-            builtInRegistration: .notRegistered)
+            builtInRegistration: .notRegistered,
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == .canSwitchToHTTP)
         #expect(state?.hasBuiltInWarning == true)
         #expect(state?.showsSwitchToHTTPAction == true)
+    }
+
+    @Test("notRegistered on stdio without http support warns but hides the switch")
+    func warnsNoSwitchWhenAdapterLacksHTTP() {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered,
+            adapterSupportsHTTP: false)
+        #expect(state?.builtInWarning == .httpUnsupported)
+        #expect(state?.hasBuiltInWarning == true)
+        #expect(state?.showsSwitchToHTTPAction == false)
     }
 
     @Test("notRegistered on http warns without the switch")
     func warnsNoSwitchOnHTTP() {
         let state = ACPMCPStatusState(
             summary: builtInSummary(transport: .http), currentServers: [],
-            builtInRegistration: .notRegistered)
+            builtInRegistration: .notRegistered,
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == .alreadyHTTP)
         #expect(state?.hasBuiltInWarning == true)
         #expect(state?.showsSwitchToHTTPAction == false)
     }
@@ -198,7 +213,9 @@ struct ACPMCPStatusPolicyTests {
     func registeredNoWarning() {
         let state = ACPMCPStatusState(
             summary: builtInSummary(transport: .stdio), currentServers: [],
-            builtInRegistration: .registered)
+            builtInRegistration: .registered,
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == BuiltInMCPWarning.none)
         #expect(state?.hasBuiltInWarning == false)
         #expect(state?.showsSwitchToHTTPAction == false)
     }
