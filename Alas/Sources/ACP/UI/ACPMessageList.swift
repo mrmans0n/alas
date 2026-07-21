@@ -50,6 +50,8 @@ struct ACPMessageList: View {
     /// bottom we guarantee the streaming caret / last message sits
     /// above the composer instead of behind it.
     private let composerSpacerHeight: CGFloat = 220
+    private let goToNewestButtonSize: CGFloat = 32
+    private let goToNewestButtonComposerGap: CGFloat = 12
     /// Step the visible head back when the "Earlier messages…" marker
     /// crosses this many points from the top edge during scroll.
     private let headStepScrollThreshold: CGFloat = 200
@@ -134,181 +136,214 @@ struct ACPMessageList: View {
     var body: some View {
         ScrollViewReader { proxy in
             GeometryReader { viewport in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        switch Self.topPaginationIndicator(
-                            visibleHead: transcript.visibleHead,
-                            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
-                        ) {
-                        case .hidden:
-                            EmptyView()
-                        case .sentinel:
-                            topPaginationSentinel
-                        case .spinner:
-                            Spinner(lineWidth: 1.5)
-                                .frame(width: 14, height: 14)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.bottom, 4)
-                                .background(topPaginationSentinel)
-                        }
-                        ForEach(visibleRows) { row in
-                            visibleRow(row)
-                        }
-                        if Self.shouldShowBottomPaginationSentinel(
-                            visibleTail: transcript.visibleTailBound,
-                            messageCount: transcript.messages.count
-                        ) {
-                            bottomPaginationSentinel
-                        }
-                        if transcript.pendingPermission != nil, let policy = policy {
-                            ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
-                                .id("__pending_perm__")
-                        }
-                        if let request = transcript.pendingUserInputs.first {
-                            ACPUserInputPrompt(
-                                request: request,
-                                onRespond: onUserInputResponse,
-                                onOpenURL: onOpenElicitationURL
-                            )
-                            .id("__pending_user_input_\(request.id)")
-                        }
-                        ForEach(transcript.urlElicitationWaits) { wait in
-                            ACPURLElicitationWaitView(
-                                wait: wait,
-                                onOpenAgain: { NSWorkspace.shared.open($0) },
-                                onDismiss: onDismissElicitationURLWait
-                            )
-                            .id("__elicitation_wait_\(wait.id)")
-                        }
-                        if transcript.streamingState == .streaming {
-                            StreamingCaret().frame(width: 8, height: 14)
-                                .id("__streaming_caret__")
-                        }
-                        let queueHeaderCount = Self.queueHeaderCount(
-                            statuses: session.queue.map(\.status)
-                        )
-                        if queueHeaderCount > 1 {
-                            ACPQueueHeader(count: queueHeaderCount, onClear: onQueueClearAll)
-                                .id("__queue_header__")
-                        }
-                        ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
-                            if Self.shouldRenderQueueBubble(status: item.status) {
-                                ACPQueuedBubble(
-                                    item: item,
-                                    contentMaxWidth: contentMaxWidth,
-                                    typography: typography,
-                                    onForceSend: { onQueueForceSend(item.id) },
-                                    onEdit: { onQueueEdit(item) },
-                                    onRemove: { onQueueRemove(item.id) },
-                                    onRetry: { onQueueRetry(item.id) }
-                                )
-                                .dropDestination(for: String.self) { items, _ in
-                                    guard let s = items.first,
-                                          let uuid = UUID(uuidString: s),
-                                          let src = session.queue.firstIndex(where: { $0.id == uuid })
-                                    else { return false }
-                                    guard Self.canDropQueuedItem(
-                                        sourceStatus: session.queue[src].status,
-                                        targetStatus: item.status
-                                    ) else { return false }
-                                    onQueueReorder(src, idx)
-                                    return true
-                                }
-                                .id("__queue_\(item.id)")
+                ZStack(alignment: .bottomTrailing) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            switch Self.topPaginationIndicator(
+                                visibleHead: transcript.visibleHead,
+                                isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+                            ) {
+                            case .hidden:
+                                EmptyView()
+                            case .sentinel:
+                                topPaginationSentinel
+                            case .spinner:
+                                Spinner(lineWidth: 1.5)
+                                    .frame(width: 14, height: 14)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.bottom, 4)
+                                    .background(topPaginationSentinel)
                             }
+                            ForEach(visibleRows) { row in
+                                visibleRow(row)
+                            }
+                            if Self.shouldShowBottomPaginationSentinel(
+                                visibleTail: transcript.visibleTailBound,
+                                messageCount: transcript.messages.count
+                            ) {
+                                bottomPaginationSentinel
+                            }
+                            if transcript.pendingPermission != nil, let policy = policy {
+                                ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
+                                    .id("__pending_perm__")
+                            }
+                            if let request = transcript.pendingUserInputs.first {
+                                ACPUserInputPrompt(
+                                    request: request,
+                                    onRespond: onUserInputResponse,
+                                    onOpenURL: onOpenElicitationURL
+                                )
+                                .id("__pending_user_input_\(request.id)")
+                            }
+                            ForEach(transcript.urlElicitationWaits) { wait in
+                                ACPURLElicitationWaitView(
+                                    wait: wait,
+                                    onOpenAgain: { NSWorkspace.shared.open($0) },
+                                    onDismiss: onDismissElicitationURLWait
+                                )
+                                .id("__elicitation_wait_\(wait.id)")
+                            }
+                            if transcript.streamingState == .streaming {
+                                StreamingCaret().frame(width: 8, height: 14)
+                                    .id("__streaming_caret__")
+                            }
+                            let queueHeaderCount = Self.queueHeaderCount(
+                                statuses: session.queue.map(\.status)
+                            )
+                            if queueHeaderCount > 1 {
+                                ACPQueueHeader(count: queueHeaderCount, onClear: onQueueClearAll)
+                                    .id("__queue_header__")
+                            }
+                            ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
+                                if Self.shouldRenderQueueBubble(status: item.status) {
+                                    ACPQueuedBubble(
+                                        item: item,
+                                        contentMaxWidth: contentMaxWidth,
+                                        typography: typography,
+                                        onForceSend: { onQueueForceSend(item.id) },
+                                        onEdit: { onQueueEdit(item) },
+                                        onRemove: { onQueueRemove(item.id) },
+                                        onRetry: { onQueueRetry(item.id) }
+                                    )
+                                    .dropDestination(for: String.self) { items, _ in
+                                        guard let s = items.first,
+                                              let uuid = UUID(uuidString: s),
+                                              let src = session.queue.firstIndex(where: { $0.id == uuid })
+                                        else { return false }
+                                        guard Self.canDropQueuedItem(
+                                            sourceStatus: session.queue[src].status,
+                                            targetStatus: item.status
+                                        ) else { return false }
+                                        onQueueReorder(src, idx)
+                                        return true
+                                    }
+                                    .id("__queue_\(item.id)")
+                                }
+                            }
+                            if let status = session.contextRecoveryStatus {
+                                contextRecoveryRow(status)
+                                    .id("__context_recovery__")
+                            }
+                            // Invisible tail spacer that the auto-scroll pins to
+                            // the viewport bottom; this guarantees the streaming
+                            // caret / last message sits above the composer pill.
+                            Color.clear
+                                .frame(height: composerSpacerHeight)
+                                .id("__composer_spacer__")
                         }
-                        if let status = session.contextRecoveryStatus {
-                            contextRecoveryRow(status)
-                                .id("__context_recovery__")
+                        .frame(maxWidth: contentMaxWidth, alignment: .leading)
+                        .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
+                        .padding(.top, 24)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .environment(\.openURL, openTranscriptURLAction)
+                    }
+                    .coordinateSpace(.named(Self.scrollSpaceName))
+                    .modifier(ACPTranscriptScrollTracking(
+                        isRestoring: { scrollBook.isRestoringTail },
+                        onResolveScrollView: { scrollViewRef.scrollView = $0 },
+                        onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
+                        onPaused: { setFollowsTranscriptTail(false) },
+                        onAtBottom: { shouldPageHiddenTail in
+                            handleAtBottom(proxy: proxy, shouldPageHiddenTail: shouldPageHiddenTail)
+                        },
+                        onGeometry: { old, new in
+                            handleScrollGeometry(
+                                previousMinY: old.minY,
+                                newMinY: new.minY,
+                                viewportHeight: new.viewportHeight,
+                                previousContentHeight: old.contentHeight,
+                                contentHeight: new.contentHeight,
+                                proxy: proxy)
                         }
-                        // Invisible tail spacer that the auto-scroll pins to
-                        // the viewport bottom; this guarantees the streaming
-                        // caret / last message sits above the composer pill.
-                        Color.clear
-                            .frame(height: composerSpacerHeight)
-                            .id("__composer_spacer__")
+                    ))
+                    .onAppear {
+                        restoreTailIfNeeded(proxy: proxy, animated: false)
+                        restoreRememberedAnchorIfNeeded(proxy: proxy)
                     }
-                    .frame(maxWidth: contentMaxWidth, alignment: .leading)
-                    .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
-                    .padding(.top, 24)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .environment(\.openURL, openTranscriptURLAction)
-                }
-                .coordinateSpace(.named(Self.scrollSpaceName))
-                .modifier(ACPTranscriptScrollTracking(
-                    isRestoring: { scrollBook.isRestoringTail },
-                    onResolveScrollView: { scrollViewRef.scrollView = $0 },
-                    onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
-                    onPaused: { setFollowsTranscriptTail(false) },
-                    onAtBottom: { shouldPageHiddenTail in
-                        handleAtBottom(proxy: proxy, shouldPageHiddenTail: shouldPageHiddenTail)
-                    },
-                    onGeometry: { old, new in
-                        handleScrollGeometry(
-                            previousMinY: old.minY,
-                            newMinY: new.minY,
-                            viewportHeight: new.viewportHeight,
-                            previousContentHeight: old.contentHeight,
-                            contentHeight: new.contentHeight,
-                            proxy: proxy)
+                    .onDisappear {
+                        scrollBook.pendingTailScrollTask?.cancel()
+                        scrollBook.pendingTailScrollTask = nil
+                        scrollBook.pendingContentGrowthTailRestore = nil
+                        scrollBook.pendingContentShrinkResetTask?.cancel()
+                        scrollBook.pendingContentShrinkResetTask = nil
+                        scrollBook.contentShrinkBookmarkResetState = .none
                     }
-                ))
-                .onAppear {
-                    restoreTailIfNeeded(proxy: proxy, animated: false)
-                    restoreRememberedAnchorIfNeeded(proxy: proxy)
-                }
-                .onDisappear {
-                    scrollBook.pendingTailScrollTask?.cancel()
-                    scrollBook.pendingTailScrollTask = nil
-                    scrollBook.pendingContentGrowthTailRestore = nil
-                    scrollBook.pendingContentShrinkResetTask?.cancel()
-                    scrollBook.pendingContentShrinkResetTask = nil
-                    scrollBook.contentShrinkBookmarkResetState = .none
-                }
-                .onChange(of: viewport.size.height) { _, _ in
-                    restoreTailIfNeeded(proxy: proxy, animated: false)
-                    restoreRememberedAnchorIfNeeded(proxy: proxy)
-                }
-                .onChange(of: viewport.size.width) { oldWidth, newWidth in
-                    if Self.shouldRestoreTailAfterViewportWidthChange(
-                        previousWidth: oldWidth,
-                        newWidth: newWidth,
+                    .onChange(of: viewport.size.height) { _, _ in
+                        restoreTailIfNeeded(proxy: proxy, animated: false)
+                        restoreRememberedAnchorIfNeeded(proxy: proxy)
+                    }
+                    .onChange(of: viewport.size.width) { oldWidth, newWidth in
+                        if Self.shouldRestoreTailAfterViewportWidthChange(
+                            previousWidth: oldWidth,
+                            newWidth: newWidth,
+                            followsTranscriptTail: session.followsTranscriptTail
+                        ) {
+                            restoreTailIfNeeded(proxy: proxy, animated: false)
+                        }
+                        restoreRememberedAnchorIfNeeded(proxy: proxy)
+                    }
+                    .onChange(of: scrollSignature) { _, _ in
+                        if session.followsTranscriptTail {
+                            transcript.resetWindowToTail()
+                            scheduleTailScroll(
+                                proxy: proxy,
+                                animated: Self.shouldAnimateTailScroll(
+                                    trigger: .contentSignature,
+                                    streamingState: transcript.streamingState
+                                )
+                            )
+                        }
+                        restoreRememberedAnchorIfNeeded(proxy: proxy)
+                    }
+                    .onChange(of: transcript.streamingState) { _, new in
+                        if session.followsTranscriptTail && (new == .streaming || new == .sending) {
+                            scheduleTailScroll(
+                                proxy: proxy,
+                                animated: Self.shouldAnimateTailScroll(
+                                    trigger: .streamingState,
+                                    streamingState: new
+                                )
+                            )
+                        }
+                    }
+                    .onChange(of: transcript.visibleHead) { _, _ in
+                        restoreRememberedAnchorIfNeeded(proxy: proxy)
+                    }
+                    .modifier(ACPRowFramePreferenceTracking { frames in
+                        handleRowFramePreference(frames, proxy: proxy)
+                    })
+
+                    if Self.shouldShowGoToNewestAffordance(
                         followsTranscriptTail: session.followsTranscriptTail
                     ) {
-                        restoreTailIfNeeded(proxy: proxy, animated: false)
-                    }
-                    restoreRememberedAnchorIfNeeded(proxy: proxy)
-                }
-                .onChange(of: scrollSignature) { _, _ in
-                    if session.followsTranscriptTail {
-                        transcript.resetWindowToTail()
-                        scheduleTailScroll(
-                            proxy: proxy,
-                            animated: Self.shouldAnimateTailScroll(
-                                trigger: .contentSignature,
-                                streamingState: transcript.streamingState
-                            )
+                        Button {
+                            goToNewestMessage(proxy: proxy)
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: goToNewestButtonSize, height: goToNewestButtonSize)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(theme.color("fg"))
+                        .background(
+                            Circle()
+                                .fill(theme.color("bg-1").opacity(0.95))
+                                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                         )
-                    }
-                    restoreRememberedAnchorIfNeeded(proxy: proxy)
-                }
-                .onChange(of: transcript.streamingState) { _, new in
-                    if session.followsTranscriptTail && (new == .streaming || new == .sending) {
-                        scheduleTailScroll(
-                            proxy: proxy,
-                            animated: Self.shouldAnimateTailScroll(
-                                trigger: .streamingState,
-                                streamingState: new
-                            )
+                        .overlay(
+                            Circle()
+                                .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
                         )
+                        .accessibilityLabel("Go to newest message")
+                        .help("Go to newest message")
+                        .padding(.trailing, 20)
+                        .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
+                            composerSpacerHeight: composerSpacerHeight,
+                            gap: goToNewestButtonComposerGap
+                        ))
+                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
                     }
                 }
-                .onChange(of: transcript.visibleHead) { _, _ in
-                    restoreRememberedAnchorIfNeeded(proxy: proxy)
-                }
-                .modifier(ACPRowFramePreferenceTracking { frames in
-                    handleRowFramePreference(frames, proxy: proxy)
-                })
             }
         }
         .background(
@@ -323,6 +358,16 @@ struct ACPMessageList: View {
         guard session.followsTranscriptTail else { return }
         transcript.resetWindowToTail()
         scrollToTail(proxy: proxy, animated: animated)
+    }
+
+    private func goToNewestMessage(proxy: ScrollViewProxy) {
+        let action = Self.goToNewestAffordanceAction()
+        if action.resumesTailFollow {
+            setFollowsTranscriptTail(true)
+        }
+        if action.schedulesTailScroll {
+            scheduleTailScroll(proxy: proxy, animated: action.animatedTailScroll)
+        }
     }
 
     private func restoreRememberedAnchorIfNeeded(proxy: ScrollViewProxy) {
@@ -928,6 +973,37 @@ struct ACPMessageList: View {
         case .streamingState, .contentGrowth:
             return false
         }
+    }
+
+    nonisolated static func shouldShowGoToNewestAffordance(
+        followsTranscriptTail: Bool
+    ) -> Bool {
+        !followsTranscriptTail
+    }
+
+    nonisolated static func shouldAnimateGoToNewestTailScroll() -> Bool {
+        true
+    }
+
+    struct GoToNewestAffordanceAction: Equatable {
+        let resumesTailFollow: Bool
+        let schedulesTailScroll: Bool
+        let animatedTailScroll: Bool
+    }
+
+    nonisolated static func goToNewestAffordanceAction() -> GoToNewestAffordanceAction {
+        GoToNewestAffordanceAction(
+            resumesTailFollow: true,
+            schedulesTailScroll: true,
+            animatedTailScroll: shouldAnimateGoToNewestTailScroll()
+        )
+    }
+
+    nonisolated static func goToNewestAffordanceBottomPadding(
+        composerSpacerHeight: CGFloat,
+        gap: CGFloat
+    ) -> CGFloat {
+        composerSpacerHeight + gap
     }
 
     nonisolated static func shouldRunScheduledTailScroll(followsTranscriptTail: Bool) -> Bool {
