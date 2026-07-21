@@ -22,7 +22,13 @@ struct ACPToolbar: View {
             ACPMCPStatusControl(
                 session: session,
                 currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
-                onInstallPiMCPAdapter: { await state.installPiMCPAdapter() }
+                onInstallPiMCPAdapter: { await state.installPiMCPAdapter() },
+                transport: state.config.harness.alasMCPTransport,
+                onSwitchToHTTP: {
+                    state.config.harness.alasMCPTransport = .http
+                    _ = state.saveConfig()
+                    Task { await manager.reattach(to: session.id) }
+                }
             )
             ACPRecoveryPill(session: session)
             if let currentGoal = session.currentGoal {
