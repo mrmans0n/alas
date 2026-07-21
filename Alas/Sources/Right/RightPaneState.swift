@@ -106,11 +106,17 @@ final class RightPaneState {
     /// Injected by RightPaneStore — resolves gates 1–3 (master toggle,
     /// gg installed, per-project mode) against app-level state.
     var ggGateProvider: (@MainActor () -> Bool)? = nil
-    /// Injected by RightPaneStore so a successful clean can reconcile any
-    /// gg-managed worktrees removed from the app-level project topology.
+    /// Injected by RightPaneStore so mutations that add or remove worktrees
+    /// can reconcile app-level project topology.
     @ObservationIgnored
-    var refreshProjectTopologyAfterGGClean: (@MainActor () async -> Void)? = nil
-    var ggService = GGService()
+    var refreshProjectTopologyAfterGGMutation: (@MainActor () async -> Void)? = nil
+    @ObservationIgnored
+    var selectWorktreeAtPathAfterGGMutation: (@MainActor (String) async -> Void)? = nil
+    var ggService = GGService() {
+        didSet { ggMutationCoordinatorStorage = nil }
+    }
+    @ObservationIgnored
+    private var ggMutationCoordinatorStorage: GGMutationCoordinator? = nil
     /// Backing store for the stack drawer's mutation UI (in-flight action,
     /// sync progress, paused/error state). Not snapshot-derived, so
     /// `markSnapshotUnknown()` does not reset it.
@@ -216,8 +222,9 @@ final class RightPaneState {
     var mergeError: String? = nil
     var mergeQueuedMessage: String? = nil
     var pendingGGLand: GGLandRequest? = nil
-    @ObservationIgnored private var pendingGGLandStackFingerprint: String? = nil
+    @ObservationIgnored private var pendingGGLandPrepared: GGPreparedMutation? = nil
     var pendingGGCleanAll: Bool = false
+    @ObservationIgnored private var pendingGGCleanPrepared: GGPreparedMutation? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -330,6 +337,43 @@ final class RightPaneState {
         remoteEventDebouncer.onFire = { [weak self] in
             Task { @MainActor in await self?.refresh() }
         }
+    }
+
+    private var ggMutationCoordinator: GGMutationCoordinator {
+        if let coordinator = ggMutationCoordinatorStorage { return coordinator }
+        let coordinator = GGMutationCoordinator(
+            worktreeId: worktree.id,
+            worktreePath: worktree.path.path,
+            service: ggService,
+            actionState: ggActionState,
+            context: GGMutationContext(
+                loadFreshStack: { [weak self] in
+                    guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
+                    return try await self.ggService.currentStackSnapshot(
+                        worktreePath: self.worktree.path.path
+                    )
+                },
+                refreshStack: { [weak self] in
+                    guard let self else { return }
+                    self.ggStackCommitsKey = nil
+                    await self.refreshGGStack()
+                },
+                refreshGitChanges: { [weak self] in await self?.refresh() },
+                refreshProviderReviews: { [weak self] in await self?.refresh(forceReviewLoopRemote: true) },
+                refreshProjectTopology: { [weak self] in await self?.refreshProjectTopologyAfterGGMutation?() },
+                worktreeExists: { [weak self] in
+                    guard let self else { return false }
+                    return FileManager.default.fileExists(atPath: self.worktree.path.path)
+                },
+                invalidateInbox: { [weak self] in
+                    guard let self else { return }
+                    GGInboxStore.shared.invalidate(projectId: self.worktree.projectId)
+                },
+                selectWorktreeAtPath: { [weak self] path in await self?.selectWorktreeAtPathAfterGGMutation?(path) }
+            )
+        )
+        ggMutationCoordinatorStorage = coordinator
+        return coordinator
     }
 
     func start() {
@@ -926,46 +970,82 @@ final class RightPaneState {
     func onGGStackAction(_ kind: GGStackActionKind, appState: AppState) {
         switch kind {
         case .sync:
-            runGGSync()
+            runGGMutation(.sync)
         case .clean:
             requestGGCleanAll()
         case .continueOp:
-            runGGSimpleAction(.continueOp) { try await self.ggService.continueOp(worktreePath: self.worktree.path.path) }
+            runGGMutation(.continueOperation)
         case .abortOp:
-            runGGSimpleAction(.abortOp) { try await self.ggService.abortOp(worktreePath: self.worktree.path.path) }
+            runGGMutation(.abortOperation)
         case .checkout:
             break
         case .land:
             requestGGLand(.ready)
+        case .amendCurrent:
+            runGGMutation(.amendCurrent)
+        case .absorbStaged:
+            runGGMutation(.absorbStaged)
+        case .restack:
+            runGGMutation(.restack)
+        case .rebase:
+            runGGMutation(.rebase(target: nil))
+        case .drop, .unstack, .reorder, .undo, .split:
+            break
         }
     }
 
     func requestGGLand(_ request: GGLandRequest) {
-        pendingGGLand = request
-        pendingGGLandStackFingerprint = ggStack.map(Self.ggLandStackFingerprint)
+        guard let stack = ggStack,
+              let target = Self.ggLandUntilTarget(for: request, in: stack)
+        else {
+            ggActionState.setError("This stack is no longer ready to land.")
+            return
+        }
+        Task { @MainActor in
+            do {
+                let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
+                guard case .land(_, let readyCommits) = prepared.confirmation,
+                      readyCommits > 0 else {
+                    throw GGMutationError.staleConfirmation
+                }
+                pendingGGLandPrepared = prepared
+                pendingGGLand = request
+            } catch {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
+        }
     }
 
     func cancelGGLand() {
         pendingGGLand = nil
-        pendingGGLandStackFingerprint = nil
+        pendingGGLandPrepared = nil
     }
-    func requestGGCleanAll() { pendingGGCleanAll = true }
-    func cancelGGCleanAll() { pendingGGCleanAll = false }
-    func performGGCleanAll() {
-        guard pendingGGCleanAll else { return }
-        pendingGGCleanAll = false
-        runGGSimpleAction(.clean) {
-            try await self.ggService.clean(worktreePath: self.worktree.path.path)
-            await self.refreshProjectTopologyAfterGGClean?()
+    func requestGGCleanAll() {
+        Task { @MainActor in
+            do {
+                pendingGGCleanPrepared = try await ggMutationCoordinator.prepare(.clean)
+                pendingGGCleanAll = true
+            } catch {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
         }
     }
+    func cancelGGCleanAll() {
+        pendingGGCleanAll = false
+        pendingGGCleanPrepared = nil
+    }
+    func performGGCleanAll() {
+        guard pendingGGCleanAll, let prepared = pendingGGCleanPrepared else { return }
+        pendingGGCleanAll = false
+        pendingGGCleanPrepared = nil
+        runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
+    }
 
-    /// Checks out a stack entry (`gg mv <target>`), routed through
-    /// `runGGSimpleAction` so it gets the same busy-gating, error-surfacing,
-    /// and post-action refresh as every other gg mutation.
+    /// Checks out a stack entry (`gg mv <target>`) through the shared mutation
+    /// lifecycle so it gets the same gating and refresh behavior as other actions.
     @MainActor
     func requestGGCheckout(target: String) {
-        runGGSimpleAction(.checkout) { try await self.ggService.checkout(worktreePath: self.worktree.path.path, target: target) }
+        runGGMutation(.checkout(target: target))
     }
 
     /// Pure landability check used both to stage the confirmation and to
@@ -1034,120 +1114,50 @@ final class RightPaneState {
         }
     }
 
+    static func ggManualRebaseTarget(
+        stackBase: String,
+        behindBase: GitService.BehindStatus?
+    ) -> String {
+        guard let ref = behindBase?.ref,
+              ref == stackBase || ref.hasSuffix("/\(stackBase)")
+        else { return stackBase }
+        return ref
+    }
+
+    var pendingGGLandConfirmationMessage: String? {
+        guard let request = pendingGGLand else { return nil }
+        guard case .land(_, let readyCommits) = pendingGGLandPrepared?.confirmation else {
+            return Self.ggLandConfirmationMessage(for: request, stack: ggStack)
+        }
+        switch request {
+        case .ready:
+            return "Merge \(readyCommits) approved, passing PR\(readyCommits == 1 ? "" : "s") from the bottom of the stack."
+        case .until(_, let title):
+            return "Land the stack up to and including \u{201C}\(title)\u{201D}."
+        }
+    }
+
     @MainActor
     func performGGLand() {
-        guard let request = pendingGGLand else { return }
-        let confirmedStackFingerprint = pendingGGLandStackFingerprint
+        guard pendingGGLand != nil, let prepared = pendingGGLandPrepared else { return }
         pendingGGLand = nil
-        pendingGGLandStackFingerprint = nil
-        guard ggActionState.beginAction(.land) else { return }
-        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
-        ggActionState.clearError()
+        pendingGGLandPrepared = nil
+        runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
+    }
+
+    private func runGGMutation(_ request: GGMutationRequest, confirmedAgainst identity: GGStackIdentity? = nil) {
+        guard let operation = ggMutationCoordinator.startApplying(
+            request,
+            confirmedAgainst: identity
+        ) else { return }
         Task { @MainActor in
-            defer {
-                preservePausedGGOperationIfNeeded()
-                clearAlasGGOperationMarkerIfComplete()
-                ggActionState.endAction(.land)
-                Task { @MainActor in
-                    await self.refresh()
-                    _ = self.reevaluateGGGate()
-                }
-            }
             do {
-                // Re-verify against a fresh stack before mutating (defends a
-                // stale dialog), mirroring performMerge.
-                let fresh = try await ggService.currentStack(worktreePath: worktree.path.path)
-                guard let fresh,
-                      Self.ggLandStackMatchesPendingConfirmation(fresh, fingerprint: confirmedStackFingerprint),
-                      ggLandTargetStillLandable(request, in: fresh)
-                else {
-                    ggActionState.setError("This stack is no longer ready to land.")
-                    return
-                }
-                guard let until = Self.ggLandUntilTarget(for: request, in: fresh) else {
-                    ggActionState.setError("This stack is no longer ready to land.")
-                    return
-                }
-                let result = try await ggService.land(worktreePath: worktree.path.path, until: until)
-                if let summary = GGStackActionState.landSummaryLine(from: result.landed) {
-                    ggActionState.setActionSummary(summary)
-                }
-            } catch let error as GGServiceError {
-                ggActionState.setError(error.userMessage)
+                try await operation.value
             } catch {
-                ggActionState.setError(error.localizedDescription)
-            }
-        }
-    }
-
-    private func runGGSync() {
-        guard ggActionState.beginAction(.sync) else { return }
-        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
-        ggActionState.clearError()
-        ggActionState.clearSyncProgress()
-        Task { @MainActor in
-            defer {
-                preservePausedGGOperationIfNeeded()
-                clearAlasGGOperationMarkerIfComplete()
-                ggActionState.endAction(.sync)
-                Task { @MainActor in
-                    await self.refresh()
-                    _ = self.reevaluateGGGate()
+                if ggActionState.lastError == nil {
+                    ggActionState.setError(GGErrorPresentation.message(for: error))
                 }
             }
-            do {
-                for try await event in ggService.sync(worktreePath: worktree.path.path) {
-                    ggActionState.appendSyncEvent(event)
-                    if case .error(let message) = event { ggActionState.setError(message) }
-                }
-                if ggActionState.lastError == nil,
-                   let summary = GGStackActionState.syncSummaryLine(from: ggActionState.syncProgress) {
-                    ggActionState.setActionSummary(summary)
-                    ggActionState.clearSyncProgress()
-                }
-            } catch let error as GGServiceError {
-                if ggActionState.lastError == nil { ggActionState.setError(error.userMessage) }
-            } catch {
-                if ggActionState.lastError == nil { ggActionState.setError(error.localizedDescription) }
-            }
-        }
-    }
-
-    private func runGGSimpleAction(_ kind: GGStackActionKind, _ body: @escaping () async throws -> Void) {
-        guard ggActionState.beginAction(kind) else { return }
-        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
-        ggActionState.clearError()
-        Task { @MainActor in
-            defer {
-                preservePausedGGOperationIfNeeded()
-                clearAlasGGOperationMarkerIfComplete()
-                ggActionState.endAction(kind)
-                Task { @MainActor in
-                    await self.refresh()
-                    _ = self.reevaluateGGGate()
-                }
-            }
-            do {
-                try await body()
-            } catch let error as GGServiceError {
-                ggActionState.setError(error.userMessage)
-            } catch {
-                ggActionState.setError(error.localizedDescription)
-            }
-        }
-    }
-
-    private func preservePausedGGOperationIfNeeded() {
-        guard GGStackGate.operationInProgress(repoPath: worktree.path.path),
-              let action = ggActionState.inFlightAction,
-              ggActionState.pausedOperation == nil
-        else { return }
-        ggActionState.setPaused(GGPausedOperation(pausedBy: action))
-    }
-
-    private func clearAlasGGOperationMarkerIfComplete() {
-        if !GGStackGate.operationInProgress(repoPath: worktree.path.path) {
-            GGStackGate.clearAlasGGOperationInProgress(repoPath: worktree.path.path)
         }
     }
 

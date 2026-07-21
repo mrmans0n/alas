@@ -17,6 +17,7 @@ final class GGInboxStore {
     }
 
     var states: [String: State] = [:]
+    @ObservationIgnored private var invalidationGenerations: [String: UInt64] = [:]
 
     /// A snapshot older than `threshold` (or missing) should be refetched
     /// when the tab appears or regains focus.
@@ -32,6 +33,7 @@ final class GGInboxStore {
         now: () -> Date = Date.init
     ) async {
         if states[projectId]?.isRefreshing == true { return }
+        let generation = invalidationGenerations[projectId, default: 0]
         var state = states[projectId] ?? State()
         state.isRefreshing = true
         write(projectId, state)
@@ -45,7 +47,22 @@ final class GGInboxStore {
         } catch {
             state.lastError = error.localizedDescription
         }
+        guard invalidationGenerations[projectId, default: 0] == generation else {
+            var invalidated = states[projectId] ?? State()
+            invalidated.isRefreshing = false
+            invalidated.fetchedAt = nil
+            write(projectId, invalidated)
+            return
+        }
         state.isRefreshing = false
+        write(projectId, state)
+    }
+
+    /// Expires cached freshness while retaining the last visible result.
+    func invalidate(projectId: String) {
+        invalidationGenerations[projectId, default: 0] &+= 1
+        guard var state = states[projectId] else { return }
+        state.fetchedAt = nil
         write(projectId, state)
     }
 

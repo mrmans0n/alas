@@ -3,6 +3,31 @@ import Testing
 @testable import Alas
 
 struct GGActionEventsTests {
+    @Test func everyMutationRequestMapsToItsPresentationAction() {
+        let splitTarget = GGSplitTargetIdentity(ggID: "change-1", sha: "abc", tree: "tree")
+        let requests: [(GGMutationRequest, GGStackActionKind)] = [
+            (.amendCurrent, .amendCurrent),
+            (.absorbStaged, .absorbStaged),
+            (.checkout(target: "change-1"), .checkout),
+            (.drop(target: "change-1"), .drop),
+            (.unstack(target: "change-1", name: "upper", createWorktree: true), .unstack),
+            (.reorder(order: ["change-1"]), .reorder),
+            (.restack, .restack),
+            (.rebase(target: "main"), .rebase),
+            (.sync, .sync),
+            (.land(target: "change-1"), .land),
+            (.clean, .clean),
+            (.continueOperation, .continueOp),
+            (.abortOperation, .abortOp),
+            (.undo(operationID: "op_1"), .undo),
+            (.applySplit(planURL: URL(fileURLWithPath: "/tmp/plan"), target: splitTarget, planToken: "token"), .split),
+        ]
+
+        for (request, action) in requests {
+            #expect(request.actionKind == action)
+        }
+    }
+
     @Test func parsesEachSyncEventVariant() {
         #expect(GGSyncEvent.parse(line: #"{"version":1,"command":"sync","event":"start","total_entries":2}"#)
             == .start(totalEntries: 2))

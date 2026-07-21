@@ -166,9 +166,16 @@ final class RightPaneStore {
                     isRemoteProject: project.host != nil
                 )
             }
-            new.refreshProjectTopologyAfterGGClean = { [weak self] in
+            new.refreshProjectTopologyAfterGGMutation = { [weak self] in
                 guard let app = self?.appState else { return }
                 await app.refreshProjectTopology(projectId: worktree.projectId)
+            }
+            new.selectWorktreeAtPathAfterGGMutation = { [weak self] path in
+                guard let app = self?.appState,
+                      let target = app.projectsManager.worktrees(projectId: worktree.projectId)
+                          .first(where: { $0.path.path == path })
+                else { return }
+                app.focusGlobalWorktree(id: target.id, projectId: worktree.projectId)
             }
 
             if shouldDeferInitialRefresh {

@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// Which gg mutation is running / paused.
-enum GGStackActionKind: Equatable {
-    case sync, land, clean, continueOp, abortOp, checkout
+enum GGStackActionKind: Equatable, Sendable {
+    case amendCurrent, absorbStaged, checkout, drop, unstack, reorder, restack
+    case rebase, sync, land, clean, continueOp, abortOp, undo, split
 }
 
 /// What a confirmed `land` should do: land everything currently landable, or
