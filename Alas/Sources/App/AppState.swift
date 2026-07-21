@@ -61,6 +61,7 @@ final class AppState {
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
+    let mcpRegistrationRegistry = MCPRegistrationRegistry()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     let acpAdapterInstallCoordinator = ACPAdapterInstallCoordinator()
 
@@ -2051,6 +2052,22 @@ final class AppState {
         harness.socketServer.onCLIRequest = { [weak self] request in
             guard let self else { return .error("Alas is not available.") }
             return await self.handleCLIRequest(request)
+        }
+        // The socket server dispatches this on the main queue, so the closure
+        // is already main-actor context.
+        harness.socketServer.onMCPHello = { [weak self] hello in
+            guard let self else { return }
+            self.mcpRegistrationRegistry.recordHello(
+                sessionId: hello.sessionId, transport: hello.transport
+            )
+            // Heal immediately if a slow/lazy harness registered after the
+            // grace check already flipped the row to notRegistered.
+            for manager in self.acpManagers.values {
+                if let session = manager.liveSession(for: hello.sessionId) {
+                    session.builtInMCPRegistration = .registered
+                    break
+                }
+            }
         }
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
@@ -4831,6 +4848,12 @@ final class AppState {
                     sessionId: sessionId,
                     parentSessionId: parentSessionId
                 )
+            },
+            isBuiltInMCPRegistered: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.isRegistered(sessionId: sessionId) ?? false
+            },
+            clearMCPRegistration: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
             },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,

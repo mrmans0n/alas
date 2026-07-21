@@ -83,6 +83,13 @@ final class ACPSessionManager: ObservableObject {
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
+    /// Reports whether the built-in MCP server announced itself (hello) for a
+    /// local session id. Read after the post-attach grace to decide between
+    /// `.registered` and `.notRegistered`.
+    private let isBuiltInMCPRegistered: (@MainActor (String) -> Bool)?
+    /// Clears any recorded hello for a local session id so each attach epoch
+    /// re-proves registration.
+    private let clearMCPRegistration: (@MainActor (String) -> Void)?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable. Fetched per attach, mirroring
     /// `builtInMCPProvider`.
@@ -360,6 +367,8 @@ final class ACPSessionManager: ObservableObject {
          brokerServiceFactory: ACPBrokerServiceFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
+         isBuiltInMCPRegistered: (@MainActor (String) -> Bool)? = nil,
+         clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil)
     {
@@ -377,6 +386,8 @@ final class ACPSessionManager: ObservableObject {
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.builtInMCPProvider = builtInMCPProvider
+        self.isBuiltInMCPRegistered = isBuiltInMCPRegistered
+        self.clearMCPRegistration = clearMCPRegistration
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
@@ -2535,6 +2546,23 @@ extension ACPSessionManager {
             // connect.
             let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
             let builtInMCP = remoteHost == nil ? await builtInMCPProvider?(worktreePath, sessionId) : nil
+            if builtInMCP != nil {
+                clearMCPRegistration?(sessionId)
+                session.builtInMCPRegistration = .unknown
+                // Grace after attach: MCP servers register at session creation,
+                // so by now a working harness has announced ours. If not,
+                // surface notRegistered. A late hello still heals the row via
+                // AppState.onMCPHello.
+                Task { @MainActor [weak self, weak session] in
+                    try? await Task.sleep(for: .seconds(12))
+                    guard let self, let session else { return }
+                    // Don't downgrade a row that already registered.
+                    if session.builtInMCPRegistration == .registered { return }
+                    let helloSeen = self.isBuiltInMCPRegistered?(sessionId) ?? false
+                    session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
+                        helloSeen: helloSeen, turnStarted: true, graceElapsed: true)
+                }
+            }
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {
