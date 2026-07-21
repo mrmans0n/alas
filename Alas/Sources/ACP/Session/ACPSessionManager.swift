@@ -2560,7 +2560,7 @@ extension ACPSessionManager {
                     if session.builtInMCPRegistration == .registered { return }
                     let helloSeen = self.isBuiltInMCPRegistered?(sessionId) ?? false
                     session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
-                        helloSeen: helloSeen, turnStarted: true, graceElapsed: true)
+                        helloSeen: helloSeen, graceElapsed: true)
                 }
             }
             var plannedWireServers = mcpPlan.wireServers

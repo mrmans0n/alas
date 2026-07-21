@@ -5,15 +5,15 @@ import Testing
 struct MCPRegistrationDecisionTests {
     @Test("registered when hello seen")
     func registered() {
-        #expect(MCPRegistrationDecision.resolve(helloSeen: true, turnStarted: true, graceElapsed: true) == .registered)
+        #expect(MCPRegistrationDecision.resolve(helloSeen: true, graceElapsed: true) == .registered)
     }
-    @Test("unknown before first turn completes")
+    @Test("unknown before grace elapses")
     func unknownEarly() {
-        #expect(MCPRegistrationDecision.resolve(helloSeen: false, turnStarted: false, graceElapsed: false) == .unknown)
+        #expect(MCPRegistrationDecision.resolve(helloSeen: false, graceElapsed: false) == .unknown)
     }
-    @Test("notRegistered only after turn + grace with no hello")
+    @Test("notRegistered only after grace with no hello")
     func notRegistered() {
-        #expect(MCPRegistrationDecision.resolve(helloSeen: false, turnStarted: true, graceElapsed: true) == .notRegistered)
-        #expect(MCPRegistrationDecision.resolve(helloSeen: false, turnStarted: true, graceElapsed: false) == .unknown)
+        #expect(MCPRegistrationDecision.resolve(helloSeen: false, graceElapsed: true) == .notRegistered)
+        #expect(MCPRegistrationDecision.resolve(helloSeen: false, graceElapsed: false) == .unknown)
     }
 }
