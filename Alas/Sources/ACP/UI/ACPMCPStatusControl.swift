@@ -33,7 +33,7 @@ struct ACPMCPStatusControl: View {
                         .font(.system(size: 11, weight: .medium))
                     Text("MCP \(status.requestedCount)")
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    if status.skippedCount > 0 {
+                    if status.skippedCount > 0 || status.hasBuiltInWarning {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 9))
                     }
@@ -66,7 +66,7 @@ struct ACPMCPStatusControl: View {
     }
 
     private func foregroundColor(for status: ACPMCPStatusState) -> Color {
-        if status.isStale || status.skippedCount > 0 {
+        if status.isStale || status.skippedCount > 0 || status.hasBuiltInWarning {
             return theme.color("warn")
         }
         return theme.color("accent")

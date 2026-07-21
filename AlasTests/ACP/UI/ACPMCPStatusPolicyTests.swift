@@ -173,7 +173,9 @@ struct ACPMCPStatusPolicyTests {
         let status = MCPAttachmentServerStatus(
             id: BuiltInAlasMCP.statusId, name: "alas",
             transport: transport, disposition: .requested)
-        return MCPAttachmentSummary(statuses: [status], configurationFingerprint: "fp")
+        return MCPAttachmentSummary(
+            statuses: [status],
+            configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: []))
     }
 
     @Test("notRegistered on stdio offers the HTTP switch when the adapter supports http")
@@ -207,6 +209,32 @@ struct ACPMCPStatusPolicyTests {
         #expect(state?.builtInWarning == .alreadyHTTP)
         #expect(state?.hasBuiltInWarning == true)
         #expect(state?.showsSwitchToHTTPAction == false)
+    }
+
+    @Test("accessibility summary reflects the built-in warning")
+    func accessibilitySummaryReflectsBuiltInWarning() {
+        let canSwitch = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered, adapterSupportsHTTP: true)
+        #expect(canSwitch?.accessibilitySummary
+            == "MCP: 1 requested, Alas MCP server not started — switch to HTTP transport")
+
+        let unsupported = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .notRegistered, adapterSupportsHTTP: false)
+        #expect(unsupported?.accessibilitySummary
+            == "MCP: 1 requested, Alas MCP server not started and this agent has no HTTP MCP support")
+
+        let alreadyHTTP = ACPMCPStatusState(
+            summary: builtInSummary(transport: .http), currentServers: [],
+            builtInRegistration: .notRegistered, adapterSupportsHTTP: true)
+        #expect(alreadyHTTP?.accessibilitySummary
+            == "MCP: 1 requested, Alas MCP server not started over HTTP")
+
+        let registered = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: .registered, adapterSupportsHTTP: true)
+        #expect(registered?.accessibilitySummary == "MCP: 1 requested")
     }
 
     @Test("registered shows no warning")

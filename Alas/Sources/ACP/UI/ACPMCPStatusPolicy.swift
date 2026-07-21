@@ -155,6 +155,16 @@ struct ACPMCPStatusState: Equatable {
         if isStale {
             parts.append("New settings apply on reconnect.")
         }
+        switch builtInWarning {
+        case .none:
+            break
+        case .canSwitchToHTTP:
+            parts.append("Alas MCP server not started — switch to HTTP transport")
+        case .httpUnsupported:
+            parts.append("Alas MCP server not started and this agent has no HTTP MCP support")
+        case .alreadyHTTP:
+            parts.append("Alas MCP server not started over HTTP")
+        }
         return parts.joined(separator: ", ")
     }
 
