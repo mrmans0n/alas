@@ -44,6 +44,23 @@ enum GGConfigReader {
         return nil
     }
 
+    static func effectiveConfig(
+        repoPath: String,
+        globalConfigPath: String? = GGConfigReader.defaultGlobalConfigPath
+    ) -> GGEffectiveConfig {
+        let localPath = GGStackGate.ggConfigPath(repoPath: repoPath)
+        let hasLocalConfig = localPath.map(FileManager.default.fileExists(atPath:)) ?? false
+        let effectiveDefaults = hasLocalConfig
+            ? localPath.flatMap(readDefaults(at:))
+            : globalConfigPath.flatMap(readDefaults(at:))
+        return GGEffectiveConfig(
+            syncAutoRebase: effectiveDefaults?.syncAutoRebase
+                ?? GGEffectiveConfig.defaults.syncAutoRebase,
+            syncBehindThreshold: effectiveDefaults?.syncBehindThreshold.flatMap { $0 >= 0 ? $0 : nil }
+                ?? GGEffectiveConfig.defaults.syncBehindThreshold
+        )
+    }
+
     /// gg's stack-branch naming convention.
     static func composeStackBranch(username: String, stackName: String) -> String {
         "\(username)/\(stackName)"
@@ -57,5 +74,32 @@ enum GGConfigReader {
               !value.isEmpty
         else { return nil }
         return value
+    }
+
+    private static func readDefaults(at path: String) -> EffectiveDefaults? {
+        guard let data = FileManager.default.contents(atPath: path),
+              let config = try? JSONDecoder().decode(EffectiveConfig.self, from: data)
+        else { return nil }
+        return config.defaults
+    }
+
+    private struct EffectiveConfig: Decodable {
+        var defaults: EffectiveDefaults?
+    }
+
+    private struct EffectiveDefaults: Decodable {
+        var syncAutoRebase: Bool?
+        var syncBehindThreshold: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case syncAutoRebase = "sync_auto_rebase"
+            case syncBehindThreshold = "sync_behind_threshold"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            syncAutoRebase = try? container.decode(Bool.self, forKey: .syncAutoRebase)
+            syncBehindThreshold = try? container.decode(Int.self, forKey: .syncBehindThreshold)
+        }
     }
 }

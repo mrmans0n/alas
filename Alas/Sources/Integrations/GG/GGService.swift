@@ -287,6 +287,24 @@ struct GGService {
         return output.split(separator: " ").last.map(String.init)
     }
 
+    func probeCapabilities() async -> GGCapabilities {
+        let root = try? await runner.run(args: ["--help"], cwd: nil)
+        let split = try? await runner.run(args: ["split", "--help"], cwd: nil)
+        let unstack = try? await runner.run(args: ["unstack", "--help"], cwd: nil)
+        let sc = try? await runner.run(args: ["sc", "--help"], cwd: nil)
+        return GGCapabilities(
+            structuredSplit: split?.exitCode == 0
+                && split?.stdout.contains("--describe") == true
+                && split?.stdout.contains("--plan-json") == true,
+            keepCurrentUnstack: unstack?.exitCode == 0
+                && unstack?.stdout.contains("--keep-current") == true,
+            clientOperationID: root?.exitCode == 0
+                && root?.stdout.contains("--client-operation-id") == true,
+            stagedOnlyAmend: sc?.exitCode == 0
+                && sc?.stdout.contains("--staged-only") == true
+        )
+    }
+
     /// Loads the current branch's stack via `gg ls --json`. Returns nil
     /// when the branch is not a gg stack (gg emits the all-stacks shape).
     func currentStack(worktreePath: String) async throws -> GGStack? {
@@ -419,6 +437,10 @@ final class GGAvailability {
     private(set) var version: String?
     private(set) var hasProbed = false
     private(set) var ggMCPBinaryPath: String?
+    private(set) var capabilities = GGCapabilities(
+        structuredSplit: false,
+        keepCurrentUnstack: false
+    )
 
     var isInstalled: Bool { version != nil }
 
@@ -439,8 +461,15 @@ final class GGAvailability {
         force: Bool = false
     ) async {
         if hasProbed && !force { return }
-        version = await service.probeVersion()
-        ggMCPBinaryPath = version != nil ? await which("gg-mcp") : nil
-        hasProbed = true
+        let detectedVersion = await service.probeVersion()
+        let detectedMCPBinaryPath = detectedVersion != nil ? await which("gg-mcp") : nil
+        let detectedCapabilities = detectedVersion != nil
+            ? await service.probeCapabilities()
+            : GGCapabilities(structuredSplit: false, keepCurrentUnstack: false)
+
+        if version != detectedVersion { version = detectedVersion }
+        if ggMCPBinaryPath != detectedMCPBinaryPath { ggMCPBinaryPath = detectedMCPBinaryPath }
+        if capabilities != detectedCapabilities { capabilities = detectedCapabilities }
+        if !hasProbed { hasProbed = true }
     }
 }

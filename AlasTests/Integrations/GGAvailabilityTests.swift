@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import Alas
 
@@ -12,8 +13,115 @@ private struct FixedVersionGGRunner: GGCommandRunning {
     }
 }
 
+private struct HelpGGRunner: GGCommandRunning {
+    let version: String?
+    let root: String?
+    let split: String?
+    let unstack: String?
+    let sc: String?
+
+    init(
+        version: String? = "1.0.0",
+        root: String? = nil,
+        split: String?,
+        unstack: String?,
+        sc: String? = nil
+    ) {
+        self.version = version
+        self.root = root
+        self.split = split
+        self.unstack = unstack
+        self.sc = sc
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        switch args {
+        case ["--version"]:
+            guard let version else { break }
+            return ProcessResult(exitCode: 0, stdout: "gg \(version)\n", stderr: "")
+        case ["--help"]:
+            guard let root else { break }
+            return ProcessResult(exitCode: 0, stdout: root, stderr: "")
+        case ["split", "--help"]:
+            guard let split else { break }
+            return ProcessResult(exitCode: 0, stdout: split, stderr: "")
+        case ["unstack", "--help"]:
+            guard let unstack else { break }
+            return ProcessResult(exitCode: 0, stdout: unstack, stderr: "")
+        case ["sc", "--help"]:
+            guard let sc else { break }
+            return ProcessResult(exitCode: 0, stdout: sc, stderr: "")
+        default:
+            break
+        }
+        return ProcessResult(exitCode: 127, stdout: "", stderr: "not found")
+    }
+}
+
+private final class InvalidationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 @MainActor
 struct GGAvailabilityTests {
+    @Test func splitCapabilityRequiresBothFlags() async {
+        let service = GGService(
+            runner: HelpGGRunner(split: "--describe --plan-json", unstack: "--keep-current")
+        )
+        #expect(
+            await service.probeCapabilities()
+                == GGCapabilities(structuredSplit: true, keepCurrentUnstack: true)
+        )
+
+        let oldService = GGService(runner: HelpGGRunner(split: "--describe", unstack: ""))
+        #expect(
+            await oldService.probeCapabilities()
+                == GGCapabilities(structuredSplit: false, keepCurrentUnstack: false)
+        )
+    }
+
+    @Test func capabilityProbeReturnsFalseWhenHelpCommandsFail() async {
+        let service = GGService(runner: HelpGGRunner(split: nil, unstack: nil))
+
+        #expect(
+            await service.probeCapabilities()
+                == GGCapabilities(structuredSplit: false, keepCurrentUnstack: false)
+        )
+    }
+
+    @Test func clientOperationCapabilityUsesRootHelpAndDefaultsOff() async {
+        let current = GGService(runner: HelpGGRunner(
+            root: "--client-operation-id <ID>", split: "", unstack: ""
+        ))
+        #expect((await current.probeCapabilities()).clientOperationID)
+
+        let old = GGService(runner: HelpGGRunner(root: "--verbose", split: "", unstack: ""))
+        #expect(!(await old.probeCapabilities()).clientOperationID)
+    }
+
+    @Test func stagedOnlyAmendCapabilityUsesScHelpAndDefaultsOff() async {
+        let current = GGService(runner: HelpGGRunner(
+            split: "", unstack: "", sc: "--staged-only"
+        ))
+        #expect((await current.probeCapabilities()).stagedOnlyAmend)
+
+        let old = GGService(runner: HelpGGRunner(split: "", unstack: "", sc: "--message"))
+        #expect(!(await old.probeCapabilities()).stagedOnlyAmend)
+    }
+
     @Test func probePopulatesVersionAndMCPPath() async {
         let availability = GGAvailability()
         await availability.probe(
@@ -52,5 +160,55 @@ struct GGAvailabilityTests {
         )
         #expect(availability.version == "1.0.0")
         #expect(availability.ggMCPBinaryPath == "/first/gg-mcp")
+    }
+
+    @Test func forcedProbeUpdatesCapabilitiesWithDetectedVersion() async {
+        let availability = GGAvailability()
+        await availability.probe(
+            service: GGService(
+                runner: HelpGGRunner(
+                    version: "1.0.0",
+                    split: "--describe --plan-json",
+                    unstack: "--keep-current"
+                )
+            ),
+            which: { _ in nil },
+            force: true
+        )
+        #expect(
+            availability.capabilities
+                == GGCapabilities(structuredSplit: true, keepCurrentUnstack: true)
+        )
+
+        await availability.probe(
+            service: GGService(
+                runner: HelpGGRunner(version: "2.0.0", split: "--describe", unstack: "")
+            ),
+            which: { _ in nil },
+            force: true
+        )
+        #expect(availability.version == "2.0.0")
+        #expect(
+            availability.capabilities
+                == GGCapabilities(structuredSplit: false, keepCurrentUnstack: false)
+        )
+    }
+
+    @Test func unchangedCapabilityProbeDoesNotInvalidateObservers() async {
+        let availability = GGAvailability()
+        let service = GGService(
+            runner: HelpGGRunner(split: "--describe --plan-json", unstack: "--keep-current")
+        )
+        await availability.probe(service: service, which: { _ in nil }, force: true)
+
+        let invalidations = InvalidationCounter()
+        withObservationTracking {
+            _ = availability.capabilities
+        } onChange: {
+            invalidations.increment()
+        }
+
+        await availability.probe(service: service, which: { _ in nil }, force: true)
+        #expect(invalidations.count == 0)
     }
 }
