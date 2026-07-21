@@ -2380,6 +2380,11 @@ extension ACPSessionManager {
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
+                // A failed/aborted attach may have already spawned the supervised
+                // `alas mcp --http` helper (the provider runs before session
+                // creation). Tear it down so it doesn't linger bound on
+                // localhost; a later reattach respawns it. No-op for stdio sessions.
+                onSessionEnded?(sessionId)
             }
         }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
