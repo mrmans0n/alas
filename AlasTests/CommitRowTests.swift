@@ -67,6 +67,11 @@ struct CommitRowTests {
         #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: false) == [.edit])
     }
 
+    @Test func ggContextMenuUsesOneTypedActionSurface() {
+        #expect(CommitRow.ggContextMenuTitle == "GG")
+        #expect(GGCommitAction.checkout != .dropCommit)
+    }
+
     @MainActor
     @Test func copyFeedbackShowsThenDismisses() async throws {
         let feedback = CopyFeedbackState(displayNanoseconds: 10_000_000)

@@ -139,10 +139,18 @@ final class RightPaneState {
     // import` without a real git repo driving `refresh()`. Bookkeeping only,
     // never read by a view — kept out of observation to avoid invalidation
     // churn on the hot refresh path.
-    @ObservationIgnored var ggStackCommitsKey: String? = nil
+    var ggStackCommitsKey: String? = nil
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
+
+    var currentGGStackCommitsKey: String {
+        "\(currentBranch)|" + ggStackSourceCommits.map(\.sha).joined(separator: "|")
+    }
+
+    var ggCommitSelectionIsStale: Bool {
+        ggStack != nil && ggStackCommitsKey != currentGGStackCommitsKey
+    }
 
     // Sync-nudge state. All fields are in-memory only; nothing is
     // persisted to AppConfig. Two independent conditions:
@@ -223,6 +231,10 @@ final class RightPaneState {
     var mergeQueuedMessage: String? = nil
     var pendingGGLand: GGLandRequest? = nil
     @ObservationIgnored private var pendingGGLandPrepared: GGPreparedMutation? = nil
+    var pendingGGDrop: GGDropPresentation? = nil
+    @ObservationIgnored private var pendingGGDropPrepared: GGPreparedMutation? = nil
+    var pendingGGUnstack: GGUnstackModel? = nil
+    @ObservationIgnored var pendingGGUnstackPrepared: GGPreparedMutation? = nil
     var pendingGGCleanAll: Bool = false
     @ObservationIgnored private var pendingGGCleanPrepared: GGPreparedMutation? = nil
 
@@ -870,7 +882,7 @@ final class RightPaneState {
         // *current* branch — a checkout to a different branch that happens
         // to share the same commits (e.g. right after `git checkout -b`)
         // must not reuse the old branch's cached stack.
-        let key = "\(currentBranch)|" + ggStackSourceCommits.map(\.sha).joined(separator: "|")
+        let key = currentGGStackCommitsKey
         guard key != ggStackCommitsKey else { return }
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
@@ -1016,6 +1028,155 @@ final class RightPaneState {
         }
     }
 
+    func handleGGCommitAction(_ action: GGCommitAction, commit: CommitInfo, appState: AppState) {
+        guard let entry = ggStack?.entry(matchingCommitSHA: commit.sha) else {
+            ggActionState.setError("The stack changed. Refresh and try again.")
+            return
+        }
+
+        switch action {
+        case .reviewProviderRequest(let number, let url):
+            guard entry.prNumber == number,
+                  commitRemote?.reviewRequestURL(number: number) == url
+            else {
+                ggActionState.setError("The provider review changed. Refresh and try again.")
+                return
+            }
+            Task { @MainActor in
+                let response = await appState.cliOpenProviderReview(
+                    worktree: worktree,
+                    target: url.absoluteString
+                )
+                if let message = Self.ggProviderReviewError(response) {
+                    ggActionState.setError(message)
+                }
+            }
+        case .openProviderRequest(let number):
+            guard entry.prNumber == number, let remote = commitRemote else {
+                ggActionState.setError("The provider review is no longer available.")
+                return
+            }
+            NSWorkspace.shared.open(remote.reviewRequestURL(number: number))
+        case .checkout:
+            requestGGCheckout(target: entry.id)
+        case .splitCommit:
+            guard mergeOp.current == nil else {
+                ggActionState.setError("Finish the current Git operation before splitting a commit.")
+                return
+            }
+            requestGGSplitCommit?(entry)
+        case .dropCommit:
+            requestGGDrop(entry)
+        case .unstackHere:
+            requestGGUnstack(entry)
+        case .landThrough:
+            requestGGLand(.until(entryId: entry.id, title: entry.title))
+        }
+    }
+
+    static func ggProviderReviewError(_ response: AlasCLIResponse) -> String? {
+        guard case .error(let message) = response else { return nil }
+        return message
+    }
+
+    @ObservationIgnored var requestGGSplitCommit: ((GGStackEntry) -> Void)? = nil
+
+    func requestGGDrop(_ entry: GGStackEntry) {
+        Task { @MainActor in
+            do {
+                let prepared = try await ggMutationCoordinator.prepare(.drop(target: entry.id))
+                guard case .drop(_, let descendants, let hasOpenReview) = prepared.confirmation else {
+                    throw GGMutationError.staleConfirmation
+                }
+                pendingGGDropPrepared = prepared
+                pendingGGDrop = GGDropPresentation(
+                    target: entry.id,
+                    title: entry.title,
+                    rewrittenDescendants: descendants,
+                    openReviewLabel: hasOpenReview
+                        ? (commitRemote?.kind.reviewRequestLabel ?? "review")
+                        : nil
+                )
+            } catch {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
+        }
+    }
+
+    func cancelGGDrop() {
+        pendingGGDrop = nil
+        pendingGGDropPrepared = nil
+    }
+
+    func performGGDrop() {
+        guard let prepared = pendingGGDropPrepared else { return }
+        pendingGGDrop = nil
+        pendingGGDropPrepared = nil
+        runGGMutation(prepared)
+    }
+
+    func requestGGUnstack(_ entry: GGStackEntry) {
+        let name = GGUnstackModel.derivedStackName(from: entry.title)
+        let request = GGMutationRequest.unstack(
+            target: entry.id,
+            name: name,
+            createWorktree: true
+        )
+        Task { @MainActor in
+            do {
+                let prepared = try await ggMutationCoordinator.prepare(request)
+                let model = try GGUnstackModel(
+                    prepared: prepared,
+                    supportsKeepCurrent: GGAvailability.shared.capabilities.keepCurrentUnstack
+                )
+                pendingGGUnstackPrepared = prepared
+                pendingGGUnstack = model
+            } catch {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
+        }
+    }
+
+    func cancelGGUnstack() {
+        pendingGGUnstack = nil
+        pendingGGUnstackPrepared = nil
+    }
+
+    func submitGGUnstack(_ model: GGUnstackModel) async throws -> GGUnstackSubmissionResult {
+        guard let pending = pendingGGUnstack,
+              let prepared = pendingGGUnstackPrepared,
+              pending.id == model.id,
+              let name = model.validatedStackName
+        else {
+            throw GGMutationError.staleConfirmation
+        }
+        let request = GGMutationRequest.unstack(
+            target: model.targetID,
+            name: name,
+            createWorktree: model.createWorktree
+        )
+
+        let freshPrepared = try await ggMutationCoordinator.prepare(request)
+        if request != prepared.request
+            || freshPrepared.snapshot != prepared.snapshot
+            || freshPrepared.confirmation != prepared.confirmation
+        {
+            let freshModel = try GGUnstackModel(
+                prepared: freshPrepared,
+                supportsKeepCurrent: GGAvailability.shared.capabilities.keepCurrentUnstack
+            )
+            pendingGGUnstackPrepared = freshPrepared
+            pendingGGUnstack = freshModel
+            return .reconfirm(freshModel)
+        }
+
+        pendingGGUnstackPrepared = freshPrepared
+        try await ggMutationCoordinator.apply(freshPrepared)
+        pendingGGUnstack = nil
+        pendingGGUnstackPrepared = nil
+        return .applied
+    }
+
     func cancelGGLand() {
         pendingGGLand = nil
         pendingGGLandPrepared = nil
@@ -1118,10 +1279,18 @@ final class RightPaneState {
         stackBase: String,
         behindBase: GitService.BehindStatus?
     ) -> String {
-        guard let ref = behindBase?.ref,
-              ref == stackBase || ref.hasSuffix("/\(stackBase)")
-        else { return stackBase }
+        guard let ref = behindBase?.ref else { return stackBase }
+        if ref == stackBase { return ref }
+        let components = ref.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard components.count == 2, components[1] == stackBase else { return stackBase }
         return ref
+    }
+
+    static func ggUndoRecoveryIsBlockedByGenericGitOperation(
+        operationInProgress: Bool,
+        alasGGOperationInProgress: Bool
+    ) -> Bool {
+        operationInProgress && !alasGGOperationInProgress
     }
 
     var pendingGGLandConfirmationMessage: String? {
@@ -1150,6 +1319,19 @@ final class RightPaneState {
             request,
             confirmedAgainst: identity
         ) else { return }
+        Task { @MainActor in
+            do {
+                try await operation.value
+            } catch {
+                if ggActionState.lastError == nil {
+                    ggActionState.setError(GGErrorPresentation.message(for: error))
+                }
+            }
+        }
+    }
+
+    private func runGGMutation(_ prepared: GGPreparedMutation) {
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
         Task { @MainActor in
             do {
                 try await operation.value
@@ -2658,5 +2840,18 @@ final class RightPaneState {
         case .error(let message):
             logger.error("operation returned error: \(message, privacy: .public)")
         }
+    }
+}
+
+struct GGDropPresentation: Equatable {
+    let target: String
+    let title: String
+    let rewrittenDescendants: Int
+    let openReviewLabel: String?
+
+    var message: String {
+        let descendants = "\(rewrittenDescendants) descendant commit\(rewrittenDescendants == 1 ? "" : "s")"
+        let reviewWarning = openReviewLabel.map { " The selected commit has an open \($0)." } ?? ""
+        return "Drop \u{201C}\(title)\u{201D}. GG will rewrite and retain \(descendants).\(reviewWarning)"
     }
 }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CommitRow: View {
     static let ggCheckoutTitle = "Checkout Commit"
+    static let ggContextMenuTitle = "GG"
 
     enum ContextMenuAction: Hashable {
         case edit
@@ -19,9 +20,9 @@ struct CommitRow: View {
     var onReview: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
     var onRevert: (() -> Void)? = nil
+    var ggMenu: GGCommitMenuModel? = nil
+    var onGGAction: ((GGCommitAction) -> Void)? = nil
     var onGGOpenPR: (() -> Void)? = nil
-    var onGGLandUntil: (() -> Void)? = nil
-    var onGGCheckout: (() -> Void)? = nil
     /// Stack entry for this commit when the branch is a gg stack.
     var stackEntry: GGStackEntry? = nil
     var codeHostKind: CodeHostKind? = nil
@@ -73,16 +74,32 @@ struct CommitRow: View {
             if let onOpenRemote {
                 Button("Open Commit on Remote") { onOpenRemote() }
             }
-            if stackEntry != nil {
+            if let ggMenu {
                 Divider()
-                if let onGGOpenPR, stackEntry?.prNumber != nil {
-                    Button("Open \(codeHostKind?.reviewRequestLabel ?? "PR")") { onGGOpenPR() }
-                }
-                if let onGGCheckout {
-                    Button(Self.ggCheckoutTitle) { onGGCheckout() }
-                }
-                if let onGGLandUntil {
-                    Button("Land Until Here…") { onGGLandUntil() }
+                Menu(Self.ggContextMenuTitle, systemImage: "square.stack.3d.up") {
+                    ForEach(ggMenu.visibleItems) { item in
+                        if item.isSeparator {
+                            Divider()
+                        } else if let title = item.title, let action = item.action {
+                            Button {
+                                onGGAction?(action)
+                            } label: {
+                                if let systemImage = item.systemImage {
+                                    Label(title, systemImage: systemImage)
+                                } else {
+                                    Text(title)
+                                }
+                            }
+                            .disabled(!item.isEnabled)
+                            .help(item.disabledReason ?? "")
+
+                            if !item.isEnabled, let reason = item.disabledReason {
+                                Text(reason)
+                                    .foregroundStyle(.secondary)
+                                    .disabled(true)
+                            }
+                        }
+                    }
                 }
             }
             if onCherryPick != nil {

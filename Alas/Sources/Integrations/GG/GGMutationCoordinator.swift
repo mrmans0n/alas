@@ -73,7 +73,16 @@ final class GGMutationCoordinator {
 
     func apply(_ request: GGMutationRequest, confirmedAgainst identity: GGStackIdentity?) async throws {
         guard reserve(request) else { throw GGMutationError.operationInFlight }
-        try await applyReserved(request, confirmedAgainst: identity)
+        try await applyReserved(request, confirmedAgainst: identity, confirmedWith: nil)
+    }
+
+    func apply(_ prepared: GGPreparedMutation) async throws {
+        guard reserve(prepared.request) else { throw GGMutationError.operationInFlight }
+        try await applyReserved(
+            prepared.request,
+            confirmedAgainst: prepared.snapshot,
+            confirmedWith: prepared.confirmation
+        )
     }
 
     func startApplying(
@@ -81,7 +90,18 @@ final class GGMutationCoordinator {
         confirmedAgainst identity: GGStackIdentity?
     ) -> Task<Void, Error>? {
         guard reserve(request) else { return nil }
-        return Task { try await self.applyReserved(request, confirmedAgainst: identity) }
+        return Task { try await self.applyReserved(request, confirmedAgainst: identity, confirmedWith: nil) }
+    }
+
+    func startApplying(_ prepared: GGPreparedMutation) -> Task<Void, Error>? {
+        guard reserve(prepared.request) else { return nil }
+        return Task {
+            try await self.applyReserved(
+                prepared.request,
+                confirmedAgainst: prepared.snapshot,
+                confirmedWith: prepared.confirmation
+            )
+        }
     }
 
     private func reserve(_ request: GGMutationRequest) -> Bool {
@@ -94,7 +114,8 @@ final class GGMutationCoordinator {
 
     private func applyReserved(
         _ request: GGMutationRequest,
-        confirmedAgainst identity: GGStackIdentity?
+        confirmedAgainst identity: GGStackIdentity?,
+        confirmedWith confirmation: GGMutationConfirmation?
     ) async throws {
         defer {
             activeRequest = nil
@@ -211,8 +232,7 @@ final class GGMutationCoordinator {
                 }
             guard lowerEntriesAreReady else { throw GGMutationError.staleConfirmation }
         case .applySplit(_, let identity, _):
-            let target = identity.ggID.flatMap { stack.entry(matchingStableID: $0) }
-                ?? stack.entry(matchingStableID: identity.sha)
+            let target = stack.splitTarget(matching: identity)
             guard target != nil else { throw GGMutationError.staleConfirmation }
         default:
             break
@@ -227,8 +247,7 @@ final class GGMutationCoordinator {
         case .drop(let id), .unstack(let id, _, _):
             target = stack.entry(matchingStableID: id)
         case .applySplit(_, let identity, _):
-            target = identity.ggID.flatMap { stack.entry(matchingStableID: $0) }
-                ?? stack.entry(matchingStableID: identity.sha)
+            target = stack.splitTarget(matching: identity)
         default:
             target = nil
         }
@@ -250,6 +269,7 @@ final class GGMutationCoordinator {
             guard let entry = stack.entry(matchingStableID: target) else { return nil }
             return .unstack(
                 target: target,
+                targetTitle: entry.title,
                 movedCommits: stack.entries.filter { $0.position >= entry.position }.count,
                 lowerStack: stack.name,
                 newStack: name
@@ -329,6 +349,12 @@ final class GGMutationCoordinator {
             if let summary = GGStackActionState.landSummaryLine(from: result.landed) {
                 actionState.setActionSummary(summary)
             }
+        case .unstack(let result) where result.worktreePath == nil:
+            precondition(
+                result.currentStack == result.originalStack,
+                "Unstack without a worktree must keep the current lower stack checked out."
+            )
+            actionState.setActionSummary("New stack created without a worktree")
         default:
             if request == .sync,
                actionState.lastError == nil,
@@ -394,6 +420,13 @@ private extension GGMutationRequest {
 private extension GGStack {
     func entry(matchingStableID target: String) -> GGStackEntry? {
         entries.first { $0.id == target || $0.sha == target }
+    }
+
+    func splitTarget(matching identity: GGSplitTargetIdentity) -> GGStackEntry? {
+        if let ggID = identity.ggID {
+            return entry(matchingStableID: ggID)
+        }
+        return entry(matchingCommitSHA: identity.sha)
     }
 }
 

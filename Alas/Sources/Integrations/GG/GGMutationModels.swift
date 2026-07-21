@@ -67,7 +67,13 @@ struct GGPreparedMutation: Equatable, Sendable {
 
 enum GGMutationConfirmation: Equatable, Sendable {
     case drop(target: String, rewrittenDescendants: Int, hasOpenReview: Bool)
-    case unstack(target: String, movedCommits: Int, lowerStack: String, newStack: String)
+    case unstack(
+        target: String,
+        targetTitle: String,
+        movedCommits: Int,
+        lowerStack: String,
+        newStack: String
+    )
     case land(target: String, readyCommits: Int)
     case clean(mergedCommits: Int)
 
@@ -77,8 +83,8 @@ enum GGMutationConfirmation: Equatable, Sendable {
             let descendants = Self.commitCount(rewrittenDescendants, qualifier: "descendant")
             let reviewWarning = hasOpenReview ? " The selected commit has an open review." : ""
             return "Drop \(target) and rewrite \(descendants).\(reviewWarning)"
-        case .unstack(_, let movedCommits, let lowerStack, let newStack):
-            return "Move \(Self.commitCount(movedCommits)) from \(lowerStack) to \(newStack)."
+        case .unstack(_, let targetTitle, let movedCommits, let lowerStack, let newStack):
+            return "Split at \u{201C}\(targetTitle)\u{201D}. Move \(Self.commitCount(movedCommits)) from \(lowerStack) to \(newStack)."
         case .land(let target, let readyCommits):
             return "Land \(Self.commitCount(readyCommits, qualifier: "ready")) through \(target)."
         case .clean(let mergedCommits):

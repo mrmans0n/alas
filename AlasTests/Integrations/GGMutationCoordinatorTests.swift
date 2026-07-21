@@ -217,6 +217,59 @@ struct GGMutationCoordinatorTests {
         #expect(harness.service.requests.isEmpty)
     }
 
+    @Test func dropRejectsConfirmationWhenItsReviewWarningChanges() async throws {
+        let open = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Drop", ggId: "change-1",
+                prNumber: 7, prState: .open, isCurrent: true
+            ),
+        ]
+        let closed = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Drop", ggId: "change-1",
+                prNumber: 7, prState: .closed, isCurrent: true
+            ),
+        ]
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "a", entries: open),
+            stack(head: "a", entries: closed),
+        ])
+        let prepared = try await harness.coordinator.prepare(.drop(target: "change-1"))
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await harness.coordinator.apply(prepared)
+        }
+
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func startApplyingRejectsConfirmationWhenItsReviewWarningChanges() async throws {
+        let open = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Drop", ggId: "change-1",
+                prNumber: 7, prState: .open, isCurrent: true
+            ),
+        ]
+        let closed = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Drop", ggId: "change-1",
+                prNumber: 7, prState: .closed, isCurrent: true
+            ),
+        ]
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "a", entries: open),
+            stack(head: "a", entries: closed),
+        ])
+        let prepared = try await harness.coordinator.prepare(.drop(target: "change-1"))
+        let task = try #require(harness.coordinator.startApplying(prepared))
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await task.value
+        }
+
+        #expect(harness.service.requests.isEmpty)
+    }
+
     @Test func missingTargetIsRejectedBeforeProcessLaunch() async {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
 
@@ -362,6 +415,7 @@ struct GGMutationCoordinatorTests {
             confirmedAgainst: nil
         )
         #expect(!withoutWorktree.refreshes.contains(.topology))
+        #expect(withoutWorktree.actionState.lastActionSummary == "New stack created without a worktree")
 
         let withWorktree = GGMutationHarness(stacks: [stack(head: "a")])
         withWorktree.service.result = .unstack(.init(
