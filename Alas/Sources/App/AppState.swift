@@ -4825,7 +4825,7 @@ final class AppState {
                     configuredServers: project.mcpServers
                 )
             },
-            builtInMCPProvider: { [weak self] worktreePath, sessionId in
+            builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
                 guard let self else { return nil }
                 // installExecutables is idempotent (byte-compares before
                 // writing); a nil binaryPath (no bundle, e.g. tests) means
@@ -4842,6 +4842,7 @@ final class AppState {
                 }
                 let configuredServers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
                 if self.config.harness.alasMCPTransport == .http,
+                   adapterSupportsHTTP,
                    let binaryPath, let socketPath = self.harness.socketServer.socketPath,
                    BuiltInAlasMCP.shouldInject(
                        enabled: self.config.harness.exposeAlasMCP,

@@ -31,7 +31,8 @@ final class ACPSessionManager: ObservableObject {
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
     typealias BuiltInMCPProvider = @MainActor (
         _ worktreePath: String,
-        _ sessionId: ACPSession.ID
+        _ sessionId: ACPSession.ID,
+        _ adapterSupportsHTTP: Bool
     ) async -> BuiltInAlasMCP.Injection?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable for that worktree. Mirrors
@@ -2545,7 +2546,9 @@ extension ACPSessionManager {
             // skip it entirely instead of reporting it unavailable on every
             // connect.
             let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let builtInMCP = remoteHost == nil ? await builtInMCPProvider?(worktreePath, sessionId) : nil
+            let builtInMCP = remoteHost == nil
+                ? await builtInMCPProvider?(worktreePath, sessionId, initialized.mcpCapabilities.http)
+                : nil
             if builtInMCP != nil {
                 clearMCPRegistration?(sessionId)
                 session.builtInMCPRegistration = .unknown
