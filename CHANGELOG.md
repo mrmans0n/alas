@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-07-21
+
+### 🐛 Fixes
+
+- Avoid duplicate branch username prefixes in `git-gud` workflow branches (#863).
+- Lighten diff review stream row identity to reduce unnecessary row churn (#866).
+
+### 🎨 Changed
+
+- Simplify diff context expansion controls (#864).
+
+### 🏗️ Internal
+
+- Update `actions/checkout` to v7.0.1 and Rust crate `libc` to v0.2.187 (#865, #867).
+- Add native `git-gud` workflow integration design and implementation plans (#868, #869).
+
 ## [0.12.1] - 2026-07-20
 
 ### ✨ Features
