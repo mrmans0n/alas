@@ -800,7 +800,6 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
     println!("PORT {}", listener.local_addr()?.port());
     std::io::stdout().flush()?;
 
-    let mut hello_sent = false;
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -809,7 +808,7 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
                 continue;
             }
         };
-        if let Err(err) = handle_http_connection(env, &mut stream, &token, &mut hello_sent) {
+        if let Err(err) = handle_http_connection(env, &mut stream, &token) {
             // A single bad connection must not take down the server.
             eprintln!("alas: mcp http connection error: {err}");
         }
@@ -821,7 +820,6 @@ fn handle_http_connection(
     env: &McpEnv,
     stream: &mut std::net::TcpStream,
     token: &str,
-    hello_sent: &mut bool,
 ) -> std::io::Result<()> {
     use std::io::{Read, Write};
 
@@ -844,7 +842,7 @@ fn handle_http_connection(
     };
 
     let response = match request {
-        Ok(Some(req)) => build_http_response(env, &req, token, hello_sent),
+        Ok(Some(req)) => build_http_response(env, &req, token),
         Ok(None) | Err(()) => http_response(400, "text/plain", "bad request"),
     };
     stream.write_all(response.as_bytes())?;
@@ -852,12 +850,20 @@ fn handle_http_connection(
     Ok(())
 }
 
-fn build_http_response(
-    env: &McpEnv,
-    req: &HttpRequest,
-    token: &str,
-    hello_sent: &mut bool,
-) -> String {
+/// True iff `body` parses as JSON whose `method` is `initialize`.
+fn is_initialize_message(body: &str) -> bool {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("method")
+                .and_then(Value::as_str)
+                .map(|method| method == "initialize")
+        })
+        .unwrap_or(false)
+}
+
+fn build_http_response(env: &McpEnv, req: &HttpRequest, token: &str) -> String {
     // No token configured, or a mismatch, is a flat 401 with no detail so the
     // response never distinguishes "no token here" from "wrong token".
     if token.is_empty() || req.bearer.as_deref() != Some(token) {
@@ -867,15 +873,12 @@ fn build_http_response(
         return http_response(404, "text/plain", "not found");
     }
 
-    // Announce startup once, on the first authenticated `initialize`, mirroring
-    // the stdio server's best-effort hello.
-    if !*hello_sent {
-        if let Ok(value) = serde_json::from_str::<Value>(&req.body) {
-            if value.get("method").and_then(Value::as_str) == Some("initialize") {
-                alas_client::send_hello(&env.socket, &env.session_id, "http");
-                *hello_sent = true;
-            }
-        }
+    // Re-announce on every authenticated `initialize`. The supervisor reuses the
+    // process across ACP reattaches while the app clears its registration
+    // registry per attach, so the hello must fire each time the harness
+    // reconnects and re-sends `initialize`. `recordHello` is idempotent.
+    if is_initialize_message(&req.body) {
+        alas_client::send_hello(&env.socket, &env.session_id, "http");
     }
 
     match handle_line_with_parent(
@@ -893,11 +896,22 @@ fn build_http_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_tool, dispatch, env_from, handle_line, http_response, parse_http_request,
-        McpEnv, PROTOCOL_VERSION,
+        command_for_tool, dispatch, env_from, handle_line, http_response, is_initialize_message,
+        parse_http_request, McpEnv, PROTOCOL_VERSION,
     };
     use alas_client::Response;
     use serde_json::{json, Value};
+
+    #[test]
+    fn detects_initialize_messages() {
+        assert!(is_initialize_message(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#
+        ));
+        assert!(!is_initialize_message(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#
+        ));
+        assert!(!is_initialize_message("not json"));
+    }
 
     #[test]
     fn parses_post_body_and_token() {
