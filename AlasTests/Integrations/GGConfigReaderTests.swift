@@ -59,4 +59,85 @@ struct GGConfigReaderTests {
         let garbage = try makeRepo(configJSON: "not json")
         #expect(GGConfigReader.defaultBase(repoPath: garbage, globalConfigPath: nil) == nil)
     }
+
+    @Test func effectiveConfigUsesTypedDefaultsWhenValuesAreAbsent() throws {
+        let repo = try makeRepo(configJSON: #"{"defaults":{}}"#)
+
+        #expect(
+            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: nil)
+                == .defaults
+        )
+    }
+
+    @Test func effectiveConfigReadsGlobalValues() throws {
+        let repo = try makeRepo(configJSON: nil)
+        let global = try makeGlobal(
+            configJSON: #"{"defaults":{"sync_auto_rebase":true,"sync_behind_threshold":4}}"#
+        )
+
+        #expect(
+            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global)
+                == GGEffectiveConfig(syncAutoRebase: true, syncBehindThreshold: 4)
+        )
+    }
+
+    @Test func effectiveConfigLocalDefaultsReplaceGlobalDefaults() throws {
+        let repo = try makeRepo(configJSON: #"{"defaults":{"sync_auto_rebase":true}}"#)
+        let global = try makeGlobal(
+            configJSON: #"{"defaults":{"sync_auto_rebase":false,"sync_behind_threshold":4}}"#
+        )
+
+        #expect(
+            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global)
+                == GGEffectiveConfig(syncAutoRebase: true, syncBehindThreshold: 1)
+        )
+    }
+
+    @Test func effectiveConfigMalformedLocalKeyUsesHardcodedDefault() throws {
+        let repo = try makeRepo(
+            configJSON: #"{"defaults":{"sync_auto_rebase":"yes","sync_behind_threshold":2}}"#
+        )
+        let global = try makeGlobal(
+            configJSON: #"{"defaults":{"sync_auto_rebase":true,"sync_behind_threshold":"four"}}"#
+        )
+
+        #expect(
+            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global)
+                == GGEffectiveConfig(syncAutoRebase: false, syncBehindThreshold: 2)
+        )
+    }
+
+    @Test func effectiveConfigRejectsCrossTypeLocalValues() throws {
+        let repo = try makeRepo(
+            configJSON: #"{"defaults":{"sync_auto_rebase":1,"sync_behind_threshold":true}}"#
+        )
+        let global = try makeGlobal(
+            configJSON: #"{"defaults":{"sync_auto_rebase":false,"sync_behind_threshold":4}}"#
+        )
+
+        #expect(
+            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global)
+                == GGEffectiveConfig(syncAutoRebase: false, syncBehindThreshold: 1)
+        )
+    }
+
+    @Test func effectiveConfigFallsBackForNegativeBehindThreshold() throws {
+        let repo = try makeRepo(
+            configJSON: #"{"defaults":{"sync_auto_rebase":true,"sync_behind_threshold":-1}}"#
+        )
+
+        #expect(
+            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: nil)
+                == GGEffectiveConfig(syncAutoRebase: true, syncBehindThreshold: 1)
+        )
+    }
+
+    @Test func effectiveConfigInvalidLocalFileDoesNotExposeGlobalPolicy() throws {
+        let repo = try makeRepo(configJSON: "not json")
+        let global = try makeGlobal(
+            configJSON: #"{"defaults":{"sync_auto_rebase":true,"sync_behind_threshold":4}}"#
+        )
+
+        #expect(GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global) == .defaults)
+    }
 }
