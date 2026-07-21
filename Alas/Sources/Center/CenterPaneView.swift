@@ -53,6 +53,33 @@ struct CenterPaneView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(rel, forType: .string)
                 },
+                onOpenWithSystem: { id in
+                    guard !worktree.path.isRemoteAlasPath,
+                          let tab = tabs.first(where: { $0.id == id }) else { return }
+                    let url: URL
+                    if let abs = tab.absoluteFilePath {
+                        url = URL(fileURLWithPath: abs)
+                    } else if let rel = tab.relativeFilePath {
+                        url = worktree.path.appendingPathComponent(rel)
+                    } else {
+                        return
+                    }
+                    FileSystemOpen.open(url: url)
+                },
+                onRevealInFinder: { id in
+                    guard !worktree.path.isRemoteAlasPath,
+                          let tab = tabs.first(where: { $0.id == id }) else { return }
+                    let url: URL
+                    if let abs = tab.absoluteFilePath {
+                        url = URL(fileURLWithPath: abs)
+                    } else if let rel = tab.relativeFilePath {
+                        url = worktree.path.appendingPathComponent(rel)
+                    } else {
+                        return
+                    }
+                    FileSystemOpen.reveal(url: url)
+                },
+                systemActionsEnabled: !worktree.path.isRemoteAlasPath,
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
                 },
@@ -159,7 +186,8 @@ struct CenterPaneView: View {
                                             appState: state,
                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         } else {
-                            EditorTabView(worktreePath: worktree.path,
+                            EditorTabView(worktree: worktree,
+                                          worktreePath: worktree.path,
                                           relativePath: s.relativePath,
                                           worktreeId: worktree.id,
                                           tabId: s.id,
@@ -270,6 +298,10 @@ struct CenterPaneView: View {
                         .id(sessionState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
+                                             relativePath: s.relativePath,
+                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                    case .binaryPreview(let s):
+                        BinaryPreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
                                              onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                     case .mergeConflict(let s):

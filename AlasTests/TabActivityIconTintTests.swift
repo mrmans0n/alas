@@ -100,6 +100,8 @@ struct TabActivityIconTintTests {
             onCloseToRight: { _ in },
             onCopyPath: { _ in },
             onCopyRelativePath: { _ in },
+            onOpenWithSystem: { _ in },
+            onRevealInFinder: { _ in },
             onRenameTerminal: { _ in },
             onRenameACPSession: { _ in },
             onCopyACPSession: { _ in },

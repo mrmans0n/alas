@@ -10,13 +10,37 @@ struct ImagePreviewTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            breadcrumb
+            BreadcrumbView(
+                relativePath: relativePath,
+                onRevealInFiles: onRevealInFiles,
+                menuItems: { index, pathPrefix in
+                    let isLast = index == relativePath.split(separator: "/").count - 1
+                    if isLast {
+                        return .file(BreadcrumbFileMenu(
+                            onCopyRelativePath: { Clipboard.copy(relativePath) },
+                            onCopyFullPath: { Clipboard.copy(absoluteURL.path) },
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteURL) },
+                            onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
+                        ))
+                    } else {
+                        return .folder(BreadcrumbFolderMenu(
+                            onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: worktreePath.appendingPathComponent(pathPrefix)) },
+                            onFocusInFiles: { onRevealInFiles(pathPrefix) },
+                            onCopyFullPath: { Clipboard.copy(worktreePath.appendingPathComponent(pathPrefix).path) }
+                        ))
+                    }
+                }
+            )
             content
         }
         .background(theme.color("bg-1"))
         .task(id: absoluteURL) {
             await loadImage()
         }
+    }
+
+    private var isRemote: Bool {
+        worktreePath.isRemoteAlasPath
     }
 
     @ViewBuilder
@@ -30,10 +54,12 @@ struct ImagePreviewTabView: View {
             previewMessage(
                 title: "Cannot Preview Image",
                 detail: "The file could not be decoded as an image.",
-                icon: "photo.badge.exclamationmark"
+                icon: "photo.badge.exclamationmark",
+                onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
             )
         case .unsupported:
-            previewMessage(title: "No Preview", detail: "This file type is not supported.", icon: "photo")
+            previewMessage(title: "No Preview", detail: "This file type is not supported.", icon: "photo",
+                           onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) })
         case .loaded(let info):
             loadedPreview(info)
         }
@@ -63,6 +89,12 @@ struct ImagePreviewTabView: View {
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                 Spacer()
+                if !isRemote {
+                    Button("Open with System") { FileSystemOpen.open(url: absoluteURL) }
+                        .buttonStyle(.borderless)
+                    Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteURL) }
+                        .buttonStyle(.borderless)
+                }
             }
             .padding(.horizontal, 12)
             .frame(height: 28)
@@ -71,7 +103,7 @@ struct ImagePreviewTabView: View {
         }
     }
 
-    private func previewMessage(title: String, detail: String, icon: String) -> some View {
+    private func previewMessage(title: String, detail: String, icon: String, onOpenWithSystem: (() -> Void)? = nil) -> some View {
         VStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 30))
@@ -86,38 +118,13 @@ struct ImagePreviewTabView: View {
                 .multilineTextAlignment(.center)
                 .truncationMode(.middle)
                 .frame(maxWidth: 420)
+            if let onOpenWithSystem {
+                Button("Open with System") { onOpenWithSystem() }
+                    .padding(.top, 4)
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var breadcrumb: some View {
-        let components = relativePath.split(separator: "/")
-        let lastIndex = components.count - 1
-        return HStack(spacing: 6) {
-            if components.isEmpty {
-                Text("").font(.system(size: 11, design: .monospaced))
-            } else {
-                ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
-                    let pathPrefix = components[0...i].joined(separator: "/")
-                    Text(String(comp))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
-                        .onTapGesture { onRevealInFiles(String(pathPrefix)) }
-                        .onHover { inside in
-                            if inside { NSCursor.pointingHand.push() }
-                            else { NSCursor.pointingHand.pop() }
-                        }
-                    if i < lastIndex {
-                        Text("/").foregroundColor(theme.color("fg-faint"))
-                    }
-                }
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12).frame(height: 28)
-        .background(theme.color("bg-1"))
-        .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 
     private var absoluteURL: URL {

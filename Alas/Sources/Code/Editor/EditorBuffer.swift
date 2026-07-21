@@ -139,6 +139,11 @@ final class EditorBuffer {
 
     var lastSaveError: String?
 
+    /// The last load result kind, observable by SwiftUI. Set by
+    /// `applyLoadResult`. The view uses this to render the binary
+    /// placeholder overlay when the file isn't valid UTF-8.
+    private(set) var loadKind: LoadKind = .loaded
+
     private(set) var editGeneration: Int = 0
 
     @ObservationIgnored
@@ -411,9 +416,11 @@ final class EditorBuffer {
         checkConflictOnRestore: Bool = false
     ) {
         if case .cancelled = loadState { return }
+        var restoredContent = false
         if !isExternal,
            let snap = snapshot {
             applySnapshot(snap)
+            restoredContent = true
             if onRestoredPathChanged != nil,
                let restoredPathChange = consumeRestoredPathChange() {
                 onRestoredPathChanged?(restoredPathChange.oldPath, restoredPathChange.newPath)
@@ -422,7 +429,20 @@ final class EditorBuffer {
         }
         if !pendingUserEdits.isEmpty {
             replayPendingUserEdits(pendingUserEdits, fallbackText: preloadText)
+            restoredContent = true
             conflict = .changedOnDisk
+        }
+        // If we restored a hot-exit snapshot or replayed pending user edits
+        // *and* the on-disk load failed (binary/unreadable/missing), the
+        // buffer now shows editable text content that the user authored.
+        // Don't leave `loadKind` as `.notUTF8`/`.missing` (or `EditorTabView`
+        // swaps to the binary placeholder and hides the draft), and clear
+        // `readOnly` so the draft is editable and saveable. Skip this for
+        // successful loads: symlinks and external files are legitimately
+        // read-only even when the user typed before the load completed.
+        if restoredContent, loadKind != .loaded {
+            loadKind = .loaded
+            readOnly = false
         }
         if checkConflictOnRestore {
             checkForConflictOnRestore()
@@ -1896,6 +1916,7 @@ final class EditorBuffer {
                 }
                 if replacingDirty || !self.restoredRemoteSnapshot {
                     self.setStorageText("(unable to read remote file: \(Self.remoteFileErrorDescription(error)))")
+                    self.loadKind = .missing
                 }
                 return
             }
@@ -1906,20 +1927,24 @@ final class EditorBuffer {
             case .missing, .directory:
                 if replacingDirty || !self.restoredRemoteSnapshot {
                     self.setStorageText("(unable to read file)")
+                    self.loadKind = .missing
                 }
             case .symlink:
                 if replacingDirty || !self.restoredRemoteSnapshot {
                     self.setStorageText("(read-only: remote symbolic links are not editable)")
+                    self.loadKind = .loaded
                 }
                 self.readOnly = true
             case let .unreadable(detail):
                 if replacingDirty || !self.restoredRemoteSnapshot {
                     self.setStorageText("(unable to read remote file: \(detail))")
+                    self.loadKind = .missing
                 }
             case let .file(data, mtime):
                 guard let raw = String(data: data, encoding: .utf8) else {
                     if replacingDirty || !self.restoredRemoteSnapshot {
                         self.setStorageText("(read-only: file is not valid UTF-8)")
+                        self.loadKind = .notUTF8
                     }
                     return
                 }
@@ -1929,6 +1954,7 @@ final class EditorBuffer {
                     if self.storage.string != self.originalText, mtime != self.originalMtime {
                         self.conflict = .changedOnDisk
                     }
+                    self.loadKind = .loaded
                     self.startWatching()
                     self.openRemoteLSPIfNeeded()
                     return
@@ -1938,6 +1964,7 @@ final class EditorBuffer {
                 }
                 self.originalMtime = mtime
                 self.markRemoteFileEditable()
+                self.loadKind = .loaded
                 self.startWatching()
                 self.openRemoteLSPIfNeeded()
             }
@@ -2056,6 +2083,13 @@ final class EditorBuffer {
         case loaded(raw: String, resolvedURL: URL, isExternal: Bool, isSymlink: Bool)
     }
 
+    /// Observable summary of the last `LoadResult`, for SwiftUI views.
+    enum LoadKind {
+        case loaded
+        case missing
+        case notUTF8
+    }
+
     @discardableResult
     private func applyLoadResult(_ result: LoadResult) -> Bool {
         switch result {
@@ -2065,6 +2099,7 @@ final class EditorBuffer {
                 storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
                 readOnly = true
             }
+            loadKind = .missing
             return didApplyChange
         case .notUTF8:
             let message = "(read-only: file is not valid UTF-8)"
@@ -2073,6 +2108,7 @@ final class EditorBuffer {
                 storage.setAttributedString(NSAttributedString(string: message))
                 readOnly = true
             }
+            loadKind = .notUTF8
             return didApplyChange
         case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
             let detected = LineEnding.detect(in: raw)
@@ -2089,6 +2125,7 @@ final class EditorBuffer {
             lineEnding = detected
             updateOriginalFileAttributes(from: resolvedURL)
             readOnly = nextReadOnly
+            loadKind = .loaded
             return didApplyChange
         }
     }
@@ -2114,6 +2151,7 @@ final class EditorBuffer {
                 storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
             }
             readOnly = true
+            loadKind = .missing
             return self
         }
         let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
@@ -2122,6 +2160,7 @@ final class EditorBuffer {
                 storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
             }
             readOnly = true
+            loadKind = .missing
             return self
         }
         guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
@@ -2129,6 +2168,7 @@ final class EditorBuffer {
                 storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
             }
             readOnly = true
+            loadKind = .notUTF8
             return self
         }
         let detected = LineEnding.detect(in: raw)
@@ -2141,6 +2181,7 @@ final class EditorBuffer {
         updateOriginalFileAttributes(from: resolvedURL)
         let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
         readOnly = isExternal || isSymlink
+        loadKind = .loaded
         return self
     }
 

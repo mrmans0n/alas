@@ -1045,6 +1045,31 @@ final class TabsManager {
         return tab
     }
 
+    /// Open or focus a binary preview tab for `relativePath`.
+    /// Used for files whose extension is in `BinaryFileType.knownBinaryExtensions`,
+    /// so they skip a wasted text-load attempt in the editor.
+    @discardableResult
+    func openBinaryPreview(worktreeId: String, relativePath: String) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .binaryPreview(let s) = $0 { return s.relativePath == relativePath }
+               return false
+           }) {
+            if case .binaryPreview(let s) = file.tabs[idx] {
+                file.activeTabId = s.id
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                return .binaryPreview(s)
+            }
+        }
+
+        let title = (relativePath as NSString).lastPathComponent
+        let state = BinaryPreviewTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
+        let tab = Tab.binaryPreview(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     /// Clears the reveal hints on an editor tab.
     /// Called by the editor coordinator once it has scrolled to the target,
     /// so the hint isn't replayed on the next view re-render or app
@@ -1439,6 +1464,17 @@ final class TabsManager {
     /// dirty-tab queries.
     func peekBuffer(tabId: TabID) -> EditorBuffer? {
         tabBuffers[tabId]
+    }
+
+    /// Non-creating lookup for an external editor buffer. Returns nil if no
+    /// external buffer has been registered for this tab (or if the tab isn't
+    /// an external editor tab). Used by read-only checks (e.g.
+    /// `EditorTabView.isBinary`) to avoid the side-effecting creation in
+    /// `externalBuffer(...)` while still detecting the load kind of external
+    /// files that went through the editor path (unknown-extension binaries).
+    func peekExternalBuffer(tabId: TabID) -> EditorBuffer? {
+        guard let entry = externalTabURLs[tabId] else { return nil }
+        return bufferStore.peekExternalBuffer(worktreeId: entry.worktreeId, absoluteURL: entry.url)
     }
 
     private func indexRestoredPathBufferIfAvailable(worktreeId: String, tabId: TabID, buffer: EditorBuffer) {

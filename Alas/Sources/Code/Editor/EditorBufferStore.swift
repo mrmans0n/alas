@@ -100,6 +100,15 @@ final class EditorBufferStore {
         return buffer
     }
 
+    /// Non-creating lookup for an external buffer. Returns nil if no buffer
+    /// has been created yet for this `(worktreeId, absoluteURL)` pair. Used
+    /// by read-only checks (e.g. `EditorTabView.isBinary`) to avoid the
+    /// side-effecting creation in `externalBuffer`.
+    func peekExternalBuffer(worktreeId: String, absoluteURL: URL) -> EditorBuffer? {
+        let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
+        return externalBuffers[key]
+    }
+
     /// Remove an external buffer from the cache and stop its watcher.
     /// A no-op if no buffer for this URL exists in `worktreeId`.
     func discardExternalBuffer(worktreeId: String, absoluteURL: URL) {

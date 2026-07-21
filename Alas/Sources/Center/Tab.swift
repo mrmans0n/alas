@@ -14,6 +14,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case reviewChanges(ReviewChangesTabState)
     case reviewSession(ReviewSessionTabState)
     case imagePreview(ImagePreviewTabState)
+    case binaryPreview(BinaryPreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
     case reviewPR(ReviewPRTabState)
@@ -34,6 +35,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewChanges(let s): return s.id
         case .reviewSession(let s): return s.id
         case .imagePreview(let s): return s.id
+        case .binaryPreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
         case .reviewPR(let s):     return s.id
@@ -56,6 +58,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewChanges:       return "Review Changes"
         case .reviewSession(let s): return s.title
         case .imagePreview(let s): return s.title
+        case .binaryPreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
         case .reviewPR(let s):     return s.displayTitle
@@ -78,6 +81,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .reviewChanges: return "diff"
         case .reviewSession: return "text.badge.checkmark"
         case .imagePreview: return "image"
+        case .binaryPreview: return "doc.fill"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
         case .reviewPR:     return "list.bullet.rectangle.portrait.fill"
@@ -92,10 +96,40 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
         case .stashDiff(let s):    return s.file.path
         case .imagePreview(let s): return s.relativePath
+        case .binaryPreview(let s): return s.relativePath.hasPrefix("/") ? nil : s.relativePath
         case .mergeConflict(let s): return s.relativePath
         case .fileSnapshot(let s): return s.relativePath
         case .fileHistory(let s):  return s.relativePath
         default:                   return nil
+        }
+    }
+
+    /// Absolute path for file-backed tabs whose path is not worktree-relative
+    /// (external editor tabs, external binary previews). Used by tab-bar
+    /// actions that resolve a URL for system-open / reveal-in-Finder without
+    /// going through `worktree.path.appendingPathComponent`.
+    var absoluteFilePath: String? {
+        switch self {
+        case .editor(let s):       return s.isExternal ? s.externalAbsolutePath : nil
+        case .binaryPreview(let s): return s.relativePath.hasPrefix("/") ? s.relativePath : nil
+        default:                   return nil
+        }
+    }
+
+    /// True for tabs that represent the live, current on-disk file at
+    /// `relativeFilePath` / `absoluteFilePath` — i.e. opening with the system
+    /// or revealing in Finder operates on the file the tab is actually
+    /// showing. False for `.stashDiff`, `.fileSnapshot`, and `.fileHistory`,
+    /// whose `relativeFilePath` points at a historical/stashed revision and
+    /// must not be handed to `NSWorkspace` as if it were the current file.
+    var supportsSystemOpenActions: Bool {
+        switch self {
+        case .editor, .imagePreview, .binaryPreview, .mergeConflict:
+            return true
+        case .stashDiff, .fileSnapshot, .fileHistory:
+            return false
+        default:
+            return false
         }
     }
 }
@@ -474,6 +508,12 @@ struct StashDiffTabState: Codable, Equatable, Identifiable {
 }
 
 struct ImagePreviewTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    var title: String
+    var relativePath: String
+}
+
+struct BinaryPreviewTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String
