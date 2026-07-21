@@ -61,6 +61,25 @@ struct BuiltInAlasMCPTests {
         #expect(split.droppedStdio == ["alas"])
     }
 
+    @Test("builds an http wire entry when given an endpoint")
+    func buildsHTTPWireEntry() {
+        let injection = BuiltInAlasMCP.injection(
+            enabled: true,
+            configuredServers: [],
+            binaryPath: "/bin/alas",
+            socketPath: "/tmp/s.sock",
+            worktreePath: "/wt",
+            sessionId: "S1",
+            httpEndpoint: .init(url: "http://localhost:5599/mcp", token: "TOK"))
+        guard case let .http(name, url, headers)? = injection?.server else {
+            Issue.record("expected http server"); return
+        }
+        #expect(name == "alas")
+        #expect(url == "http://localhost:5599/mcp")
+        #expect(headers.contains(ACPMCPKeyValue(name: "Authorization", value: "Bearer TOK")))
+        #expect(injection?.status.transport == .http)
+    }
+
     @Test("injection marks delegated sessions")
     func injectionMarksDelegated() throws {
         let root = try #require(BuiltInAlasMCP.injection(
