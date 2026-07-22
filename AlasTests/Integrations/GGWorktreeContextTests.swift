@@ -278,6 +278,12 @@ struct AppStateGGACPWorktreeContextTests {
         )
 
         pane.currentBranch = "main"
+        _ = state.rightPaneStore.state(
+            for: topologyWorktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        #expect(pane.currentBranch == "main")
         let plain = try #require(state.ggACPWorktreeIntegration(
             worktreePath: path.path,
             ggInstalled: true
@@ -307,5 +313,26 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(!AppState.shouldAttachGGMCP(context: quiescent.context))
         #expect(AppState.ggPreambleSignal(context: quiescent.context, snapshot: nil) == .none)
         #expect(quiescent.context == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
+
+        pane.currentBranch = "main"
+        state.projectsManager.applyHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [path: "nacho/reactivated-stack"]
+        )
+        let reactivatedWorktree = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first
+        )
+        _ = state.rightPaneStore.state(
+            for: reactivatedWorktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        let reactivated = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(AppState.shouldAttachGGMCP(context: reactivated.context))
+        #expect(AppState.ggPreambleSignal(context: reactivated.context, snapshot: nil) == .generic)
+        #expect(reactivated.context == .active(stackName: "reactivated-stack"))
     }
 }

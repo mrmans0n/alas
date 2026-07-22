@@ -68,6 +68,7 @@ final class RightPaneStore {
 
     func state(for worktree: Worktree, baseBranch: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode) -> RightPaneState {
         let id = worktree.id
+        let wasCached = states[id] != nil
         let result: RightPaneState
         let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
         if let existing = states[id] {
@@ -224,6 +225,14 @@ final class RightPaneStore {
         if activeId != id {
             if let prev = activeId, let prevState = states[prev] {
                 prevState.stop()
+            }
+            if wasCached, result.currentBranch != worktree.branch {
+                result.currentBranch = worktree.branch
+                result.ggStackCommitsKey = nil
+                let context = result.ggContextProvider?(worktree.branch)
+                    ?? .inactive(reason: .policyOff)
+                result.ggContext = context
+                result.ggStackLoadState = context.isActive ? .loading : .inactive
             }
             activeId = id
             // Don't start the state's background work here if we deferred it
