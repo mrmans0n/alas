@@ -1326,8 +1326,25 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let theme: Theme
     let isFocused: FocusState<Bool>.Binding
+    let focusRequestGeneration: Int
     let onSave: () -> Void
     let onCancel: () -> Void
+
+    init(
+        text: Binding<String>,
+        theme: Theme,
+        isFocused: FocusState<Bool>.Binding,
+        focusRequestGeneration: Int = 0,
+        onSave: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        _text = text
+        self.theme = theme
+        self.isFocused = isFocused
+        self.focusRequestGeneration = focusRequestGeneration
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -1388,6 +1405,14 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         context.coordinator.requestFocusIfNeeded()
     }
 
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.cancelScheduledFocusRequest()
+        guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
+        textView.onKeyboardAction = nil
+        textView.onWindowChanged = nil
+        textView.delegate = nil
+    }
+
     private func applyTheme(to scrollView: NSScrollView, textView: NSTextView) {
         scrollView.wantsLayer = true
         scrollView.layer?.backgroundColor = NSColor(theme.color("bg-2")).cgColor
@@ -1396,12 +1421,20 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         textView.insertionPointColor = NSColor(theme.color("accent"))
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ReviewDraftComposerTextEditor
         weak var textView: NSTextView?
+        private var latestFulfilledFocusRequestGeneration = 0
+        private var scheduledFocusRequestGeneration: Int?
+        private var scheduledFocusTask: Task<Void, Never>?
 
         init(_ parent: ReviewDraftComposerTextEditor) {
             self.parent = parent
+        }
+
+        deinit {
+            scheduledFocusTask?.cancel()
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1417,17 +1450,53 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             parent.isFocused.wrappedValue = false
         }
 
-        @MainActor
         func requestFocusIfNeeded() {
-            guard parent.isFocused.wrappedValue,
-                  let textView,
-                  let window = textView.window,
-                  window.firstResponder !== textView
-            else { return }
-            window.makeFirstResponder(textView)
+            let generation = parent.focusRequestGeneration
+            let hasExplicitRequest = generation > latestFulfilledFocusRequestGeneration
+            let hasLegacyRequest = generation == 0 && parent.isFocused.wrappedValue
+            guard hasExplicitRequest || hasLegacyRequest else {
+                cancelScheduledFocusRequest()
+                return
+            }
+            guard scheduledFocusRequestGeneration != generation else { return }
+
+            cancelScheduledFocusRequest()
+            scheduledFocusRequestGeneration = generation
+            scheduledFocusTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled, let self else { return }
+                defer {
+                    if self.scheduledFocusRequestGeneration == generation {
+                        self.scheduledFocusRequestGeneration = nil
+                        self.scheduledFocusTask = nil
+                    }
+                }
+
+                guard self.parent.focusRequestGeneration == generation else { return }
+                if generation == 0 {
+                    guard self.parent.isFocused.wrappedValue else { return }
+                } else {
+                    guard generation > self.latestFulfilledFocusRequestGeneration else { return }
+                }
+                guard let textView = self.textView,
+                      let window = textView.window
+                else { return }
+
+                if window.firstResponder !== textView {
+                    guard window.makeFirstResponder(textView) else { return }
+                }
+                if generation > 0 {
+                    self.latestFulfilledFocusRequestGeneration = generation
+                }
+            }
         }
 
-        @MainActor
+        func cancelScheduledFocusRequest() {
+            scheduledFocusTask?.cancel()
+            scheduledFocusTask = nil
+            scheduledFocusRequestGeneration = nil
+        }
+
         func perform(_ action: ReviewDraftComposerKeyboardAction) {
             switch action {
             case .save:

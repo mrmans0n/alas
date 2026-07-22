@@ -8,6 +8,37 @@ import Testing
 struct DiffReviewSurfaceTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
+        let model = ReviewDraftComposerFocusModel()
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerFocusHarness(theme: theme(), model: model)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+
+        await drainSwiftUI(controller.view)
+
+        let textView = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSTextView }.first)
+        #expect(window.firstResponder === textView)
+
+        let sibling = try #require(
+            subview(withAccessibilityIdentifier: "draft-composer-focus-sibling", in: controller.view)
+        )
+        #expect(window.makeFirstResponder(sibling))
+        #expect(window.firstResponder !== textView)
+
+        model.focusRequestGeneration += 1
+        await drainSwiftUI(controller.view)
+
+        #expect(window.firstResponder === textView)
+    }
+
     @Test func railRendersUngroupedCommitSessionWithFileRowsAndNoSourceHeader() {
         let files = [
             summary(path: "Sources/App/AlphaView.swift", additions: 4, deletions: 1),
@@ -3640,6 +3671,13 @@ struct DiffReviewSurfaceTests {
         return controller
     }
 
+    private func drainSwiftUI(_ view: NSView) async {
+        for _ in 0..<6 {
+            view.layoutSubtreeIfNeeded()
+            await Task.yield()
+        }
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
@@ -3675,6 +3713,65 @@ struct DiffReviewSurfaceTests {
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
     }
+}
+
+@MainActor
+private final class ReviewDraftComposerFocusRetainer {
+    private static var retainedObjects: [AnyObject] = []
+
+    static func retain(_ objects: AnyObject...) {
+        retainedObjects.append(contentsOf: objects)
+    }
+}
+
+@MainActor
+private final class ReviewDraftComposerFocusModel: ObservableObject {
+    @Published var focusRequestGeneration = 1
+}
+
+@MainActor
+private struct ReviewDraftComposerFocusHarness: View {
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    let theme: Theme
+    @ObservedObject var model: ReviewDraftComposerFocusModel
+
+    var body: some View {
+        VStack {
+            ReviewDraftComposerTextEditor(
+                text: $text,
+                theme: theme,
+                isFocused: $focused,
+                focusRequestGeneration: model.focusRequestGeneration,
+                onSave: {},
+                onCancel: {}
+            )
+            .frame(height: 100)
+
+            ReviewDraftComposerFocusSiblingView()
+
+            Button("Request focus") {
+                model.focusRequestGeneration += 1
+            }
+            .accessibilityIdentifier("draft-composer-request-focus")
+        }
+        .padding()
+    }
+}
+
+private struct ReviewDraftComposerFocusSiblingView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = FocusSinkView(frame: NSRect(x: 0, y: 0, width: 40, height: 20))
+        view.setAccessibilityIdentifier("draft-composer-focus-sibling")
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class FocusSinkView: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
 
 private final class ReviewBundleActionRecorder: @unchecked Sendable {
