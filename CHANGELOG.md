@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-07-22
+
+### 🐛 Fixes
+
+- Add the new diff comment composers and focus handling (#888).
+- Fix feedback lane layout recursion in diff review surfaces (#886).
+- Send the `Content-Type` header on GitLab `glab api --input` requests (#887).
+
+### 🏗️ Internal
+
+- Update Rust crate `libc` to v0.2.189 (#885).
+
 ## [0.12.3] - 2026-07-21
 
 ### ✨ Features
