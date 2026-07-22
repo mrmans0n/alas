@@ -114,6 +114,10 @@ enum DiffFeedbackLineLabels {
 enum DiffFeedbackLaneGeometry {
     static let dividerWidth = DiffPaneSplitGeometry.dividerWidth
 
+    static func containerWidth(for proposal: ProposedViewSize) -> CGFloat {
+        proposal.width.map { max($0, 0) } ?? 0
+    }
+
     static func contentFrame(
         containerWidth: CGFloat,
         layoutMode: DiffLayoutMode,
@@ -145,21 +149,6 @@ enum DiffFeedbackLaneGeometry {
             height: 0
         )
     }
-
-    static func idealContainerWidth(
-        contentWidth: CGFloat,
-        layoutMode: DiffLayoutMode,
-        gutterWidth: CGFloat
-    ) -> CGFloat {
-        let contentWidth = max(contentWidth, 0)
-        let gutterWidth = max(gutterWidth, 0)
-        switch layoutMode {
-        case .split:
-            return (contentWidth + gutterWidth) * 2 + dividerWidth
-        case .stacked:
-            return contentWidth + gutterWidth
-        }
-    }
 }
 
 private struct DiffFeedbackLaneLayout: Layout {
@@ -175,11 +164,7 @@ private struct DiffFeedbackLaneLayout: Layout {
         guard let subview = subviews.first else {
             return CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
         }
-        let width = proposal.width.map { max($0, 0) } ?? DiffFeedbackLaneGeometry.idealContainerWidth(
-            contentWidth: subview.sizeThatFits(.unspecified).width,
-            layoutMode: layoutMode,
-            gutterWidth: gutterWidth
-        )
+        let width = DiffFeedbackLaneGeometry.containerWidth(for: proposal)
         let frame = DiffFeedbackLaneGeometry.contentFrame(
             containerWidth: width,
             layoutMode: layoutMode,
@@ -248,7 +233,6 @@ struct DiffFeedbackLaneView<Content: View>: View {
                 content
             }
         }
-        .frame(maxWidth: .infinity)
         .overlay(alignment: .topLeading) {
             if layoutMode == .split {
                 GeometryReader { geometry in
