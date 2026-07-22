@@ -4928,8 +4928,9 @@ final class AppState {
                 else { return .none }
                 return Self.ggPreambleSignal(
                     context: integration.context,
-                    loadedStack: self.rightPaneStore.stackForWorktreePath(
-                        integration.worktree.path.path
+                    snapshot: self.rightPaneStore.ggStackSnapshotForWorktreePath(
+                        integration.worktree.path.path,
+                        effectiveContext: integration.context
                     )
                 )
             }
@@ -5567,11 +5568,14 @@ final class AppState {
 
     nonisolated static func ggPreambleSignal(
         context: GGWorktreeContext,
-        loadedStack: GGStack?
+        snapshot: RightPaneGGStackSnapshot?
     ) -> GGPreambleSignal {
         guard context.isActive else { return .none }
-        guard let loadedStack else { return .generic }
-        return .stack(name: loadedStack.name, entryCount: loadedStack.totalCommits)
+        guard let snapshot,
+              snapshot.loadState == .loaded,
+              let stack = snapshot.stack
+        else { return .generic }
+        return .stack(name: stack.name, entryCount: stack.totalCommits)
     }
 
     private func ggACPWorktreeIntegration(

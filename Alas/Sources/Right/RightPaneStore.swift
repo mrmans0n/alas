@@ -2,6 +2,11 @@ import Foundation
 import Observation
 import os
 
+struct RightPaneGGStackSnapshot: Equatable {
+    let stack: GGStack?
+    let loadState: GGStackLoadState
+}
+
 @Observable
 @MainActor
 final class RightPaneStore {
@@ -338,10 +343,29 @@ final class RightPaneStore {
         states.values.first { $0.pendingMerge != nil }
     }
 
-    /// Loaded stack state for a worktree path, if its pane has been
-    /// activated. Used by the ACP preamble at session creation.
-    func stackForWorktreePath(_ path: String) -> GGStack? {
-        states.values.first { $0.worktree.path.path == path }?.ggStack
+    /// Cached stack state for a worktree path, if its pane has been activated.
+    /// A loaded stack whose key no longer matches the live branch/context is
+    /// exposed as loading so non-UI consumers cannot treat it as current.
+    func ggStackSnapshotForWorktreePath(
+        _ path: String,
+        effectiveContext: GGWorktreeContext
+    ) -> RightPaneGGStackSnapshot? {
+        guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
+            return nil
+        }
+        let loadState: GGStackLoadState
+        if state.ggStackLoadState == .loaded,
+           (state.ggStackCommitsKey != state.currentGGStackCommitsKey
+            || state.ggContext != effectiveContext)
+        {
+            loadState = effectiveContext.isActive ? .loading : .inactive
+        } else {
+            loadState = state.ggStackLoadState
+        }
+        return RightPaneGGStackSnapshot(
+            stack: state.ggStack,
+            loadState: loadState
+        )
     }
 
     /// The first cached state with a pending gg-land confirmation, if any.

@@ -942,11 +942,7 @@ final class RightPaneState: GGSplitCommitServicing {
             await reconcileGGUndoCandidateIfNeeded()
             return
         }
-        if ggStack == nil,
-           GGStackSummaryStore.shared.summaries[worktree.path.path] == nil
-        {
-            ggStackLoadState = .loading
-        }
+        ggStackLoadState = .loading
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
             // A newer refresh, or a `markSnapshotUnknown()` invalidation,

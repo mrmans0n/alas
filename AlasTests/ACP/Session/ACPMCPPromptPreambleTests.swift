@@ -5,25 +5,38 @@ import Testing
 struct ACPMCPPromptPreambleTests {
     @Test("active gg context uses loaded stack details")
     func activeGGContextWithStack() {
+        let context = GGWorktreeContext.active(stackName: "loaded-name")
         #expect(AppState.ggPreambleSignal(
-            context: .active(stackName: "context-name"),
-            loadedStack: GGStack(
-                name: "loaded-name",
-                base: "main",
-                totalCommits: 3,
-                syncedCommits: 2,
-                currentPosition: nil,
-                behindBase: nil,
-                entries: []
+            context: context,
+            snapshot: RightPaneGGStackSnapshot(
+                stack: Self.stack,
+                loadState: .loaded
             )
         ) == .stack(name: "loaded-name", entryCount: 3))
     }
 
-    @Test("active gg context without a loaded stack stays generic")
-    func activeGGContextWithoutStack() {
+    @Test("active gg context without current loaded metadata stays generic")
+    func activeGGContextWithoutCurrentLoadedMetadata() {
+        let context = GGWorktreeContext.active(stackName: "loaded-name")
+        let states: [GGStackLoadState] = [
+            .inactive,
+            .loading,
+            .empty,
+            .failed("boom"),
+        ]
+        for loadState in states {
+            #expect(AppState.ggPreambleSignal(
+                context: context,
+                snapshot: RightPaneGGStackSnapshot(
+                    stack: Self.stack,
+                    loadState: loadState
+                )
+            ) == .generic)
+        }
+        #expect(AppState.ggPreambleSignal(context: context, snapshot: nil) == .generic)
         #expect(AppState.ggPreambleSignal(
-            context: .active(stackName: "feature"),
-            loadedStack: nil
+            context: context,
+            snapshot: RightPaneGGStackSnapshot(stack: nil, loadState: .loaded)
         ) == .generic)
     }
 
@@ -40,9 +53,22 @@ struct ACPMCPPromptPreambleTests {
         )
         #expect(AppState.ggPreambleSignal(
             context: .inactive(reason: .policyOff),
-            loadedStack: stack
+            snapshot: RightPaneGGStackSnapshot(
+                stack: stack,
+                loadState: .loaded
+            )
         ) == .none)
     }
+
+    private static let stack = GGStack(
+        name: "loaded-name",
+        base: "main",
+        totalCommits: 3,
+        syncedCommits: 2,
+        currentPosition: nil,
+        behindBase: nil,
+        entries: []
+    )
 
     @Test("nothing attached produces no preamble")
     func nothingAttached() {

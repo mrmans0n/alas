@@ -1179,6 +1179,76 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
+    @Test func changedKeyPublishesLoadingWhileRetainingPreviousStack() async throws {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
+        state.ggService = GGService(runner: CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        ))
+        await state.refreshGGStack()
+        let previousStack = try #require(state.ggStack)
+
+        let delayed = DelayedStackGGRunner(
+            staleResult: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: ""),
+            freshResult: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: delayed)
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
+        let refresh = Task { @MainActor in await state.refreshGGStack() }
+        for _ in 0..<500 where delayed.callCount == 0 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(delayed.callCount == 1)
+        #expect(state.ggStack == previousStack)
+        #expect(state.ggStackLoadState == .loading)
+        await refresh.value
+    }
+
+    @Test func storeSnapshotMarksStaleStackKeyAsLoading() async throws {
+        let worktree = makeWorktree()
+        let store = RightPaneStore()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        store.deactivate()
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        state.ggService = GGService(runner: CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        ))
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "o", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+        #expect(state.ggStackLoadState == .loaded)
+
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
+        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
+            worktree.path.path,
+            effectiveContext: .active(stackName: "stack")
+        ))
+
+        #expect(snapshot.stack != nil)
+        #expect(snapshot.loadState == .loading)
+    }
+
+    @Test func storeSnapshotMarksStaleContextAsLoading() async throws {
+        let worktree = makeWorktree()
+        let store = RightPaneStore()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        store.deactivate()
+        state.ggContextProvider = { _ in .active(stackName: "old-stack") }
+        state.ggService = GGService(runner: CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        ))
+        await state.refreshGGStack()
+
+        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
+            worktree.path.path,
+            effectiveContext: .active(stackName: "new-stack")
+        ))
+
+        #expect(snapshot.stack != nil)
+        #expect(snapshot.loadState == .loading)
+    }
+
     /// `markSnapshotUnknown()` resets `commits` along with the rest of the
     /// snapshot; gg stack state derives from `commits`, so it must be reset
     /// in lockstep or a delayed/failed refresh after invalidation can leave
