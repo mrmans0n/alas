@@ -138,7 +138,23 @@ struct ACPMessageList: View {
             GeometryReader { viewport in
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
+                        // Eager VStack, not LazyVStack: the render window is
+                        // hard-capped at `ACPTranscript.maxVisibleRows` (see
+                        // ACPTranscriptWindowTests) and heavy rows are
+                        // `.equatable()`-gated (ACPTranscriptRowContent), so at
+                        // most ~90 already-diffed rows are ever laid out. The
+                        // cap holds in every state: while following the tail the
+                        // window is the last `tailWindow` rows, and pausing the
+                        // follow freezes `visibleTail` (setFollowsTranscriptTail
+                        // → ACPTranscript.freezeVisibleTail) so a long turn's
+                        // later appends can't grow the eager window. A LazyVStack
+                        // mis-places rows on macOS 26 when the scroll-up reveal
+                        // path grafts a chunk at the top of the ForEach while
+                        // `scrollTo` re-anchors the viewport, drawing a band of
+                        // messages overlapping. An eager VStack computes every
+                        // child's real height and stacks them sequentially, so
+                        // rows cannot overlap regardless of scroll/anchor timing.
+                        VStack(alignment: .leading, spacing: 18) {
                             switch Self.topPaginationIndicator(
                                 visibleHead: transcript.visibleHead,
                                 isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
@@ -573,6 +589,11 @@ struct ACPMessageList: View {
             )
         } else {
             session.followsTranscriptTail = false
+            // Freeze the render window's tail the moment we stop following it.
+            // While following, `visibleTail` is nil so the window tracks the
+            // growing end; once paused, later appends must not grow the eager
+            // window past its bound (see `ACPTranscript.freezeVisibleTail`).
+            transcript.freezeVisibleTail()
             scrollBook.pendingTailScrollTask?.cancel()
             scrollBook.pendingTailScrollTask = nil
             scrollBook.pendingContentGrowthTailRestore = nil
