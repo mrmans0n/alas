@@ -23,8 +23,11 @@ struct ChangesTabView: View {
                 changes: rps.changes,
                 hasDraft: draftNonEmpty,
                 capabilities: GGAvailability.shared.capabilities,
+                hasLoadedCommit: rps.ggStack?.entries.isEmpty == false,
                 mutationDisabledReason: ggPreparationMutationDisabledReason,
                 newCommitDisabledReason: Self.ggNewStackCommitDisabledReason(
+                    contextIsActive: rps.ggContext.isActive,
+                    stackLoadState: rps.ggStackLoadState,
                     stack: rps.ggStack,
                     currentHeadSHA: rps.currentHeadSHA
                 )
@@ -65,7 +68,7 @@ struct ChangesTabView: View {
 
     private var isGGDrawerActive: Bool {
         Self.shouldShowGGDrawer(
-            stack: rps.ggStack,
+            contextIsActive: rps.ggContext.isActive,
             pausedGGOperation: rps.ggActionState.pausedOperation,
             hasUndoCandidate: rps.ggUndoCandidate != nil
         )
@@ -73,7 +76,8 @@ struct ChangesTabView: View {
 
     private var ggPreparationMutationDisabledReason: String? {
         Self.ggPreparationMutationDisabledReason(
-            hasStack: rps.ggStack != nil,
+            contextIsActive: rps.ggContext.isActive,
+            stackLoadState: rps.ggStackLoadState,
             pausedOperation: rps.ggActionState.pausedOperation,
             inFlightAction: rps.ggActionState.inFlightAction,
             mergeOperation: rps.mergeOp.current
@@ -81,12 +85,13 @@ struct ChangesTabView: View {
     }
 
     static func ggPreparationMutationDisabledReason(
-        hasStack: Bool,
+        contextIsActive: Bool,
+        stackLoadState: GGStackLoadState,
         pausedOperation: GGPausedOperation?,
         inFlightAction: GGStackActionKind?,
         mergeOperation: MergeOperation?
     ) -> String? {
-        if !hasStack || pausedOperation != nil {
+        if pausedOperation != nil {
             return "Continue or abort the paused GG operation first."
         }
         if inFlightAction != nil {
@@ -95,15 +100,41 @@ struct ChangesTabView: View {
         if mergeOperation != nil {
             return "Finish the current Git operation first."
         }
-        return nil
+        guard contextIsActive else { return "A GG stack is not available." }
+        switch stackLoadState {
+        case .loading:
+            return "Wait for the GG stack to load."
+        case .failed:
+            return "Retry loading the GG stack."
+        case .inactive:
+            return "A GG stack is not available."
+        case .empty, .loaded:
+            return nil
+        }
     }
 
     static func ggNewStackCommitDisabledReason(
+        contextIsActive: Bool,
+        stackLoadState: GGStackLoadState,
         stack: GGStack?,
         currentHeadSHA: String
     ) -> String? {
+        guard contextIsActive else { return "A GG stack is not available." }
+        switch stackLoadState {
+        case .empty:
+            return nil
+        case .loading:
+            return "Wait for the GG stack to load."
+        case .failed:
+            return "Retry loading the GG stack."
+        case .inactive:
+            return "A GG stack is not available."
+        case .loaded:
+            break
+        }
+        guard let stack else { return "A GG stack is not available." }
         guard !currentHeadSHA.isEmpty,
-              let head = stack?.entries.max(by: { $0.position < $1.position }),
+              let head = stack.entries.max(by: { $0.position < $1.position }),
               !head.sha.isEmpty,
               currentHeadSHA.hasPrefix(head.sha) || head.sha.hasPrefix(currentHeadSHA)
         else {
@@ -292,11 +323,11 @@ struct ChangesTabView: View {
     }
 
     static func shouldShowGGDrawer(
-        stack: GGStack?,
+        contextIsActive: Bool,
         pausedGGOperation: GGPausedOperation?,
         hasUndoCandidate: Bool
     ) -> Bool {
-        stack != nil || pausedGGOperation != nil || hasUndoCandidate
+        contextIsActive || pausedGGOperation != nil || hasUndoCandidate
     }
 
     static func shouldShowChangesPreparationCard(

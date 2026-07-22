@@ -31,7 +31,8 @@ struct ChangesTabViewTests {
 
     @Test func regularGitOperationDisablesGGPreparationMutations() {
         let reason = ChangesTabView.ggPreparationMutationDisabledReason(
-            hasStack: true,
+            contextIsActive: true,
+            stackLoadState: .loaded,
             pausedOperation: nil,
             inFlightAction: nil,
             mergeOperation: .merge(sourceBranch: "main")
@@ -44,50 +45,83 @@ struct ChangesTabViewTests {
         let stack = stack(currentPosition: 1)
 
         #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            contextIsActive: true,
+            stackLoadState: .loaded,
             stack: stack,
             currentHeadSHA: "1111111111111111111111111111111111111111"
         ) == "Checkout the stack head to create a new stack commit.")
         #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            contextIsActive: true,
+            stackLoadState: .loaded,
             stack: stack,
             currentHeadSHA: "2222222222222222222222222222222222222222"
         ) == nil)
     }
 
-    @Test func newStackCommitIsConservativelyDisabledWithoutVerifiableHead() {
+    @Test func activeEmptyContextAllowsFirstStackCommitButNotRewrites() {
         #expect(ChangesTabView.ggNewStackCommitDisabledReason(
-            stack: stack(currentPosition: nil, entries: []),
+            contextIsActive: true,
+            stackLoadState: .empty,
+            stack: nil,
             currentHeadSHA: "1111111111111111111111111111111111111111"
-        ) == "Checkout the stack head to create a new stack commit.")
+        ) == nil)
+
+        let model = ChangesPreparationModel.makeGG(
+            staged: .init(files: 1, insertions: 1, deletions: 0),
+            hasDraft: false,
+            capabilities: GGCapabilities(
+                structuredSplit: true,
+                keepCurrentUnstack: true,
+                stagedOnlyAmend: true
+            ),
+            hasLoadedCommit: false
+        )
+        #expect(model.ggAction(.newStackCommit)?.isEnabled == true)
+        #expect(model.ggAction(.amendCurrent)?.disabledReason == "Create the first stack commit.")
+        #expect(model.ggAction(.absorbIntoStack)?.disabledReason == "Create the first stack commit.")
+    }
+
+    @Test func unavailableStackStateDisablesPreparationWithAccurateReason() {
+        #expect(ChangesTabView.ggPreparationMutationDisabledReason(
+            contextIsActive: true,
+            stackLoadState: .loading,
+            pausedOperation: nil,
+            inFlightAction: nil,
+            mergeOperation: nil
+        ) == "Wait for the GG stack to load.")
         #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            contextIsActive: true,
+            stackLoadState: .failed("gg unavailable"),
+            stack: nil,
+            currentHeadSHA: "1111111111111111111111111111111111111111"
+        ) == "Retry loading the GG stack.")
+    }
+
+    @Test func loadedStackWithoutVerifiableHeadDisablesNewCommit() {
+        #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            contextIsActive: true,
+            stackLoadState: .loaded,
             stack: stack(currentPosition: 2),
             currentHeadSHA: ""
         ) == "Checkout the stack head to create a new stack commit.")
     }
 
-    @Test func ggDrawerActiveForStackOrPausedOperation() {
+    @Test func ggDrawerActiveForContextOrRecovery() {
         #expect(!ChangesTabView.shouldShowGGDrawer(
-            stack: nil, pausedGGOperation: nil, hasUndoCandidate: false
+            contextIsActive: false, pausedGGOperation: nil, hasUndoCandidate: false
         ))
         #expect(ChangesTabView.shouldShowGGDrawer(
-            stack: GGStack(
-                name: "feat",
-                base: "main",
-                totalCommits: 0,
-                syncedCommits: 0,
-                currentPosition: nil,
-                behindBase: nil,
-                entries: []
-            ),
+            contextIsActive: true,
             pausedGGOperation: nil,
             hasUndoCandidate: false
         ))
         #expect(ChangesTabView.shouldShowGGDrawer(
-            stack: nil,
+            contextIsActive: false,
             pausedGGOperation: GGPausedOperation(pausedBy: .sync),
             hasUndoCandidate: false
         ))
         #expect(ChangesTabView.shouldShowGGDrawer(
-            stack: nil, pausedGGOperation: nil, hasUndoCandidate: true
+            contextIsActive: false, pausedGGOperation: nil, hasUndoCandidate: true
         ))
     }
 

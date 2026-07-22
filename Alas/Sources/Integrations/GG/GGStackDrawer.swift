@@ -1,5 +1,49 @@
 import SwiftUI
 
+struct GGStackPlaceholderModel: Equatable {
+    let title: String
+    let summaryChip: String
+    let detail: String?
+    let canRetry: Bool
+    let isLoading: Bool
+
+    static func make(
+        context: GGWorktreeContext,
+        loadState: GGStackLoadState
+    ) -> GGStackPlaceholderModel? {
+        guard case .active(let stackName) = context else { return nil }
+
+        switch loadState {
+        case .loading:
+            return GGStackPlaceholderModel(
+                title: stackName,
+                summaryChip: "Loading",
+                detail: nil,
+                canRetry: false,
+                isLoading: true
+            )
+        case .empty:
+            return GGStackPlaceholderModel(
+                title: stackName,
+                summaryChip: "0 commits",
+                detail: nil,
+                canRetry: false,
+                isLoading: false
+            )
+        case .failed(let message):
+            return GGStackPlaceholderModel(
+                title: stackName,
+                summaryChip: "Unavailable",
+                detail: message,
+                canRetry: true,
+                isLoading: false
+            )
+        case .inactive, .loaded:
+            return nil
+        }
+    }
+}
+
 struct GGStackDrawer: View {
     @Bindable var rps: RightPaneState
     let appState: AppState
@@ -9,7 +53,7 @@ struct GGStackDrawer: View {
     @State private var isRefreshing = false
 
     private var model: GGStackReadinessModel? {
-        if let stack = rps.ggStack {
+        if rps.ggStackLoadState == .loaded, let stack = rps.ggStack {
             return GGStackReadinessModel.make(
                 stack: stack,
                 action: rps.ggActionState,
@@ -51,6 +95,13 @@ struct GGStackDrawer: View {
         return GGStackReadinessModel.makePausedFallback(action: rps.ggActionState)
     }
 
+    private var placeholderModel: GGStackPlaceholderModel? {
+        GGStackPlaceholderModel.make(
+            context: rps.ggContext,
+            loadState: rps.ggStackLoadState
+        )
+    }
+
     static func liveBehindBaseOverride(
         stack: GGStack,
         selectedBaseBranch: String,
@@ -75,18 +126,48 @@ struct GGStackDrawer: View {
                 if expanded { expandedBody(model) }
             }
             .background(theme.color("bg-1").opacity(0.97))
+        } else if let placeholderModel {
+            VStack(spacing: 0) {
+                Rectangle().fill(theme.color("accent").opacity(0.24)).frame(height: 1)
+                collapsedRow(placeholderModel)
+                if expanded { expandedBody(placeholderModel) }
+            }
+            .background(theme.color("bg-1").opacity(0.97))
         }
     }
 
     private func collapsedRow(_ model: GGStackReadinessModel) -> some View {
+        collapsedRow(
+            title: model.title,
+            summaryChip: model.summaryChip,
+            isPaused: model.isPaused,
+            showsLoading: false
+        )
+    }
+
+    private func collapsedRow(_ model: GGStackPlaceholderModel) -> some View {
+        collapsedRow(
+            title: model.title,
+            summaryChip: model.summaryChip,
+            isPaused: false,
+            showsLoading: model.isLoading
+        )
+    }
+
+    private func collapsedRow(
+        title: String,
+        summaryChip: String,
+        isPaused: Bool,
+        showsLoading: Bool
+    ) -> some View {
         HStack(spacing: 7) {
-            Circle().fill(theme.color(model.isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
+            Circle().fill(theme.color(isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
             Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
-            Text(model.title.uppercased())
+            Text(title.uppercased())
                 .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
                 .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
-            Text(model.summaryChip)
+            Text(summaryChip)
                 .font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.color("fg-dim"))
             Button {
                 appState.openGGInbox(projectId: rps.worktree.projectId)
@@ -96,24 +177,7 @@ struct GGStackDrawer: View {
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .help("Open gg inbox")
-            if isRefreshing {
-                Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 11, height: 11)
-            } else {
-                Button {
-                    isRefreshing = true
-                    let task = rps.reevaluateGGGate()
-                    Task { @MainActor in
-                        await task.value
-                        isRefreshing = false
-                    }
-                } label: {
-                    Icon(name: "arrow.clockwise", size: 10, color: theme.color("fg-faint"))
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .disabled(rps.ggActionState.inFlightAction != nil)
-                .help("Refresh stack and PR status")
-            }
+            refreshControl(showsLoading: showsLoading)
             Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
@@ -130,11 +194,47 @@ struct GGStackDrawer: View {
             return .handled
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(model.title)
+        .accessibilityLabel(title)
         .accessibilityHint(expanded ? "Collapse stack status" : "Expand stack status")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
             expanded.toggle()
+        }
+    }
+
+    @ViewBuilder
+    private func refreshControl(showsLoading: Bool) -> some View {
+        if showsLoading || isRefreshing {
+            Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 11, height: 11)
+        } else {
+            Button(action: refresh) {
+                Icon(name: "arrow.clockwise", size: 10, color: theme.color("fg-faint"))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .disabled(rps.ggActionState.inFlightAction != nil)
+            .help("Refresh stack and PR status")
+        }
+    }
+
+    @ViewBuilder
+    private func expandedBody(_ model: GGStackPlaceholderModel) -> some View {
+        if model.detail != nil || model.canRetry {
+            VStack(alignment: .leading, spacing: 8) {
+                if let detail = model.detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("warn"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.canRetry {
+                    Button("Retry", action: refresh)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(isRefreshing)
+                }
+            }
+            .padding(.horizontal, 10).padding(.bottom, 10)
         }
     }
 
@@ -242,6 +342,15 @@ struct GGStackDrawer: View {
             rps.requestGGLand(.ready)
         } else {
             rps.onGGStackAction(action.kind, appState: appState)
+        }
+    }
+
+    private func refresh() {
+        isRefreshing = true
+        let task = rps.reevaluateGGGate()
+        Task { @MainActor in
+            await task.value
+            isRefreshing = false
         }
     }
 
