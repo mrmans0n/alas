@@ -5484,11 +5484,10 @@ final class AppState {
         worktree: Worktree,
         branch: String
     ) -> GGWorktreeContext {
-        GGWorktreeContextResolver.resolve(
+        Self.resolveGGWorktreeContext(
             masterEnabled: config.changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
-            isRemoteProject: project.host != nil,
-            projectMode: project.ggMode,
+            project: project,
             worktreeOverride: projectsManager.ggWorktreeMode(
                 projectId: project.id,
                 worktreeId: worktree.id
@@ -5496,6 +5495,29 @@ final class AppState {
             isMainWorktree: projectsManager.isMain(worktree, in: project),
             repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path),
             branchUsername: GGConfigReader.branchUsername(repoPath: project.path),
+            branch: branch
+        )
+    }
+
+    nonisolated static func resolveGGWorktreeContext(
+        masterEnabled: Bool,
+        ggInstalled: Bool,
+        project: ProjectConfig,
+        worktreeOverride: GGWorktreeMode,
+        isMainWorktree: Bool,
+        repoHasGGConfig: Bool,
+        branchUsername: String?,
+        branch: String
+    ) -> GGWorktreeContext {
+        GGWorktreeContextResolver.resolve(
+            masterEnabled: masterEnabled,
+            ggInstalled: ggInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            worktreeOverride: worktreeOverride,
+            isMainWorktree: isMainWorktree,
+            repoHasGGConfig: repoHasGGConfig,
+            branchUsername: branchUsername,
             branch: branch
         )
     }

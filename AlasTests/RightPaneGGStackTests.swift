@@ -1116,6 +1116,26 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
+    @Test func activeContextNameChangeWithSameBranchAndCommitsReinvokesCLI() async {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        var stackName = "stack-a"
+        state.ggContextProvider = { _ in .active(stackName: stackName) }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "h", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(runner.callCount == 1)
+
+        stackName = "stack-b"
+        await state.refreshGGStack()
+
+        #expect(state.ggContext == .active(stackName: "stack-b"))
+        #expect(runner.callCount == 2)
+    }
+
     /// `markSnapshotUnknown()` resets `commits` along with the rest of the
     /// snapshot; gg stack state derives from `commits`, so it must be reset
     /// in lockstep or a delayed/failed refresh after invalidation can leave
@@ -1139,7 +1159,18 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggStack == nil)
         #expect(state.ggStackCommitsKey == nil)
+        #expect(state.ggStackLoadState == .loading)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+    }
+
+    @Test func markSnapshotUnknownKeepsInactiveLoadStateInactive() {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        state.ggContext = .inactive(reason: .policyOff)
+        state.ggStackLoadState = .inactive
+
+        state.markSnapshotUnknown()
+
+        #expect(state.ggStackLoadState == .inactive)
     }
 
     /// Plain git actions use the same marker files as paused gg actions, so

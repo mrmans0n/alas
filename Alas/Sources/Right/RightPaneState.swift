@@ -164,7 +164,15 @@ final class RightPaneState: GGSplitCommitServicing {
     @ObservationIgnored private var ggStackRefreshGeneration: UInt = 0
 
     var currentGGStackCommitsKey: String {
-        "\(currentBranch)|" + ggStackSourceCommits.map(\.sha).joined(separator: "|")
+        let contextIdentity: String
+        switch ggContext {
+        case .active(let stackName):
+            contextIdentity = "active:\(stackName)"
+        case .inactive:
+            contextIdentity = "inactive"
+        }
+        return "\(currentBranch)|\(contextIdentity)|"
+            + ggStackSourceCommits.map(\.sha).joined(separator: "|")
     }
 
     var ggCommitSelectionIsStale: Bool {
@@ -1551,6 +1559,7 @@ final class RightPaneState: GGSplitCommitServicing {
         ggStackSourceCommits = []
         ggStackCommitsKey = nil
         if ggStack != nil { ggStack = nil }
+        ggStackLoadState = ggContext.isActive ? .loading : .inactive
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }

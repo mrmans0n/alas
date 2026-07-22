@@ -2,6 +2,18 @@ import Testing
 @testable import Alas
 
 struct GGWorktreeContextTests {
+    private func project(mode: GGProjectMode, host: String? = nil) -> ProjectConfig {
+        ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "teal",
+            addedAt: .now,
+            host: host,
+            ggMode: mode
+        )
+    }
+
     private func resolve(
         masterEnabled: Bool = true,
         ggInstalled: Bool = true,
@@ -75,6 +87,98 @@ struct GGWorktreeContextTests {
         #expect(resolve(branch: "nacho/") == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
         #expect(resolve(branch: "other/feature") == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
         #expect(!resolve(branch: "other/feature").isActive)
+    }
+
+    @Test func appStateMappingPropagatesProjectModeAndRepoConfig() {
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: true,
+            project: project(mode: .auto),
+            worktreeOverride: .inherit,
+            isMainWorktree: false,
+            repoHasGGConfig: false,
+            branchUsername: "nacho",
+            branch: "nacho/feature"
+        ) == .inactive(reason: .policyOff))
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: true,
+            project: project(mode: .auto),
+            worktreeOverride: .inherit,
+            isMainWorktree: false,
+            repoHasGGConfig: true,
+            branchUsername: "nacho",
+            branch: "nacho/feature"
+        ) == .active(stackName: "feature"))
+    }
+
+    @Test func appStateMappingPropagatesMasterAndAvailability() {
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: false,
+            ggInstalled: true,
+            project: project(mode: .on),
+            worktreeOverride: .on,
+            isMainWorktree: false,
+            repoHasGGConfig: true,
+            branchUsername: "nacho",
+            branch: "nacho/feature"
+        ) == .inactive(reason: .masterDisabled))
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: false,
+            project: project(mode: .on),
+            worktreeOverride: .on,
+            isMainWorktree: false,
+            repoHasGGConfig: true,
+            branchUsername: "nacho",
+            branch: "nacho/feature"
+        ) == .inactive(reason: .cliMissing))
+    }
+
+    @Test func appStateMappingPropagatesOverrideAndMainIdentity() {
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: true,
+            project: project(mode: .off),
+            worktreeOverride: .on,
+            isMainWorktree: true,
+            repoHasGGConfig: false,
+            branchUsername: "nacho",
+            branch: "nacho/forced"
+        ) == .active(stackName: "forced"))
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: true,
+            project: project(mode: .on),
+            worktreeOverride: .inherit,
+            isMainWorktree: true,
+            repoHasGGConfig: true,
+            branchUsername: "nacho",
+            branch: "nacho/main"
+        ) == .inactive(reason: .policyOff))
+    }
+
+    @Test func appStateMappingPropagatesRemoteAndLiveBranch() {
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: true,
+            project: project(mode: .on, host: "build-host"),
+            worktreeOverride: .on,
+            isMainWorktree: false,
+            repoHasGGConfig: true,
+            branchUsername: "nacho",
+            branch: "nacho/live-branch"
+        ) == .inactive(reason: .remoteProject))
+        #expect(AppState.resolveGGWorktreeContext(
+            masterEnabled: true,
+            ggInstalled: true,
+            project: project(mode: .on),
+            worktreeOverride: .inherit,
+            isMainWorktree: false,
+            repoHasGGConfig: true,
+            branchUsername: "nacho",
+            branch: "other/live-branch"
+        ) == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
     }
 }
 
