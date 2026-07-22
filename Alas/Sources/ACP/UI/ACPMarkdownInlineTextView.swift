@@ -256,6 +256,14 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     func fittingSize(for width: CGFloat) -> CGSize {
         let fittingWidth = max(minimumFittingWidth, width)
         if let cachedHeight = fittingHeightByWidth[fittingWidth] {
+            // `widthTracksTextView` only re-syncs the container off a real
+            // frame change, so a cache hit must still restore the container
+            // to this width itself — otherwise, if the previous call was a
+            // miss at a different width and this width's frame goes
+            // unchanged (e.g. re-probed mid-scroll), drawing/selection would
+            // keep wrapping at that stale width while SwiftUI allocates the
+            // (correct) cached height for this one.
+            textContainer?.containerSize = CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
             return CGSize(width: fittingWidth, height: cachedHeight)
         }
         guard let textContainer, let layoutManager else {
@@ -277,7 +285,13 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     }
 
     func naturalFittingSize() -> CGSize {
-        if let cachedNaturalFittingSize { return cachedNaturalFittingSize }
+        if let cachedNaturalFittingSize {
+            // See the matching comment in `fittingSize(for:)`: restore the
+            // container even on a cache hit so a stale width from an
+            // intervening `fittingSize` call can't leak into drawing.
+            textContainer?.containerSize = CGSize(width: maximumNaturalFittingWidth, height: .greatestFiniteMagnitude)
+            return cachedNaturalFittingSize
+        }
         guard let textContainer, let layoutManager else {
             return CGSize(width: minimumFittingWidth, height: 0)
         }

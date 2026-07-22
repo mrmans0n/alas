@@ -93,4 +93,30 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         _ = textView.fittingSize(for: 100)
         #expect(textView.fittingComputationCountForTests == 18)
     }
+
+    /// `widthTracksTextView` only re-syncs the container off a real frame
+    /// change, so a cache hit must restore `textContainer.containerSize`
+    /// itself. Otherwise probing width A (a miss) and then width B (a stale
+    /// cache hit) would leave the container wrapped at A while the cached,
+    /// correct height for B is what SwiftUI actually allocates.
+    @Test func cacheHitRestoresContainerWidth() {
+        let textView = makeTextView("Some wrapping text for the row.")
+
+        _ = textView.fittingSize(for: 200) // miss — container left at 200
+        _ = textView.fittingSize(for: 350) // miss — container left at 350
+        #expect(textView.textContainer?.containerSize.width == 350)
+
+        _ = textView.fittingSize(for: 200) // hit — must restore container to 200
+        #expect(textView.textContainer?.containerSize.width == 200)
+    }
+
+    @Test func naturalFittingSizeCacheHitRestoresContainerWidth() {
+        let textView = makeTextView("Some wrapping text for the row.")
+
+        _ = textView.naturalFittingSize()
+        _ = textView.fittingSize(for: 200) // interleaved miss at a fixed width
+
+        _ = textView.naturalFittingSize() // hit — must restore the natural-width container
+        #expect(textView.textContainer?.containerSize.width == 10_000)
+    }
 }
