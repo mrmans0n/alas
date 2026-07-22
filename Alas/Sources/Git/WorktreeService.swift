@@ -164,6 +164,7 @@ struct WorktreeService {
                     name: branch,
                     branch: branch,
                     path: path,
+                    isMainWorktree: result.isEmpty,
                     status: .clean,
                     lastActivity: lastActivity,
                     createdAt: ctime
@@ -613,6 +614,7 @@ struct WorktreeService {
             name: branch,
             branch: branch,
             path: destination,
+            isMainWorktree: false,
             status: .clean,
             lastActivity: now,
             createdAt: now

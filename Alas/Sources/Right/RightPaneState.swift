@@ -924,10 +924,10 @@ final class RightPaneState: GGSplitCommitServicing {
         let refreshGeneration = ggStackRefreshGeneration
         let context = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
         if ggContext != context { ggContext = context }
+        reconcilePausedOperation()
         guard context.isActive else {
             ggStackCommitsKey = nil
             ggStackLoadState = .inactive
-            ggActionState.clearPaused()
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
@@ -938,7 +938,6 @@ final class RightPaneState: GGSplitCommitServicing {
             ggMutationCoordinator.suspendUndoCandidate()
             return
         }
-        reconcilePausedOperation()
         ggEffectiveConfig = GGConfigReader.effectiveConfig(repoPath: worktree.path.path)
         // `gg ls --json` reaches out to gh/glab for PR state — skip when
         // the branch and commit set are unchanged since the last query. PR-

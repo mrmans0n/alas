@@ -635,6 +635,7 @@ final class ProjectsManager {
     }
 
     private func isMainWorktree(_ worktree: Worktree, project: ProjectConfig) -> Bool {
-        canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path))
+        worktree.isMainWorktree
+            ?? (canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path)))
     }
 }

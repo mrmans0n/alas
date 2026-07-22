@@ -259,6 +259,31 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(GGStackSummaryStore.shared.summaries[path.path] == nil)
     }
 
+    @Test func fullTopologyRefreshClearsCachedSidebarSummaryWhenBranchChanges() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-summary-topology-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [])))
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "topology",
+            color: "teal"
+        )
+        await state.refreshProjectTopology(projectId: project.id)
+        let worktreePath = try #require(state.projectsManager.worktrees(projectId: project.id).first?.path.path)
+        GGStackSummaryStore.shared.summaries[worktreePath] = GGStackSummary(merged: 1, total: 2)
+        defer { GGStackSummaryStore.shared.summaries[worktreePath] = nil }
+        state.stopAllProjectGitWatchers()
+
+        _ = try await Process.git(["checkout", "-q", "-b", "nacho/new-stack"], cwd: repo)
+        await state.refreshProjectTopology(projectId: project.id)
+
+        #expect(GGStackSummaryStore.shared.summaries[worktreePath] == nil)
+    }
+
     @Test func cachedLiveBranchOverridesStaleTopologyForACPDecisions() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-acp-live-branch-\(UUID().uuidString)")

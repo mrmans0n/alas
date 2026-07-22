@@ -1879,7 +1879,18 @@ final class AppState {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects
             .filter { $0.id == projectId }
             .map { ($0.id, $0.path) })
+        let previousBranches = Dictionary(uniqueKeysWithValues: projectsManager
+            .worktrees(projectId: projectId)
+            .map { (Self.canonicalWorktreePath($0.path.path), (path: $0.path.path, branch: $0.branch)) })
         let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            let canonicalPath = Self.canonicalWorktreePath(worktree.path.path)
+            guard let previous = previousBranches[canonicalPath], previous.branch != worktree.branch else {
+                continue
+            }
+            GGStackSummaryStore.shared.summaries[previous.path] = nil
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+        }
         if changed { saveProjects() }
         restartProjectGitWatchers(previousPaths: previousPaths)
         return changed

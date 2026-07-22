@@ -111,6 +111,38 @@ struct ProjectsManagerTests {
         #expect(restartedWorktrees.first?.path.standardizedFileURL == repo.standardizedFileURL)
     }
 
+    @Test func linkedWorktreeRegistrationPreservesGitsMainWorktreeIdentity() async throws {
+        let repo = try await makeRepo(name: "linked-registration")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let service = WorktreeService()
+        let linkedPath = repo.appendingPathComponent("linked-registration")
+        let projectId = "linked-registration-project"
+        _ = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "linked-registration-branch",
+            destination: linkedPath,
+            projectId: projectId
+        )
+        let project = ProjectConfig(
+            id: projectId,
+            name: "linked-registration",
+            path: linkedPath.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        try await manager.refreshWorktrees(projectId: projectId)
+
+        let worktrees = manager.worktrees(projectId: projectId)
+        let main = try #require(worktrees.first { $0.path.standardizedFileURL == repo.standardizedFileURL })
+        let linked = try #require(worktrees.first { $0.path.standardizedFileURL == linkedPath.standardizedFileURL })
+        #expect(manager.isMain(main, in: project))
+        #expect(!manager.isMain(linked, in: project))
+        #expect(worktrees.first?.id == main.id)
+    }
+
     @Test func remoteRegistrationReconcileUnregistersRemovedWorktreeRoots() {
         let project = ProjectConfig(
             id: "remote-project",

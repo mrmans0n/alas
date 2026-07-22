@@ -3,6 +3,27 @@ import Foundation
 @testable import Alas
 
 @Suite struct WorktreeServiceCreatedAtTests {
+    @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")
+        let main = root.appendingPathComponent("main")
+        let linked = root.appendingPathComponent("linked")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: linked, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let porcelain = """
+        worktree \(main.path)
+        branch refs/heads/main
+
+        worktree \(linked.path)
+        branch refs/heads/feature
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1")
+
+        #expect(parsed.map(\.isMainWorktree) == [true, false])
+    }
+
     @Test func parsePorcelainPopulatesCreatedAtFromFilesystem() throws {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("alas-ctime-\(UUID().uuidString)")

@@ -254,6 +254,7 @@ private final class PausedContinueGGRunner: GGCommandRunning, @unchecked Sendabl
     let snapshotOperationID: String?
     let listedOperationID: String
     private(set) var continueCallCount = 0
+    private(set) var abortCallCount = 0
     private(set) var undoListCallCount = 0
 
     init(snapshotOperationID: String?, listedOperationID: String) {
@@ -272,6 +273,10 @@ private final class PausedContinueGGRunner: GGCommandRunning, @unchecked Sendabl
         }
         if args == ["continue"] {
             continueCallCount += 1
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        if args == ["abort"] {
+            abortCallCount += 1
             return ProcessResult(exitCode: 0, stdout: "", stderr: "")
         }
         if args == ["undo", "--list", "--json", "--limit", "1"] {
@@ -1354,6 +1359,46 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
 
         #expect(state.ggActionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
+    }
+
+    @Test func inactiveDetachedRefreshRestoresPausedGGOperationAndRoutesRecoveryThroughGG() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-paused-detached-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent(".git/rebase-merge"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        GGStackGate.markAlasGGOperationInProgress(repoPath: dir.path)
+        let wt = Worktree(
+            id: Worktree.makeId(path: dir), projectId: "p", name: "detached",
+            branch: "", path: dir, status: .clean, lastActivity: Date()
+        )
+        let runner = PausedContinueGGRunner(
+            snapshotOperationID: nil,
+            listedOperationID: "in-progress"
+        )
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")) }
+        state.currentBranch = ""
+
+        await state.refreshGGStack()
+
+        #expect(state.ggStackLoadState == .inactive)
+        #expect(state.ggActionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
+
+        state.onGGStackAction(.continueOp, appState: AppState(store: MemoryStore()))
+        for _ in 0..<500 where runner.continueCallCount == 0 || state.ggActionState.inFlightAction != nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(runner.continueCallCount == 1)
+
+        state.onGGStackAction(.abortOp, appState: AppState(store: MemoryStore()))
+        for _ in 0..<500 where runner.abortCallCount == 0 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(runner.abortCallCount == 1)
     }
 
     @Test func refreshClearsStaleAlasMarkerWhenNoGitOperationIsInProgress() async throws {
