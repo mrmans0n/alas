@@ -23,7 +23,7 @@ struct ChangesTabView: View {
                 changes: rps.changes,
                 hasDraft: draftNonEmpty,
                 capabilities: GGAvailability.shared.capabilities,
-                hasLoadedCommit: rps.ggStack?.entries.isEmpty == false,
+                hasLoadedCommit: rps.ggStackLoadState.hasLoadedCommit,
                 mutationDisabledReason: ggPreparationMutationDisabledReason,
                 newCommitDisabledReason: Self.ggNewStackCommitDisabledReason(
                     contextIsActive: rps.ggContext.isActive,

@@ -60,6 +60,45 @@ private final class CountingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
     }
 }
 
+enum GGStackClassificationFixture: CaseIterable, Sendable {
+    case nilStack
+    case zeroTotalWithEntry
+    case positiveTotalWithoutEntries
+    case populated
+
+    var isEmpty: Bool { self != .populated }
+    var hasStack: Bool { self != .nilStack }
+
+    var json: String {
+        guard self != .nilStack else {
+            return #"{"version": 1, "stack": null}"#
+        }
+        let totalCommits = self == .zeroTotalWithEntry ? 0 : 1
+        let entries = self == .positiveTotalWithoutEntries ? "[]" : """
+        [
+          {"position": 1, "sha": "aaaaaaa", "title": "feat: first",
+           "gg_id": "id-1", "gg_parent": null, "pr_number": null, "pr_state": null,
+           "approved": false, "ci_status": null, "is_current": true,
+           "in_merge_train": false, "merge_train_position": null}
+        ]
+        """
+        return """
+        {
+          "version": 1,
+          "stack": {
+            "name": "stack",
+            "base": "main",
+            "total_commits": \(totalCommits),
+            "synced_commits": 0,
+            "current_position": 1,
+            "behind_base": 0,
+            "entries": \(entries)
+          }
+        }
+        """
+    }
+}
+
 /// Always throws, simulating a transient gg/provider failure (e.g. a gh/glab
 /// auth hiccup) rather than a real "not a stack" result.
 private final class ThrowingFakeGGRunner: GGCommandRunning, @unchecked Sendable {
@@ -768,23 +807,47 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackLoadState == .loaded)
     }
 
-    @Test func nilStackLeavesContextActiveAndPublishesEmpty() async {
-        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+    @Test(arguments: GGStackClassificationFixture.allCases)
+    func stackClassificationKeepsEmptyUIConsistent(_ fixture: GGStackClassificationFixture) async {
+        let worktree = makeWorktree()
+        defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
         let runner = CountingFakeGGRunner(
             result: ProcessResult(
                 exitCode: 0,
-                stdout: #"{"version": 1, "current_stack": null, "stacks": []}"#,
+                stdout: fixture.json,
                 stderr: ""
             )
         )
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in .active(stackName: "stack") }
+        state.currentHeadSHA = String(repeating: "a", count: 40)
 
         await state.refreshGGStack()
 
-        #expect(state.ggContext == .active(stackName: "stack"))
-        #expect(state.ggStack == nil)
-        #expect(state.ggStackLoadState == .empty)
+        #expect((state.ggStack != nil) == fixture.hasStack)
+        #expect((state.ggStackLoadState == .empty) == fixture.isEmpty)
+        #expect((GGStackSummaryStore.shared.summaries[worktree.path.path] == nil) == fixture.isEmpty)
+        #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+            contextIsActive: state.ggContext.isActive,
+            stackLoadState: state.ggStackLoadState,
+            stack: state.ggStack,
+            currentHeadSHA: state.currentHeadSHA
+        ) == nil)
+        let hasLoadedCommit = state.ggStackLoadState.hasLoadedCommit
+        #expect(hasLoadedCommit == !fixture.isEmpty)
+        let preparation = ChangesPreparationModel.makeGG(
+            staged: .init(files: 1, insertions: 1, deletions: 0),
+            hasDraft: false,
+            capabilities: GGCapabilities(
+                structuredSplit: true,
+                keepCurrentUnstack: true,
+                stagedOnlyAmend: true
+            ),
+            hasLoadedCommit: hasLoadedCommit
+        )
+        #expect(preparation.ggAction(.newStackCommit)?.isEnabled == true)
+        #expect(preparation.ggAction(.amendCurrent)?.isEnabled == !fixture.isEmpty)
     }
 
     @Test func inactiveContextSkipsGGAndClearsPublishedState() async throws {

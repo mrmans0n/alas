@@ -11,6 +11,8 @@ enum GGStackLoadState: Equatable {
     case empty
     case loaded
     case failed(String)
+
+    var hasLoadedCommit: Bool { self == .loaded }
 }
 
 struct ReviewLoopRemoteFingerprint: Equatable, Sendable {
@@ -965,8 +967,9 @@ final class RightPaneState: GGSplitCommitServicing {
             else { return }
             ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
-            ggStackLoadState = stack == nil ? .empty : .loaded
-            let summary = stack?.summary
+            let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
+            ggStackLoadState = stackIsEmpty ? .empty : .loaded
+            let summary = stackIsEmpty ? nil : stack?.summary
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
             }
