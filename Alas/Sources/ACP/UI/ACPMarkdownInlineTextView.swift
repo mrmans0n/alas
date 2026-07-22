@@ -47,6 +47,10 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             memoizeInlineMarkdown: memoizesInlineMarkdown
         )
         textView.textStorage?.setAttributedString(rendered)
+        // The rendered text changed, so any memoized width→height
+        // measurements are stale; drop them before SwiftUI re-queries
+        // `sizeThatFits`.
+        (textView as? ACPMarkdownInlineNSTextView)?.invalidateFittingCache()
         context.coordinator.loadRemoteImages(in: textView, attributedString: rendered)
     }
 
@@ -142,6 +146,9 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             if let textContainer = textView.textContainer {
                 textView.layoutManager?.ensureLayout(for: textContainer)
             }
+            // A loaded (or failed) remote image resizes the run, so cached
+            // fitting measurements no longer hold.
+            (textView as? ACPMarkdownInlineNSTextView)?.invalidateFittingCache()
             textView.invalidateIntrinsicContentSize()
         }
 
@@ -212,12 +219,53 @@ extension NSAttributedString.Key {
     static let acpMarkdownInlineRemoteImage = NSAttributedString.Key("ACPMarkdownInlineRemoteImage")
 }
 
-private final class ACPMarkdownInlineNSTextView: NSTextView {
+final class ACPMarkdownInlineNSTextView: NSTextView {
     private let minimumFittingWidth: CGFloat = 80
     private let maximumNaturalFittingWidth: CGFloat = 10_000
 
+    #if DEBUG
+    /// Number of times a fitting measurement actually ran TextKit layout
+    /// (i.e. a cache miss). Lets tests assert that repeated `sizeThatFits`
+    /// probes at a known width hit the memo instead of re-laying out.
+    private(set) var fittingComputationCountForTests = 0
+    #endif
+    /// Cap on distinct cached widths. SwiftUI's `StackLayout` probes a small,
+    /// bounded set of widths per placement pass (min / ideal / actual), so a
+    /// handful of entries covers steady scrolling; the cap only guards against
+    /// unbounded growth during a live width drag.
+    private static let fittingCacheLimit = 16
+
+    /// Memoized width→height results. `sizeThatFits` is driven by SwiftUI's
+    /// layout engine, which probes each child multiple times per placement
+    /// pass and re-probes on every scroll frame. Running
+    /// `NSLayoutManager.ensureLayout` + `usedRect` on each probe is the
+    /// `NSAttributedString.MetricsCache.metrics` cost that pins the main
+    /// thread while scrolling a long transcript. The text only changes through
+    /// `updateNSView`/remote-image loads, so measurements stay valid between
+    /// those points — cache them and invalidate via `invalidateFittingCache()`.
+    private var fittingHeightByWidth: [CGFloat: CGFloat] = [:]
+    private var cachedNaturalFittingSize: CGSize?
+
+    /// Discard memoized measurements. Call whenever the text storage (or a
+    /// layout input baked into it) changes.
+    func invalidateFittingCache() {
+        fittingHeightByWidth.removeAll(keepingCapacity: true)
+        cachedNaturalFittingSize = nil
+    }
+
     func fittingSize(for width: CGFloat) -> CGSize {
         let fittingWidth = max(minimumFittingWidth, width)
+        if let cachedHeight = fittingHeightByWidth[fittingWidth] {
+            // `widthTracksTextView` only re-syncs the container off a real
+            // frame change, so a cache hit must still restore the container
+            // to this width itself — otherwise, if the previous call was a
+            // miss at a different width and this width's frame goes
+            // unchanged (e.g. re-probed mid-scroll), drawing/selection would
+            // keep wrapping at that stale width while SwiftUI allocates the
+            // (correct) cached height for this one.
+            textContainer?.containerSize = CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
+            return CGSize(width: fittingWidth, height: cachedHeight)
+        }
         guard let textContainer, let layoutManager else {
             return CGSize(width: fittingWidth, height: 0)
         }
@@ -225,10 +273,25 @@ private final class ACPMarkdownInlineNSTextView: NSTextView {
         textContainer.containerSize = CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
-        return CGSize(width: fittingWidth, height: ceil(used.height))
+        let height = ceil(used.height)
+        #if DEBUG
+        fittingComputationCountForTests += 1
+        #endif
+        if fittingHeightByWidth.count >= Self.fittingCacheLimit {
+            fittingHeightByWidth.removeAll(keepingCapacity: true)
+        }
+        fittingHeightByWidth[fittingWidth] = height
+        return CGSize(width: fittingWidth, height: height)
     }
 
     func naturalFittingSize() -> CGSize {
+        if let cachedNaturalFittingSize {
+            // See the matching comment in `fittingSize(for:)`: restore the
+            // container even on a cache hit so a stale width from an
+            // intervening `fittingSize` call can't leak into drawing.
+            textContainer?.containerSize = CGSize(width: maximumNaturalFittingWidth, height: .greatestFiniteMagnitude)
+            return cachedNaturalFittingSize
+        }
         guard let textContainer, let layoutManager else {
             return CGSize(width: minimumFittingWidth, height: 0)
         }
@@ -236,10 +299,15 @@ private final class ACPMarkdownInlineNSTextView: NSTextView {
         textContainer.containerSize = CGSize(width: maximumNaturalFittingWidth, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
-        return CGSize(
+        #if DEBUG
+        fittingComputationCountForTests += 1
+        #endif
+        let size = CGSize(
             width: max(minimumFittingWidth, ceil(used.width)),
             height: ceil(used.height)
         )
+        cachedNaturalFittingSize = size
+        return size
     }
 
     override var intrinsicContentSize: NSSize {
