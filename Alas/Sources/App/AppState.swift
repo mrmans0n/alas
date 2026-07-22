@@ -15,6 +15,7 @@ final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
+    private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
     var pendingSettingsSection: SettingsSection?
@@ -1088,7 +1089,8 @@ final class AppState {
         branch: String,
         destination: URL,
         runStartup: Bool,
-        launchSurface: WorktreeLaunchSurface
+        launchSurface: WorktreeLaunchSurface,
+        ggWorktreeMode: GGWorktreeMode = .inherit
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -1142,7 +1144,13 @@ final class AppState {
             _ = switchToSpace(id: containing)
         }
         projectsManager.insertOptimisticWorktree(optimistic)
+        setUnpersistedGGWorktreeMode(
+            projectId: projectId,
+            worktreeId: optimistic.id,
+            mode: ggWorktreeMode
+        )
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
+        rightPaneStore.reevaluateGGGate(worktreeId: optimistic.id)
         if launchSurface != .delegated {
             selectWorktree(id: optimistic.id)
         }
@@ -1198,6 +1206,16 @@ final class AppState {
                     )
                     _ = try await refreshProjectWorktrees(projectId: project.id)
                     guard projects.contains(where: { $0.id == projectId }) else { return }
+                    removeUnpersistedGGWorktreeMode(projectId: project.id, worktreeId: newWorktree.id)
+                    projectsManager.setGGWorktreeMode(
+                        projectId: project.id,
+                        worktreeId: newWorktree.id,
+                        mode: ggWorktreeMode
+                    )
+                    if ggWorktreeMode != .inherit {
+                        saveProjects()
+                    }
+                    rightPaneStore.reevaluateGGGate(worktreeId: newWorktree.id)
                     projectsManager.setOperationState(id: optimistic.id, state: nil)
                     if wasHidden {
                         saveProjects()
@@ -1227,6 +1245,11 @@ final class AppState {
                         break
                     }
                 } catch {
+                    discardUnpersistedGGWorktreeMode(
+                        projectId: projectId,
+                        worktreeId: optimistic.id,
+                        mode: ggWorktreeMode
+                    )
                     projectsManager.setOperationState(
                         id: optimistic.id,
                         state: .createFailed(message: error.localizedDescription, base: base)
@@ -1234,6 +1257,11 @@ final class AppState {
                 }
             } catch {
                 let msg = error.localizedDescription
+                discardUnpersistedGGWorktreeMode(
+                    projectId: projectId,
+                    worktreeId: optimistic.id,
+                    mode: ggWorktreeMode
+                )
                 projectsManager.setOperationState(id: optimistic.id, state: .createFailed(message: msg, base: base))
             }
         }
@@ -1620,6 +1648,7 @@ final class AppState {
 
     func removeFailedOptimisticWorktree(id: String, projectId: String) {
         cleanupWorktreeState(worktreeId: id)
+        removeUnpersistedGGWorktreeMode(projectId: projectId, worktreeId: id)
         projectsManager.removeGGWorktreeMode(projectId: projectId, worktreeId: id)
         projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
         saveProjects()
@@ -1752,6 +1781,7 @@ final class AppState {
             remoteRootsToUnregister = []
         }
         stopProjectGitWatcher(projectId: id)
+        unpersistedGGWorktreeModes.removeValue(forKey: id)
         projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
         spacesManager.removeProjectEverywhere(id)
         saveProjects()
@@ -5516,10 +5546,7 @@ final class AppState {
             masterEnabled: config.changes.stackedDiffsEnabled,
             ggInstalled: ggInstalled,
             project: project,
-            worktreeOverride: projectsManager.ggWorktreeMode(
-                projectId: project.id,
-                worktreeId: worktree.id
-            ),
+            worktreeOverride: effectiveGGWorktreeMode(projectId: project.id, worktreeId: worktree.id),
             isMainWorktree: projectsManager.isMain(worktree, in: project),
             repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path),
             branchUsername: GGConfigReader.branchUsername(repoPath: project.path),
@@ -5531,10 +5558,7 @@ final class AppState {
         project: ProjectConfig,
         worktree: Worktree
     ) -> GGWorktreeMenuModel {
-        let selectedMode = projectsManager.ggWorktreeMode(
-            projectId: project.id,
-            worktreeId: worktree.id
-        )
+        let selectedMode = effectiveGGWorktreeMode(projectId: project.id, worktreeId: worktree.id)
         return GGWorktreeMenuModel(
             selectedMode: selectedMode,
             context: ggWorktreeContext(
@@ -5559,6 +5583,42 @@ final class AppState {
         )
         saveProjects()
         rightPaneStore.reevaluateGGGate(worktreeId: worktreeId)
+    }
+
+    private func discardUnpersistedGGWorktreeMode(
+        projectId: String,
+        worktreeId: String,
+        mode: GGWorktreeMode
+    ) {
+        guard mode != .inherit else { return }
+        removeUnpersistedGGWorktreeMode(projectId: projectId, worktreeId: worktreeId)
+        rightPaneStore.reevaluateGGGate(worktreeId: worktreeId)
+    }
+
+    private func setUnpersistedGGWorktreeMode(
+        projectId: String,
+        worktreeId: String,
+        mode: GGWorktreeMode
+    ) {
+        guard mode != .inherit else { return }
+        var modes = unpersistedGGWorktreeModes[projectId] ?? [:]
+        modes[worktreeId] = mode
+        unpersistedGGWorktreeModes[projectId] = modes
+    }
+
+    private func removeUnpersistedGGWorktreeMode(projectId: String, worktreeId: String) {
+        guard var modes = unpersistedGGWorktreeModes[projectId] else { return }
+        modes.removeValue(forKey: worktreeId)
+        if modes.isEmpty {
+            unpersistedGGWorktreeModes.removeValue(forKey: projectId)
+        } else {
+            unpersistedGGWorktreeModes[projectId] = modes
+        }
+    }
+
+    private func effectiveGGWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {
+        unpersistedGGWorktreeModes[projectId]?[worktreeId]
+            ?? projectsManager.ggWorktreeMode(projectId: projectId, worktreeId: worktreeId)
     }
 
     func removePersistedGGWorktreeMode(projectId: String, worktreeId: String) {
