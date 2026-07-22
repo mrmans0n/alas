@@ -212,10 +212,13 @@ struct WorktreeRowView: View {
                 }
                 Divider()
                 if ggMenuModel.isVisible {
-                    Menu("GG Mode") {
-                        ggModeButton("Inherit repository default", mode: .inherit)
-                        ggModeButton("On", mode: .on)
-                        ggModeButton("Off", mode: .off)
+                    Picker("GG Mode", selection: Binding(
+                        get: { ggMenuModel.selectedMode },
+                        set: { mode in onSetGGWorktreeMode(mode) }
+                    )) {
+                        Text("Inherit repository default").tag(GGWorktreeMode.inherit)
+                        Text("On").tag(GGWorktreeMode.on)
+                        Text("Off").tag(GGWorktreeMode.off)
                     }
                     if let explanation = ggMenuModel.inactiveExplanation {
                         Divider()
@@ -228,19 +231,6 @@ struct WorktreeRowView: View {
                 if showKeepBranchOption {
                     Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
                 }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func ggModeButton(_ title: String, mode: GGWorktreeMode) -> some View {
-        Button {
-            onSetGGWorktreeMode(mode)
-        } label: {
-            if ggMenuModel.selectedMode == mode {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
             }
         }
     }
