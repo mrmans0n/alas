@@ -44,6 +44,7 @@ struct DiffTabView: View {
     @State private var loadedDraftSessionID: ReviewDraftSessionID?
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
+    @State private var draftComposerFocusRequestGeneration = 0
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
     @State private var showWhitespace = false
     @StateObject private var renderContextCache = DiffTabRenderContextCache()
@@ -147,10 +148,6 @@ struct DiffTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
         .onChange(of: loadKey, initial: true) { _, _ in loadDraftCommentController() }
-        .onChange(of: pendingDraftAnchor) { _, anchor in
-            guard anchor != nil else { return }
-            Task { @MainActor in draftComposerFocused = true }
-        }
         .task(id: loadKey) { await load() }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             try? draftCommentController?.load()
@@ -534,6 +531,13 @@ struct DiffTabView: View {
     private func clearPendingDraft() {
         pendingDraftAnchor = nil
         pendingDraftBody = ""
+        draftComposerFocused = false
+    }
+
+    private func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
+        pendingDraftAnchor = anchor
+        pendingDraftBody = ""
+        draftComposerFocusRequestGeneration &+= 1
     }
 
     @ViewBuilder
@@ -691,10 +695,7 @@ struct DiffTabView: View {
                             codeFontSize: codeFontSize,
                             theme: theme,
                             lspContext: lspContext,
-                            onReviewLineSelected: { anchor in
-                                pendingDraftAnchor = anchor
-                                pendingDraftBody = ""
-                            }
+                            onReviewLineSelected: beginPendingDraft
                         )
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -724,10 +725,7 @@ struct DiffTabView: View {
                     codeFontSize: codeFontSize,
                     theme: theme,
                     lspContext: lspContext,
-                    onReviewLineSelected: { anchor in
-                        pendingDraftAnchor = anchor
-                        pendingDraftBody = ""
-                    }
+                    onReviewLineSelected: beginPendingDraft
                 )
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -855,6 +853,7 @@ struct DiffTabView: View {
                 text: $pendingDraftBody,
                 theme: theme,
                 isFocused: $draftComposerFocused,
+                focusRequestGeneration: draftComposerFocusRequestGeneration,
                 onSave: savePendingDraft,
                 onCancel: clearPendingDraft
             )
@@ -862,7 +861,6 @@ struct DiffTabView: View {
             .background(theme.color("bg-2"))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
-            .onAppear { draftComposerFocused = true }
             .accessibilityIdentifier("diff-review-draft-composer")
             HStack(spacing: 6) {
                 Spacer(minLength: 0)

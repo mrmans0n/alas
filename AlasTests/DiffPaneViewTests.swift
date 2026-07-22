@@ -567,6 +567,60 @@ struct DiffPaneViewTests {
         #expect(missCount == 1)
     }
 
+    @MainActor
+    @Test func diffTabViewRefocusesDraftComposerAfterSelectingDifferentGutterRows() async throws {
+        let repo = try makeTemporaryDiffRepository()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(store: MemoryStore())
+        state.config.changes.diffLayoutMode = .stacked
+        state.config.changes.diffWrapLines = false
+        let view = DiffTabView(
+            worktreePath: repo,
+            relativePath: "Sources/App.swift",
+            staged: false,
+            originalPath: nil,
+            compareWithHEAD: false,
+            worktreeId: "worktree",
+            appState: state,
+            onOpenFile: nil,
+            onRequestDiscardFile: nil
+        )
+        .environment(\.theme, theme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 520)
+        let window = NSWindow(
+            contentRect: controller.view.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        defer { DiffTabViewFocusRetainer.retain(window, controller) }
+
+        try await waitForRenderPass(controller: controller) {
+            !visibleReviewRulers(in: controller.view).isEmpty
+        }
+        try selectReviewLine(selectionIndex: 0, in: controller.view)
+        try await waitForRenderPass(controller: controller) {
+            draftComposerTextView(in: controller.view).map { window.firstResponder === $0 } ?? false
+        }
+
+        let firstComposer = try #require(draftComposerTextView(in: controller.view))
+        let sink = DiffTabViewFocusSinkView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        controller.view.addSubview(sink)
+        #expect(window.makeFirstResponder(sink))
+        #expect(window.firstResponder !== firstComposer)
+
+        try selectReviewLine(selectionIndex: 1, in: controller.view)
+        try await waitForRenderPass(controller: controller) {
+            draftComposerTextView(in: controller.view).map { window.firstResponder === $0 } ?? false
+        }
+
+        let relocatedComposer = try #require(draftComposerTextView(in: controller.view))
+        #expect(window.firstResponder === relocatedComposer)
+    }
+
     @Test func splitModeHostsRendererWithoutCrashing() {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -4645,6 +4699,34 @@ let second = true
         return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
     }
 
+    private func selectReviewLine(selectionIndex: Int, in view: NSView) throws {
+        let selectableRows = visibleReviewRulers(in: view).flatMap { ruler -> [(ruler: DiffPaneLineNumberRulerView, row: Int)] in
+            guard let textView = ruler.scrollView?.documentView as? DiffPaneCodeTextView else { return [] }
+            return (0..<200).compactMap { row in
+                textView.reviewLineAnchor(atRow: row).map { _ in (ruler, row) }
+            }
+        }
+        let selection = try #require(selectableRows.dropFirst(selectionIndex).first)
+        selection.ruler.invokeReviewLineSelectionForTesting(row: selection.row)
+    }
+
+    private func visibleReviewRulers(in view: NSView) -> [DiffPaneLineNumberRulerView] {
+        allSubviews(of: view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter(isEffectivelyVisible)
+            .compactMap { $0.verticalRulerView as? DiffPaneLineNumberRulerView }
+            .filter(\.allowsReviewLineSelection)
+    }
+
+    private func draftComposerTextView(in view: NSView) -> NSTextView? {
+        allSubviews(of: view).compactMap { subview -> NSTextView? in
+            guard let textView = subview as? NSTextView,
+                  !(textView is DiffPaneCodeTextView)
+            else { return nil }
+            return textView
+        }.first
+    }
+
     private func visibleCodeTextViews(in view: NSView) -> [DiffPaneCodeTextView] {
         allSubviews(of: view)
             .compactMap { $0 as? DiffPaneTextScrollView }
@@ -4663,4 +4745,17 @@ let second = true
         }
         return true
     }
+}
+
+@MainActor
+private final class DiffTabViewFocusRetainer {
+    private static var retainedObjects: [AnyObject] = []
+
+    static func retain(_ objects: AnyObject...) {
+        retainedObjects.append(contentsOf: objects)
+    }
+}
+
+private final class DiffTabViewFocusSinkView: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }

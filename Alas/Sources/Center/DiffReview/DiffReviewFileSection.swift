@@ -118,6 +118,7 @@ struct DiffReviewFileSection: View {
     @StateObject private var renderContextCache = DiffReviewRenderContextCache()
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
+    @State private var draftComposerFocusRequestGeneration = 0
     @State private var expandedCollapsedRowIDs: Set<String> = []
     @State private var contextSnapshot: DiffReviewFileContextSnapshot?
     @State private var contextExpansion = DiffContextExpansionState()
@@ -186,12 +187,6 @@ struct DiffReviewFileSection: View {
         }
         .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
-        }
-        .onChange(of: pendingDraftAnchor) { _, anchor in
-            guard allowsDraftCommentCreation, anchor != nil else { return }
-            Task { @MainActor in
-                draftComposerFocused = true
-            }
         }
     }
 
@@ -704,10 +699,7 @@ struct DiffReviewFileSection: View {
                                     lspContext: lspContext,
                                     activeCommentHighlight: activeHighlight(for: rowSeg.rows),
                                     allowsReviewLineSelection: allowsDraftCommentCreation,
-                                    onReviewLineSelected: { anchor in
-                                        pendingDraftAnchor = anchor
-                                        pendingDraftBody = ""
-                                    },
+                                    onReviewLineSelected: beginPendingDraft,
                                     onContextExpansion: loadContextAndExpand
                                 )
                                 .fixedSize(horizontal: false, vertical: true)
@@ -775,10 +767,7 @@ struct DiffReviewFileSection: View {
                 lspContext: lspContext,
                 activeCommentHighlight: activeHighlight(for: displayGroup.rows),
                 allowsReviewLineSelection: allowsDraftCommentCreation,
-                onReviewLineSelected: { anchor in
-                    pendingDraftAnchor = anchor
-                    pendingDraftBody = ""
-                },
+                onReviewLineSelected: beginPendingDraft,
                 onContextExpansion: loadContextAndExpand,
                 threads: threads,
                 annotations: annotations,
@@ -916,14 +905,12 @@ struct DiffReviewFileSection: View {
                 text: $pendingDraftBody,
                 theme: theme,
                 isFocused: $draftComposerFocused,
+                focusRequestGeneration: draftComposerFocusRequestGeneration,
                 onSave: savePendingDraft,
                 onCancel: clearPendingDraft
             )
             .frame(minHeight: 76, maxHeight: 104)
             .background(focusedComposerMarker)
-            .onAppear {
-                draftComposerFocused = true
-            }
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
@@ -998,6 +985,12 @@ struct DiffReviewFileSection: View {
 
         onSaveDraftComment(canonicalAnchor, body)
         clearPendingDraft()
+    }
+
+    private func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
+        pendingDraftAnchor = anchor
+        pendingDraftBody = ""
+        draftComposerFocusRequestGeneration &+= 1
     }
 
     private func clearPendingDraft() {
