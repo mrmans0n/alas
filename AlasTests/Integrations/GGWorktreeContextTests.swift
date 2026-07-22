@@ -3,6 +3,33 @@ import Testing
 @testable import Alas
 
 struct GGWorktreeContextTests {
+    @Test func policyResolverPreservesWorktreeSemantics() {
+        #expect(GGWorktreeContextResolver.isPolicyEnabled(
+            projectMode: .auto,
+            worktreeOverride: .inherit,
+            isMainWorktree: false,
+            repoHasGGConfig: true
+        ))
+        #expect(!GGWorktreeContextResolver.isPolicyEnabled(
+            projectMode: .on,
+            worktreeOverride: .inherit,
+            isMainWorktree: true,
+            repoHasGGConfig: true
+        ))
+        #expect(GGWorktreeContextResolver.isPolicyEnabled(
+            projectMode: .off,
+            worktreeOverride: .on,
+            isMainWorktree: false,
+            repoHasGGConfig: false
+        ))
+        #expect(!GGWorktreeContextResolver.isPolicyEnabled(
+            projectMode: .on,
+            worktreeOverride: .off,
+            isMainWorktree: false,
+            repoHasGGConfig: true
+        ))
+    }
+
     private func project(mode: GGProjectMode, host: String? = nil) -> ProjectConfig {
         ProjectConfig(
             id: "project",

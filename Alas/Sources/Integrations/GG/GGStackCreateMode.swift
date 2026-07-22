@@ -20,4 +20,21 @@ enum GGStackCreateMode {
         }
         return .enabled(username: username)
     }
+
+    static func createsStack(
+        masterEnabled: Bool,
+        ggInstalled: Bool,
+        isRemoteProject: Bool,
+        projectMode: GGProjectMode,
+        worktreeMode: GGWorktreeMode,
+        repoHasGGConfig: Bool
+    ) -> Bool {
+        guard masterEnabled, ggInstalled, !isRemoteProject else { return false }
+        return GGWorktreeContextResolver.isPolicyEnabled(
+            projectMode: projectMode,
+            worktreeOverride: worktreeMode,
+            isMainWorktree: false,
+            repoHasGGConfig: repoHasGGConfig
+        )
+    }
 }
