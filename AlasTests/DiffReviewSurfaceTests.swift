@@ -8,6 +8,37 @@ import Testing
 struct DiffReviewSurfaceTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
+        let model = ReviewDraftComposerFocusModel()
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerFocusHarness(theme: theme(), model: model)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+
+        await drainSwiftUI(controller.view)
+
+        let textView = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSTextView }.first)
+        #expect(window.firstResponder === textView)
+
+        let sibling = try #require(
+            subview(withAccessibilityIdentifier: "draft-composer-focus-sibling", in: controller.view)
+        )
+        #expect(window.makeFirstResponder(sibling))
+        #expect(window.firstResponder !== textView)
+
+        model.focusRequestGeneration += 1
+        await drainSwiftUI(controller.view)
+
+        #expect(window.firstResponder === textView)
+    }
+
     @Test func railRendersUngroupedCommitSessionWithFileRowsAndNoSourceHeader() {
         let files = [
             summary(path: "Sources/App/AlphaView.swift", additions: 4, deletions: 1),
@@ -131,6 +162,58 @@ struct DiffReviewSurfaceTests {
         for ruler in rulers {
             #expect(!ruler.allowsReviewLineSelection)
         }
+    }
+
+    @Test func fileSectionRefocusesDraftComposerAfterSelectingDifferentGutterRows() async throws {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App/AlphaView.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        var layout = DiffLayoutMode.stacked
+        var wrap = false
+        var whitespace = false
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 520),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+
+        await drainSwiftUI(controller.view)
+        try selectReviewLine(selectionIndex: 0, in: controller.view)
+        await drainSwiftUI(controller.view)
+
+        let firstComposer = try #require(draftComposerTextView(in: controller.view))
+        #expect(window.firstResponder === firstComposer)
+
+        let sink = FocusSinkView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        controller.view.addSubview(sink)
+        #expect(window.makeFirstResponder(sink))
+        #expect(window.firstResponder !== firstComposer)
+
+        try selectReviewLine(selectionIndex: 1, in: controller.view)
+        await drainSwiftUI(controller.view)
+
+        let relocatedComposer = try #require(draftComposerTextView(in: controller.view))
+        #expect(window.firstResponder === relocatedComposer)
     }
 
     @Test func stackedFileSectionBoundsHunkMaterializationToScrollViewport() throws {
@@ -3640,6 +3723,13 @@ struct DiffReviewSurfaceTests {
         return controller
     }
 
+    private func drainSwiftUI(_ view: NSView) async {
+        for _ in 0..<6 {
+            view.layoutSubtreeIfNeeded()
+            await Task.yield()
+        }
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
@@ -3669,12 +3759,94 @@ struct DiffReviewSurfaceTests {
         return false
     }
 
+    private func selectReviewLine(selectionIndex: Int, in view: NSView) throws {
+        let selectableRows = allSubviews(of: view)
+            .compactMap { $0 as? DiffPaneLineNumberRulerView }
+            .filter(\.allowsReviewLineSelection)
+            .flatMap { ruler -> [(ruler: DiffPaneLineNumberRulerView, row: Int)] in
+                guard let textView = ruler.scrollView?.documentView as? DiffPaneCodeTextView else { return [] }
+                return (0..<200).compactMap { row in
+                    textView.reviewLineAnchor(atRow: row).map { _ in (ruler, row) }
+                }
+            }
+        let selection = try #require(selectableRows.dropFirst(selectionIndex).first)
+        selection.ruler.invokeReviewLineSelectionForTesting(row: selection.row)
+    }
+
+    private func draftComposerTextView(in view: NSView) -> NSTextView? {
+        allSubviews(of: view).compactMap { subview -> NSTextView? in
+            guard let textView = subview as? NSTextView,
+                  !(textView is DiffPaneCodeTextView)
+            else { return nil }
+            return textView
+        }.first
+    }
+
     private func accessibilityLabel(in view: NSView, containing text: String) -> String? {
         if let label = view.accessibilityLabel(), label.contains(text) {
             return label
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
     }
+}
+
+@MainActor
+private final class ReviewDraftComposerFocusRetainer {
+    private static var retainedObjects: [AnyObject] = []
+
+    static func retain(_ objects: AnyObject...) {
+        retainedObjects.append(contentsOf: objects)
+    }
+}
+
+@MainActor
+private final class ReviewDraftComposerFocusModel: ObservableObject {
+    @Published var focusRequestGeneration = 1
+}
+
+@MainActor
+private struct ReviewDraftComposerFocusHarness: View {
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    let theme: Theme
+    @ObservedObject var model: ReviewDraftComposerFocusModel
+
+    var body: some View {
+        VStack {
+            ReviewDraftComposerTextEditor(
+                text: $text,
+                theme: theme,
+                isFocused: $focused,
+                focusRequestGeneration: model.focusRequestGeneration,
+                onSave: {},
+                onCancel: {}
+            )
+            .frame(height: 100)
+
+            ReviewDraftComposerFocusSiblingView()
+
+            Button("Request focus") {
+                model.focusRequestGeneration += 1
+            }
+            .accessibilityIdentifier("draft-composer-request-focus")
+        }
+        .padding()
+    }
+}
+
+private struct ReviewDraftComposerFocusSiblingView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = FocusSinkView(frame: NSRect(x: 0, y: 0, width: 40, height: 20))
+        view.setAccessibilityIdentifier("draft-composer-focus-sibling")
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class FocusSinkView: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
 
 private final class ReviewBundleActionRecorder: @unchecked Sendable {
