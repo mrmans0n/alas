@@ -7,6 +7,8 @@ struct GGStackPlaceholderModel: Equatable {
     let canRetry: Bool
     let isLoading: Bool
 
+    var isExpandable: Bool { detail != nil || canRetry }
+
     static func make(
         context: GGWorktreeContext,
         loadState: GGStackLoadState
@@ -137,7 +139,7 @@ struct GGStackDrawer: View {
     }
 
     private func collapsedRow(_ model: GGStackReadinessModel) -> some View {
-        collapsedRow(
+        expandableCollapsedRow(
             title: model.title,
             summaryChip: model.summaryChip,
             isPaused: model.isPaused,
@@ -145,42 +147,37 @@ struct GGStackDrawer: View {
         )
     }
 
+    @ViewBuilder
     private func collapsedRow(_ model: GGStackPlaceholderModel) -> some View {
-        collapsedRow(
-            title: model.title,
-            summaryChip: model.summaryChip,
-            isPaused: false,
-            showsLoading: model.isLoading
-        )
+        if model.isExpandable {
+            expandableCollapsedRow(
+                title: model.title,
+                summaryChip: model.summaryChip,
+                isPaused: false,
+                showsLoading: model.isLoading
+            )
+        } else {
+            staticCollapsedRow(
+                title: model.title,
+                summaryChip: model.summaryChip,
+                showsLoading: model.isLoading
+            )
+        }
     }
 
-    private func collapsedRow(
+    private func expandableCollapsedRow(
         title: String,
         summaryChip: String,
         isPaused: Bool,
         showsLoading: Bool
     ) -> some View {
-        HStack(spacing: 7) {
-            Circle().fill(theme.color(isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
-            Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
-            Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
-                .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 6)
-            Text(summaryChip)
-                .font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.color("fg-dim"))
-            Button {
-                appState.openGGInbox(projectId: rps.worktree.projectId)
-            } label: {
-                Icon(name: "tray.full", size: 10, color: theme.color("fg-faint"))
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help("Open gg inbox")
-            refreshControl(showsLoading: showsLoading)
-            Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
-        }
-        .padding(.horizontal, 10).padding(.vertical, 7)
+        collapsedRowContent(
+            title: title,
+            summaryChip: summaryChip,
+            isPaused: isPaused,
+            showsLoading: showsLoading,
+            showsChevron: true
+        )
         .contentShape(Rectangle())
         .onTapGesture { expanded.toggle() }
         .focusable()
@@ -200,6 +197,54 @@ struct GGStackDrawer: View {
         .accessibilityAction {
             expanded.toggle()
         }
+    }
+
+    private func staticCollapsedRow(
+        title: String,
+        summaryChip: String,
+        showsLoading: Bool
+    ) -> some View {
+        collapsedRowContent(
+            title: title,
+            summaryChip: summaryChip,
+            isPaused: false,
+            showsLoading: showsLoading,
+            showsChevron: false
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+
+    private func collapsedRowContent(
+        title: String,
+        summaryChip: String,
+        isPaused: Bool,
+        showsLoading: Bool,
+        showsChevron: Bool
+    ) -> some View {
+        HStack(spacing: 7) {
+            Circle().fill(theme.color(isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
+            Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
+            Text(title.uppercased())
+                .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
+                .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 6)
+            Text(summaryChip)
+                .font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.color("fg-dim"))
+            Button {
+                appState.openGGInbox(projectId: rps.worktree.projectId)
+            } label: {
+                Icon(name: "tray.full", size: 10, color: theme.color("fg-faint"))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Open gg inbox")
+            refreshControl(showsLoading: showsLoading)
+            if showsChevron {
+                Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
     }
 
     @ViewBuilder

@@ -7,15 +7,23 @@ struct GGStackReadinessModelTests {
     @Test func placeholderMapsActiveStackLoadStates() {
         let context = GGWorktreeContext.active(stackName: "feature")
 
-        #expect(GGStackPlaceholderModel.make(context: context, loadState: .loading) == .init(
+        let loading = GGStackPlaceholderModel.make(context: context, loadState: .loading)
+        #expect(loading == .init(
             title: "feature", summaryChip: "Loading", detail: nil, canRetry: false, isLoading: true
         ))
-        #expect(GGStackPlaceholderModel.make(context: context, loadState: .empty) == .init(
+        #expect(loading?.isExpandable == false)
+
+        let empty = GGStackPlaceholderModel.make(context: context, loadState: .empty)
+        #expect(empty == .init(
             title: "feature", summaryChip: "0 commits", detail: nil, canRetry: false, isLoading: false
         ))
-        #expect(GGStackPlaceholderModel.make(context: context, loadState: .failed("gg unavailable")) == .init(
+        #expect(empty?.isExpandable == false)
+
+        let failed = GGStackPlaceholderModel.make(context: context, loadState: .failed("gg unavailable"))
+        #expect(failed == .init(
             title: "feature", summaryChip: "Unavailable", detail: "gg unavailable", canRetry: true, isLoading: false
         ))
+        #expect(failed?.isExpandable == true)
         #expect(GGStackPlaceholderModel.make(context: context, loadState: .loaded) == nil)
     }
 

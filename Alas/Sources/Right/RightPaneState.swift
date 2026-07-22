@@ -991,7 +991,9 @@ final class RightPaneState: GGSplitCommitServicing {
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
-            ggStackLoadState = .failed(error.localizedDescription)
+            ggStackLoadState = .failed(
+                (error as? GGServiceError)?.userMessage ?? error.localizedDescription
+            )
             // The cached stack we just dropped belonged to a different key, so
             // the current stack identity is unknown until a refresh succeeds.
             // Hide any recovery candidate (keeping its marker) so the drawer

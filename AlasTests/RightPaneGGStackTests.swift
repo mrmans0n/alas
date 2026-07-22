@@ -289,6 +289,38 @@ private final class PausedContinueGGRunner: GGCommandRunning, @unchecked Sendabl
 }
 
 @MainActor
+struct RightPaneGGStackErrorPresentationTests {
+    @Test func cliErrorReachesRetryableDrawerDetail() async {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-stack-error-\(UUID().uuidString)")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: "test-project",
+            name: "feature",
+            branch: "feature",
+            path: path,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        let runner = ThrowingFakeGGRunner()
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 1)
+        #expect(state.ggContext == .active(stackName: "stack"))
+        #expect(state.ggStackLoadState == .failed("boom"))
+        #expect(GGStackPlaceholderModel.make(
+            context: state.ggContext,
+            loadState: state.ggStackLoadState
+        )?.detail == "boom")
+        #expect(state.ggStackCommitsKey == nil)
+    }
+}
+
+@MainActor
 struct RightPaneGGStackTests {
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
@@ -756,22 +788,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggStack == nil)
         #expect(state.ggStackLoadState == .inactive)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
-    }
-
-    @Test func stackLoadErrorLeavesContextActiveAndPublishesRetryableFailure() async {
-        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
-        let runner = ThrowingFakeGGRunner()
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-
-        await state.refreshGGStack()
-
-        #expect(runner.callCount == 1)
-        #expect(state.ggContext == .active(stackName: "stack"))
-        #expect(state.ggStackLoadState == .failed(
-            GGServiceError.commandFailed(stderr: "boom").localizedDescription
-        ))
-        #expect(state.ggStackCommitsKey == nil)
     }
 
     @Test func gateClosedSkipsCLIAndClearsStack() async throws {
