@@ -322,24 +322,46 @@ struct NewWorktreeDialogTests {
         #expect(result.persistableLaunchMode == .terminal)
     }
 
-    @Test func stackModeSurvivesOnlyWhenAvailabilityEnabled() {
-        // Stays on when the new project still offers gg stacks.
-        #expect(NewWorktreeDialog.stackModeSurvives(true, availability: .enabled(username: "nacho")) == true)
-        // Clears when the toggle was on but availability dropped to disabled/hidden.
-        #expect(NewWorktreeDialog.stackModeSurvives(true, availability: .disabled(hint: "Set branch_username")) == false)
-        #expect(NewWorktreeDialog.stackModeSurvives(true, availability: .hidden) == false)
-        // Off stays off regardless of availability.
-        #expect(NewWorktreeDialog.stackModeSurvives(false, availability: .enabled(username: "nacho")) == false)
+    @Test func inheritedGGDescriptionReportsEffectiveMode() {
+        #expect(NewWorktreeDialog.ggModeDescription(mode: .inherit, createsGGStack: true) ==
+            "Uses repository default: On.")
+        #expect(NewWorktreeDialog.ggModeDescription(mode: .inherit, createsGGStack: false) ==
+            "Uses repository default: Off. Creates a regular Git branch.")
+    }
+
+    @Test func explicitGGDescriptionsExplainCreation() {
+        #expect(NewWorktreeDialog.ggModeDescription(mode: .on, createsGGStack: true) ==
+            "GG enabled for this worktree.")
+        #expect(NewWorktreeDialog.ggModeDescription(mode: .off, createsGGStack: false) ==
+            "GG disabled for this worktree. Creates a regular Git branch.")
+    }
+
+    @Test func repositoryChangeResetsGGModeToInherit() {
+        #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .on) == .inherit)
+        #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .off) == .inherit)
+    }
+
+    @Test func canCreateBlocksMissingUsernameOnlyForEffectiveGG() {
+        #expect(!NewWorktreeDialog.canCreate(
+            projectsEmpty: false,
+            branchEmpty: false,
+            ggConfigurationMissing: true
+        ))
+        #expect(NewWorktreeDialog.canCreate(
+            projectsEmpty: false,
+            branchEmpty: false,
+            ggConfigurationMissing: false
+        ))
     }
 
     @Test func ggModeUsesIndependentStackNameInsteadOfBranchPrefix() {
         #expect(NewWorktreeDialog.activeName(
-            createAsGGStack: false,
+            createsGGStack: false,
             branch: "nacho/auth-flow",
             stackName: "auth-flow"
         ) == "nacho/auth-flow")
         #expect(NewWorktreeDialog.activeName(
-            createAsGGStack: true,
+            createsGGStack: true,
             branch: "nacho/auth-flow",
             stackName: "auth-flow"
         ) == "auth-flow")
@@ -347,7 +369,7 @@ struct NewWorktreeDialogTests {
 
     @Test func ggModePreservesNestedStackNameVerbatim() {
         #expect(NewWorktreeDialog.activeName(
-            createAsGGStack: true,
+            createsGGStack: true,
             branch: "nacho/other-branch",
             stackName: "nacho/auth-flow"
         ) == "nacho/auth-flow")
