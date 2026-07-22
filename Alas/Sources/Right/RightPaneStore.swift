@@ -2,6 +2,11 @@ import Foundation
 import Observation
 import os
 
+struct RightPaneGGStackSnapshot: Equatable {
+    let stack: GGStack?
+    let loadState: GGStackLoadState
+}
+
 @Observable
 @MainActor
 final class RightPaneStore {
@@ -63,6 +68,7 @@ final class RightPaneStore {
 
     func state(for worktree: Worktree, baseBranch: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode) -> RightPaneState {
         let id = worktree.id
+        let wasCached = states[id] != nil
         let result: RightPaneState
         let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
         if let existing = states[id] {
@@ -150,22 +156,19 @@ final class RightPaneStore {
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
             }
-            new.ggGateProvider = { [weak self] in
-                guard let app = self?.appState else { return false }
-                guard app.config.changes.stackedDiffsEnabled,
-                      GGAvailability.shared.isInstalled,
+            new.ggContextProvider = { [weak self] branch in
+                guard let app = self?.appState,
                       let project = app.projectsManager.projects.first(
                         where: { $0.id == worktree.projectId }
                       )
-                else { return false }
-                return GGStackGate.projectEnabled(
-                    masterEnabled: true,
-                    ggInstalled: true,
-                    mode: project.ggMode,
-                    repoPath: project.path,
-                    isRemoteProject: project.host != nil
+                else { return .inactive(reason: .policyOff) }
+                return app.ggWorktreeContext(
+                    project: project,
+                    worktree: worktree,
+                    branch: branch
                 )
             }
+            new.seedGGContext(branch: worktree.branch)
             new.refreshProjectTopologyAfterGGMutation = { [weak self] in
                 guard let app = self?.appState else { return }
                 await app.refreshProjectTopology(projectId: worktree.projectId)
@@ -223,6 +226,9 @@ final class RightPaneStore {
         if activeId != id {
             if let prev = activeId, let prevState = states[prev] {
                 prevState.stop()
+            }
+            if wasCached, result.currentBranch != worktree.branch {
+                result.seedGGContext(branch: worktree.branch)
             }
             activeId = id
             // Don't start the state's background work here if we deferred it
@@ -287,6 +293,13 @@ final class RightPaneStore {
         for state in states.values { state.reevaluateGGGate() }
     }
 
+    /// Re-evaluate the gg gate for one cached worktree after its override
+    /// changes. Returns nil when that worktree has no cached pane state.
+    @discardableResult
+    func reevaluateGGGate(worktreeId: String) -> Task<Void, Never>? {
+        states[worktreeId]?.reevaluateGGGate()
+    }
+
     func commitEditorComparisonRef(worktreeId: String) -> String? {
         guard let state = states[worktreeId] else { return nil }
         return state.comparisonRef
@@ -335,10 +348,39 @@ final class RightPaneStore {
         states.values.first { $0.pendingMerge != nil }
     }
 
-    /// Loaded stack state for a worktree path, if its pane has been
-    /// activated. Used by the ACP preamble at session creation.
-    func stackForWorktreePath(_ path: String) -> GGStack? {
-        states.values.first { $0.worktree.path.path == path }?.ggStack
+    /// Cached stack state for a worktree path, if its pane has been activated.
+    /// A loaded stack whose key no longer matches the live branch/context is
+    /// exposed as loading so non-UI consumers cannot treat it as current.
+    func ggStackSnapshotForWorktreePath(
+        _ path: String,
+        effectiveContext: GGWorktreeContext
+    ) -> RightPaneGGStackSnapshot? {
+        guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
+            return nil
+        }
+        let loadState: GGStackLoadState
+        if state.ggStackLoadState == .loaded,
+           (state.ggStackCommitsKey != state.currentGGStackCommitsKey
+            || state.ggContext != effectiveContext)
+        {
+            loadState = effectiveContext.isActive ? .loading : .inactive
+        } else {
+            loadState = state.ggStackLoadState
+        }
+        return RightPaneGGStackSnapshot(
+            stack: state.ggStack,
+            loadState: loadState
+        )
+    }
+
+    /// Latest branch observed by the active pane state. Quiescent cached panes
+    /// have no watcher and must not override a newer topology snapshot.
+    func currentBranchForWorktreePath(_ path: String) -> String? {
+        guard let activeId,
+              let state = states[activeId],
+              state.worktree.path.path == path
+        else { return nil }
+        return state.currentBranch
     }
 
     /// The first cached state with a pending gg-land confirmation, if any.

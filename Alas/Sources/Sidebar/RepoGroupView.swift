@@ -16,6 +16,7 @@ struct RepoGroupView: View {
     let isMain: (Worktree) -> Bool
     let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
+    let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
     let onEditProject: () -> Void
@@ -39,6 +40,7 @@ struct RepoGroupView: View {
     let onCopyError: (String) -> Void
     let onRetryCreate: (Worktree) -> Void
     let onRetryDelete: (Worktree) -> Void
+    let onSetGGWorktreeMode: (Worktree, GGWorktreeMode) -> Void
     let onRemoveFailed: (Worktree) -> Void
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
@@ -163,6 +165,7 @@ struct RepoGroupView: View {
                             isMain: isMain(wt),
                             operationState: operationState(wt),
                             harnessSummary: harnessSummary(wt.id),
+                            ggMenuModel: ggMenuModel(wt),
                             onTap: { onSelect(wt) },
                             onOpenTerminal: { onOpenTerminal(wt) },
                             onCopyPath: { onCopyPath(wt) },
@@ -176,7 +179,8 @@ struct RepoGroupView: View {
                             onCopyError: onCopyError,
                             onRemoveFailed: { onRemoveFailed(wt) },
                             onRetryCreate: { onRetryCreate(wt) },
-                            onRetryDelete: { onRetryDelete(wt) }
+                            onRetryDelete: { onRetryDelete(wt) },
+                            onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) }
                         )
                         .draggable(wt.id)
                         .dropDestination(for: String.self) { ids, _ in

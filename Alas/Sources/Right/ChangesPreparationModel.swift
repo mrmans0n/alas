@@ -117,6 +117,7 @@ struct ChangesPreparationModel: Equatable {
         changes: [ChangedFile],
         hasDraft: Bool,
         capabilities: GGCapabilities,
+        hasLoadedCommit: Bool = true,
         mutationDisabledReason: String? = nil,
         newCommitDisabledReason: String? = nil
     ) -> ChangesPreparationModel {
@@ -131,6 +132,7 @@ struct ChangesPreparationModel: Equatable {
             staged: staged,
             hasDraft: hasDraft,
             capabilities: capabilities,
+            hasLoadedCommit: hasLoadedCommit,
             mutationDisabledReason: mutationDisabledReason,
             newCommitDisabledReason: newCommitDisabledReason,
             reviewSummary: summary
@@ -141,6 +143,7 @@ struct ChangesPreparationModel: Equatable {
         staged: StagedStats,
         hasDraft: Bool,
         capabilities: GGCapabilities,
+        hasLoadedCommit: Bool = true,
         mutationDisabledReason: String? = nil,
         newCommitDisabledReason: String? = nil
     ) -> ChangesPreparationModel {
@@ -155,6 +158,7 @@ struct ChangesPreparationModel: Equatable {
             staged: staged,
             hasDraft: hasDraft,
             capabilities: capabilities,
+            hasLoadedCommit: hasLoadedCommit,
             mutationDisabledReason: mutationDisabledReason,
             newCommitDisabledReason: newCommitDisabledReason,
             reviewSummary: summary
@@ -169,6 +173,7 @@ struct ChangesPreparationModel: Equatable {
         staged: StagedStats,
         hasDraft: Bool,
         capabilities: GGCapabilities,
+        hasLoadedCommit: Bool,
         mutationDisabledReason: String?,
         newCommitDisabledReason: String?,
         reviewSummary: ReviewChangesTriggerSummary?
@@ -185,12 +190,13 @@ struct ChangesPreparationModel: Equatable {
             ?? newCommitDisabledReason
             ?? (staged.hasChanges || hasDraft ? nil : "Stage changes first")
         let rewriteDisabledReason = mutationDisabledReason
+            ?? (hasLoadedCommit ? nil : "Create the first stack commit.")
             ?? (staged.hasChanges ? nil : "Stage changes first")
-        let amendDisabledReason = mutationDisabledReason ?? (
-            capabilities.stagedOnlyAmend
+        let amendDisabledReason = mutationDisabledReason
+            ?? (hasLoadedCommit ? nil : "Create the first stack commit.")
+            ?? (capabilities.stagedOnlyAmend
                 ? rewriteDisabledReason
-                : "Update GG to amend staged changes safely"
-        )
+                : "Update GG to amend staged changes safely")
         return ChangesPreparationModel(
             reviewAction: reviewAction,
             ggActions: [

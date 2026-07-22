@@ -53,6 +53,13 @@ struct RepoGroupViewLayoutTests {
             isMain: { _ in false },
             operationState: { _ in nil },
             harnessSummary: { _ in nil },
+            ggMenuModel: { _ in
+                GGWorktreeMenuModel(
+                    selectedMode: .inherit,
+                    context: .inactive(reason: .policyOff),
+                    hasStackSummary: false
+                )
+            },
             onSelect: { _ in },
             onNewWorktree: {},
             onEditProject: {},
@@ -76,6 +83,7 @@ struct RepoGroupViewLayoutTests {
             onCopyError: { _ in },
             onRetryCreate: { _ in },
             onRetryDelete: { _ in },
+            onSetGGWorktreeMode: { _, _ in },
             onRemoveFailed: { _ in },
             onDropWorktree: { _, _ in },
             onDropProject: { _, _ in }

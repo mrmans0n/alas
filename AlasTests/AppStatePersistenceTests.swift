@@ -26,6 +26,25 @@ struct AppStatePersistenceTests {
         }
     }
 
+    private final class RecordingStore: PersistenceStoreProtocol, @unchecked Sendable {
+        let initialProjectsFile: ProjectsFile
+        var writtenProjectsFile: ProjectsFile?
+
+        init(initialProjectsFile: ProjectsFile) {
+            self.initialProjectsFile = initialProjectsFile
+        }
+
+        func write<T: Encodable>(_ value: T, to _: URL) throws {
+            if let projectsFile = value as? ProjectsFile {
+                writtenProjectsFile = projectsFile
+            }
+        }
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == ProjectsFile.self ? initialProjectsFile as? T : nil
+        }
+    }
+
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
         let state = AppState(store: FailingStore()) { title, message in
@@ -50,6 +69,36 @@ struct AppStatePersistenceTests {
         #expect(saved == false)
         #expect(reports.map(\.title) == ["Projects Save Failed"])
         #expect(reports.first?.message == "write rejected")
+    }
+
+    @Test func deletedWorktreeOverrideIsRemovedAndPersistedBeforeTopologyRefresh() throws {
+        let persistedProject = ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "teal",
+            addedAt: .now
+        )
+        let store = RecordingStore(
+            initialProjectsFile: ProjectsFile(projects: [persistedProject])
+        )
+        let state = AppState(store: store)
+        state.projectsManager.setGGWorktreeMode(
+            projectId: persistedProject.id,
+            worktreeId: "deleted-worktree",
+            mode: .on
+        )
+
+        state.removePersistedGGWorktreeMode(
+            projectId: persistedProject.id,
+            worktreeId: "deleted-worktree"
+        )
+
+        #expect(state.projectsManager.ggWorktreeMode(
+            projectId: persistedProject.id,
+            worktreeId: "deleted-worktree"
+        ) == .inherit)
+        #expect(store.writtenProjectsFile?.projects.first?.ggWorktreeModes.isEmpty == true)
     }
 
     @Test func shortcutOverridesPersistThroughSaveAndReload() throws {

@@ -10,6 +10,8 @@ struct Worktree: Identifiable, Equatable, Codable {
     var name: String         // display name (usually the branch)
     var branch: String
     var path: URL
+    /// Nil for legacy or synthetic rows whose identity has not been read from Git.
+    var isMainWorktree: Bool?
     var status: WorktreeStatus
     var lastActivity: Date
     var createdAt: Date
@@ -17,7 +19,7 @@ struct Worktree: Identifiable, Equatable, Codable {
     var deletedLines: Int = 0
 
     enum CodingKeys: String, CodingKey {
-        case id, projectId, name, branch, path, status,
+        case id, projectId, name, branch, path, isMainWorktree, status,
              lastActivity, createdAt, addedLines, deletedLines
     }
 
@@ -27,6 +29,7 @@ struct Worktree: Identifiable, Equatable, Codable {
         name: String,
         branch: String,
         path: URL,
+        isMainWorktree: Bool? = nil,
         status: WorktreeStatus,
         lastActivity: Date,
         createdAt: Date? = nil,
@@ -38,6 +41,7 @@ struct Worktree: Identifiable, Equatable, Codable {
         self.name = name
         self.branch = branch
         self.path = path
+        self.isMainWorktree = isMainWorktree
         self.status = status
         self.lastActivity = lastActivity
         self.createdAt = createdAt ?? lastActivity
@@ -52,6 +56,7 @@ struct Worktree: Identifiable, Equatable, Codable {
         name = try c.decode(String.self, forKey: .name)
         branch = try c.decode(String.self, forKey: .branch)
         path = try c.decode(URL.self, forKey: .path)
+        isMainWorktree = try c.decodeIfPresent(Bool.self, forKey: .isMainWorktree)
         status = try c.decode(WorktreeStatus.self, forKey: .status)
         lastActivity = try c.decode(Date.self, forKey: .lastActivity)
         createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? lastActivity

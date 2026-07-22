@@ -165,6 +165,24 @@ final class ProjectsManager {
         projects[idx].ggMode = mode
     }
 
+    func ggWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {
+        projects.first(where: { $0.id == projectId })?.ggWorktreeModes[worktreeId] ?? .inherit
+    }
+
+    func setGGWorktreeMode(projectId: String, worktreeId: String, mode: GGWorktreeMode) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        if mode == .inherit {
+            projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
+        } else {
+            projects[idx].ggWorktreeModes[worktreeId] = mode
+        }
+    }
+
+    func removeGGWorktreeMode(projectId: String, worktreeId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
+    }
+
     func reorderProject(fromIndex: Int, toIndex: Int) {
         guard projects.indices.contains(fromIndex),
               projects.indices.contains(toIndex),
@@ -321,9 +339,8 @@ final class ProjectsManager {
         projects[idx].hiddenWorktreePaths = paths
     }
 
-    /// Refresh the live worktree list for a project and GC orphan hidden
-    /// paths. Returns `true` when the GC dropped at least one entry, so the
-    /// caller can persist the change to disk; `false` otherwise.
+    /// Refresh the live worktree list and reconcile per-worktree persisted
+    /// configuration. Returns `true` when the caller should persist changes.
     @discardableResult
     func refreshWorktrees(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
@@ -397,7 +414,15 @@ final class ProjectsManager {
         let live = Set(trees.map { canonical($0.path) })
         let before = projects[idx].hiddenWorktreePaths.count
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
-        return anchorChanged || orderChanged || projects[idx].hiddenWorktreePaths.count != before
+        let reconciledIds = Set(reconciled.map(\.id))
+        let previousGGWorktreeModes = projects[idx].ggWorktreeModes
+        projects[idx].ggWorktreeModes = previousGGWorktreeModes.filter {
+            reconciledIds.contains($0.key)
+        }
+        return anchorChanged
+            || orderChanged
+            || projects[idx].hiddenWorktreePaths.count != before
+            || projects[idx].ggWorktreeModes != previousGGWorktreeModes
     }
 
     func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {
@@ -440,7 +465,7 @@ final class ProjectsManager {
     }
 
     /// Refresh every project. Returns `true` when at least one project's
-    /// hidden-path GC dropped an entry, so the caller can persist the change.
+    /// persisted configuration changed, so the caller can save it.
     @discardableResult
     func refreshAll() async -> Bool {
         var changed = false
@@ -462,12 +487,14 @@ final class ProjectsManager {
     /// has on disk yet. `.deleting` and `.deleteFailed` rows are still
     /// updated — they correspond to real git worktrees with a pending UI
     /// operation, so git's branch is still the truth.
-    func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
-        guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return }
+    @discardableResult
+    func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) -> Set<String> {
+        guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return [] }
         let lookup: [String: String] = Dictionary(uniqueKeysWithValues:
             branchByWorktreePath.map { (canonical($0.key), $0.value) }
         )
         var changed = false
+        var changedPaths: Set<String> = []
         for i in rows.indices {
             let key = canonical(rows[i].path)
             guard let newBranch = lookup[key] else { continue }
@@ -481,12 +508,14 @@ final class ProjectsManager {
                 rows[i].branch = newBranch
                 rows[i].name = newBranch
                 changed = true
+                changedPaths.insert(rows[i].path.path)
             }
         }
         if changed {
             worktreesByProject[projectId] = rows
             applyWorktreeOrdering(projectId: projectId)
         }
+        return changedPaths
     }
 
     private func hiddenSet(projectId: String) -> Set<String> {
@@ -606,6 +635,7 @@ final class ProjectsManager {
     }
 
     private func isMainWorktree(_ worktree: Worktree, project: ProjectConfig) -> Bool {
-        canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path))
+        worktree.isMainWorktree
+            ?? (canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path)))
     }
 }

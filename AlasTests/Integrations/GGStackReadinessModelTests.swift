@@ -4,6 +4,38 @@ import Testing
 
 @MainActor
 struct GGStackReadinessModelTests {
+    @Test func placeholderMapsActiveStackLoadStates() {
+        let context = GGWorktreeContext.active(stackName: "feature")
+
+        let loading = GGStackPlaceholderModel.make(context: context, loadState: .loading)
+        #expect(loading == .init(
+            title: "feature", summaryChip: "Loading", detail: nil, canRetry: false, isLoading: true
+        ))
+        #expect(loading?.isExpandable == false)
+
+        let empty = GGStackPlaceholderModel.make(context: context, loadState: .empty)
+        #expect(empty == .init(
+            title: "feature", summaryChip: "0 commits", detail: nil, canRetry: false, isLoading: false
+        ))
+        #expect(empty?.isExpandable == false)
+
+        let failed = GGStackPlaceholderModel.make(context: context, loadState: .failed("gg unavailable"))
+        #expect(failed == .init(
+            title: "feature", summaryChip: "Unavailable", detail: "gg unavailable", canRetry: true, isLoading: false
+        ))
+        #expect(failed?.isExpandable == true)
+        #expect(GGStackPlaceholderModel.make(context: context, loadState: .loaded) == nil)
+    }
+
+    @Test func placeholderIsAbsentForInactiveContext() {
+        let context = GGWorktreeContext.inactive(reason: .policyOff)
+
+        #expect(GGStackPlaceholderModel.make(context: context, loadState: .loading) == nil)
+        #expect(GGStackPlaceholderModel.make(context: context, loadState: .empty) == nil)
+        #expect(GGStackPlaceholderModel.make(context: context, loadState: .failed("nope")) == nil)
+        #expect(GGStackPlaceholderModel.make(context: context, loadState: .inactive) == nil)
+    }
+
     private func entry(
         position: Int, prState: GGPRState?, approved: Bool = false, ci: GGCIStatus? = nil
     ) -> GGStackEntry {

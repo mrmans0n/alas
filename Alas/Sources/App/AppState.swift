@@ -538,7 +538,7 @@ final class AppState {
         ShellEnvResolver.shared.resolve()
 
         // Probe gg CLI availability once at startup so the stacked-diffs
-        // gate (RightPaneStore.ggGateProvider) has an answer by the time
+        // context provider (RightPaneStore.ggContextProvider) has an answer by the time
         // the first right pane activates. Wait for the login-shell PATH
         // resolution kicked off above first — otherwise a gg installed only
         // via Homebrew (not on the process's own PATH, e.g. launched from
@@ -1620,7 +1620,9 @@ final class AppState {
 
     func removeFailedOptimisticWorktree(id: String, projectId: String) {
         cleanupWorktreeState(worktreeId: id)
+        projectsManager.removeGGWorktreeMode(projectId: projectId, worktreeId: id)
         projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
+        saveProjects()
         if selectedWorktreeId == id {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
@@ -1856,8 +1858,14 @@ final class AppState {
         remoteProjectWatchers.removeAll()
     }
 
-    private func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
-        projectsManager.applyHeadUpdates(projectId: projectId, branchByWorktreePath: branchByWorktreePath)
+    func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
+        let changedPaths = projectsManager.applyHeadUpdates(
+            projectId: projectId,
+            branchByWorktreePath: branchByWorktreePath
+        )
+        for path in changedPaths {
+            GGStackSummaryStore.shared.summaries[path] = nil
+        }
     }
 
     private func handleProjectTopologyChange(projectId: String) {
@@ -1871,7 +1879,18 @@ final class AppState {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects
             .filter { $0.id == projectId }
             .map { ($0.id, $0.path) })
+        let previousBranches = Dictionary(uniqueKeysWithValues: projectsManager
+            .worktrees(projectId: projectId)
+            .map { (Self.canonicalWorktreePath($0.path.path), (path: $0.path.path, branch: $0.branch)) })
         let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            let canonicalPath = Self.canonicalWorktreePath(worktree.path.path)
+            guard let previous = previousBranches[canonicalPath], previous.branch != worktree.branch else {
+                continue
+            }
+            GGStackSummaryStore.shared.summaries[previous.path] = nil
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+        }
         if changed { saveProjects() }
         restartProjectGitWatchers(previousPaths: previousPaths)
         return changed
@@ -4427,6 +4446,10 @@ final class AppState {
         // Always clear the deleting state after a successful remove,
         // even if the subsequent refresh fails.
         projectsManager.setOperationState(id: worktree.id, state: nil)
+        removePersistedGGWorktreeMode(
+            projectId: worktree.projectId,
+            worktreeId: worktree.id
+        )
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
@@ -4910,38 +4933,27 @@ final class AppState {
             },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,
-                      let project = self.projects.first(where: { $0.id == worktree.projectId }),
-                      self.config.changes.stackedDiffsEnabled,
-                      GGAvailability.shared.isInstalled,
-                      GGStackGate.projectEnabled(
-                          masterEnabled: true, ggInstalled: true,
-                          mode: project.ggMode, repoPath: project.path,
-                          isRemoteProject: project.host != nil
-                      ),
-                      GGStackGate.repoHasGGConfig(repoPath: worktreePath)
+                      let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath),
+                      Self.shouldAttachGGMCP(context: integration.context)
                 else { return nil }
                 return GGMCPInjection.injection(
                     gatePassed: true,
                     binaryPath: GGAvailability.shared.ggMCPBinaryPath,
-                    configuredServers: project.mcpServers,
+                    configuredServers: integration.project.mcpServers,
                     worktreePath: worktreePath
                 )
             },
             ggPreambleProvider: { [weak self] worktreePath in
                 guard let self,
-                      let project = self.projects.first(where: { $0.id == worktree.projectId }),
-                      self.config.changes.stackedDiffsEnabled,
-                      GGAvailability.shared.isInstalled,
-                      GGStackGate.projectEnabled(
-                          masterEnabled: true, ggInstalled: true,
-                          mode: project.ggMode, repoPath: project.path,
-                          isRemoteProject: project.host != nil
-                      )
+                      let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath)
                 else { return .none }
-                if let stack = self.rightPaneStore.stackForWorktreePath(worktreePath) {
-                    return .stack(name: stack.name, entryCount: stack.totalCommits)
-                }
-                return GGStackGate.repoHasGGConfig(repoPath: worktreePath) ? .generic : .none
+                return Self.ggPreambleSignal(
+                    context: integration.context,
+                    snapshot: self.rightPaneStore.ggStackSnapshotForWorktreePath(
+                        integration.worktree.path.path,
+                        effectiveContext: integration.context
+                    )
+                )
             }
         )
         mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
@@ -5466,17 +5478,167 @@ final class AppState {
         tabs.activate(worktreeId: worktree.id, tabId: tab.id)
     }
 
-    /// The phase-3 gg gate for a project: gg feature on, CLI installed, and
-    /// the project (local, not remote) has gg enabled.
+    /// Project-scoped gg inbox capability. This intentionally does not use a
+    /// hosting worktree's effective context because the inbox spans the repo.
     func ggInboxAvailable(projectId: String) -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
-        return config.changes.stackedDiffsEnabled
-            && GGAvailability.shared.isInstalled
-            && GGStackGate.projectEnabled(
-                masterEnabled: true, ggInstalled: true,
-                mode: project.ggMode, repoPath: project.path,
-                isRemoteProject: project.host != nil
+        return Self.resolveGGInboxAvailable(
+            masterEnabled: config.changes.stackedDiffsEnabled,
+            ggInstalled: GGAvailability.shared.isInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path),
+            worktreeOverrides: Array(project.ggWorktreeModes.values)
+        )
+    }
+
+    nonisolated static func resolveGGInboxAvailable(
+        masterEnabled: Bool,
+        ggInstalled: Bool,
+        isRemoteProject: Bool,
+        projectMode: GGProjectMode,
+        repoHasGGConfig: Bool,
+        worktreeOverrides: [GGWorktreeMode]
+    ) -> Bool {
+        guard masterEnabled, ggInstalled, !isRemoteProject else { return false }
+        return repoHasGGConfig
+            || projectMode == .on
+            || worktreeOverrides.contains(.on)
+    }
+
+    func ggWorktreeContext(
+        project: ProjectConfig,
+        worktree: Worktree,
+        branch: String,
+        ggInstalled: Bool = GGAvailability.shared.isInstalled
+    ) -> GGWorktreeContext {
+        Self.resolveGGWorktreeContext(
+            masterEnabled: config.changes.stackedDiffsEnabled,
+            ggInstalled: ggInstalled,
+            project: project,
+            worktreeOverride: projectsManager.ggWorktreeMode(
+                projectId: project.id,
+                worktreeId: worktree.id
+            ),
+            isMainWorktree: projectsManager.isMain(worktree, in: project),
+            repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path),
+            branchUsername: GGConfigReader.branchUsername(repoPath: project.path),
+            branch: branch
+        )
+    }
+
+    func ggWorktreeMenuModel(
+        project: ProjectConfig,
+        worktree: Worktree
+    ) -> GGWorktreeMenuModel {
+        let selectedMode = projectsManager.ggWorktreeMode(
+            projectId: project.id,
+            worktreeId: worktree.id
+        )
+        return GGWorktreeMenuModel(
+            selectedMode: selectedMode,
+            context: ggWorktreeContext(
+                project: project,
+                worktree: worktree,
+                branch: worktree.branch
+            ),
+            hasStackSummary: GGStackSummaryStore.shared.summaries[worktree.path.path] != nil,
+            isRemoteWorktree: project.host != nil || worktree.path.isRemoteAlasPath
+        )
+    }
+
+    func setGGWorktreeMode(
+        projectId: String,
+        worktreeId: String,
+        mode: GGWorktreeMode
+    ) {
+        projectsManager.setGGWorktreeMode(
+            projectId: projectId,
+            worktreeId: worktreeId,
+            mode: mode
+        )
+        saveProjects()
+        rightPaneStore.reevaluateGGGate(worktreeId: worktreeId)
+    }
+
+    func removePersistedGGWorktreeMode(projectId: String, worktreeId: String) {
+        guard projectsManager.ggWorktreeMode(
+            projectId: projectId,
+            worktreeId: worktreeId
+        ) != .inherit else { return }
+        projectsManager.removeGGWorktreeMode(projectId: projectId, worktreeId: worktreeId)
+        saveProjects()
+    }
+
+    nonisolated static func resolveGGWorktreeContext(
+        masterEnabled: Bool,
+        ggInstalled: Bool,
+        project: ProjectConfig,
+        worktreeOverride: GGWorktreeMode,
+        isMainWorktree: Bool,
+        repoHasGGConfig: Bool,
+        branchUsername: String?,
+        branch: String
+    ) -> GGWorktreeContext {
+        GGWorktreeContextResolver.resolve(
+            masterEnabled: masterEnabled,
+            ggInstalled: ggInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            worktreeOverride: worktreeOverride,
+            isMainWorktree: isMainWorktree,
+            repoHasGGConfig: repoHasGGConfig,
+            branchUsername: branchUsername,
+            branch: branch
+        )
+    }
+
+    nonisolated static func shouldAttachGGMCP(context: GGWorktreeContext) -> Bool {
+        context.isActive
+    }
+
+    nonisolated static func ggPreambleSignal(
+        context: GGWorktreeContext,
+        snapshot: RightPaneGGStackSnapshot?
+    ) -> GGPreambleSignal {
+        guard context.isActive else { return .none }
+        guard let snapshot,
+              snapshot.loadState == .loaded,
+              let stack = snapshot.stack
+        else { return .generic }
+        return .stack(name: stack.name, entryCount: stack.totalCommits)
+    }
+
+    func ggACPWorktreeIntegration(
+        worktreePath: String,
+        ggInstalled: Bool = GGAvailability.shared.isInstalled
+    ) -> (project: ProjectConfig, worktree: Worktree, context: GGWorktreeContext)? {
+        let requestedPath = Self.canonicalWorktreePath(worktreePath)
+        for project in projects {
+            guard let worktree = projectsManager.worktrees(projectId: project.id).first(where: {
+                Self.canonicalWorktreePath($0.path.path) == requestedPath
+            }) else { continue }
+            let branch = rightPaneStore.currentBranchForWorktreePath(worktree.path.path)
+                ?? worktree.branch
+            return (
+                project,
+                worktree,
+                ggWorktreeContext(
+                    project: project,
+                    worktree: worktree,
+                    branch: branch,
+                    ggInstalled: ggInstalled
+                )
             )
+        }
+        return nil
+    }
+
+    nonisolated private static func canonicalWorktreePath(_ path: String) -> String {
+        URL(fileURLWithPath: path)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
     }
 
     /// Chooses which of the target project's worktrees hosts its inbox tab:

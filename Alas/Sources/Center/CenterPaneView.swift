@@ -348,7 +348,7 @@ struct CenterPaneView: View {
                                     .map { s.matches(splitTarget: $0) } ?? false)
                             let otherActionInFlight = ggActionState.inFlightAction != nil
                                 && !ownSplitApplying
-                            let workflowAvailable = rightPaneState.ggGateProvider?() == true
+                            let workflowAvailable = rightPaneState.ggContext.isActive
                                 && targetEntry != nil
                                 && targetEntry?.prState != .merged
                                 && !otherActionInFlight

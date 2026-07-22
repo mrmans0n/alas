@@ -1,5 +1,48 @@
 import SwiftUI
 
+struct GGWorktreeMenuModel: Equatable {
+    let selectedMode: GGWorktreeMode
+    let isEffectiveActive: Bool
+    let inactiveExplanation: String?
+    let showsStatusIndicator: Bool
+    let isVisible: Bool
+
+    init(
+        selectedMode: GGWorktreeMode,
+        context: GGWorktreeContext,
+        hasStackSummary: Bool,
+        isRemoteWorktree: Bool = false
+    ) {
+        self.selectedMode = selectedMode
+        isEffectiveActive = context.isActive
+        showsStatusIndicator = context.isActive && !hasStackSummary
+        let contextIsRemote = context == .inactive(reason: .remoteProject)
+        isVisible = !isRemoteWorktree && !contextIsRemote
+
+        guard !isRemoteWorktree else {
+            inactiveExplanation = nil
+            return
+        }
+
+        switch context {
+        case .active:
+            inactiveExplanation = nil
+        case .inactive(reason: .masterDisabled):
+            inactiveExplanation = "Stacked diffs are disabled in Settings."
+        case .inactive(reason: .cliMissing):
+            inactiveExplanation = "gg is not installed."
+        case .inactive(reason: .remoteProject):
+            inactiveExplanation = nil
+        case .inactive(reason: .policyOff):
+            inactiveExplanation = nil
+        case .inactive(reason: .branchUsernameMissing):
+            inactiveExplanation = "Set branch_username in gg config."
+        case .inactive(reason: .branchPrefixMismatch(let expectedPrefix)):
+            inactiveExplanation = "Branch must start with \(expectedPrefix)"
+        }
+    }
+}
+
 struct WorktreeRowView: View {
     static func stackSummaryTooltip(merged: Int, total: Int) -> String {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
@@ -10,6 +53,7 @@ struct WorktreeRowView: View {
     let isMain: Bool
     let operationState: WorktreeOperationState?
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
+    let ggMenuModel: GGWorktreeMenuModel
     let onTap: () -> Void
     let onOpenTerminal: () -> Void
     let onCopyPath: () -> Void
@@ -24,6 +68,7 @@ struct WorktreeRowView: View {
     let onRemoveFailed: () -> Void
     let onRetryCreate: () -> Void
     let onRetryDelete: () -> Void
+    let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     @Environment(\.theme) var theme
 
     private var isPending: Bool {
@@ -106,6 +151,11 @@ struct WorktreeRowView: View {
                                 .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundColor(theme.color("accent"))
                                 .help(Self.stackSummaryTooltip(merged: stack.merged, total: stack.total))
+                        } else if ggMenuModel.showsStatusIndicator {
+                            Text("GG")
+                                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                                .foregroundColor(theme.color("accent"))
+                                .help("gg is active for this worktree.")
                         }
                         if let summary = harnessSummary {
                             Spacer()
@@ -161,6 +211,21 @@ struct WorktreeRowView: View {
                     Button("Reveal in Finder", action: onRevealInFinder)
                 }
                 Divider()
+                if ggMenuModel.isVisible {
+                    Picker("GG Mode", selection: Binding(
+                        get: { ggMenuModel.selectedMode },
+                        set: { mode in onSetGGWorktreeMode(mode) }
+                    )) {
+                        Text("Inherit repository default").tag(GGWorktreeMode.inherit)
+                        Text("On").tag(GGWorktreeMode.on)
+                        Text("Off").tag(GGWorktreeMode.off)
+                    }
+                    if let explanation = ggMenuModel.inactiveExplanation {
+                        Divider()
+                        Text(explanation)
+                    }
+                    Divider()
+                }
                 Button("Archive", action: onArchive)
                 Button("Delete Worktree…", role: .destructive, action: onDelete)
                 if showKeepBranchOption {
