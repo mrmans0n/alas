@@ -11,6 +11,7 @@ struct DiffInlineAnnotationCard: View {
             accentBar
             content
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
