@@ -276,7 +276,6 @@ struct AppStateGGACPWorktreeContextTests {
             baseBranch: "main",
             comparisonMode: .manual
         )
-        state.rightPaneStore.deactivate()
 
         pane.currentBranch = "main"
         let plain = try #require(state.ggACPWorktreeIntegration(
@@ -299,5 +298,14 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(AppState.shouldAttachGGMCP(context: stacked.context))
         #expect(AppState.ggPreambleSignal(context: stacked.context, snapshot: nil) == .generic)
         #expect(stacked.context == .active(stackName: "new-stack"))
+
+        state.rightPaneStore.deactivate()
+        let quiescent = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(!AppState.shouldAttachGGMCP(context: quiescent.context))
+        #expect(AppState.ggPreambleSignal(context: quiescent.context, snapshot: nil) == .none)
+        #expect(quiescent.context == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
     }
 }

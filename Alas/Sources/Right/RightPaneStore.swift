@@ -368,10 +368,14 @@ final class RightPaneStore {
         )
     }
 
-    /// Latest branch observed by the cached pane state. Nil when the pane has
-    /// never been created, allowing callers to fall back to topology state.
+    /// Latest branch observed by the active pane state. Quiescent cached panes
+    /// have no watcher and must not override a newer topology snapshot.
     func currentBranchForWorktreePath(_ path: String) -> String? {
-        states.values.first { $0.worktree.path.path == path }?.currentBranch
+        guard let activeId,
+              let state = states[activeId],
+              state.worktree.path.path == path
+        else { return nil }
+        return state.currentBranch
     }
 
     /// The first cached state with a pending gg-land confirmation, if any.
