@@ -1,9 +1,8 @@
 import Foundation
 
-/// Availability of the "Create as gg stack" mode in the new-worktree
-/// dialog. Hidden when the project isn't gg-gated; disabled (with a hint)
-/// when gg's branch_username can't be resolved from config — we fail
-/// closed rather than re-implementing gg's whoami resolution.
+/// Hard availability of GG creation in the new-worktree dialog. This controls
+/// whether the picker is shown and whether GG branch naming has the required
+/// username; effective On/Off policy is resolved separately by `createsStack`.
 enum GGStackCreateMode {
     enum Availability: Equatable {
         case hidden

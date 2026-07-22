@@ -38,7 +38,9 @@ struct ProjectUpdate: Equatable {
 enum WorktreeOperationState: Equatable {
     case creating
     case deleting
-    case createFailed(message: String, base: String)
+    /// The raw GG policy is retry metadata only; AppState removes its effective
+    /// optimistic overlay before entering this state.
+    case createFailed(message: String, base: String, ggWorktreeMode: GGWorktreeMode)
     case deleteFailed(message: String)
 }
 

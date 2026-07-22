@@ -89,7 +89,10 @@ struct RightPaneSelectionStateResolverTests {
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
         mgr.insertOptimisticWorktree(wt)
-        mgr.setOperationState(id: wt.id, state: .createFailed(message: "disk full", base: "main"))
+        mgr.setOperationState(
+            id: wt.id,
+            state: .createFailed(message: "disk full", base: "main", ggWorktreeMode: .inherit)
+        )
         let resolver = RightPaneSelectionStateResolver(
             selectedWorktreeId: wt.id,
             projects: [project],

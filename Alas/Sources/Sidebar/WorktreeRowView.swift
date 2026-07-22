@@ -90,7 +90,7 @@ struct WorktreeRowView: View {
         switch operationState {
         case .creating: return "Creating…"
         case .deleting: return "Deleting…"
-        case .createFailed(let msg, _): return "Create failed: \(msg.trimmedForDisplay)"
+        case .createFailed(let msg, _, _): return "Create failed: \(msg.trimmedForDisplay)"
         case .deleteFailed(let msg): return "Delete failed: \(msg.trimmedForDisplay)"
         case .none: return ""
         }
@@ -98,7 +98,7 @@ struct WorktreeRowView: View {
 
     private var errorMessage: String? {
         switch operationState {
-        case .createFailed(let message, _), .deleteFailed(let message):
+        case .createFailed(let message, _, _), .deleteFailed(let message):
             return message
         case .creating, .deleting, .none:
             return nil

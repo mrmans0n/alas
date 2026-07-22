@@ -1252,7 +1252,11 @@ final class AppState {
                     )
                     projectsManager.setOperationState(
                         id: optimistic.id,
-                        state: .createFailed(message: error.localizedDescription, base: base)
+                        state: .createFailed(
+                            message: error.localizedDescription,
+                            base: base,
+                            ggWorktreeMode: ggWorktreeMode
+                        )
                     )
                 }
             } catch {
@@ -1262,7 +1266,10 @@ final class AppState {
                     worktreeId: optimistic.id,
                     mode: ggWorktreeMode
                 )
-                projectsManager.setOperationState(id: optimistic.id, state: .createFailed(message: msg, base: base))
+                projectsManager.setOperationState(
+                    id: optimistic.id,
+                    state: .createFailed(message: msg, base: base, ggWorktreeMode: ggWorktreeMode)
+                )
             }
         }
         return optimistic.id
@@ -1361,7 +1368,7 @@ final class AppState {
         guard !id.isEmpty else { return .failure(.init(message: "Could not start worktree creation.")) }
         for _ in 0..<1_200 {
             switch projectsManager.operationState(for: id) {
-            case .createFailed(let message, _):
+            case .createFailed(let message, _, _):
                 return .failure(.init(message: message))
             case .creating:
                 try? await Task.sleep(for: .milliseconds(250))

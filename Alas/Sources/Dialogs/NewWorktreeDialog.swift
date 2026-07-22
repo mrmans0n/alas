@@ -94,7 +94,10 @@ struct NewWorktreeDialog: View {
                     if createsGGStack, case .disabled(let hint) = ggStackAvailability {
                         Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                     } else if createsGGStack, case .enabled(let username) = ggStackAvailability, !stackName.isEmpty {
-                        Text("Branch: \(GGConfigReader.composeStackBranch(username: username, stackName: stackName))")
+                        Text(Self.ggBranchPreview(
+                            branch: GGConfigReader.composeStackBranch(username: username, stackName: stackName),
+                            base: stackPinnedBase
+                        ))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(theme.color("fg-dim"))
                     }
@@ -427,6 +430,11 @@ struct NewWorktreeDialog: View {
 
     nonisolated static func ggModeAfterRepositoryChange(current _: GGWorktreeMode) -> GGWorktreeMode {
         .inherit
+    }
+
+    nonisolated static func ggBranchPreview(branch: String, base: String?) -> String {
+        guard let base else { return "Branch: \(branch)" }
+        return "Branch: \(branch), based on \(base)"
     }
 
     nonisolated static func activeName(

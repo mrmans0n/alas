@@ -336,6 +336,16 @@ struct NewWorktreeDialogTests {
             "GG disabled for this worktree. Creates a regular Git branch.")
     }
 
+    @Test func ggBranchPreviewIncludesPinnedBase() {
+        #expect(NewWorktreeDialog.ggBranchPreview(branch: "nacho/feature", base: "main") ==
+            "Branch: nacho/feature, based on main")
+    }
+
+    @Test func ggBranchPreviewOmitsMissingBase() {
+        #expect(NewWorktreeDialog.ggBranchPreview(branch: "nacho/feature", base: nil) ==
+            "Branch: nacho/feature")
+    }
+
     @Test func repositoryChangeResetsGGModeToInherit() {
         #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .on) == .inherit)
         #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .off) == .inherit)

@@ -459,7 +459,7 @@ struct RemoteAppStateAccessTests {
         state.projectsManager.setOperationState(id: deleting.id, state: .deleting)
         state.projectsManager.setOperationState(
             id: createFailed.id,
-            state: .createFailed(message: "failed", base: "main")
+            state: .createFailed(message: "failed", base: "main", ggWorktreeMode: .inherit)
         )
         state.projectsManager.setOperationState(id: deleteFailed.id, state: .deleteFailed(message: "failed"))
 
