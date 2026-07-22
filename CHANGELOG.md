@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-07-22
+
+### ✨ Features
+
+- Add worktree-level `git-gud` mode controls (#891).
+
+### 🐛 Fixes
+
+- Restore composer focus after connecting a new ACP chat (#890).
+- Memoize markdown row measurement to avoid transcript scroll beachballs (#889).
+
 ## [0.12.4] - 2026-07-22
 
 ### 🐛 Fixes
