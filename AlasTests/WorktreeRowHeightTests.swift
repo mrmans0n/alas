@@ -13,6 +13,13 @@ struct WorktreeRowHeightTests {
             == "gg stack · 2 of 3 commits merged")
     }
 
+    @Test func ggStackAccessibilityLabelMatchesTooltipTerminology() {
+        #expect(WorktreeRowView.stackSummaryAccessibilityLabel(merged: 1, total: 1)
+            == "gg stack · 1 of 1 commit merged")
+        #expect(WorktreeRowView.stackSummaryAccessibilityLabel(merged: 2, total: 3)
+            == "gg stack · 2 of 3 commits merged")
+    }
+
     @Test func rowHeightIsStableWithAndWithoutBadge() throws {
         let withoutBadge = try renderHeight(harnessSummary: nil)
         let withBadge = try renderHeight(harnessSummary: .init(
@@ -59,13 +66,21 @@ struct WorktreeRowHeightTests {
         #expect(inactive == active)
     }
 
+    @Test func rowHeightIsStableWithAndWithoutGGStackMarker() throws {
+        let withoutStack = try renderHeight(harnessSummary: nil, stackSummary: nil)
+        let withStack = try renderHeight(harnessSummary: nil, stackSummary: GGStackSummary(merged: 2, total: 3))
+
+        #expect(withoutStack == withStack)
+    }
+
     private func renderHeight(
         harnessSummary: HarnessService.WorktreeHarnessSummary?,
         ggMenuModel: GGWorktreeMenuModel = GGWorktreeMenuModel(
             selectedMode: .inherit,
             context: .inactive(reason: .policyOff),
             hasStackSummary: false
-        )
+        ),
+        stackSummary: GGStackSummary? = nil
     ) throws -> Int {
         let worktree = Worktree(
             id: "wt-1",
@@ -76,6 +91,14 @@ struct WorktreeRowHeightTests {
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 0)
         )
+
+        GGStackSummaryStore.shared.summaries.removeAll()
+        if let stackSummary {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = stackSummary
+        }
+        defer {
+            GGStackSummaryStore.shared.summaries.removeAll()
+        }
 
         let view = WorktreeRowView(
             worktree: worktree,

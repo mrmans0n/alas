@@ -45,6 +45,14 @@ struct GGWorktreeMenuModel: Equatable {
 
 struct WorktreeRowView: View {
     static func stackSummaryTooltip(merged: Int, total: Int) -> String {
+        stackSummaryText(merged: merged, total: total)
+    }
+
+    static func stackSummaryAccessibilityLabel(merged: Int, total: Int) -> String {
+        stackSummaryText(merged: merged, total: total)
+    }
+
+    private static func stackSummaryText(merged: Int, total: Int) -> String {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
     }
 
@@ -147,10 +155,19 @@ struct WorktreeRowView: View {
                                 .foregroundColor(theme.color("del"))
                         }
                         if let stack = stackSummary {
-                            Text("▲ \(stack.merged)/\(stack.total)")
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(theme.color("accent"))
-                                .help(Self.stackSummaryTooltip(merged: stack.merged, total: stack.total))
+                            let summaryText = Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
+                            HStack(spacing: 3) {
+                                GGSidebarStackShape()
+                                    .fill(theme.color("fg-faint"))
+                                    .frame(width: 9, height: 9)
+                                    .accessibilityHidden(true)
+                                Text("\(stack.merged)/\(stack.total)")
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundColor(theme.color("fg-faint"))
+                            }
+                            .help(summaryText)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Self.stackSummaryAccessibilityLabel(merged: stack.merged, total: stack.total))
                         } else if ggMenuModel.showsStatusIndicator {
                             Text("GG")
                                 .font(.system(size: 10.5, weight: .medium, design: .monospaced))
@@ -253,6 +270,29 @@ struct WorktreeRowView: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+}
+
+private struct GGSidebarStackShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let strokeHeight = min(rect.height / 9, 1)
+        let strokeWidth = min(rect.width, 7)
+        let x = rect.midX - strokeWidth / 2
+        let yPositions = [
+            rect.minY + 1,
+            rect.midY - strokeHeight / 2,
+            rect.maxY - strokeHeight - 1
+        ]
+
+        for y in yPositions {
+            path.addRoundedRect(
+                in: CGRect(x: x, y: y, width: strokeWidth, height: strokeHeight),
+                cornerSize: CGSize(width: strokeHeight / 2, height: strokeHeight / 2)
+            )
+        }
+
+        return path
+    }
 }
 
 private extension String {
