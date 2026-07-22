@@ -168,6 +168,7 @@ final class RightPaneStore {
                     branch: branch
                 )
             }
+            new.seedGGContext(branch: worktree.branch)
             new.refreshProjectTopologyAfterGGMutation = { [weak self] in
                 guard let app = self?.appState else { return }
                 await app.refreshProjectTopology(projectId: worktree.projectId)
@@ -227,12 +228,7 @@ final class RightPaneStore {
                 prevState.stop()
             }
             if wasCached, result.currentBranch != worktree.branch {
-                result.currentBranch = worktree.branch
-                result.ggStackCommitsKey = nil
-                let context = result.ggContextProvider?(worktree.branch)
-                    ?? .inactive(reason: .policyOff)
-                result.ggContext = context
-                result.ggStackLoadState = context.isActive ? .loading : .inactive
+                result.seedGGContext(branch: worktree.branch)
             }
             activeId = id
             // Don't start the state's background work here if we deferred it

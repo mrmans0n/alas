@@ -1858,8 +1858,14 @@ final class AppState {
         remoteProjectWatchers.removeAll()
     }
 
-    private func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
-        projectsManager.applyHeadUpdates(projectId: projectId, branchByWorktreePath: branchByWorktreePath)
+    func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
+        let changedPaths = projectsManager.applyHeadUpdates(
+            projectId: projectId,
+            branchByWorktreePath: branchByWorktreePath
+        )
+        for path in changedPaths {
+            GGStackSummaryStore.shared.summaries[path] = nil
+        }
     }
 
     private func handleProjectTopologyChange(projectId: String) {
@@ -4429,6 +4435,10 @@ final class AppState {
         // Always clear the deleting state after a successful remove,
         // even if the subsequent refresh fails.
         projectsManager.setOperationState(id: worktree.id, state: nil)
+        removePersistedGGWorktreeMode(
+            projectId: worktree.projectId,
+            worktreeId: worktree.id
+        )
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
@@ -5538,6 +5548,15 @@ final class AppState {
         )
         saveProjects()
         rightPaneStore.reevaluateGGGate(worktreeId: worktreeId)
+    }
+
+    func removePersistedGGWorktreeMode(projectId: String, worktreeId: String) {
+        guard projectsManager.ggWorktreeMode(
+            projectId: projectId,
+            worktreeId: worktreeId
+        ) != .inherit else { return }
+        projectsManager.removeGGWorktreeMode(projectId: projectId, worktreeId: worktreeId)
+        saveProjects()
     }
 
     nonisolated static func resolveGGWorktreeContext(

@@ -487,12 +487,14 @@ final class ProjectsManager {
     /// has on disk yet. `.deleting` and `.deleteFailed` rows are still
     /// updated — they correspond to real git worktrees with a pending UI
     /// operation, so git's branch is still the truth.
-    func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
-        guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return }
+    @discardableResult
+    func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) -> Set<String> {
+        guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return [] }
         let lookup: [String: String] = Dictionary(uniqueKeysWithValues:
             branchByWorktreePath.map { (canonical($0.key), $0.value) }
         )
         var changed = false
+        var changedPaths: Set<String> = []
         for i in rows.indices {
             let key = canonical(rows[i].path)
             guard let newBranch = lookup[key] else { continue }
@@ -506,12 +508,14 @@ final class ProjectsManager {
                 rows[i].branch = newBranch
                 rows[i].name = newBranch
                 changed = true
+                changedPaths.insert(rows[i].path.path)
             }
         }
         if changed {
             worktreesByProject[projectId] = rows
             applyWorktreeOrdering(projectId: projectId)
         }
+        return changedPaths
     }
 
     private func hiddenSet(projectId: String) -> Set<String> {

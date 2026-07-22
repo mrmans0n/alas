@@ -352,6 +352,19 @@ struct RightPaneGGStackTests {
         )
     }
 
+    @Test func seedingContextMakesEligibleFirstActivationLoadingImmediately() {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        state.ggContextProvider = { branch in
+            .active(stackName: String(branch.dropFirst("nacho/".count)))
+        }
+
+        state.seedGGContext(branch: "nacho/first-stack")
+
+        #expect(state.currentBranch == "nacho/first-stack")
+        #expect(state.ggContext == .active(stackName: "first-stack"))
+        #expect(state.ggStackLoadState == .loading)
+    }
+
     @Test func prepareCardRemainsVisibleAlongsideGGDrawer() {
         #expect(ChangesTabView.shouldShowChangesPreparationCard(
             preparationIsVisible: true

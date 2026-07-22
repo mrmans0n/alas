@@ -228,6 +228,37 @@ struct AppStateGGACPWorktreeContextTests {
         }
     }
 
+    @Test func topologyBranchChangeClearsCachedSidebarSummary() {
+        let project = ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: "/tmp/alas-summary-project",
+            color: "teal",
+            addedAt: .now
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let path = URL(fileURLWithPath: "/tmp/alas-summary-linked")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: "nacho/old-stack",
+            branch: "nacho/old-stack",
+            path: path,
+            status: .clean,
+            lastActivity: .now
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        GGStackSummaryStore.shared.summaries[path.path] = GGStackSummary(merged: 1, total: 2)
+        defer { GGStackSummaryStore.shared.summaries[path.path] = nil }
+
+        state.handleProjectHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [path: "nacho/new-stack"]
+        )
+
+        #expect(GGStackSummaryStore.shared.summaries[path.path] == nil)
+    }
+
     @Test func cachedLiveBranchOverridesStaleTopologyForACPDecisions() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-acp-live-branch-\(UUID().uuidString)")

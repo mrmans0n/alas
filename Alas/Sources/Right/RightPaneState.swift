@@ -907,6 +907,17 @@ final class RightPaneState: GGSplitCommitServicing {
     // `ggStackSourceCommits` / `ggService` without needing a real git repo +
     // watcher.
     @MainActor
+    func seedGGContext(branch: String) {
+        if currentBranch != branch {
+            currentBranch = branch
+            ggStackCommitsKey = nil
+        }
+        let context = ggContextProvider?(branch) ?? .inactive(reason: .policyOff)
+        if ggContext != context { ggContext = context }
+        ggStackLoadState = context.isActive ? .loading : .inactive
+    }
+
+    @MainActor
     func refreshGGStack() async {
         let snapshotGeneration = snapshotInvalidationGeneration
         ggStackRefreshGeneration &+= 1
