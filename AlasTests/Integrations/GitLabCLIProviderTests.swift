@@ -872,6 +872,12 @@ struct GitLabCLIProviderTests {
         ])
         let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
         #expect(discussionPayload["body"] as? String == "Please fix this.")
+        // glab does not set Content-Type when the body is read from --input, so
+        // GitLab rejects the request with HTTP 415 unless we send it explicitly.
+        let discussionSetsJSONContentType = Self.sendsJSONContentType(commands[1].args)
+        let approveSetsJSONContentType = Self.sendsJSONContentType(commands[2].args)
+        #expect(discussionSetsJSONContentType)
+        #expect(approveSetsJSONContentType)
         #expect(commands[2].args.suffix(2) == ["--input", "-"])
         let approvePayload = try Self.jsonObject(from: commands[2].stdin)
         #expect(approvePayload["sha"] as? String == "head123")
@@ -1286,6 +1292,7 @@ struct GitLabCLIProviderTests {
             "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1/notes",
             "--method", "POST",
             "--hostname", "gitlab.example.com",
+            "-H", "Content-Type: application/json",
             "--input", "-",
         ])
         #expect(commands[5].args == [
@@ -1293,6 +1300,7 @@ struct GitLabCLIProviderTests {
             "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1",
             "--method", "PUT",
             "--hostname", "gitlab.example.com",
+            "-H", "Content-Type: application/json",
             "--input", "-",
         ])
         #expect(try Self.jsonObject(from: commands[5].stdin)["resolved"] as? Bool == true)
@@ -2458,6 +2466,16 @@ struct GitLabCLIProviderTests {
             updatedAt: Date(timeIntervalSince1970: 11)
         )
         return try #require(ProviderReviewDraftComment(localDraft: draft))
+    }
+
+    /// True when the argument list passes an explicit `-H Content-Type: application/json` header.
+    private static func sendsJSONContentType(_ args: [String]) -> Bool {
+        for index in args.indices.dropLast() where args[index] == "-H" {
+            if args[index + 1] == "Content-Type: application/json" {
+                return true
+            }
+        }
+        return false
     }
 
     private static func jsonObject(from stdin: String?) throws -> [String: Any] {
