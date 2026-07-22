@@ -109,17 +109,22 @@ The dialog passes the raw `GGWorktreeMode` into the worktree-creation request.
 The creation path retains ownership of applying it because successful creation,
 topology refresh, persistence, selection, and launch already happen there.
 
-After Git creation and the successful topology refresh identify the final
-worktree, but before selecting it or launching a terminal or ACP session, the
-creation path applies the raw mode:
+The creation path applies the raw mode in memory to the optimistic worktree
+before its immediate selection:
 
 - `Inherit`: remove or omit the worktree entry in `ggWorktreeModes`.
 - `On`: persist `.on` under the worktree's stable identity.
 - `Off`: persist `.off` under the worktree's stable identity.
 
-The project file is saved when an explicit override is applied. The affected
-right-pane GG gate is reevaluated after the policy update. A failed worktree
-creation does not leave an override behind.
+This in-memory phase ensures the selected optimistic row never evaluates GG
+using a policy other than the one chosen in the dialog. After Git creation and
+the successful topology refresh identify the final worktree, but before
+auto-launching a terminal or ACP session, the creation path reapplies the raw
+mode to the reconciled identity and saves the project file when the mode is an
+explicit override. The affected right-pane GG gate is then reevaluated.
+
+If creation fails, the unpersisted in-memory override is removed. A failed
+worktree creation therefore does not leave an override behind.
 
 Applying the override before selection and auto-launch prevents a newly opened
 ACP session from attaching GG context based on a transient inherited policy.
@@ -146,4 +151,3 @@ Focused Swift Testing coverage should include:
   context.
 - Regression coverage for current regular-branch validation, GG branch
   composition, and pinned-base behavior.
-
