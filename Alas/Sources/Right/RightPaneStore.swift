@@ -368,6 +368,12 @@ final class RightPaneStore {
         )
     }
 
+    /// Latest branch observed by the cached pane state. Nil when the pane has
+    /// never been created, allowing callers to fall back to topology state.
+    func currentBranchForWorktreePath(_ path: String) -> String? {
+        states.values.first { $0.worktree.path.path == path }?.currentBranch
+    }
+
     /// The first cached state with a pending gg-land confirmation, if any.
     /// Mirrors `stateWithPendingMerge` for the same reason: the confirmation
     /// dialog (see RootView) must resolve its owning state through this

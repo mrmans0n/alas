@@ -5488,11 +5488,12 @@ final class AppState {
     func ggWorktreeContext(
         project: ProjectConfig,
         worktree: Worktree,
-        branch: String
+        branch: String,
+        ggInstalled: Bool = GGAvailability.shared.isInstalled
     ) -> GGWorktreeContext {
         Self.resolveGGWorktreeContext(
             masterEnabled: config.changes.stackedDiffsEnabled,
-            ggInstalled: GGAvailability.shared.isInstalled,
+            ggInstalled: ggInstalled,
             project: project,
             worktreeOverride: projectsManager.ggWorktreeMode(
                 projectId: project.id,
@@ -5578,18 +5579,26 @@ final class AppState {
         return .stack(name: stack.name, entryCount: stack.totalCommits)
     }
 
-    private func ggACPWorktreeIntegration(
-        worktreePath: String
+    func ggACPWorktreeIntegration(
+        worktreePath: String,
+        ggInstalled: Bool = GGAvailability.shared.isInstalled
     ) -> (project: ProjectConfig, worktree: Worktree, context: GGWorktreeContext)? {
         let requestedPath = Self.canonicalWorktreePath(worktreePath)
         for project in projects {
             guard let worktree = projectsManager.worktrees(projectId: project.id).first(where: {
                 Self.canonicalWorktreePath($0.path.path) == requestedPath
             }) else { continue }
+            let branch = rightPaneStore.currentBranchForWorktreePath(worktree.path.path)
+                ?? worktree.branch
             return (
                 project,
                 worktree,
-                ggWorktreeContext(project: project, worktree: worktree, branch: worktree.branch)
+                ggWorktreeContext(
+                    project: project,
+                    worktree: worktree,
+                    branch: branch,
+                    ggInstalled: ggInstalled
+                )
             )
         }
         return nil

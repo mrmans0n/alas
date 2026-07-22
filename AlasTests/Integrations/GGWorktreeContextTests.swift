@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -211,5 +212,92 @@ struct ProjectsManagerGGWorktreeModeTests {
         manager.removeGGWorktreeMode(projectId: "missing", worktreeId: "worktree")
         #expect(manager.ggWorktreeMode(projectId: "missing", worktreeId: "worktree") == .inherit)
         #expect(manager.projects.isEmpty)
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct AppStateGGACPWorktreeContextTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == ProjectsFile.self ? projectsFile as? T : nil
+        }
+    }
+
+    @Test func cachedLiveBranchOverridesStaleTopologyForACPDecisions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-acp-live-branch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git/gg"),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"defaults":{"branch_username":"nacho"}}"#.utf8).write(
+            to: root.appendingPathComponent(".git/gg/config.json")
+        )
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: root.path,
+            color: "teal",
+            addedAt: .now,
+            ggMode: .off
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let path = root.appendingPathComponent("linked")
+        let topologyWorktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: "nacho/old-stack",
+            branch: "nacho/old-stack",
+            path: path,
+            status: .clean,
+            lastActivity: .now
+        )
+        state.projectsManager.insertOptimisticWorktree(topologyWorktree)
+        state.projectsManager.setGGWorktreeMode(
+            projectId: project.id,
+            worktreeId: topologyWorktree.id,
+            mode: .on
+        )
+        let fallback = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(fallback.context == .active(stackName: "old-stack"))
+
+        let pane = state.rightPaneStore.state(
+            for: topologyWorktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        state.rightPaneStore.deactivate()
+
+        pane.currentBranch = "main"
+        let plain = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(!AppState.shouldAttachGGMCP(context: plain.context))
+        #expect(AppState.ggPreambleSignal(context: plain.context, snapshot: nil) == .none)
+
+        state.projectsManager.applyHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [path: "main"]
+        )
+        #expect(state.projectsManager.worktrees(projectId: project.id).first?.branch == "main")
+        pane.currentBranch = "nacho/new-stack"
+        let stacked = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(AppState.shouldAttachGGMCP(context: stacked.context))
+        #expect(AppState.ggPreambleSignal(context: stacked.context, snapshot: nil) == .generic)
+        #expect(stacked.context == .active(stackName: "new-stack"))
     }
 }
