@@ -490,7 +490,9 @@ struct AppStateSpacesTests {
     }
 
     @Test func removingFailedActiveSpaceWorktreeDoesNotSelectOtherSpaceWorktree() {
-        let p1 = project("p1")
+        var persistedProjects: ProjectsFile?
+        var p1 = project("p1")
+        p1.ggWorktreeModes["wt1"] = .on
         let p2 = project("p2")
         let spaces = SpacesFile(
             version: 1,
@@ -500,7 +502,14 @@ struct AppStateSpacesTests {
                 SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: "wt2", createdAt: Date())
             ]
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [p1, p2]),
+            spacesFile: spaces,
+            writes: { value, url in
+                guard url == Paths.projectsFile else { return }
+                persistedProjects = value as? ProjectsFile
+            }
+        ))
         state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
         state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
         state.selectedWorktreeId = "wt1"
@@ -510,6 +519,8 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpaceId == "s1")
         #expect(state.selectedWorktreeId == nil)
         #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == nil)
+        #expect(state.projectsManager.ggWorktreeMode(projectId: "p1", worktreeId: "wt1") == .inherit)
+        #expect(persistedProjects?.projects.first { $0.id == "p1" }?.ggWorktreeModes["wt1"] == nil)
     }
 
     @Test func focusingGlobalWorktreeSwitchesToContainingSpace() {

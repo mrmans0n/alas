@@ -3,6 +3,47 @@ import Testing
 
 @Suite("ACPMCPPromptPreamble")
 struct ACPMCPPromptPreambleTests {
+    @Test("active gg context uses loaded stack details")
+    func activeGGContextWithStack() {
+        #expect(AppState.ggPreambleSignal(
+            context: .active(stackName: "context-name"),
+            loadedStack: GGStack(
+                name: "loaded-name",
+                base: "main",
+                totalCommits: 3,
+                syncedCommits: 2,
+                currentPosition: nil,
+                behindBase: nil,
+                entries: []
+            )
+        ) == .stack(name: "loaded-name", entryCount: 3))
+    }
+
+    @Test("active gg context without a loaded stack stays generic")
+    func activeGGContextWithoutStack() {
+        #expect(AppState.ggPreambleSignal(
+            context: .active(stackName: "feature"),
+            loadedStack: nil
+        ) == .generic)
+    }
+
+    @Test("inactive gg context produces no gg preamble")
+    func inactiveGGContext() {
+        let stack = GGStack(
+            name: "stale",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: 1,
+            currentPosition: nil,
+            behindBase: nil,
+            entries: []
+        )
+        #expect(AppState.ggPreambleSignal(
+            context: .inactive(reason: .policyOff),
+            loadedStack: stack
+        ) == .none)
+    }
+
     @Test("nothing attached produces no preamble")
     func nothingAttached() {
         #expect(ACPMCPPromptPreamble.text(

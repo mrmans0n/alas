@@ -2,6 +2,18 @@ import Testing
 @testable import Alas
 
 struct GGMCPInjectionTests {
+    @Test func providerOnlyAttachesForActiveWorktreeContext() {
+        #expect(AppState.shouldAttachGGMCP(
+            context: .active(stackName: "feature")
+        ))
+        #expect(!AppState.shouldAttachGGMCP(
+            context: .inactive(reason: .policyOff)
+        ))
+        #expect(!AppState.shouldAttachGGMCP(
+            context: .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        ))
+    }
+
     @Test func happyPathBuildsStdioServerWithRepoPath() throws {
         let injection = try #require(GGMCPInjection.injection(
             gatePassed: true,

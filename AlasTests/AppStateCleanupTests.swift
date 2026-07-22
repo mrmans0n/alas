@@ -923,6 +923,7 @@ struct AppStateCleanupTests {
 
         // Simulate a failed delete.
         state.projectsManager.setOperationState(id: wt.id, state: .deleteFailed(message: "permission denied"))
+        state.projectsManager.setGGWorktreeMode(projectId: project.id, worktreeId: wt.id, mode: .on)
         state.selectedWorktreeId = wt.id
 
         // Archive should succeed and hide the worktree.
@@ -931,6 +932,7 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: wt.path))
         #expect(state.projectsManager.archivedWorktrees(projectId: project.id).count == 1)
         #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
+        #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: wt.id) == .on)
         // Operation state should be cleared.
         #expect(state.projectsManager.operationState(for: wt.id) == nil)
         // Selection should move away because the worktree is no longer visible.
