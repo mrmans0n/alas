@@ -140,7 +140,10 @@ struct NewWorktreeDialog: View {
                 }
             }
             if base.isEmpty {
-                base = state.config.worktrees.baseBranch
+                base = Self.initialBase(
+                    configuredDefault: state.config.worktrees.baseBranch,
+                    stackPinnedBase: stackPinnedBase
+                )
             }
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
@@ -430,6 +433,13 @@ struct NewWorktreeDialog: View {
 
     nonisolated static func ggModeAfterRepositoryChange(current _: GGWorktreeMode) -> GGWorktreeMode {
         .inherit
+    }
+
+    nonisolated static func initialBase(
+        configuredDefault: String,
+        stackPinnedBase: String?
+    ) -> String {
+        stackPinnedBase ?? configuredDefault
     }
 
     nonisolated static func ggBranchPreview(branch: String, base: String?) -> String {

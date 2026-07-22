@@ -106,6 +106,20 @@ struct NewWorktreeDialogTests {
         #expect(selected == "integration")
     }
 
+    @Test func initialBaseUsesStackPinnedBaseWhenAvailable() {
+        #expect(NewWorktreeDialog.initialBase(
+            configuredDefault: "main",
+            stackPinnedBase: "develop"
+        ) == "develop")
+    }
+
+    @Test func initialBaseUsesConfiguredDefaultWithoutStackPin() {
+        #expect(NewWorktreeDialog.initialBase(
+            configuredDefault: "main",
+            stackPinnedBase: nil
+        ) == "main")
+    }
+
     @Test func canCreateRequiresProjects() {
         #expect(!NewWorktreeDialog.canCreate(projectsEmpty: true, branchEmpty: false))
     }

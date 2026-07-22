@@ -99,7 +99,12 @@ struct CenterSelectionStateResolverTests {
         mgr.insertOptimisticWorktree(wt)
         mgr.setOperationState(
             id: wt.id,
-            state: .createFailed(message: "disk full", base: "main", ggWorktreeMode: .inherit)
+            state: .createFailed(
+                projectId: project.id,
+                message: "disk full",
+                base: "main",
+                ggWorktreeMode: .inherit
+            )
         )
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: wt.id,

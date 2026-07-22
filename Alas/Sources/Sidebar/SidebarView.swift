@@ -239,7 +239,7 @@ struct SidebarView: View {
         operationState: WorktreeOperationState?,
         defaultBase: String
     ) -> (base: String, ggWorktreeMode: GGWorktreeMode) {
-        guard case .createFailed(_, let base, let ggWorktreeMode) = operationState else {
+        guard case .createFailed(_, _, let base, let ggWorktreeMode) = operationState else {
             return (defaultBase, .inherit)
         }
         return (base, ggWorktreeMode)

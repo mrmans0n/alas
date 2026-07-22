@@ -76,6 +76,59 @@ struct AppStateCleanupTests {
         #expect(ids == Set(trees.map(\.id)))
     }
 
+    @Test func topologyRefreshReevaluatesCachedGGGateAfterPromotingRecoveredMode() async throws {
+        let repo = try await makeRepo(name: "recovered-gg-gate")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState(store: MemoryStore())
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "recovered-gg-gate",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        let pane = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: state.config.worktrees.baseBranch,
+            comparisonMode: state.config.changes.comparisonMode
+        )
+        state.rightPaneStore.deactivate()
+        pane.baseBranchProbeTask?.cancel()
+        pane.baseBranchProbeTask = nil
+
+        var gateEvaluationCount = 0
+        pane.ggContextProvider = { _ in
+            gateEvaluationCount += 1
+            return .inactive(reason: .policyOff)
+        }
+        await pane.reevaluateGGGate().value
+        pane.stop()
+        try await Task.sleep(for: .milliseconds(250))
+        pane.stop()
+        gateEvaluationCount = 0
+
+        state.projectsManager.setOperationState(
+            id: worktree.id,
+            state: .createFailed(
+                projectId: project.id,
+                message: "transient",
+                base: "main",
+                ggWorktreeMode: .off
+            )
+        )
+
+        await state.refreshProjectTopology(projectId: project.id)
+        for _ in 0..<20 where gateEvaluationCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(state.projectsManager.ggWorktreeMode(
+            projectId: project.id,
+            worktreeId: worktree.id
+        ) == .off)
+        #expect(gateEvaluationCount == 1)
+    }
+
     @Test func allWorktreeIdsEmptyBeforeRefresh() async throws {
         let repo = try await makeRepo(name: "empty-ids")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -474,7 +527,7 @@ struct AppStateCleanupTests {
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(let message, _, _) = state.projectsManager.operationState(for: id) {
+        if case .createFailed(_, let message, _, _) = state.projectsManager.operationState(for: id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")
@@ -515,7 +568,7 @@ struct AppStateCleanupTests {
         )
         #expect(state.ggWorktreeMenuModel(project: project, worktree: failedWorktree).selectedMode == .inherit)
 
-        guard case .createFailed(_, let failedBase, let failedMode) =
+        guard case .createFailed(_, _, let failedBase, let failedMode) =
             state.projectsManager.operationState(for: failedId)
         else {
             Issue.record("Expected createFailed state")

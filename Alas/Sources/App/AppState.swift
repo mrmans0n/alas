@@ -1253,6 +1253,7 @@ final class AppState {
                     projectsManager.setOperationState(
                         id: optimistic.id,
                         state: .createFailed(
+                            projectId: projectId,
                             message: error.localizedDescription,
                             base: base,
                             ggWorktreeMode: ggWorktreeMode
@@ -1268,7 +1269,12 @@ final class AppState {
                 )
                 projectsManager.setOperationState(
                     id: optimistic.id,
-                    state: .createFailed(message: msg, base: base, ggWorktreeMode: ggWorktreeMode)
+                    state: .createFailed(
+                        projectId: projectId,
+                        message: msg,
+                        base: base,
+                        ggWorktreeMode: ggWorktreeMode
+                    )
                 )
             }
         }
@@ -1368,7 +1374,7 @@ final class AppState {
         guard !id.isEmpty else { return .failure(.init(message: "Could not start worktree creation.")) }
         for _ in 0..<1_200 {
             switch projectsManager.operationState(for: id) {
-            case .createFailed(let message, _, _):
+            case .createFailed(_, let message, _, _):
                 return .failure(.init(message: message))
             case .creating:
                 try? await Task.sleep(for: .milliseconds(250))
@@ -1928,7 +1934,10 @@ final class AppState {
             GGStackSummaryStore.shared.summaries[previous.path] = nil
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
-        if changed { saveProjects() }
+        if changed {
+            saveProjects()
+            rightPaneStore.reevaluateGGGates()
+        }
         restartProjectGitWatchers(previousPaths: previousPaths)
         return changed
     }
@@ -1950,7 +1959,10 @@ final class AppState {
     func refreshAllProjectTopologies() async -> Bool {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
         let changed = await projectsManager.refreshAll()
-        if changed { saveProjects() }
+        if changed {
+            saveProjects()
+            rightPaneStore.reevaluateGGGates()
+        }
         restartProjectGitWatchers(previousPaths: previousPaths)
         return changed
     }

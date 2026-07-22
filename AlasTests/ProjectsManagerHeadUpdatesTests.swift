@@ -92,7 +92,12 @@ struct ProjectsManagerHeadUpdatesTests {
         seed(mgr, projectId: project.id, [row])
         mgr.setOperationState(
             id: row.id,
-            state: .createFailed(message: "x", base: "main", ggWorktreeMode: .inherit)
+            state: .createFailed(
+                projectId: project.id,
+                message: "x",
+                base: "main",
+                ggWorktreeMode: .inherit
+            )
         )
 
         mgr.applyHeadUpdates(

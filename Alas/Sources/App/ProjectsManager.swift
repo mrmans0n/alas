@@ -40,7 +40,12 @@ enum WorktreeOperationState: Equatable {
     case deleting
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
-    case createFailed(message: String, base: String, ggWorktreeMode: GGWorktreeMode)
+    case createFailed(
+        projectId: String,
+        message: String,
+        base: String,
+        ggWorktreeMode: GGWorktreeMode
+    )
     case deleteFailed(message: String)
 }
 
@@ -370,6 +375,7 @@ final class ProjectsManager {
         let liveIds = Set(trees.map(\.id))
         var reconciled = trees
         var clearOperationIds: [String] = []
+        var resolvedCreateModes: [String: GGWorktreeMode] = [:]
         for (id, opState) in Array(worktreeOperationStates) {
             guard previousById[id] != nil || liveIds.contains(id) else { continue }
             switch opState {
@@ -385,10 +391,12 @@ final class ProjectsManager {
                 if !liveIds.contains(id) {
                     clearOperationIds.append(id)
                 }
-            case .createFailed:
+            case .createFailed(let originProjectId, _, _, let ggWorktreeMode):
+                guard originProjectId == projectId else { continue }
                 if liveIds.contains(id) {
                     // Worktree exists in git — transient failure is resolved; clear state.
                     clearOperationIds.append(id)
+                    resolvedCreateModes[id] = ggWorktreeMode
                 } else if let existing = previousById[id] {
                     // Preserve failed rows so they remain visible for retry/removal.
                     reconciled.append(existing)
@@ -418,7 +426,14 @@ final class ProjectsManager {
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
         let reconciledIds = Set(reconciled.map(\.id))
         let previousGGWorktreeModes = projects[idx].ggWorktreeModes
-        projects[idx].ggWorktreeModes = previousGGWorktreeModes.filter {
+        for (id, mode) in resolvedCreateModes {
+            if mode == .inherit {
+                projects[idx].ggWorktreeModes.removeValue(forKey: id)
+            } else {
+                projects[idx].ggWorktreeModes[id] = mode
+            }
+        }
+        projects[idx].ggWorktreeModes = projects[idx].ggWorktreeModes.filter {
             reconciledIds.contains($0.key)
         }
         return anchorChanged
