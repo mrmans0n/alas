@@ -165,6 +165,24 @@ final class ProjectsManager {
         projects[idx].ggMode = mode
     }
 
+    func ggWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {
+        projects.first(where: { $0.id == projectId })?.ggWorktreeModes[worktreeId] ?? .inherit
+    }
+
+    func setGGWorktreeMode(projectId: String, worktreeId: String, mode: GGWorktreeMode) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        if mode == .inherit {
+            projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
+        } else {
+            projects[idx].ggWorktreeModes[worktreeId] = mode
+        }
+    }
+
+    func removeGGWorktreeMode(projectId: String, worktreeId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
+    }
+
     func reorderProject(fromIndex: Int, toIndex: Int) {
         guard projects.indices.contains(fromIndex),
               projects.indices.contains(toIndex),

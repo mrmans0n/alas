@@ -100,11 +100,14 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var host: String?
     /// Per-project stacked-diffs (gg) mode. Defaults to `.auto`.
     var ggMode: GGProjectMode = .auto
+    /// Sparse per-worktree overrides. Missing entries inherit project policy.
+    var ggWorktreeModes: [String: GGWorktreeMode] = [:]
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host, ggMode
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host, ggMode,
+             ggWorktreeModes
     }
 
     init(
@@ -121,7 +124,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         mcpServers: [ProjectMCPServer] = [],
         worktreeOpenAfterCreate: Bool? = nil,
         worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil,
-        host: String? = nil
+        host: String? = nil,
+        ggMode: GGProjectMode = .auto,
+        ggWorktreeModes: [String: GGWorktreeMode] = [:]
     ) {
         self.id = id
         self.name = name
@@ -136,6 +141,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
         self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
         self.host = host
+        self.ggMode = ggMode
+        self.ggWorktreeModes = ggWorktreeModes
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -163,6 +170,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
         host = try? c.decode(String.self, forKey: .host)
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
+        ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -182,5 +190,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
         try c.encodeIfPresent(host, forKey: .host)
         try c.encode(ggMode, forKey: .ggMode)
+        let sparseGGWorktreeModes = ggWorktreeModes.filter { $0.value != .inherit }
+        if !sparseGGWorktreeModes.isEmpty {
+            try c.encode(sparseGGWorktreeModes, forKey: .ggWorktreeModes)
+        }
     }
 }

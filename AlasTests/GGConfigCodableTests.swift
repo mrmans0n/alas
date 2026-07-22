@@ -24,6 +24,39 @@ struct GGConfigCodableTests {
         #expect(decoded.ggMode == .on)
     }
 
+    @Test func projectConfigGGWorktreeModesDefaultEmptyWhenMissing() throws {
+        let json = """
+        {"id": "p1", "name": "alas", "path": "/tmp/alas", "color": "teal",
+         "addedAt": 700000000}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+
+        let project = try decoder.decode(ProjectConfig.self, from: Data(json.utf8))
+
+        #expect(project.ggWorktreeModes.isEmpty)
+    }
+
+    @Test func projectConfigGGWorktreeModesEncodeSparselyAndRoundTrip() throws {
+        var project = ProjectConfig(
+            id: "p1", name: "alas", path: "/tmp/alas", color: "teal", addedAt: Date(),
+            ggWorktreeModes: ["on-worktree": .on, "off-worktree": .off, "inherited-worktree": .inherit]
+        )
+        let data = try JSONEncoder().encode(project)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let modes = try #require(object["ggWorktreeModes"] as? [String: String])
+
+        #expect(modes == ["on-worktree": "on", "off-worktree": "off"])
+
+        project.ggWorktreeModes = [:]
+        let emptyData = try JSONEncoder().encode(project)
+        let emptyObject = try #require(JSONSerialization.jsonObject(with: emptyData) as? [String: Any])
+        #expect(emptyObject["ggWorktreeModes"] == nil)
+
+        let decoded = try JSONDecoder().decode(ProjectConfig.self, from: data)
+        #expect(decoded.ggWorktreeModes == ["on-worktree": .on, "off-worktree": .off])
+    }
+
     @Test func stackedDiffsEnabledDefaultsTrueOnLegacyConfig() throws {
         // Simulate a config written before `stackedDiffsEnabled` existed by
         // encoding the defaults and stripping the key from the changes
