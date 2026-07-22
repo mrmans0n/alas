@@ -965,6 +965,33 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
     }
 
+    @Test func storeReevaluatesGGGateOnlyForRequestedWorktree() async throws {
+        let firstWorktree = makeWorktree()
+        let secondWorktree = makeWorktree()
+        let store = RightPaneStore()
+        let first = store.state(for: firstWorktree, baseBranch: "main", comparisonMode: .manual)
+        let second = store.state(for: secondWorktree, baseBranch: "main", comparisonMode: .manual)
+        store.deactivate()
+
+        var firstEvaluationCount = 0
+        var secondEvaluationCount = 0
+        first.ggContextProvider = { _ in
+            firstEvaluationCount += 1
+            return .inactive(reason: .policyOff)
+        }
+        second.ggContextProvider = { _ in
+            secondEvaluationCount += 1
+            return .inactive(reason: .policyOff)
+        }
+
+        let task = try #require(store.reevaluateGGGate(worktreeId: firstWorktree.id))
+        await task.value
+
+        #expect(firstEvaluationCount == 1)
+        #expect(secondEvaluationCount == 0)
+        #expect(store.reevaluateGGGate(worktreeId: "missing") == nil)
+    }
+
     /// A thrown gg failure must not cache the commits key — otherwise a
     /// transient error (auth hiccup, network blip) permanently skips retries
     /// for that commit set via the unchanged-key guard, even after the

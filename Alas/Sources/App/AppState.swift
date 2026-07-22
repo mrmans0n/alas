@@ -5530,7 +5530,7 @@ final class AppState {
             mode: mode
         )
         saveProjects()
-        rightPaneStore.reevaluateGGGates()
+        rightPaneStore.reevaluateGGGate(worktreeId: worktreeId)
     }
 
     nonisolated static func resolveGGWorktreeContext(

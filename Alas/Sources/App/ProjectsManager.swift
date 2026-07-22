@@ -339,9 +339,8 @@ final class ProjectsManager {
         projects[idx].hiddenWorktreePaths = paths
     }
 
-    /// Refresh the live worktree list for a project and GC orphan hidden
-    /// paths. Returns `true` when the GC dropped at least one entry, so the
-    /// caller can persist the change to disk; `false` otherwise.
+    /// Refresh the live worktree list and reconcile per-worktree persisted
+    /// configuration. Returns `true` when the caller should persist changes.
     @discardableResult
     func refreshWorktrees(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
@@ -415,7 +414,15 @@ final class ProjectsManager {
         let live = Set(trees.map { canonical($0.path) })
         let before = projects[idx].hiddenWorktreePaths.count
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
-        return anchorChanged || orderChanged || projects[idx].hiddenWorktreePaths.count != before
+        let reconciledIds = Set(reconciled.map(\.id))
+        let previousGGWorktreeModes = projects[idx].ggWorktreeModes
+        projects[idx].ggWorktreeModes = previousGGWorktreeModes.filter {
+            reconciledIds.contains($0.key)
+        }
+        return anchorChanged
+            || orderChanged
+            || projects[idx].hiddenWorktreePaths.count != before
+            || projects[idx].ggWorktreeModes != previousGGWorktreeModes
     }
 
     func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {
@@ -458,7 +465,7 @@ final class ProjectsManager {
     }
 
     /// Refresh every project. Returns `true` when at least one project's
-    /// hidden-path GC dropped an entry, so the caller can persist the change.
+    /// persisted configuration changed, so the caller can save it.
     @discardableResult
     func refreshAll() async -> Bool {
         var changed = false

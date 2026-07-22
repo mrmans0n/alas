@@ -283,6 +283,13 @@ final class RightPaneStore {
         for state in states.values { state.reevaluateGGGate() }
     }
 
+    /// Re-evaluate the gg gate for one cached worktree after its override
+    /// changes. Returns nil when that worktree has no cached pane state.
+    @discardableResult
+    func reevaluateGGGate(worktreeId: String) -> Task<Void, Never>? {
+        states[worktreeId]?.reevaluateGGGate()
+    }
+
     func commitEditorComparisonRef(worktreeId: String) -> String? {
         guard let state = states[worktreeId] else { return nil }
         return state.comparisonRef

@@ -313,6 +313,38 @@ extension ProjectsManagerTests {
         #expect(!mgr.isWorktreeHidden(projectId: project.id, path: bogus))
     }
 
+    @Test func refreshPrunesOnlyMissingGGWorktreeOverrides() async throws {
+        let repo = try await makeRepo(name: "gg-override-prune")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let projectId = "gg-override-prune-project"
+        let linked = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/archived",
+            destination: repo.appendingPathComponent("wt-archived"),
+            projectId: projectId
+        )
+        let mainId = Worktree.makeId(path: repo)
+        let staleId = "missing-worktree"
+        let project = ProjectConfig(
+            id: projectId,
+            name: "gg-override-prune",
+            path: repo.path,
+            color: "#5fb7c4",
+            addedAt: Date(),
+            hiddenWorktreePaths: [linked.path.path],
+            ggWorktreeModes: [mainId: .on, linked.id: .off, staleId: .on]
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        let changed = try await manager.refreshWorktrees(projectId: projectId)
+
+        #expect(changed)
+        #expect(manager.projects[0].ggWorktreeModes == [mainId: .on, linked.id: .off])
+        #expect(manager.ggWorktreeMode(projectId: projectId, worktreeId: staleId) == .inherit)
+        #expect(manager.archivedWorktrees(projectId: projectId).map(\.id) == [linked.id])
+    }
+
     @Test func refreshAllPopulatesMultipleProjects() async throws {
         let repoA = try await makeRepo(name: "eta")
         defer { try? FileManager.default.removeItem(at: repoA) }
