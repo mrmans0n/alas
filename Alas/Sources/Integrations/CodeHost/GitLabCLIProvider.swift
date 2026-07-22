@@ -880,6 +880,9 @@ struct GitLabCLIProvider: CodeHostProvider {
                 Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "discussions"),
                 "--method", "POST",
                 "--hostname", remote.host,
+                // glab omits the Content-Type header when the body comes from
+                // --input, which makes GitLab reject the request with HTTP 415.
+                "-H", "Content-Type: application/json",
                 "--input", "-",
             ],
             cwd: cwd,
@@ -903,6 +906,9 @@ struct GitLabCLIProvider: CodeHostProvider {
                 Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "approve"),
                 "--method", "POST",
                 "--hostname", remote.host,
+                // glab omits the Content-Type header when the body comes from
+                // --input, which makes GitLab reject the request with HTTP 415.
+                "-H", "Content-Type: application/json",
                 "--input", "-",
             ],
             cwd: cwd,
@@ -929,6 +935,9 @@ struct GitLabCLIProvider: CodeHostProvider {
                 Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "notes"),
                 "--method", "POST",
                 "--hostname", remote.host,
+                // glab omits the Content-Type header when the body comes from
+                // --input, which makes GitLab reject the request with HTTP 415.
+                "-H", "Content-Type: application/json",
                 "--input", "-",
             ],
             cwd: cwd,
@@ -954,6 +963,9 @@ struct GitLabCLIProvider: CodeHostProvider {
                 Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "discussions/\(discussionID)/notes"),
                 "--method", "POST",
                 "--hostname", remote.host,
+                // glab omits the Content-Type header when the body comes from
+                // --input, which makes GitLab reject the request with HTTP 415.
+                "-H", "Content-Type: application/json",
                 "--input", "-",
             ],
             cwd: cwd,
@@ -979,6 +991,9 @@ struct GitLabCLIProvider: CodeHostProvider {
                 Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "discussions/\(discussionID)"),
                 "--method", "PUT",
                 "--hostname", remote.host,
+                // glab omits the Content-Type header when the body comes from
+                // --input, which makes GitLab reject the request with HTTP 415.
+                "-H", "Content-Type: application/json",
                 "--input", "-",
             ],
             cwd: cwd,
