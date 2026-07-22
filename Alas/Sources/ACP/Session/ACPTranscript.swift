@@ -502,6 +502,25 @@ final class ACPTranscript: ObservableObject {
         setVisibleWindow(head: boundedHead, tail: newTail)
     }
 
+    /// Pin `visibleTail` to the current message count when it is still
+    /// unbounded (`nil`). Tail-follow deliberately leaves `visibleTail == nil`
+    /// so the window tracks the growing end; the moment the user pauses that
+    /// follow we must freeze the tail to a finite bound. Otherwise later
+    /// appends (a long, tool-heavy turn can add far more than `maxVisibleRows`
+    /// messages) would grow `visibleTailBound` to `messages.count` while the
+    /// head stays put, and the eager transcript stack would lay out an
+    /// ever-larger window. Newer tail messages are then revealed through the
+    /// normal bottom-pagination / resume paths instead of unbounded growth.
+    ///
+    /// No-op when the tail is already finite. The only state carrying a `nil`
+    /// tail is the tail-follow window (`resetWindowToTail`), whose head is
+    /// `messages.count - tailWindow`, so freezing keeps the span at
+    /// `tailWindow`.
+    func freezeVisibleTail() {
+        guard visibleTail == nil else { return }
+        setVisibleWindow(head: visibleHead, tail: messages.count)
+    }
+
     /// Restore around a remembered non-tail row without rendering the entire
     /// suffix from that row to the transcript tail.
     func setVisibleWindow(containing index: Int) {
