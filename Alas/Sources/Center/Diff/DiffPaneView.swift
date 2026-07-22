@@ -496,7 +496,6 @@ struct DiffPaneView: View {
                                 activeThreadID = active ? t.id : (activeThreadID == t.id ? nil : activeThreadID)
                             }
                         )
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 case .annotation(let a):
                     DiffFeedbackLaneView(
@@ -505,7 +504,6 @@ struct DiffPaneView: View {
                         rows: visibleRows
                     ) {
                         DiffInlineAnnotationCard(annotation: a)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }

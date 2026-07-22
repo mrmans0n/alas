@@ -2098,6 +2098,35 @@ let second = true
         ) != nil)
     }
 
+    @Test func feedbackLaneDoesNotProbeChildWithUnspecifiedWidth() throws {
+        let rows = try #require(model().groups.first?.rows)
+        let counter = LayoutMeasurementCounter()
+        let controller = NSHostingController(rootView:
+            DiffFeedbackLaneView(lane: .right, layoutMode: .split, rows: rows) {
+                LayoutMeasurementProbe(counter: counter) {
+                    Color.clear
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 20)
+            }
+            .environment(\.theme, theme())
+        )
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 20)
+
+        _ = controller.view.fittingSize
+
+        #expect(
+            counter.widthProposals.allSatisfy { $0 != nil },
+            "Feedback lane should not ask content for an unspecified ideal width; proposals were \(counter.widthProposals)"
+        )
+    }
+
+    @Test func feedbackLaneUnspecifiedProposalHasNoIntrinsicContainerWidth() {
+        #expect(DiffFeedbackLaneGeometry.containerWidth(for: .unspecified) == 0)
+        #expect(DiffFeedbackLaneGeometry.containerWidth(for: .init(width: -12, height: nil)) == 0)
+        #expect(DiffFeedbackLaneGeometry.containerWidth(for: .init(width: 900, height: nil)) == 900)
+    }
+
     @Test func diffPreferenceBindingsPersistLayoutAndWrapButKeepWhitespaceLocal() {
         let appState = AppState()
         appState.config.changes.diffLayoutMode = .split
@@ -4622,6 +4651,32 @@ let second = true
                 constraintInvalidationCount += 1
             }
         }
+    }
+
+    private final class LayoutMeasurementCounter: @unchecked Sendable {
+        var measurementCount = 0
+        var widthProposals: [CGFloat?] = []
+    }
+
+    private struct LayoutMeasurementProbe: Layout {
+        let counter: LayoutMeasurementCounter
+
+        func sizeThatFits(
+            proposal: ProposedViewSize,
+            subviews: Subviews,
+            cache: inout ()
+        ) -> CGSize {
+            counter.measurementCount += 1
+            counter.widthProposals.append(proposal.width)
+            return CGSize(width: proposal.width ?? 100, height: 20)
+        }
+
+        func placeSubviews(
+            in bounds: CGRect,
+            proposal: ProposedViewSize,
+            subviews: Subviews,
+            cache: inout ()
+        ) {}
     }
 
     private struct FrameProbe: NSViewRepresentable {
