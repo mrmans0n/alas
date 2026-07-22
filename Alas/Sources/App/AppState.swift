@@ -538,7 +538,7 @@ final class AppState {
         ShellEnvResolver.shared.resolve()
 
         // Probe gg CLI availability once at startup so the stacked-diffs
-        // gate (RightPaneStore.ggGateProvider) has an answer by the time
+        // context provider (RightPaneStore.ggContextProvider) has an answer by the time
         // the first right pane activates. Wait for the login-shell PATH
         // resolution kicked off above first — otherwise a gg installed only
         // via Homebrew (not on the process's own PATH, e.g. launched from
@@ -5477,6 +5477,27 @@ final class AppState {
                 mode: project.ggMode, repoPath: project.path,
                 isRemoteProject: project.host != nil
             )
+    }
+
+    func ggWorktreeContext(
+        project: ProjectConfig,
+        worktree: Worktree,
+        branch: String
+    ) -> GGWorktreeContext {
+        GGWorktreeContextResolver.resolve(
+            masterEnabled: config.changes.stackedDiffsEnabled,
+            ggInstalled: GGAvailability.shared.isInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            worktreeOverride: projectsManager.ggWorktreeMode(
+                projectId: project.id,
+                worktreeId: worktree.id
+            ),
+            isMainWorktree: projectsManager.isMain(worktree, in: project),
+            repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path),
+            branchUsername: GGConfigReader.branchUsername(repoPath: project.path),
+            branch: branch
+        )
     }
 
     /// Chooses which of the target project's worktrees hosts its inbox tab:

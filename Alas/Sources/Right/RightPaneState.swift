@@ -5,6 +5,14 @@ import os
 
 enum RightPaneTab: String { case changes, files }
 
+enum GGStackLoadState: Equatable {
+    case inactive
+    case loading
+    case empty
+    case loaded
+    case failed(String)
+}
+
 struct ReviewLoopRemoteFingerprint: Equatable, Sendable {
     var branchName: String
     var headSHA: String
@@ -100,13 +108,15 @@ final class RightPaneState: GGSplitCommitServicing {
     var hasMoreOlder: Bool = true
     var isLoadingOlder: Bool = false
 
-    /// Current gg stack for this worktree's branch; nil when gating fails
-    /// or the branch is not a stack. Loaded during performRefresh.
+    /// Current gg stack for this worktree's branch; nil when inactive or when
+    /// gg reports that the active context has no stack metadata.
     var ggStack: GGStack? = nil
     var ggEffectiveConfig: GGEffectiveConfig = .defaults
-    /// Injected by RightPaneStore — resolves gates 1–3 (master toggle,
-    /// gg installed, per-project mode) against app-level state.
-    var ggGateProvider: (@MainActor () -> Bool)? = nil
+    var ggContext: GGWorktreeContext = .inactive(reason: .policyOff)
+    var ggStackLoadState: GGStackLoadState = .inactive
+    /// Injected by RightPaneStore to resolve the current live branch against
+    /// app-, project-, and worktree-level GG policy.
+    var ggContextProvider: (@MainActor (_ branch: String) -> GGWorktreeContext)? = nil
     /// Injected by RightPaneStore so mutations that add or remove worktrees
     /// can reconcile app-level project topology.
     @ObservationIgnored
@@ -893,28 +903,20 @@ final class RightPaneState: GGSplitCommitServicing {
         let snapshotGeneration = snapshotInvalidationGeneration
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
-        let gated = ggGateProvider?() ?? false
-        guard gated, GGStackGate.isStackShaped(commits: ggStackSourceCommits) else {
+        let context = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
+        if ggContext != context { ggContext = context }
+        guard context.isActive else {
             ggStackCommitsKey = nil
-            if gated, shouldPreservePausedOperationOutsideStackShape() {
-                reconcilePausedOperation()
-            } else {
-                ggActionState.clearPaused()
-            }
+            ggStackLoadState = .inactive
+            ggActionState.clearPaused()
             if ggStack != nil { ggStack = nil }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
-            if gated {
-                await reconcileGGUndoCandidateIfNeeded()
-            } else {
-                // The gg gate can read false transiently before the startup
-                // `GGAvailability` probe resolves. Only hide the candidate;
-                // keep the persisted marker so a valid recovery Undo survives
-                // until the gate is known to be intentionally disabled and the
-                // later re-check can restore or reject it.
-                ggMutationCoordinator.suspendUndoCandidate()
-            }
+            // Context can be inactive transiently while startup availability
+            // resolves. Hide the candidate but retain its persisted marker for
+            // a later active-context reconciliation.
+            ggMutationCoordinator.suspendUndoCandidate()
             return
         }
         reconcilePausedOperation()
@@ -932,6 +934,11 @@ final class RightPaneState: GGSplitCommitServicing {
             await reconcileGGUndoCandidateIfNeeded()
             return
         }
+        if ggStack == nil,
+           GGStackSummaryStore.shared.summaries[worktree.path.path] == nil
+        {
+            ggStackLoadState = .loading
+        }
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
             // A newer refresh, or a `markSnapshotUnknown()` invalidation,
@@ -944,6 +951,7 @@ final class RightPaneState: GGSplitCommitServicing {
             else { return }
             ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
+            ggStackLoadState = stack == nil ? .empty : .loaded
             let summary = stack?.summary
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
@@ -975,6 +983,7 @@ final class RightPaneState: GGSplitCommitServicing {
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
+            ggStackLoadState = .failed(error.localizedDescription)
             // The cached stack we just dropped belonged to a different key, so
             // the current stack identity is unknown until a refresh succeeds.
             // Hide any recovery candidate (keeping its marker) so the drawer
@@ -1037,13 +1046,6 @@ final class RightPaneState: GGSplitCommitServicing {
         } else {
             ggActionState.clearPaused()
         }
-    }
-
-    private func shouldPreservePausedOperationOutsideStackShape() -> Bool {
-        guard GGStackGate.operationInProgress(repoPath: worktree.path.path) else { return false }
-        return ggActionState.inFlightAction != nil
-            || ggActionState.pausedOperation != nil
-            || GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
     }
 
     /// Dispatches a stack-drawer action kind to its gg mutation. `.land`

@@ -482,7 +482,7 @@ struct RightPaneGGStackTests {
         )
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "q", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -511,7 +511,7 @@ struct RightPaneGGStackTests {
         let runner = AdvancingUndoGGRunner()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "u", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -543,7 +543,7 @@ struct RightPaneGGStackTests {
         let runner = NoCurrentStackUndoGGRunner()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [
             commit(sha: String(repeating: "u", count: 40), stackShaped: true),
         ]
@@ -575,7 +575,7 @@ struct RightPaneGGStackTests {
         // refresh loads the `agent-inbox` stack and reconciles the undo
         // candidate against a matching scope, rather than treating the gate as
         // closed and suspending it.
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "c", count: 40), stackShaped: true)]
         state.ggActionState.setPaused(GGPausedOperation(pausedBy: .restack))
 
@@ -702,6 +702,78 @@ struct RightPaneGGStackTests {
         #expect(GGStackGate.isStackShaped(commits: state.ggStackSourceCommits))
     }
 
+    @Test func activeContextLoadsStackWithNoSourceCommits() async {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        state.ggStackSourceCommits = []
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 1)
+        #expect(state.ggStack != nil)
+        #expect(state.ggStackLoadState == .loaded)
+    }
+
+    @Test func nilStackLeavesContextActiveAndPublishesEmpty() async {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(
+                exitCode: 0,
+                stdout: #"{"version": 1, "current_stack": null, "stacks": []}"#,
+                stderr: ""
+            )
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+
+        await state.refreshGGStack()
+
+        #expect(state.ggContext == .active(stackName: "stack"))
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackLoadState == .empty)
+    }
+
+    @Test func inactiveContextSkipsGGAndClearsPublishedState() async throws {
+        let wt = makeWorktree()
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        await state.refreshGGStack()
+        #expect(state.ggStack != nil)
+
+        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 1)
+        #expect(state.ggContext == .inactive(reason: .policyOff))
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackLoadState == .inactive)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+    }
+
+    @Test func stackLoadErrorLeavesContextActiveAndPublishesRetryableFailure() async {
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        let runner = ThrowingFakeGGRunner()
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 1)
+        #expect(state.ggContext == .active(stackName: "stack"))
+        #expect(state.ggStackLoadState == .failed(
+            GGServiceError.commandFailed(stderr: "boom").localizedDescription
+        ))
+        #expect(state.ggStackCommitsKey == nil)
+    }
+
     @Test func gateClosedSkipsCLIAndClearsStack() async throws {
         let wt = makeWorktree()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
@@ -709,7 +781,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { false }
+        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -722,7 +794,7 @@ struct RightPaneGGStackTests {
     @Test func gateClosedClearsPausedOperation() async throws {
         let wt = makeWorktree()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
-        state.ggGateProvider = { false }
+        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
         state.ggActionState.setPaused(GGPausedOperation(pausedBy: .sync))
 
@@ -737,7 +809,7 @@ struct RightPaneGGStackTests {
         let markerStore = GGUndoMarkerStore()
         markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
         let state = RightPaneState(worktree: wt, baseBranch: "main")
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
         state.ggService = GGService(runner: AdvancingUndoGGRunner())
 
@@ -747,7 +819,7 @@ struct RightPaneGGStackTests {
         // The gg gate can read closed transiently before the startup
         // availability probe resolves. Hide the candidate but keep the marker
         // so a valid recovery Undo is not destroyed by that race.
-        state.ggGateProvider = { false }
+        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
         await state.refreshGGStack()
 
         #expect(state.ggUndoCandidate == nil)
@@ -769,7 +841,7 @@ struct RightPaneGGStackTests {
         let runner = FailSecondLsUndoGGRunner()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -799,7 +871,7 @@ struct RightPaneGGStackTests {
             branch: "feature", path: dir, status: .clean, lastActivity: Date()
         )
         let state = RightPaneState(worktree: wt, baseBranch: "main")
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "o", count: 40), stackShaped: false)]
         _ = state.ggActionState.beginAction(.sync)
 
@@ -809,21 +881,21 @@ struct RightPaneGGStackTests {
         state.ggActionState.endAction(.sync)
     }
 
-    @Test func notStackShapedSkipsCLIAndClearsStack() async throws {
+    @Test func activeContextLoadsStackWithoutStackShapedCommits() async throws {
         let wt = makeWorktree()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         let runner = CountingFakeGGRunner(
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "b", count: 40), stackShaped: false)]
 
         await state.refreshGGStack()
 
-        #expect(runner.callCount == 0)
-        #expect(state.ggStack == nil)
-        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
+        #expect(runner.callCount == 1)
+        #expect(state.ggStack != nil)
+        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
     }
 
     @Test func unchangedCommitSetDoesNotReinvokeCLI() async throws {
@@ -833,7 +905,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "c", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -862,7 +934,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "e", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -870,7 +942,7 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
 
         // Simulate the master toggle going off in Settings.
-        state.ggGateProvider = { false }
+        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
         await state.reevaluateGGGate().value
 
         #expect(state.ggStack == nil)
@@ -886,7 +958,7 @@ struct RightPaneGGStackTests {
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         let runner = ThrowingFakeGGRunner()
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -907,7 +979,7 @@ struct RightPaneGGStackTests {
         markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: ThrowingFakeGGRunner())
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -927,7 +999,7 @@ struct RightPaneGGStackTests {
         let runner = DelayedStackGGRunner(staleResult: stale, freshResult: fresh)
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "z", count: 40), stackShaped: true)]
 
         let staleRefresh = Task { @MainActor in await state.refreshGGStack() }
@@ -955,7 +1027,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: okRunner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.currentBranch = "nacho/stack-a"
         state.ggStackSourceCommits = [commit(sha: String(repeating: "i", count: 40), stackShaped: true)]
         await state.refreshGGStack()
@@ -994,7 +1066,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: firstRunner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.currentBranch = "nacho/stack-a"
         state.ggStackSourceCommits = commitsA
         await state.refreshGGStack()
@@ -1032,7 +1104,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.currentBranch = "nacho/stack-a"
         state.ggStackSourceCommits = [commit(sha: String(repeating: "h", count: 40), stackShaped: true)]
 
@@ -1056,7 +1128,7 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "g", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -1085,7 +1157,7 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: CountingFakeGGRunner(
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         ))
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -1119,7 +1191,7 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: CountingFakeGGRunner(
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         ))
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "r", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -1141,7 +1213,7 @@ struct RightPaneGGStackTests {
         state.ggService = GGService(runner: CountingFakeGGRunner(
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         ))
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "t", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
@@ -1161,7 +1233,7 @@ struct RightPaneGGStackTests {
         )
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: ThrowingFakeGGRunner())
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
         state.ggActionState.setPaused(GGPausedOperation(pausedBy: .sync))
 
@@ -1182,7 +1254,7 @@ struct RightPaneGGStackTests {
         )
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: ConflictAfterSyncRunner())
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
 
         state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
@@ -1230,7 +1302,7 @@ struct RightPaneGGStackTests {
             #"{"event":"summary"}"#,
         ].joined(separator: "\n")
         state.ggService = GGService(runner: NDJSONSyncFakeGGRunner(ndjson: ndjson))
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
 
         // Drive the same body onGGStackAction(.sync) runs, but awaitably:
@@ -1257,7 +1329,7 @@ struct RightPaneGGStackTests {
         let runner = ReentrantSyncFakeGGRunner()
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         state.ggService = GGService(runner: runner)
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
 
         state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
@@ -1285,7 +1357,7 @@ struct RightPaneGGStackTests {
             #"{"event":"summary"}"#,
         ].joined(separator: "\n")
         state.ggService = GGService(runner: NDJSONSyncFakeGGRunner(ndjson: ndjson))
-        state.ggGateProvider = { true }
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
 
         state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
