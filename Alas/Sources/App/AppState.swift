@@ -5499,6 +5499,40 @@ final class AppState {
         )
     }
 
+    func ggWorktreeMenuModel(
+        project: ProjectConfig,
+        worktree: Worktree
+    ) -> GGWorktreeMenuModel {
+        let selectedMode = projectsManager.ggWorktreeMode(
+            projectId: project.id,
+            worktreeId: worktree.id
+        )
+        return GGWorktreeMenuModel(
+            selectedMode: selectedMode,
+            context: ggWorktreeContext(
+                project: project,
+                worktree: worktree,
+                branch: worktree.branch
+            ),
+            hasStackSummary: GGStackSummaryStore.shared.summaries[worktree.path.path] != nil,
+            isRemoteWorktree: project.host != nil || worktree.path.isRemoteAlasPath
+        )
+    }
+
+    func setGGWorktreeMode(
+        projectId: String,
+        worktreeId: String,
+        mode: GGWorktreeMode
+    ) {
+        projectsManager.setGGWorktreeMode(
+            projectId: projectId,
+            worktreeId: worktreeId,
+            mode: mode
+        )
+        saveProjects()
+        rightPaneStore.reevaluateGGGates()
+    }
+
     nonisolated static func resolveGGWorktreeContext(
         masterEnabled: Bool,
         ggInstalled: Bool,

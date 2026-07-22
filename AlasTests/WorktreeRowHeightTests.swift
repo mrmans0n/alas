@@ -45,8 +45,27 @@ struct WorktreeRowHeightTests {
         #expect(running == awaiting)
     }
 
+    @Test func rowHeightIsStableWithActiveGGIndicator() throws {
+        let inactive = try renderHeight(harnessSummary: nil)
+        let active = try renderHeight(
+            harnessSummary: nil,
+            ggMenuModel: GGWorktreeMenuModel(
+                selectedMode: .on,
+                context: .active(stackName: "feature"),
+                hasStackSummary: false
+            )
+        )
+
+        #expect(inactive == active)
+    }
+
     private func renderHeight(
-        harnessSummary: HarnessService.WorktreeHarnessSummary?
+        harnessSummary: HarnessService.WorktreeHarnessSummary?,
+        ggMenuModel: GGWorktreeMenuModel = GGWorktreeMenuModel(
+            selectedMode: .inherit,
+            context: .inactive(reason: .policyOff),
+            hasStackSummary: false
+        )
     ) throws -> Int {
         let worktree = Worktree(
             id: "wt-1",
@@ -64,6 +83,7 @@ struct WorktreeRowHeightTests {
             isMain: false,
             operationState: nil,
             harnessSummary: harnessSummary,
+            ggMenuModel: ggMenuModel,
             onTap: {},
             onOpenTerminal: {},
             onCopyPath: {},
@@ -77,7 +97,8 @@ struct WorktreeRowHeightTests {
             onCopyError: { _ in },
             onRemoveFailed: {},
             onRetryCreate: {},
-            onRetryDelete: {}
+            onRetryDelete: {},
+            onSetGGWorktreeMode: { _ in }
         )
         .environment(\.theme, try ThemeStore().current)
 

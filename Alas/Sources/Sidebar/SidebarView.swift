@@ -58,6 +58,9 @@ struct SidebarView: View {
                                     }
                                     return state.harness.summary(forSessionIds: ids)
                                 },
+                                ggMenuModel: { wt in
+                                    state.ggWorktreeMenuModel(project: project, worktree: wt)
+                                },
                                 onSelect: { wt in state.selectWorktree(id: wt.id) },
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
@@ -143,6 +146,13 @@ struct SidebarView: View {
                                     }
                                 },
                                 onRetryDelete: { wt in state.deleteWorktree(wt) },
+                                onSetGGWorktreeMode: { wt, mode in
+                                    state.setGGWorktreeMode(
+                                        projectId: project.id,
+                                        worktreeId: wt.id,
+                                        mode: mode
+                                    )
+                                },
                                 onRemoveFailed: { wt in
                                     state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
                                 },

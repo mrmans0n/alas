@@ -79,8 +79,8 @@ struct ChangesPane: View {
                             }
                     }
                     SettingsRow(
-                        name: "Per project",
-                        desc: "Auto enables gg UI when the repo's main worktree has .git/gg/config.json."
+                        name: "Default for linked worktrees",
+                        desc: "Main worktrees default Off. Override individual worktrees from their sidebar menu."
                     ) {
                         EmptyView()
                     }
