@@ -206,6 +206,14 @@ private struct ACPSessionView: View {
             .onChange(of: session.planSidebarMinimized) { _, _ in
                 updatePlanSidebar(paneWidth: paneProxy.size.width)
             }
+            .onChange(of: isFirstRunConnecting) { oldValue, newValue in
+                composerFocusRequest = ACPComposerFocusPolicy.focusRequest(
+                    current: composerFocusRequest,
+                    oldFirstRunConnecting: oldValue,
+                    newFirstRunConnecting: newValue,
+                    composerReady: composerCanAcceptInput
+                )
+            }
         }
         .environment(\.acpPlanSidebarVisible, showPlanSidebar)
         .task(id: sessionId) {
@@ -271,6 +279,14 @@ private struct ACPSessionView: View {
 
     private var isMirror: Bool { manager.isMirror(sessionId: sessionId) }
     private var mirrorIsBusy: Bool { manager.mirrorIsBusy(sessionId: sessionId) }
+
+    private var composerCanAcceptInput: Bool {
+        guard !isMirror else { return false }
+        guard session.hydrationState == .ready else { return false }
+        guard case .ready = session.setupState else { return false }
+        guard case .ready = session.agentState else { return false }
+        return true
+    }
 
     private var composerPlacement: ACPComposerPlacement {
         ACPFirstRunConnectingPolicy.composerPlacement(
