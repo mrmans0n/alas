@@ -132,6 +132,60 @@ private final class DelayedStackGGRunner: GGCommandRunning, @unchecked Sendable 
     }
 }
 
+private actor ControlledStackGGRunner: GGCommandRunning {
+    private let stackResults: [(name: String, result: ProcessResult)]
+    private let suspendedCalls: Set<Int>
+    private(set) var lsCallCount = 0
+    private var lastStackName: String?
+    private var callWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
+    private var completions: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    init(
+        stackResults: [(name: String, result: ProcessResult)],
+        suspendedCalls: Set<Int>
+    ) {
+        self.stackResults = stackResults
+        self.suspendedCalls = suspendedCalls
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["undo", "--list", "--json", "--limit", "1"] {
+            guard let lastStackName else {
+                return ProcessResult(exitCode: 0, stdout: #"{"version":1,"operations":[]}"#, stderr: "")
+            }
+            return ProcessResult(
+                exitCode: 0,
+                stdout: """
+                {"version":1,"operations":[{"id":"op_1","kind":"reorder","status":"committed","created_at_ms":1,"args":["--client-operation-id","alas:persisted","reorder"],"stack_name":"\(lastStackName)","touched_remote":false,"is_undoable":true}]}
+                """,
+                stderr: ""
+            )
+        }
+        guard args == ["ls", "--json"], lsCallCount < stackResults.count else {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+        }
+        lsCallCount += 1
+        let call = lsCallCount
+        let waiters = callWaiters.removeValue(forKey: call) ?? []
+        for waiter in waiters { waiter.resume() }
+        if suspendedCalls.contains(call) {
+            await withCheckedContinuation { completions[call] = $0 }
+        }
+        let response = stackResults[call - 1]
+        lastStackName = response.name
+        return response.result
+    }
+
+    func waitUntilCall(_ call: Int) async {
+        if lsCallCount >= call { return }
+        await withCheckedContinuation { callWaiters[call, default: []].append($0) }
+    }
+
+    func complete(call: Int) {
+        completions.removeValue(forKey: call)?.resume()
+    }
+}
+
 /// Answers the `sync --help` capability probe with `--jsonl` support, then
 /// streams the given NDJSON body for `sync --jsonl` — needed because
 /// `CountingFakeGGRunner` echoes the same stdout to every call, which would
@@ -1260,31 +1314,97 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
-    @Test func changedKeyPublishesLoadingWhileRetainingPreviousStack() async throws {
-        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
-        state.ggService = GGService(runner: CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        ))
-        await state.refreshGGStack()
-        let previousStack = try #require(state.ggStack)
-
-        let delayed = DelayedStackGGRunner(
-            staleResult: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: ""),
-            freshResult: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+    @Test func changedKeyLoadingInvalidatesOldCacheAndSuspendsUndoUntilReconciled() async throws {
+        let worktree = makeWorktree()
+        try FileManager.default.createDirectory(
+            at: worktree.path.appendingPathComponent(".git/rebase-merge"),
+            withIntermediateDirectories: true
         )
-        state.ggService = GGService(runner: delayed)
+        let markerStore = GGUndoMarkerStore()
+        markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: worktree.id)
+        GGStackGate.markAlasGGOperationInProgress(repoPath: worktree.path.path)
+        defer {
+            markerStore.clear(worktreeId: worktree.id)
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+            try? FileManager.default.removeItem(at: worktree.path)
+        }
+        let oldResult = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let newResult = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture.replacingOccurrences(
+                of: "agent-inbox",
+                with: "new-stack"
+            ),
+            stderr: ""
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("agent-inbox", oldResult),
+                ("new-stack", newResult),
+                ("agent-inbox", oldResult),
+                ("new-stack", newResult),
+            ],
+            suspendedCalls: [2, 4]
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        state.currentBranch = "nacho/old-stack"
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] != nil)
+        #expect(state.ggUndoCandidate?.operationID == "op_1")
+        #expect(state.ggActionState.pausedOperation != nil)
+        let oldKey = try #require(state.ggStackCommitsKey)
+
+        state.currentBranch = "nacho/new-stack"
         state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
         let refresh = Task { @MainActor in await state.refreshGGStack() }
-        for _ in 0..<500 where delayed.callCount == 0 {
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await runner.waitUntilCall(2)
 
-        #expect(delayed.callCount == 1)
-        #expect(state.ggStack == previousStack)
+        #expect(await runner.lsCallCount == 2)
         #expect(state.ggStackLoadState == .loading)
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
+        #expect(state.ggUndoCandidate == nil)
+        #expect(markerStore.marker(worktreeId: worktree.id)?.operationID == "op_1")
+        #expect(state.ggActionState.pausedOperation != nil)
+
+        refresh.cancel()
+        await runner.complete(call: 2)
         await refresh.value
+
+        state.currentBranch = "nacho/old-stack"
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "m", count: 40), stackShaped: true)]
+        await state.refreshGGStack()
+
+        let retryCallCount = await runner.lsCallCount
+        #expect(retryCallCount == 3)
+        guard retryCallCount == 3 else { return }
+        #expect(state.ggStackCommitsKey == oldKey)
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggUndoCandidate?.operationID == "op_1")
+
+        state.currentBranch = "nacho/new-stack"
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "n", count: 40), stackShaped: true)]
+        let successfulRefresh = Task { @MainActor in await state.refreshGGStack() }
+        await runner.waitUntilCall(4)
+        #expect(state.ggUndoCandidate == nil)
+        #expect(state.ggActionState.pausedOperation != nil)
+        await runner.complete(call: 4)
+        await successfulRefresh.value
+
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStack?.name == "new-stack")
+        #expect(state.ggUndoCandidate?.operationID == "op_1")
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] != nil)
+        #expect(state.ggActionState.pausedOperation != nil)
     }
 
     @Test func storeSnapshotMarksStaleStackKeyAsLoading() async throws {
