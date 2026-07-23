@@ -71,7 +71,45 @@ struct ReviewChangesLoaderTests {
         let provider = try #require(file.imageProvider)
         _ = await provider.load()
         #expect(await git.imageProviderCalls.all() == [
-            .init(worktreePath: worktreePath, path: "image.png", stage: .unstaged),
+            .init(worktreePath: worktreePath, path: "image.png", stage: .unstaged, originalPath: nil),
+        ])
+    }
+
+    @Test func reconcilesSplitImageRenameUsingImageSpecificStatus() async throws {
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "Assets/old-logo.png", status: "D", stage: .unstaged, add: 0, del: 0, renameFrom: nil),
+                ChangedFile(path: "Assets/new-logo.png", status: "A", stage: .unstaged, add: 0, del: 0, renameFrom: nil),
+                ChangedFile(path: "notes.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil),
+            ],
+            imageStatus: [
+                ChangedFile(path: "Assets/new-logo.png", status: "R", stage: .unstaged, add: 0, del: 0, renameFrom: "Assets/old-logo.png"),
+            ],
+            diffs: [
+                .init(path: "Assets/new-logo.png", staged: false, originalPath: "Assets/old-logo.png"): ParsedDiff(hunks: []),
+                .init(path: "notes.swift", staged: false): diff(lines: [
+                    .init(kind: .add, text: "let note = true", oldNumber: nil, newNumber: 1),
+                ]),
+            ]
+        )
+        let loader = ReviewChangesLoader(git: git)
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+
+        let session = try await loader.load(worktreePath: worktreePath)
+
+        #expect(session.files.map(\.id.rawValue) == ["unstaged:Assets/new-logo.png", "unstaged:notes.swift"])
+        let imageFile = try #require(session.files.first)
+        #expect(imageFile.summary.originalPath == "Assets/old-logo.png")
+        #expect(imageFile.summary.isRenderable)
+        let provider = try #require(imageFile.imageProvider)
+        _ = await provider.load()
+        #expect(await git.imageProviderCalls.all() == [
+            .init(
+                worktreePath: worktreePath,
+                path: "Assets/new-logo.png",
+                stage: .unstaged,
+                originalPath: "Assets/old-logo.png"
+            ),
         ])
     }
 
@@ -238,6 +276,7 @@ struct ReviewChangesLoaderTests {
 
 private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
     var status: [ChangedFile]
+    var imageStatus: [ChangedFile] = []
     var diffs: [DiffKey: ParsedDiff]
     var snapshots: [DiffKey: DiffReviewFileContextSnapshot] = [:]
     var contextSnapshotCalls = ContextSnapshotCallRecorder()
@@ -245,6 +284,10 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
         status
+    }
+
+    func imageStatus(worktreePath: URL) async throws -> [ChangedFile] {
+        imageStatus
     }
 
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff {
@@ -278,7 +321,8 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
                 await imageProviderCalls.record(.init(
                     worktreePath: worktreePath,
                     path: change.path,
-                    stage: change.stage
+                    stage: change.stage,
+                    originalPath: change.renameFrom
                 ))
                 return ImageDiffPair(before: .missing, after: .missing, oldPath: change.renameFrom, kind: .modified)
             }
@@ -314,6 +358,7 @@ private struct ImageProviderCall: Equatable, Sendable {
     let worktreePath: URL
     let path: String
     let stage: ChangeStage
+    let originalPath: String?
 }
 
 private struct ContextSnapshotCall: Equatable, Sendable {

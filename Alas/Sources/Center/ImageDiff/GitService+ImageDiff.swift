@@ -533,6 +533,10 @@ extension GitService {
         return try StatusParser.parse(result.stdout)
     }
 
+    func imageStatus(worktreePath: URL) async throws -> [ChangedFile] {
+        try await imageDiffStatus(worktreePath: worktreePath)
+    }
+
     private func imageProvider(
         source: DiffReviewImageProviderID.Source,
         worktreePath: URL,
