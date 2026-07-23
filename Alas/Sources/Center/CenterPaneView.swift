@@ -110,6 +110,12 @@ struct CenterPaneView: View {
                         return AgentBuiltins.entry(id: spec.agentID)
                     }
                 }(),
+                loadRunScripts: { RunScriptStore.scripts(worktreeRoot: worktree.path) },
+                isScriptRunning: { script in state.runningScriptTab(for: script, in: worktree) != nil },
+                onRunScript: { script in state.runOrFocusScript(script, in: worktree) },
+                onRestartScript: { script in state.restartScript(script, in: worktree) },
+                onNewRunScript: { scope in state.newRunScript(scope: scope, in: worktree) },
+                onEditScripts: { state.openRunScriptPaletteOverlay() },
                 onRevealRightSidebar: {
                     state.config.rightPaneVisible = true
                     state.saveConfig()
