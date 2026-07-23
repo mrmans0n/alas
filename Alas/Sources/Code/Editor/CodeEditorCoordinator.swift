@@ -108,9 +108,13 @@ final class CodeEditorCoordinator {
 
         bindBuffer(buffer, theme: theme)
 
-        // External buffers load synchronously, so `readOnly` is settled by
-        // bind time; editable external (run-script) buffers are writable.
-        textView.isEditable = !buffer.readOnly
+        // Only external buffers gate editability on `readOnly` (they load
+        // synchronously, so it's settled by bind time; editable run-script
+        // buffers are writable, ⌘-click default ones are locked). Non-external
+        // buffers stay editable regardless of `readOnly` — a remote in-worktree
+        // buffer is transiently read-only while its async load runs, and
+        // EditorBuffer.save()'s own `guard !readOnly` prevents a mid-load write.
+        textView.isEditable = !buffer.isExternal || !buffer.readOnly
 
         hover = HoverFeature(
             textView: textView,
@@ -384,11 +388,13 @@ final class CodeEditorCoordinator {
             }
             bindBuffer(nextBuffer, theme: theme)
 
-            // External buffers load synchronously, so `readOnly` is settled by
-            // bind time; for in-worktree buffers `readOnly` is false in the
-            // normal case, preserving current behavior. Editable external
-            // (run-script) buffers stay writable.
-            textView?.isEditable = !nextBuffer.readOnly
+            // Only external buffers gate editability on `readOnly` (settled by
+            // bind time). Non-external buffers stay editable regardless — a
+            // remote in-worktree buffer is transiently read-only while its async
+            // load runs, and EditorBuffer.save()'s own `guard !readOnly`
+            // prevents a mid-load write. Editable external (run-script) buffers
+            // stay writable; ⌘-click default ones stay locked.
+            textView?.isEditable = !nextBuffer.isExternal || !nextBuffer.readOnly
             // Note: origin-change rebinding (close-old-holder / open-new-holder)
             // is now handled entirely by TabsManager.rebindExternalLSPHolder,
             // which runs at openExternalEditor() time regardless of tab activation.
