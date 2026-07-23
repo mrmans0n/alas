@@ -84,4 +84,12 @@ struct StartupScriptInstallerTests {
         #expect(plan.args == ["-l"])
         #expect(plan.envOverrides.isEmpty)
     }
+
+    @Test func supportsStartupScriptInjectionMatchesPlanBehavior() {
+        #expect(StartupScriptInstaller.supportsStartupScriptInjection(shell: "/bin/zsh"))
+        #expect(StartupScriptInstaller.supportsStartupScriptInjection(shell: "/bin/bash"))
+        #expect(StartupScriptInstaller.supportsStartupScriptInjection(shell: "/usr/local/bin/bash"))
+        #expect(!StartupScriptInstaller.supportsStartupScriptInjection(shell: "/usr/local/bin/fish"))
+        #expect(!StartupScriptInstaller.supportsStartupScriptInjection(shell: "/usr/bin/nu"))
+    }
 }

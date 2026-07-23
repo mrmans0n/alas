@@ -1,0 +1,154 @@
+import Foundation
+import Testing
+@testable import Alas
+
+struct RunScriptLaunchTests {
+    private func script(
+        executable: Bool,
+        onExit: RunScriptOnExit = .keep,
+        cwd: String? = nil
+    ) -> RunScript {
+        RunScript(
+            scope: .repo, fileName: "dev server.sh",
+            fileURL: URL(fileURLWithPath: "/wt/.alas/scripts/dev server.sh"),
+            displayName: "Dev Server", onExit: onExit, cwd: cwd, isExecutable: executable
+        )
+    }
+
+    // `AppState.shellQuote` only wraps a value in single quotes when it
+    // contains characters outside `[A-Za-z0-9_/.@%+=,:-]`; plain paths like
+    // "/wt" or "/repo" and bare words like "main"/"alas" are emitted
+    // unquoted. Only the script filename (which has a space) gets quoted.
+    @Test func executableScriptRunsDirectlyWithEnvAndCd() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo"
+        )
+        #expect(suffix.hasPrefix("cd /wt || exit 1\n"))
+        #expect(suffix.contains("'/wt/.alas/scripts/dev server.sh'"))
+        #expect(suffix.contains("ALAS_WORKTREE_ROOT=/wt"))
+        #expect(suffix.contains("ALAS_REPO_ROOT=/repo"))
+        #expect(suffix.contains("ALAS_BRANCH=main"))
+        #expect(suffix.contains("ALAS_PROJECT_NAME=alas"))
+        #expect(!suffix.contains("exit \"$status\""))
+    }
+
+    @Test func nonExecutableScriptRunsViaSh() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: false),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo"
+        )
+        #expect(suffix.contains("/bin/sh '/wt/.alas/scripts/dev server.sh'"))
+    }
+
+    @Test func closeOnExitAppendsExit() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true, onExit: .close),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo"
+        )
+        #expect(suffix.hasSuffix("status=$?\nexit \"$status\""))
+    }
+
+    @Test func cwdJoinsWorktreeRoot() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true, cwd: "apps/web"),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo"
+        )
+        #expect(suffix.hasPrefix("cd /wt/apps/web || exit 1\n"))
+    }
+
+    @Test func cdFailureStopsTheRunInsteadOfFallingThrough() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true, cwd: "missing"),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo"
+        )
+        let lines = suffix.split(separator: "\n", maxSplits: 1)
+        #expect(lines[0] == "cd /wt/missing || exit 1")
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    /// `runOrFocusScript` checks `runningScriptTab` synchronously, but the
+    /// tab it looks for is only registered once `launchScript`'s async Task
+    /// finishes. Calling it twice back-to-back (no `await` in between,
+    /// simulating a double-click or repeated Enter) exercises exactly that
+    /// window — without the in-flight guard, both calls would launch.
+    @MainActor
+    @Test func launchingTwiceBeforeCompletionCreatesOnlyOneTab() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptURL = dir.appendingPathComponent("dev.sh")
+        try "echo hi\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        let runScript = RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: scriptURL,
+            displayName: "Dev", onExit: .keep, cwd: nil, isExecutable: false
+        )
+        let project = ProjectConfig(id: "project", name: "Project", path: dir.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt", projectId: project.id, name: "main", branch: "main",
+            path: dir, status: .clean, lastActivity: Date()
+        )
+
+        var openCount = 0
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openCount += 1
+                return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        state.runOrFocusScript(runScript, in: worktree)
+        state.runOrFocusScript(runScript, in: worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(openCount == 1)
+        let scriptTabs = state.tabs.tabs(forWorktree: worktree.id).filter { tab in
+            if case .terminal(let s) = tab { return s.runScriptKey == runScript.key }
+            return false
+        }
+        #expect(scriptTabs.count == 1)
+        #expect(state.pendingScriptLaunches.isEmpty)
+    }
+
+    @MainActor
+    @Test func staleRunScriptTabWithoutLiveSessionIsNotRunning() throws {
+        let state = AppState(store: MemoryStore())
+        let runScript = script(executable: false)
+        let project = ProjectConfig(
+            id: "project",
+            name: "Project",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date()
+        )
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/repo"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        _ = state.tabs.appendTerminal(
+            worktreeId: worktree.id,
+            title: runScript.displayName,
+            sessionId: "missing-session",
+            runScriptKey: runScript.key
+        )
+
+        #expect(state.runningScriptTab(for: runScript, in: worktree) == nil)
+    }
+}

@@ -32,6 +32,12 @@ struct TabBarView: View {
     let onLaunchAgent: (String) -> Void
     let onLaunchACPSession: (String) -> Void
     let acpAgents: [AgentDefinition]
+    let loadRunScripts: () -> [RunScript]
+    let isScriptRunning: (RunScript) -> Bool
+    let onRunScript: (RunScript) -> Void
+    let onRestartScript: (RunScript) -> Void
+    let onNewRunScript: (RunScriptScope) -> Void
+    let onEditScripts: () -> Void
     let onRevealRightSidebar: () -> Void
     let rightSidebarHidden: Bool
     let onRevealSidebar: () -> Void
@@ -97,6 +103,15 @@ struct TabBarView: View {
                 acpAgents: acpAgents,
                 onLaunchAgent: onLaunchAgent,
                 onLaunchACPSession: onLaunchACPSession
+            )
+            .padding(.trailing, 2)
+            RunScriptMenu(
+                loadScripts: loadRunScripts,
+                isRunning: isScriptRunning,
+                onRun: onRunScript,
+                onRestart: onRestartScript,
+                onNew: onNewRunScript,
+                onEdit: onEditScripts
             )
             .padding(.trailing, rightSidebarHidden ? 2 : 8)
             if rightSidebarHidden {
@@ -221,7 +236,7 @@ private struct TabButton: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
-            if case .editor(let state) = tab, state.isExternal {
+            if case .editor(let state) = tab, state.isExternal, !state.isExternalEditable {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(theme.color("fg-faint"))
@@ -371,6 +386,61 @@ private struct AgentSparkleMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
+    }
+}
+
+private struct RunScriptMenu: View {
+    let loadScripts: () -> [RunScript]
+    let isRunning: (RunScript) -> Bool
+    let onRun: (RunScript) -> Void
+    let onRestart: (RunScript) -> Void
+    let onNew: (RunScriptScope) -> Void
+    let onEdit: () -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Menu {
+            // Menu content closures are evaluated when the menu opens, so
+            // this is the rescan-on-open point for the toolbar entrypoint.
+            let scripts = loadScripts()
+            ForEach(RunScriptScope.allCases, id: \.self) { scope in
+                let scoped = scripts.filter { $0.scope == scope }
+                if !scoped.isEmpty {
+                    Section(scope.sectionTitle) {
+                        ForEach(scoped) { script in
+                            let running = isRunning(script)
+                            Button {
+                                onRun(script)
+                            } label: {
+                                if running {
+                                    Label(script.displayName, systemImage: "circle.fill")
+                                } else {
+                                    Text(script.displayName)
+                                }
+                            }
+                            if running {
+                                Button("Restart \(script.displayName)") { onRestart(script) }
+                            }
+                        }
+                    }
+                }
+            }
+            if scripts.isEmpty {
+                Text("No run scripts")
+            }
+            Divider()
+            Button("New Repo Script…") { onNew(.repo) }
+            Button("New Global Script…") { onNew(.global) }
+            Button("Edit Scripts…") { onEdit() }
+        } label: {
+            Icon(name: "play", size: 13, color: theme.color("fg-faint"))
+                .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Run script (⌘R)")
     }
 }
 

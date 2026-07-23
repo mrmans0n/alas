@@ -76,8 +76,8 @@ struct ShortcutResolverTests {
         let state = makeState()
         let binding = ShortcutBinding(key: "r", modifiers: [.command])
         let conflict = state.conflict(for: binding, excluding: .searchFiles)
-        #expect(conflict == .replaceInEditor)
-        #expect(!ShortcutAction.replaceInEditor.appliesInTerminal)
+        #expect(conflict == .runScript)
+        #expect(ShortcutAction.runScript.appliesInTerminal)
     }
 
     @Test func conflictNilWhenNoneFound() async {

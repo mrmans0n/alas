@@ -110,6 +110,12 @@ struct CenterPaneView: View {
                         return AgentBuiltins.entry(id: spec.agentID)
                     }
                 }(),
+                loadRunScripts: { RunScriptStore.scripts(worktreeRoot: worktree.path) },
+                isScriptRunning: { script in state.runningScriptTab(for: script, in: worktree) != nil },
+                onRunScript: { script in state.runOrFocusScript(script, in: worktree) },
+                onRestartScript: { script in state.restartScript(script, in: worktree) },
+                onNewRunScript: { scope in state.newRunScript(scope: scope, in: worktree) },
+                onEditScripts: { state.openRunScriptPaletteOverlay() },
                 onRevealRightSidebar: {
                     state.config.rightPaneVisible = true
                     state.saveConfig()
@@ -178,6 +184,7 @@ struct CenterPaneView: View {
                                             tabId: s.id,
                                             relativePath: s.relativePath,
                                             externalAbsolutePath: s.externalAbsolutePath,
+                                            externalEditable: s.isExternalEditable,
                                             originatingRelativePath: s.originatingRelativePath,
                                             revealLine: s.revealLine,
                                             revealEndLine: s.revealEndLine,
@@ -197,6 +204,7 @@ struct CenterPaneView: View {
                                           revealRevision: s.revealRevision,
                                           appState: state,
                                           externalAbsolutePath: s.externalAbsolutePath,
+                                          externalEditable: s.isExternalEditable,
                                           originatingRelativePath: s.originatingRelativePath,
                                           onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         }

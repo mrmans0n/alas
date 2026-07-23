@@ -7,6 +7,7 @@ struct MarkdownTabView: View {
     let tabId: TabID
     let relativePath: String
     let externalAbsolutePath: String?
+    var externalEditable: Bool = false
     let originatingRelativePath: String?
     let revealLine: Int?
     var revealEndLine: Int? = nil
@@ -50,7 +51,8 @@ struct MarkdownTabView: View {
                 absoluteURL: URL(fileURLWithPath: abs),
                 worktreeRoot: worktreePath,
                 originatingFileURL: originatingRelativePath.map { worktreePath.appendingPathComponent($0) },
-                language: "markdown"
+                language: "markdown",
+                editable: externalEditable
             )
         } else {
             return appState.tabs.buffer(
@@ -175,6 +177,7 @@ struct MarkdownTabView: View {
             revealRevision: revealRevision,
             appState: appState,
             externalAbsolutePath: externalAbsolutePath,
+            externalEditable: externalEditable,
             originatingRelativePath: originatingRelativePath,
             fontFamily: appState.config.code.fontFamily,
             fontSize: appState.config.code.fontSize,

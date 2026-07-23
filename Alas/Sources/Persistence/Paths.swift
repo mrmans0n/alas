@@ -84,3 +84,9 @@ extension Paths {
         projectIconsRoot.appendingPathComponent(id, isDirectory: true)
     }
 }
+
+extension Paths {
+    static var runScriptsGlobalDir: URL {
+        appSupportRoot.appendingPathComponent("run-scripts/global", isDirectory: true)
+    }
+}

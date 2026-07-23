@@ -1,6 +1,19 @@
 import Foundation
 
 enum StartupScriptInstaller {
+    /// Shells `plan(shell:startupScript:sessionId:)` knows how to inject a
+    /// startup script into. Callers that require the startup script to
+    /// actually run (e.g. launching a run script, where a silently-empty
+    /// shell would look like a bug) should check this before relying on
+    /// `plan(...)` — for any other shell, `plan(...)` returns a plain login
+    /// shell and drops `startupScript` entirely.
+    static func supportsStartupScriptInjection(shell: String) -> Bool {
+        switch (shell as NSString).lastPathComponent {
+        case "zsh", "bash": return true
+        default: return false
+        }
+    }
+
     /// What to launch for a session, including any env overrides needed to make
     /// the startup script source after the user's normal init.
     struct Plan: Equatable {

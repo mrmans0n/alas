@@ -153,10 +153,35 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendTerminal(worktreeId: String, title: String, sessionId: String) -> Tab {
-        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId)
+    func appendTerminal(worktreeId: String, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
+        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
         let tab = Tab.terminal(state)
         append(tab, to: worktreeId)
+        return tab
+    }
+
+    /// The terminal tab launched from the given run script, if one is open
+    /// in this worktree. One tab per (script, worktree) is an invariant
+    /// maintained by AppState's run/focus logic.
+    func terminalTab(withRunScriptKey key: String, worktreeId: String) -> Tab? {
+        tabs(forWorktree: worktreeId).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.runScriptKey == key
+        }
+    }
+
+    @discardableResult
+    func clearRunScriptMarker(worktreeId: String, tabId: TabID) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx],
+              state.runScriptKey != nil || state.runScriptLeafId != nil else { return nil }
+        state.runScriptKey = nil
+        state.runScriptLeafId = nil
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
         return tab
     }
 
@@ -358,6 +383,15 @@ final class TabsManager {
             if state.root.find(leafId: state.focusedLeafId) == nil {
                 state.focusedLeafId = newRoot.firstLeaf().id
             }
+            // The script's own pane is gone but a sibling pane keeps the tab
+            // alive — that no longer means the script is running. Leave the
+            // marker alone if a DIFFERENT (non-script) pane was the one
+            // closed; the script's leaf, and thus its "running" status, is
+            // unaffected.
+            if state.runScriptLeafId == closedLeafId {
+                state.runScriptKey = nil
+                state.runScriptLeafId = nil
+            }
             let tab = Tab.terminal(state)
             file.tabs[idx] = tab
             byWorktree[worktreeId] = file
@@ -517,7 +551,8 @@ final class TabsManager {
         revealEndLine: Int? = nil,
         originatingRelativePath: String? = nil,
         originatingWorktreeRoot: URL? = nil,
-        language: String? = nil
+        language: String? = nil,
+        editable: Bool = false
     ) -> Tab {
         let absPath = absoluteURL.path
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
@@ -539,6 +574,9 @@ final class TabsManager {
                     s.markdownViewMode = .editor
                 }
                 s.originatingRelativePath = originatingRelativePath   // refresh the origin
+                // Upgrade an existing tab to editable if a more-editable open
+                // is requested; never downgrade an already-editable tab.
+                if editable { s.externalEditable = true }
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id
                 byWorktree[worktreeId] = file
@@ -575,7 +613,8 @@ final class TabsManager {
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
             externalAbsolutePath: absPath,
-            originatingRelativePath: originatingRelativePath
+            originatingRelativePath: originatingRelativePath,
+            externalEditable: editable ? true : nil
         )
         if shouldRevealInMarkdownEditor {
             state.markdownViewMode = .editor
@@ -1405,10 +1444,16 @@ final class TabsManager {
         absoluteURL: URL,
         worktreeRoot: URL? = nil,
         originatingFileURL: URL? = nil,
-        language: String? = nil
+        language: String? = nil,
+        editable: Bool = false
     ) -> EditorBuffer {
         externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
-        let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+        let buffer = bufferStore.externalBuffer(
+            worktreeId: worktreeId,
+            absoluteURL: absoluteURL,
+            editable: editable,
+            tabId: editable ? tabId : nil
+        )
         buffer.startWatching()
 
         if let root = worktreeRoot {
@@ -1504,7 +1549,7 @@ final class TabsManager {
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
     /// dirty-tab queries.
     func peekBuffer(tabId: TabID) -> EditorBuffer? {
-        tabBuffers[tabId]
+        tabBuffers[tabId] ?? peekExternalBuffer(tabId: tabId)
     }
 
     /// Non-creating lookup for an external editor buffer. Returns nil if no
@@ -1553,10 +1598,18 @@ final class TabsManager {
         buffer.startWatching()
     }
 
+    /// Excludes external tabs deliberately: `peekBuffer` resolves them via
+    /// its external fallback, but callers here (Save As, Rename) assume a
+    /// worktree-relative `relativePath` and call `saveAs`/`moveTo`, which
+    /// operate against the buffer's own root — the script's parent
+    /// directory for an external buffer, not the worktree. Cmd+S and revert
+    /// don't go through this path (they use `peekBuffer` directly, which is
+    /// exactly where the external fallback is meant to apply).
     func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
         guard let activeId = activeTabId(forWorktree: worktreeId),
               let tab = tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .editor(let state) = tab,
+              !state.isExternal,
               let buffer = peekBuffer(tabId: activeId) else { return nil }
         return (state, buffer)
     }
@@ -1703,6 +1756,10 @@ final class TabsManager {
             guard let buffer = peekBuffer(tabId: tabId), buffer.dirty else { continue }
             buffer.snapshotNow(tabId: tabId)
         }
+        for tabId in externalTabURLs.keys {
+            guard let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
+            buffer.snapshotNow(tabId: tabId)
+        }
     }
 
     @discardableResult
@@ -1720,13 +1777,28 @@ final class TabsManager {
                 errors.append((tabId, error))
             }
         }
+        // Editable external buffers (e.g. global run scripts) are tracked in
+        // `externalTabURLs`, not `bufferKeys` — they'd otherwise be silently
+        // skipped by every save sweep. Read-only ones are never dirty, so
+        // this is a no-op for the common ⌘-click navigation case.
+        for tabId in externalTabURLs.keys {
+            guard let buffer = peekExternalBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try buffer.saveRecordingError()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
         for (worktreeId, file) in byWorktree {
-            guard let root = worktreeRoots[worktreeId] else { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
                       (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+                let root = worktreeRoots[worktreeId]
+                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
                 do {
                     try buffer.saveRecordingError()
                     buffer.close(persistDirtySnapshot: false)
@@ -1754,13 +1826,26 @@ final class TabsManager {
                 errors.append((tabId, error))
             }
         }
+        // See the matching pass in `saveAll(worktreeRoots:)`: editable
+        // external buffers (global run scripts) live outside `bufferKeys`.
+        for tabId in externalTabURLs.keys {
+            guard let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
         for (worktreeId, file) in byWorktree {
-            guard let root = worktreeRoots[worktreeId] else { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
                       (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+                let root = worktreeRoots[worktreeId]
+                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
                 do {
                     try await buffer.saveRecordingErrorAwaitingRemote()
                     buffer.close(persistDirtySnapshot: false)
@@ -1794,13 +1879,27 @@ final class TabsManager {
                 errors.append((tabId, error))
             }
         }
+        // Pass 1b: editable external buffers (global run scripts) belonging
+        // to this worktree — tracked in `externalTabURLs`, not `bufferKeys`.
+        for (tabId, entry) in externalTabURLs {
+            guard entry.worktreeId == worktreeId,
+                  let buffer = peekExternalBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try buffer.saveRecordingError()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
         // Pass 2: editor tabs with no live buffer but a persisted snapshot.
         guard let file = byWorktree[worktreeId] else { return errors }
         for tab in file.tabs {
             guard case .editor(let state) = tab,
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
             do {
                 try buffer.saveRecordingError()
                 buffer.close(persistDirtySnapshot: false)
@@ -1829,13 +1928,27 @@ final class TabsManager {
                 errors.append((tabId, error))
             }
         }
+        // Pass 1b: editable external buffers (global run scripts) belonging
+        // to this worktree — tracked in `externalTabURLs`, not `bufferKeys`.
+        for (tabId, entry) in externalTabURLs {
+            guard entry.worktreeId == worktreeId,
+                  let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
         // Pass 2: editor tabs with no live buffer but a persisted snapshot.
         guard let file = byWorktree[worktreeId] else { return errors }
         for tab in file.tabs {
             guard case .editor(let state) = tab,
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
             do {
                 try await buffer.saveRecordingErrorAwaitingRemote()
                 buffer.close(persistDirtySnapshot: false)
@@ -1847,8 +1960,19 @@ final class TabsManager {
         return errors
     }
 
-    private func materializeSnapshotBufferForSave(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer? {
+    private func materializeSnapshotBufferForSave(worktreeId: String, state: EditorTabState, worktreeRoot: URL?) -> EditorBuffer? {
+        let tabId = state.id
         guard let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil else { return nil }
+        if let externalAbsolutePath = state.externalAbsolutePath, state.isExternalEditable {
+            return externalBuffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                absoluteURL: URL(fileURLWithPath: externalAbsolutePath),
+                editable: true
+            )
+        }
+        guard let worktreeRoot else { return nil }
+        let relativePath = state.relativePath
         if snapshot.relativePath != relativePath,
            !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
             bufferStore.discard(worktreeId: worktreeId, tabId: tabId)

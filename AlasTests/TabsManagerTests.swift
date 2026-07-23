@@ -410,6 +410,25 @@ struct TabsManagerTests {
         }
     }
 
+    @Test func activeEditorContextExcludesExternalTabs() {
+        let worktreeId = "tabs-manager-active-context-external"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        _ = mgr.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: URL(fileURLWithPath: "/tmp/some-script.sh"),
+            revealLine: nil, revealCharacter: nil,
+            editable: true
+        )
+
+        // Save As / Rename assume a worktree-relative path; an active
+        // external tab (e.g. an editable global run script) must not
+        // satisfy this context, or those actions would write/rename inside
+        // the external buffer's own root instead of the chosen worktree
+        // location. See `activeEditorContext`'s doc comment.
+        #expect(mgr.activeEditorContext(worktreeId: worktreeId) == nil)
+    }
+
     @Test func openImagePreviewAppendsAndActivates() {
         let worktreeId = "tabs-manager-open-image-preview"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -1083,6 +1102,72 @@ struct TabsManagerPaneTests {
             worktreeId: "wt", tabId: tab.id, leafId: "new"
         )
         #expect(second == nil)
+    }
+
+    @Test func removeLeafClearsStaleRunScriptMarkerWhenScriptLeafRemoved() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1", runScriptKey: "repo:dev.sh")
+        guard case .terminal(let initial) = tab, case .leaf(let scriptLeaf) = initial.root else {
+            Issue.record("expected single-leaf terminal tab")
+            return
+        }
+        #expect(initial.runScriptKey == "repo:dev.sh")
+        #expect(initial.runScriptLeafId == scriptLeaf.id)
+        _ = mgr.splitFocusedLeaf(
+            worktreeId: "wt", tabId: tab.id, axis: .vertical,
+            newLeafId: "new", newSessionId: "s2"
+        )
+
+        // The script's own pane exits/closes; a plain sibling pane survives.
+        // The tab must stop reporting as the running script.
+        _ = try #require(mgr.removeLeaf(worktreeId: "wt", tabId: tab.id, leafId: scriptLeaf.id))
+
+        let surviving = try #require(mgr.tabs(forWorktree: "wt").first { $0.id == tab.id })
+        guard case .terminal(let state) = surviving else {
+            Issue.record("expected terminal tab")
+            return
+        }
+        #expect(state.runScriptKey == nil)
+        #expect(state.runScriptLeafId == nil)
+        #expect(mgr.terminalTab(withRunScriptKey: "repo:dev.sh", worktreeId: "wt") == nil)
+    }
+
+    @Test func removeLeafKeepsRunScriptMarkerWhenOtherLeafRemoved() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1", runScriptKey: "repo:dev.sh")
+        _ = mgr.splitFocusedLeaf(
+            worktreeId: "wt", tabId: tab.id, axis: .vertical,
+            newLeafId: "new", newSessionId: "s2"
+        )
+
+        // The extra (non-script) pane the user split off is closed instead —
+        // the script's own leaf is untouched, so it's still running.
+        _ = try #require(mgr.removeLeaf(worktreeId: "wt", tabId: tab.id, leafId: "new"))
+
+        let surviving = try #require(mgr.tabs(forWorktree: "wt").first { $0.id == tab.id })
+        guard case .terminal(let state) = surviving else {
+            Issue.record("expected terminal tab")
+            return
+        }
+        #expect(state.runScriptKey == "repo:dev.sh")
+        #expect(state.runScriptLeafId == "s1")
+        #expect(mgr.terminalTab(withRunScriptKey: "repo:dev.sh", worktreeId: "wt")?.id == tab.id)
+    }
+
+    @Test func clearRunScriptMarkerLeavesTerminalTabOpen() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1", runScriptKey: "repo:dev.sh")
+
+        let updated = try #require(mgr.clearRunScriptMarker(worktreeId: "wt", tabId: tab.id))
+
+        guard case .terminal(let state) = updated else {
+            Issue.record("expected terminal tab")
+            return
+        }
+        #expect(state.runScriptKey == nil)
+        #expect(state.runScriptLeafId == nil)
+        #expect(mgr.tabs(forWorktree: "wt").contains { $0.id == tab.id })
+        #expect(mgr.terminalTab(withRunScriptKey: "repo:dev.sh", worktreeId: "wt") == nil)
     }
 
     @Test func setSplitFractionClampsBetween0_1And0_9() {

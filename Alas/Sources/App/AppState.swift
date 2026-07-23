@@ -60,6 +60,13 @@ final class AppState {
     @ObservationIgnored
     private var remoteAccelerationTasks: [String: Task<Void, Never>] = [:]
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
+    /// Keys of in-flight run-script launches (`"<worktreeId>:<scriptKey>"`).
+    /// `RunScript.launchScript` inserts synchronously before starting its
+    /// async `Task` and removes on completion, closing the window where two
+    /// rapid invocations (double-click, repeated Enter) would both see no
+    /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
+    @ObservationIgnored
+    var pendingScriptLaunches: Set<String> = []
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
@@ -218,12 +225,14 @@ final class AppState {
     var isRepoSelectorOpen: Bool = false
     var isAgentLauncherOpen: Bool = false
     var isReviewPaletteOpen: Bool = false
+    var isRunScriptPaletteOpen: Bool = false
     var isKeyboardOverlayOpen: Bool {
-        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen
+        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen || isRunScriptPaletteOpen
     }
     let repoSelector = RepoSelectorModel()
     let agentLauncher = AgentLauncherModel()
     let reviewPalette = ReviewTargetPaletteModel()
+    let runScriptPalette = RunScriptPaletteModel()
 
     func openSearchOverlay() {
         reviewPalette.close()
@@ -232,6 +241,8 @@ final class AppState {
         isRepoSelectorOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
         search.open()
         isSearchOpen = true
     }
@@ -241,6 +252,8 @@ final class AppState {
         isReviewPaletteOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
 
         if isRepoSelectorOpen {
             repoSelector.close()
@@ -259,6 +272,8 @@ final class AppState {
         isSearchOpen = false
         repoSelector.close()
         isRepoSelectorOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
         agentLauncher.prepareForOpen(
             defaultMode: mode ?? config.agents.defaultLauncherMode
         )
@@ -273,6 +288,20 @@ final class AppState {
         } else {
             openAgentLauncherOverlay(mode: nil)
         }
+    }
+
+    func openRunScriptPaletteOverlay() {
+        guard !isRunScriptPaletteOpen else { return }
+        reviewPalette.close()
+        isReviewPaletteOpen = false
+        search.close()
+        isSearchOpen = false
+        repoSelector.close()
+        isRepoSelectorOpen = false
+        agentLauncher.reset()
+        isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = true
     }
 
     /// Computed each time `config.agents` changes or detection re-runs.
@@ -1547,7 +1576,7 @@ final class AppState {
         }
     }
 
-    nonisolated private static func shellCommand(
+    nonisolated static func shellCommand(
         command: String,
         args: [String],
         env: [String: String],
@@ -1571,7 +1600,7 @@ final class AppState {
         ) != nil
     }
 
-    nonisolated private static func shellQuote(_ s: String) -> String {
+    nonisolated static func shellQuote(_ s: String) -> String {
         if s.range(of: "[^A-Za-z0-9_/.@%+=,:-]", options: .regularExpression) == nil {
             return s
         }
@@ -2507,7 +2536,9 @@ final class AppState {
         includeUserStartupScript: Bool = true,
         forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
-        environmentRemovals: Set<String> = []
+        environmentRemovals: Set<String> = [],
+        titleOverride: String? = nil,
+        runScriptKey: String? = nil
     ) async throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -2519,7 +2550,9 @@ final class AppState {
             includeUserStartupScript: includeUserStartupScript,
             forceInheritParentEnv: forceInheritParentEnv,
             environmentOverrides: environmentOverrides,
-            environmentRemovals: environmentRemovals
+            environmentRemovals: environmentRemovals,
+            titleOverride: titleOverride,
+            runScriptKey: runScriptKey
         )
     }
 
@@ -2530,7 +2563,9 @@ final class AppState {
         includeUserStartupScript: Bool = true,
         forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
-        environmentRemovals: Set<String> = []
+        environmentRemovals: Set<String> = [],
+        titleOverride: String? = nil,
+        runScriptKey: String? = nil
     ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -2572,7 +2607,7 @@ final class AppState {
             })
         }
         harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
-        let title = tabs.nextTerminalTitle(
+        let title = titleOverride ?? tabs.nextTerminalTitle(
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)
         )
@@ -2580,7 +2615,7 @@ final class AppState {
         // above that equals `leafId` (we passed it in). The injected
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
-        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
+        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
     }
 
     private func prepareRemoteAccelerationIfNeeded(for project: ProjectConfig) async {
@@ -3046,6 +3081,14 @@ final class AppState {
                     allowLegacy: allowLegacyAttach,
                     legacySessionInfos: $0
                 )
+            }
+            if state.runScriptLeafId == leaf.id {
+                let reattachingPersistedSession = preResolvedZmxSessionName.map { sessionName in
+                    legacySessionInfos?.contains { $0.name == sessionName } ?? false
+                } ?? false
+                if !reattachingPersistedSession {
+                    _ = tabs.clearRunScriptMarker(worktreeId: worktreeId, tabId: tabId)
+                }
             }
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
@@ -4034,7 +4077,7 @@ final class AppState {
         return rel
     }
 
-    private func showFileActionError(title: String, message: String) {
+    func showFileActionError(title: String, message: String) {
         fileActionErrorHandler(title, message)
     }
 

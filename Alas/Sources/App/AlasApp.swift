@@ -337,6 +337,11 @@ struct AlasApp: App {
             }
             .keyboardShortcut(state.shortcut(for: .openReviewPalette))
             .disabled(state.projects.isEmpty)
+            Button("Run Script…") {
+                NotificationCenter.default.post(name: .alasOpenRunScriptPalette, object: nil)
+            }
+            .keyboardShortcut(state.shortcut(for: .runScript))
+            .disabled(state.projects.isEmpty)
             Divider()
             Button("Refresh Worktrees") {
                 NotificationCenter.default.post(name: .alasRefreshWorktrees, object: nil)
