@@ -61,10 +61,6 @@ final class ACPSession: ObservableObject, Identifiable {
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
     @Published var followsTranscriptTail: Bool = true
-    /// Runtime-only user override for the inline plan sidebar. This is
-    /// deliberately not persisted; it only survives while this in-memory
-    /// ACP session object is retained.
-    @Published var planSidebarMinimized: Bool = false
     /// Lifecycle state of the agent process backing this session.
     /// Single source of truth for the composer, header pill, and runner
     /// registry checks.

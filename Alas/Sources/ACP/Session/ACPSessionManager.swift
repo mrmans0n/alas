@@ -336,16 +336,10 @@ final class ACPSessionManager: ObservableObject {
     // MARK: Writer-watch state (prompt stand-down when a takeover ping arrives)
     private var writerWatchTokens: [ACPSession.ID: Int32] = [:]
     private var writerWatchDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
-    /// Runtime-only layout memory for the plan sidebar. This intentionally
-    /// lives on the manager rather than `ACPSession` so a tab switch can
-    /// evict and later recreate the session object without losing whether
-    /// the plan was last rendered inline or in the toolbar pill.
-    private var planSidebarVisibility: [ACPSession.ID: Bool] = [:]
-    /// Runtime-only transcript scroll memory. Kept on the manager for the
-    /// same reason as `planSidebarVisibility`: idle ACP sessions can be
-    /// evicted on tab switches, but returning to the tab should not reset
-    /// a user-paused transcript to the top of whatever render window hydrates
-    /// first.
+    /// Runtime-only transcript scroll memory. Kept on the manager because
+    /// idle ACP sessions can be evicted on tab switches, but returning to the
+    /// tab should not reset a user-paused transcript to the top of whatever
+    /// render window hydrates first.
     private var transcriptScrollMemory: [ACPSession.ID: ACPTranscriptScrollMemory] = [:]
     /// Set to true by `shutdownBackgroundTasks` so any in-flight `attach`
     /// coroutine that resumes after dispose aborts at the pre-commit guard
@@ -859,7 +853,6 @@ final class ACPSessionManager: ObservableObject {
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
-        planSidebarVisibility.removeValue(forKey: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
@@ -877,7 +870,6 @@ final class ACPSessionManager: ObservableObject {
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
-        planSidebarVisibility.removeValue(forKey: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
@@ -931,14 +923,6 @@ final class ACPSessionManager: ObservableObject {
         } else {
             sessionRefCounts[id] = next
         }
-    }
-
-    func rememberedPlanSidebarVisibility(for id: ACPSession.ID) -> Bool? {
-        planSidebarVisibility[id]
-    }
-
-    func rememberPlanSidebarVisibility(_ visible: Bool, for id: ACPSession.ID) {
-        planSidebarVisibility[id] = visible
     }
 
     func rememberedTranscriptScrollAnchor(for id: ACPSession.ID) -> String? {

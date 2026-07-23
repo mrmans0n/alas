@@ -3,18 +3,6 @@ import CoreGraphics
 enum ACPChatLayout {
     static let defaultContentMaxWidth: CGFloat = 720
     static let wideContentMaxWidth: CGFloat = 960
-    static let planSidebarWidth: CGFloat = 320
-
-    static func chatColumnWidth(
-        forPaneWidth paneWidth: CGFloat,
-        planSidebarVisible: Bool
-    ) -> CGFloat {
-        guard planSidebarVisible else {
-            return paneWidth
-        }
-        return max(0, paneWidth - planSidebarWidth)
-    }
-
     static func contentMaxWidth(forChatColumnWidth columnWidth: CGFloat) -> CGFloat {
         let growthStartPaneWidth: CGFloat = 1_080
         guard columnWidth > growthStartPaneWidth else {
