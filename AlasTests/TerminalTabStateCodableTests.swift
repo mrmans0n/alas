@@ -124,5 +124,17 @@ struct TerminalTabStateCodableTests {
         let data = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
         #expect(decoded.runScriptKey == "repo:dev.sh")
+        #expect(decoded.runScriptLeafId == "s1")
+    }
+
+    @Test func backfillsRunScriptLeafIdForPayloadsPredatingIt() throws {
+        // Persisted between runScriptKey's introduction and runScriptLeafId's:
+        // has the key but not the leaf id.
+        let json = #"""
+        {"id":"t1","title":"Dev","root":{"kind":"leaf","id":"leaf-1","sessionId":"leaf-1","lastCwd":null},"focusedLeafId":"leaf-1","runScriptKey":"repo:dev.sh"}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: json)
+        #expect(decoded.runScriptKey == "repo:dev.sh")
+        #expect(decoded.runScriptLeafId == "leaf-1")
     }
 }

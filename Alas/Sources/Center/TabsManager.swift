@@ -368,6 +368,15 @@ final class TabsManager {
             if state.root.find(leafId: state.focusedLeafId) == nil {
                 state.focusedLeafId = newRoot.firstLeaf().id
             }
+            // The script's own pane is gone but a sibling pane keeps the tab
+            // alive — that no longer means the script is running. Leave the
+            // marker alone if a DIFFERENT (non-script) pane was the one
+            // closed; the script's leaf, and thus its "running" status, is
+            // unaffected.
+            if state.runScriptLeafId == closedLeafId {
+                state.runScriptKey = nil
+                state.runScriptLeafId = nil
+            }
             let tab = Tab.terminal(state)
             file.tabs[idx] = tab
             byWorktree[worktreeId] = file

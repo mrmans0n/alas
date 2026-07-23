@@ -437,13 +437,21 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     /// Key of the RunScript this tab was launched from (`"<scope>:<fileName>"`).
     /// Nil for plain terminals. Persisted so run/focus dedup survives restarts.
     var runScriptKey: String?
+    /// The specific leaf that owns `runScriptKey`. A tab can be split into
+    /// multiple panes after the script launches; if that specific pane's
+    /// session exits or is closed while a sibling pane remains, the tab
+    /// survives but no longer represents "the script is running" — cleared
+    /// alongside `runScriptKey` in `TabsManager.removeLeaf` when this leaf
+    /// goes away.
+    var runScriptLeafId: String?
 
-    init(id: TabID, title: String, root: PaneNode, focusedLeafId: String, runScriptKey: String? = nil) {
+    init(id: TabID, title: String, root: PaneNode, focusedLeafId: String, runScriptKey: String? = nil, runScriptLeafId: String? = nil) {
         self.id = id
         self.title = title
         self.root = root
         self.focusedLeafId = focusedLeafId
         self.runScriptKey = runScriptKey
+        self.runScriptLeafId = runScriptLeafId
     }
 
     /// Convenience for callers that still create a single-leaf tab. The
@@ -458,10 +466,11 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
         self.root = .leaf(PaneLeaf(id: leafId, sessionId: sessionId, lastCwd: nil))
         self.focusedLeafId = leafId
         self.runScriptKey = runScriptKey
+        self.runScriptLeafId = runScriptKey != nil ? leafId : nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, root, focusedLeafId, sessionId, runScriptKey
+        case id, title, root, focusedLeafId, sessionId, runScriptKey, runScriptLeafId
     }
 
     init(from decoder: Decoder) throws {
@@ -469,6 +478,7 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
         self.id = try c.decode(TabID.self, forKey: .id)
         self.title = try c.decode(String.self, forKey: .title)
         self.runScriptKey = try c.decodeIfPresent(String.self, forKey: .runScriptKey)
+        self.runScriptLeafId = try c.decodeIfPresent(String.self, forKey: .runScriptLeafId)
         if let root = try c.decodeIfPresent(PaneNode.self, forKey: .root) {
             self.root = root
             self.focusedLeafId = try c.decodeIfPresent(String.self, forKey: .focusedLeafId)
@@ -483,6 +493,12 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
             self.root = .leaf(PaneLeaf(id: legacy, sessionId: legacy, lastCwd: nil))
             self.focusedLeafId = legacy
         }
+        // Best-effort backfill for payloads persisted between runScriptKey's
+        // introduction and runScriptLeafId's: without it, the fix in
+        // `removeLeaf` would never clear a stale marker for these tabs.
+        if runScriptKey != nil, runScriptLeafId == nil {
+            runScriptLeafId = root.firstLeaf().id
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -492,6 +508,7 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
         try c.encode(root, forKey: .root)
         try c.encode(focusedLeafId, forKey: .focusedLeafId)
         try c.encodeIfPresent(runScriptKey, forKey: .runScriptKey)
+        try c.encodeIfPresent(runScriptLeafId, forKey: .runScriptLeafId)
     }
 }
 
