@@ -353,17 +353,23 @@ final class EditorBuffer {
     /// reload only — it never writes back). Uses sentinel worktreeRoot/
     /// relativePath values (directory + filename) so the rest of the buffer
     /// machinery works without optional-unwrap proliferation (option B).
-    convenience init(externalAbsoluteURL: URL, editable: Bool = false) {
+    convenience init(
+        externalAbsoluteURL: URL,
+        editable: Bool = false,
+        store: EditorBufferStore? = nil,
+        worktreeId: String? = nil,
+        tabId: String? = nil
+    ) {
         let worktreeRoot = externalAbsoluteURL.deletingLastPathComponent()
         let relativePath = externalAbsoluteURL.lastPathComponent
         self.init(
             worktreeRoot: worktreeRoot,
             relativePath: relativePath,
             isExternal: true,
-            store: nil,
-            worktreeId: nil,
-            tabId: nil,
-            restoreEnabled: false,
+            store: editable ? store : nil,
+            worktreeId: editable ? worktreeId : nil,
+            tabId: editable ? tabId : nil,
+            restoreEnabled: editable,
             lsp: nil,
             externalEditable: editable
         )
@@ -425,7 +431,7 @@ final class EditorBuffer {
     ) {
         if case .cancelled = loadState { return }
         var restoredContent = false
-        if !isExternal,
+        if (!isExternal || externalEditable),
            let snap = snapshot {
             applySnapshot(snap)
             restoredContent = true

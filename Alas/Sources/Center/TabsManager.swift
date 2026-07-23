@@ -1433,7 +1433,12 @@ final class TabsManager {
         editable: Bool = false
     ) -> EditorBuffer {
         externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
-        let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL, editable: editable)
+        let buffer = bufferStore.externalBuffer(
+            worktreeId: worktreeId,
+            absoluteURL: absoluteURL,
+            editable: editable,
+            tabId: editable ? tabId : nil
+        )
         buffer.startWatching()
 
         if let root = worktreeRoot {
@@ -1736,14 +1741,9 @@ final class TabsManager {
             guard let buffer = peekBuffer(tabId: tabId), buffer.dirty else { continue }
             buffer.snapshotNow(tabId: tabId)
         }
-        // Editable external buffers (e.g. global run scripts) have no
-        // hot-exit snapshot store — they always read/write their real file
-        // directly, so the equivalent of "preserve on quit" for them is a
-        // direct synchronous save rather than a snapshot. Errors are
-        // swallowed for the same reason as the loop above.
         for tabId in externalTabURLs.keys {
             guard let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
-            try? buffer.save()
+            buffer.snapshotNow(tabId: tabId)
         }
     }
 

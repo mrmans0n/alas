@@ -184,6 +184,7 @@ struct CenterPaneView: View {
                                             tabId: s.id,
                                             relativePath: s.relativePath,
                                             externalAbsolutePath: s.externalAbsolutePath,
+                                            externalEditable: s.isExternalEditable,
                                             originatingRelativePath: s.originatingRelativePath,
                                             revealLine: s.revealLine,
                                             revealEndLine: s.revealEndLine,
