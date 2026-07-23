@@ -20,6 +20,11 @@ enum ImageFileType {
         return supportedExtensions.contains(ext)
     }
 
+    static func isSupported(currentPath: String, originalPath: String?) -> Bool {
+        isSupported(relativePath: currentPath)
+            || originalPath.map(isSupported(relativePath:)) == true
+    }
+
     static func isTextBacked(relativePath: String) -> Bool {
         fileExtension(relativePath: relativePath) == "svg"
     }

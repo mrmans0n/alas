@@ -62,7 +62,7 @@ struct CommitDiffView: View {
     }
 
     var body: some View {
-        if ImageFileType.isSupported(relativePath: path) {
+        if ImageFileType.isSupported(currentPath: path, originalPath: file.originalPath) {
             imageBody
         } else {
             VStack(alignment: .leading, spacing: 0) {

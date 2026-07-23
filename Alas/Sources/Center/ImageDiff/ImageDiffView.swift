@@ -5,9 +5,25 @@ struct ImageDiffView: View {
     let pair: ImageDiffPair
     let relativePath: String
     let onOpenFile: (() -> Void)?
+    let sourceBadge: String?
+    let onRetry: (() -> Void)?
 
     @State private var presentation = ImageDiffPresentationState()
     @Environment(\.theme) private var theme
+
+    init(
+        pair: ImageDiffPair,
+        relativePath: String,
+        onOpenFile: (() -> Void)?,
+        sourceBadge: String? = nil,
+        onRetry: (() -> Void)? = nil
+    ) {
+        self.pair = pair
+        self.relativePath = relativePath
+        self.onOpenFile = onOpenFile
+        self.sourceBadge = sourceBadge
+        self.onRetry = onRetry
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,6 +54,15 @@ struct ImageDiffView: View {
             Text((relativePath as NSString).lastPathComponent)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(theme.color("fg"))
+            if let sourceBadge {
+                Text(sourceBadge)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(theme.color("accent").opacity(0.16))
+                    .foregroundColor(theme.color("accent"))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text((relativePath as NSString).deletingLastPathComponent)
                 .font(.system(size: 11))
@@ -49,6 +74,10 @@ struct ImageDiffView: View {
                 pathChangeChip(kind: "COPIED", old: old, new: relativePath)
             }
             ImageDiffControls(pair: pair, state: presentation)
+            if pair.hasFailure, let onRetry {
+                AlasButton(title: "Retry", style: .subtle, action: onRetry)
+                    .accessibilityIdentifier("image-diff-retry")
+            }
             if let onOpenFile {
                 AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
             }

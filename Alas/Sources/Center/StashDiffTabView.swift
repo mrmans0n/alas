@@ -15,11 +15,12 @@ struct StashDiffTabView: View {
     @State private var showWhitespace = false
     @State private var imagePair: ImageDiffPair?
     @State private var imagePairLoaded = false
+    @State private var imageRetryGeneration = 0
 
     private let git = GitService()
 
     var body: some View {
-        if ImageFileType.isSupported(relativePath: state.file.path) {
+        if ImageFileType.isSupported(currentPath: state.file.path, originalPath: state.file.oldPath) {
             imageBody
         } else {
             textBody
@@ -37,7 +38,9 @@ struct StashDiffTabView: View {
                 ImageDiffView(
                     pair: imagePair,
                     relativePath: state.file.path,
-                    onOpenFile: nil
+                    onOpenFile: nil,
+                    sourceBadge: state.stash.ref,
+                    onRetry: { imageRetryGeneration += 1 }
                 )
             } else {
                 Text("Could not load image diff for \(state.file.path)")
@@ -52,7 +55,7 @@ struct StashDiffTabView: View {
     }
 
     private var imageLoadKey: String {
-        "img-stash:\(worktreePath.path)\u{0}\(state.stash.sha)\u{0}\(state.file.path)\u{0}\(state.file.oldPath ?? "")\u{0}\(state.file.isUntracked)"
+        "img-stash:\(worktreePath.path)\u{0}\(state.stash.sha)\u{0}\(state.file.path)\u{0}\(state.file.oldPath ?? "")\u{0}\(state.file.isUntracked)\u{0}\(imageRetryGeneration)"
     }
 
     private func loadImagePair() async {

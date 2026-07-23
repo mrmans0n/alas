@@ -27,4 +27,19 @@ struct ImageFileTypeTests {
         #expect(!ImageFileType.isSupported(relativePath: "Makefile"))
         #expect(!ImageFileType.isSupported(relativePath: ".gitignore"))
     }
+
+    @Test func recognizesAChangeWhenOnlyTheOriginalPathIsAnImage() {
+        #expect(ImageFileType.isSupported(
+            currentPath: "Assets/logo.bin",
+            originalPath: "Assets/logo.png"
+        ))
+        #expect(ImageFileType.isSupported(
+            currentPath: "Assets/logo.png",
+            originalPath: "Assets/logo.bin"
+        ))
+        #expect(!ImageFileType.isSupported(
+            currentPath: "Assets/logo.bin",
+            originalPath: "Assets/logo.dat"
+        ))
+    }
 }

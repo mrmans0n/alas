@@ -447,4 +447,70 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.beforeImage != nil)
         #expect(pair.afterImage != nil)
     }
+
+    @Test func stagedProviderKeepsTheHeadRevisionCapturedWhenTheDiffWasParsed() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let imageURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: imageURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "red"], cwd: repo)
+        let parsedHead = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try PngFixture.blue.write(to: imageURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        let provider = await GitService().stagedImageProvider(
+            worktreePath: repo,
+            file: CommitChangedFile(
+                path: "logo.png",
+                originalPath: nil,
+                status: "M",
+                add: 0,
+                del: 0
+            )
+        )
+
+        _ = try await Process.git(["commit", "-q", "-m", "blue"], cwd: repo)
+        let pair = await provider.load()
+
+        #expect(provider.id.beforeRevision.contains(parsedHead))
+        let before = try #require(pair.beforeImage)
+        let beforeData = try #require(before.tiffRepresentation)
+        let beforeRep = try #require(NSBitmapImageRep(data: beforeData))
+        let beforeColor = try #require(beforeRep.colorAt(x: 0, y: 0))
+        #expect(beforeColor.redComponent > beforeColor.blueComponent)
+        let after = try #require(pair.afterImage)
+        let afterData = try #require(after.tiffRepresentation)
+        let afterRep = try #require(NSBitmapImageRep(data: afterData))
+        let afterColor = try #require(afterRep.colorAt(x: 0, y: 0))
+        #expect(afterColor.blueComponent > afterColor.redComponent)
+    }
+
+    @Test func stagedWorkingCopyProviderUsesTheEmptyTreeForAnUnbornHead() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try PngFixture.green.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await Process.git(["add", "new.png"], cwd: repo)
+
+        let provider = await GitService().workingCopyImageProvider(
+            worktreePath: repo,
+            change: ChangedFile(
+                path: "new.png",
+                status: "A",
+                stage: .staged,
+                add: 0,
+                del: 0,
+                renameFrom: nil
+            )
+        )
+
+        #expect(provider.id.beforeRevision.contains("4b825dc642cb6eb9a060e54bf8d69288fbee4904"))
+        let pair = await provider.load()
+        #expect(pair.kind == .added)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
+    }
 }

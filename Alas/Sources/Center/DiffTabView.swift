@@ -57,7 +57,7 @@ struct DiffTabView: View {
     private let git = GitService()
 
     var body: some View {
-        if ImageFileType.isSupported(relativePath: relativePath) {
+        if ImageFileType.isSupported(currentPath: relativePath, originalPath: originalPath) {
             imageBody
         } else {
             textBody

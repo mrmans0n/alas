@@ -6,6 +6,7 @@ extension GitService {
     private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
     private static let workingTreeImageRevision = "__alas_working_tree__"
     private static let blobImageRevisionPrefix = "__alas_blob__:"
+    private static let emptyTreeImageRevision = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
     /// Decodes image bytes obtained outside of git (for example, from a hosted
     /// review). Keeping this beside the git-blob path makes LFS-pointer and
@@ -75,7 +76,9 @@ extension GitService {
         let indexRevision = await indexObjectID(worktreePath: worktreePath, path: indexPath)
         let diskToken = fileMetadataToken(worktreePath: worktreePath, path: change.path)
         let indexImageRevision = Self.imageRevision(forIndexObjectID: indexRevision)
-        let beforeRevision = staged ? "HEAD" : indexImageRevision
+        let beforeRevision = staged
+            ? await exactHeadImageRevision(worktreePath: worktreePath)
+            : indexImageRevision
         let afterRevision = staged ? indexImageRevision : Self.workingTreeImageRevision
 
         return imageProvider(
@@ -113,11 +116,12 @@ extension GitService {
         let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
         let indexRevision = await indexObjectID(worktreePath: worktreePath, path: file.path)
         let indexImageRevision = Self.imageRevision(forIndexObjectID: indexRevision)
+        let headRevision = await exactHeadImageRevision(worktreePath: worktreePath)
 
         return imageProvider(
             source: .workingCopy,
             worktreePath: worktreePath,
-            beforeRevision: "staged:HEAD",
+            beforeRevision: "staged:\(headRevision)",
             afterRevision: "index:\(indexRevision)",
             beforePath: resolution.oldPath,
             afterPath: file.path
@@ -126,7 +130,7 @@ extension GitService {
             case .added: .missing
             default: await imageSide(
                 worktreePath: worktreePath,
-                revision: "HEAD",
+                revision: headRevision,
                 path: resolution.oldPath ?? file.path
             )
             }
@@ -292,24 +296,24 @@ extension GitService {
             )
         )
 
-        let before: NSImage?
+        let before: ImageDiffSide
         if file.isUntracked || resolution.kind == .added {
-            before = nil
+            before = .missing
         } else {
-            before = try await loadBlobImage(
+            before = await imageSide(
                 worktreePath: worktreePath,
-                ref: "\(stash.sha)^1",
+                revision: "\(stash.sha)^1",
                 path: resolution.oldPath ?? file.path
             )
         }
 
-        let after: NSImage?
+        let after: ImageDiffSide
         if resolution.kind == .deleted {
-            after = nil
+            after = .missing
         } else {
-            after = try await loadBlobImage(
+            after = await imageSide(
                 worktreePath: worktreePath,
-                ref: file.isUntracked ? "\(stash.sha)^3" : stash.sha,
+                revision: file.isUntracked ? "\(stash.sha)^3" : stash.sha,
                 path: file.path
             )
         }
@@ -318,9 +322,7 @@ extension GitService {
             before: before,
             after: after,
             oldPath: resolution.oldPath,
-            kind: resolution.kind,
-            beforeFrameCount: frameCount(for: before),
-            afterFrameCount: frameCount(for: after)
+            kind: resolution.kind
         )
     }
 
@@ -548,6 +550,38 @@ extension GitService {
             )
             return "missing-index"
         }
+    }
+
+    private func exactHeadImageRevision(worktreePath: URL) async -> String {
+        do {
+            let result = try await Process.git(
+                ["rev-parse", "--verify", "--quiet", "HEAD"],
+                cwd: worktreePath
+            )
+            let revision = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.exitCode == 0, !revision.isEmpty {
+                return revision
+            }
+            if result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return Self.emptyTreeImageRevision
+            }
+            Self.logImageSideFailure(
+                category: "Git",
+                worktreePath: worktreePath,
+                revision: "HEAD",
+                path: "-",
+                diagnostic: result.stderr
+            )
+        } catch {
+            Self.logImageSideFailure(
+                category: "Git",
+                worktreePath: worktreePath,
+                revision: "HEAD",
+                path: "-",
+                diagnostic: error.localizedDescription
+            )
+        }
+        return "unavailable-head"
     }
 
     private func fileMetadataToken(worktreePath: URL, path: String) -> String {

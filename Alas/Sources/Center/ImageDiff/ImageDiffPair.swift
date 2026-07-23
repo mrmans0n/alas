@@ -35,6 +35,11 @@ struct ImageDiffPair {
     var afterImage: NSImage? { after.image }
     var beforeFrameCount: Int { before.frameCount }
     var afterFrameCount: Int { after.frameCount }
+    var hasFailure: Bool {
+        if case .failed = before { return true }
+        if case .failed = after { return true }
+        return false
+    }
 
     init(
         before: ImageDiffSide,

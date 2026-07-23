@@ -176,6 +176,25 @@ struct GitServiceStashTests {
         #expect(pair.afterImage != nil)
     }
 
+    @Test func corruptStashImageIsFailedInsteadOfMissingAndCanBeRetried() async throws {
+        let fixture = try await StashImageFixture.corrupt()
+        defer { fixture.remove() }
+
+        let pair = try await GitService().imageDiffPairForStash(
+            worktreePath: fixture.repo,
+            stash: fixture.stash,
+            file: fixture.file
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt stash image data to be a failed side.")
+            return
+        }
+        #expect(failure.message == "decode")
+        #expect(pair.hasFailure)
+    }
+
     @Test func stashDiffForRenameIncludesChangedLinesFromOriginalPath() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -314,6 +333,21 @@ private struct StashImageFixture {
             includeUntracked: true
         )
         return try await fixture(repo: repo, path: "new.png")
+    }
+
+    static func corrupt() async throws -> Self {
+        let repo = try await makeRepo()
+        let url = repo.appendingPathComponent("logo.png")
+        try red.write(to: url)
+        try await git(["add", "logo.png"], cwd: repo)
+        try await git(["commit", "-q", "-m", "add image"], cwd: repo)
+        try Data("not an image".utf8).write(to: url)
+        _ = try await GitService().pushStash(
+            worktreePath: repo,
+            message: "corrupt image",
+            includeUntracked: false
+        )
+        return try await fixture(repo: repo, path: "logo.png")
     }
 
     private static func fixture(repo: URL, path: String) async throws -> Self {
