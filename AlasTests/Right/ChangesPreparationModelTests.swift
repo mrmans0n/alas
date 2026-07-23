@@ -115,6 +115,89 @@ struct ChangesPreparationModelTests {
         #expect(!model.isVisible)
     }
 
+    @Test func ggReconciliationMakesEmptyPreparationVisible() {
+        let reconciliationAction = GGStackReadinessModel.Action(
+            kind: .sync,
+            title: "Sync stack",
+            detail: nil,
+            isEnabled: true,
+            isInFlight: false,
+            emphasis: .primary
+        )
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            reconciliationAction: reconciliationAction
+        )
+
+        #expect(model.reconciliationAction == reconciliationAction)
+        #expect(model.isVisible)
+    }
+
+    @Test func synchronizedEmptyGGPreparationRemainsHidden() {
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            reconciliationAction: nil
+        )
+
+        #expect(model.reconciliationAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func ggReconciliationPreservesReadinessPresentation() {
+        let reconciliationAction = GGStackReadinessModel.Action(
+            kind: .sync,
+            title: "Sync stack",
+            detail: "Includes rebase onto main",
+            isEnabled: false,
+            isInFlight: true,
+            emphasis: .primary
+        )
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            reconciliationAction: reconciliationAction
+        )
+
+        #expect(model.reconciliationAction == reconciliationAction)
+    }
+
+    @Test func primaryInFlightReconciliationUsesContrastingProgressPresentation() {
+        let action = GGStackReadinessModel.Action(
+            kind: .sync,
+            title: "Sync stack",
+            detail: nil,
+            isEnabled: false,
+            isInFlight: true,
+            emphasis: .primary
+        )
+
+        let presentation = ChangesPreparationReconciliationPresentation.make(for: action)
+
+        #expect(presentation.spinnerColorToken == "bg-0")
+        #expect(presentation.accessibilityValue == "In progress")
+    }
+
+    @Test func normalIdleReconciliationKeepsDefaultProgressPresentation() {
+        let action = GGStackReadinessModel.Action(
+            kind: .rebase,
+            title: "Rebase onto main",
+            detail: nil,
+            isEnabled: true,
+            isInFlight: false,
+            emphasis: .normal
+        )
+
+        let presentation = ChangesPreparationReconciliationPresentation.make(for: action)
+
+        #expect(presentation.spinnerColorToken == nil)
+        #expect(presentation.accessibilityValue == nil)
+    }
+
     @Test func oldGGDisablesOnlyUnsafeAmendWithUpdateReason() {
         let model = ChangesPreparationModel.makeGG(
             staged: .init(files: 1, insertions: 2, deletions: 1),

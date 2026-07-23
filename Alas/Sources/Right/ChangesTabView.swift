@@ -30,7 +30,8 @@ struct ChangesTabView: View {
                     stackLoadState: rps.ggStackLoadState,
                     stack: rps.ggStack,
                     currentHeadSHA: rps.currentHeadSHA
-                )
+                ),
+                reconciliationAction: Self.reconciliationAction(from: ggReadinessModel)
             )
         }
         let readiness = ReviewReadinessModel(
@@ -81,6 +82,20 @@ struct ChangesTabView: View {
             pausedOperation: rps.ggActionState.pausedOperation,
             inFlightAction: rps.ggActionState.inFlightAction,
             mergeOperation: rps.mergeOp.current
+        )
+    }
+
+    private var ggReadinessModel: GGStackReadinessModel? {
+        GGStackReadinessProjection.make(
+            stackLoadState: rps.ggStackLoadState,
+            stack: rps.ggStack,
+            action: rps.ggActionState,
+            selectedBaseBranch: rps.baseBranch,
+            behindBase: rps.behindBase,
+            mergeOperation: rps.mergeOp.current,
+            effectiveConfig: rps.ggEffectiveConfig,
+            localChanges: rps.ggLocalChangeStatistics,
+            undoCandidate: rps.ggUndoCandidate
         )
     }
 
@@ -143,8 +158,17 @@ struct ChangesTabView: View {
         return nil
     }
 
+    static func reconciliationAction(
+        from readiness: GGStackReadinessModel?
+    ) -> GGStackReadinessModel.Action? {
+        readiness?.primaryActions.first {
+            $0.kind == .sync || $0.kind == .rebase
+        }
+    }
+
     private var scrollContent: some View {
-        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+        let preparation = preparationModel
+        return LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
             if let err = rps.sidebarError {
                 InlineErrorStrip(
                     message: err,
@@ -188,13 +212,16 @@ struct ChangesTabView: View {
             )
 
             if Self.shouldShowChangesPreparationCard(
-                preparationIsVisible: preparationModel.isVisible
+                preparationIsVisible: preparation.isVisible
             ) {
                 ChangesPreparationCard(
-                    model: preparationModel,
+                    model: preparation,
                     onReviewChanges: openReviewChangesTab,
                     onDraftCommit: openDraftTab,
                     onGGAction: handleGGPreparationAction,
+                    onGGStackAction: { action in
+                        rps.onGGStackAction(action, appState: appState)
+                    },
                     onReviewRequestAction: { action in
                         rps.handleReviewReadinessAction(action, appState: appState)
                     }

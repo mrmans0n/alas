@@ -171,7 +171,7 @@ struct CommitsSectionView: View {
     ) -> Bool {
         inFlightAction == nil
             && pausedGGOperation == nil
-            && !GGStackDrawer.hasBlockingGitOperation(
+            && !GGStackReadinessProjection.hasBlockingGitOperation(
                 mergeOperation: mergeOperation,
                 pausedGGOperation: pausedGGOperation
             )
@@ -276,7 +276,7 @@ struct CommitsSectionView: View {
             capabilities: GGAvailability.shared.capabilities,
             inFlightAction: rps.ggActionState.inFlightAction,
             pausedOperation: rps.ggActionState.pausedOperation,
-            hasBlockingGitOperation: GGStackDrawer.hasBlockingGitOperation(
+            hasBlockingGitOperation: GGStackReadinessProjection.hasBlockingGitOperation(
                 mergeOperation: rps.mergeOp.current,
                 pausedGGOperation: rps.ggActionState.pausedOperation
             ),

@@ -14,11 +14,26 @@ enum ChangesPreparationCardText {
     }
 }
 
+struct ChangesPreparationReconciliationPresentation: Equatable {
+    let spinnerColorToken: String?
+    let accessibilityValue: String?
+
+    static func make(
+        for action: GGStackReadinessModel.Action
+    ) -> ChangesPreparationReconciliationPresentation {
+        ChangesPreparationReconciliationPresentation(
+            spinnerColorToken: action.emphasis == .primary ? "bg-0" : nil,
+            accessibilityValue: action.isInFlight ? "In progress" : nil
+        )
+    }
+}
+
 struct ChangesPreparationCard: View {
     let model: ChangesPreparationModel
     let onReviewChanges: () -> Void
     let onDraftCommit: () -> Void
     let onGGAction: (GGChangesPreparationAction) -> Void
+    let onGGStackAction: (GGStackActionKind) -> Void
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
 
     @Environment(\.theme) private var theme
@@ -28,6 +43,9 @@ struct ChangesPreparationCard: View {
             header
             if let reviewAction = model.reviewAction {
                 primaryReviewButton(reviewAction)
+            }
+            if let reconciliationAction = model.reconciliationAction {
+                ggReconciliationButton(reconciliationAction)
             }
             if !model.ggActions.isEmpty {
                 HStack(spacing: 6) {
@@ -198,6 +216,75 @@ struct ChangesPreparationCard: View {
         .accessibilityIdentifier("changes-preparation-gg-\(ggIdentifier(for: action.kind))")
     }
 
+    private func ggReconciliationButton(_ action: GGStackReadinessModel.Action) -> some View {
+        let presentation = ChangesPreparationReconciliationPresentation.make(for: action)
+        return Button {
+            onGGStackAction(action.kind)
+        } label: {
+            HStack(spacing: 8) {
+                if action.isInFlight {
+                    Spinner(
+                        lineWidth: 1.5,
+                        duration: 0.7,
+                        color: presentation.spinnerColorToken.map { theme.color($0) }
+                    )
+                        .frame(width: 11, height: 11)
+                        .accessibilityHidden(true)
+                } else {
+                    Icon(
+                        name: ggReconciliationIconName(for: action.kind),
+                        size: 11,
+                        color: action.emphasis == .primary
+                            ? theme.color("bg-0")
+                            : theme.color("fg-dim")
+                    )
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(action.title)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(
+                            action.emphasis == .primary
+                                ? theme.color("bg-0")
+                                : theme.color("fg")
+                        )
+                        .lineLimit(1)
+                    if let detail = action.detail {
+                        Text(detail)
+                            .font(.system(size: 10.5))
+                            .foregroundColor(
+                                action.emphasis == .primary
+                                    ? theme.color("bg-0").opacity(0.78)
+                                    : theme.color("fg-faint")
+                            )
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!action.isEnabled)
+        .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(
+                    action.emphasis == .primary
+                        ? theme.color("accent")
+                        : theme.color("bg-2").opacity(0.72)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
+        )
+        .help(action.detail ?? action.title)
+        .accessibilityValue(presentation.accessibilityValue ?? "")
+        .accessibilityIdentifier("changes-preparation-gg-reconciliation")
+    }
+
     private func ggSubtitle(for action: ChangesPreparationModel.GGAction) -> String {
         if let disabledReason = action.disabledReason {
             return disabledReason
@@ -225,6 +312,14 @@ struct ChangesPreparationCard: View {
         case .newStackCommit: "new"
         case .amendCurrent: "amend"
         case .absorbIntoStack: "absorb"
+        }
+    }
+
+    private func ggReconciliationIconName(for action: GGStackActionKind) -> String {
+        switch action {
+        case .rebase: "arrow.triangle.2.circlepath"
+        case .sync: "arrow.clockwise"
+        default: "arrow.clockwise"
         }
     }
 

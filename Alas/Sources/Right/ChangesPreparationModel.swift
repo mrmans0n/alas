@@ -54,13 +54,14 @@ struct ChangesPreparationModel: Equatable {
     let reviewAction: ReviewAction?
     let draftAction: DraftAction?
     let reviewRequestActions: [ReviewRequestAction]
+    let reconciliationAction: GGStackReadinessModel.Action?
     let ggActions: [GGAction]
 
     var primaryAction: ReviewAction? { reviewAction }
 
     var isVisible: Bool {
         if !ggActions.isEmpty {
-            return reviewAction != nil || ggAction(.newStackCommit)?.isEnabled == true
+            return reconciliationAction != nil || reviewAction != nil || ggAction(.newStackCommit)?.isEnabled == true
         }
         return reviewAction != nil || draftAction != nil || !reviewRequestActions.isEmpty
     }
@@ -101,6 +102,7 @@ struct ChangesPreparationModel: Equatable {
 
         reviewAction = builtReviewAction
         draftAction = builtDraftAction
+        reconciliationAction = nil
         ggActions = []
         let builtActions = Self.compactReviewRequestActions(from: readinessActions)
         let effectiveAheadCommitCount = local?.aheadCommitCount ?? aheadCommitCount
@@ -119,7 +121,8 @@ struct ChangesPreparationModel: Equatable {
         capabilities: GGCapabilities,
         hasLoadedCommit: Bool = true,
         mutationDisabledReason: String? = nil,
-        newCommitDisabledReason: String? = nil
+        newCommitDisabledReason: String? = nil,
+        reconciliationAction: GGStackReadinessModel.Action? = nil
     ) -> ChangesPreparationModel {
         let summary = ReviewChangesTriggerSummary.summary(for: changes)
         let stagedChanges = changes.filter { $0.stage == .staged }
@@ -135,6 +138,7 @@ struct ChangesPreparationModel: Equatable {
             hasLoadedCommit: hasLoadedCommit,
             mutationDisabledReason: mutationDisabledReason,
             newCommitDisabledReason: newCommitDisabledReason,
+            reconciliationAction: reconciliationAction,
             reviewSummary: summary
         )
     }
@@ -145,7 +149,8 @@ struct ChangesPreparationModel: Equatable {
         capabilities: GGCapabilities,
         hasLoadedCommit: Bool = true,
         mutationDisabledReason: String? = nil,
-        newCommitDisabledReason: String? = nil
+        newCommitDisabledReason: String? = nil,
+        reconciliationAction: GGStackReadinessModel.Action? = nil
     ) -> ChangesPreparationModel {
         let summary = staged.hasChanges
             ? ReviewChangesTriggerSummary(
@@ -161,6 +166,7 @@ struct ChangesPreparationModel: Equatable {
             hasLoadedCommit: hasLoadedCommit,
             mutationDisabledReason: mutationDisabledReason,
             newCommitDisabledReason: newCommitDisabledReason,
+            reconciliationAction: reconciliationAction,
             reviewSummary: summary
         )
     }
@@ -176,6 +182,7 @@ struct ChangesPreparationModel: Equatable {
         hasLoadedCommit: Bool,
         mutationDisabledReason: String?,
         newCommitDisabledReason: String?,
+        reconciliationAction: GGStackReadinessModel.Action?,
         reviewSummary: ReviewChangesTriggerSummary?
     ) -> ChangesPreparationModel {
         let reviewAction = reviewSummary.map {
@@ -199,6 +206,7 @@ struct ChangesPreparationModel: Equatable {
                 : "Update GG to amend staged changes safely")
         return ChangesPreparationModel(
             reviewAction: reviewAction,
+            reconciliationAction: reconciliationAction,
             ggActions: [
                 GGAction(
                     kind: .newStackCommit,
@@ -225,10 +233,15 @@ struct ChangesPreparationModel: Equatable {
         )
     }
 
-    private init(reviewAction: ReviewAction?, ggActions: [GGAction]) {
+    private init(
+        reviewAction: ReviewAction?,
+        reconciliationAction: GGStackReadinessModel.Action?,
+        ggActions: [GGAction]
+    ) {
         self.reviewAction = reviewAction
         draftAction = nil
         reviewRequestActions = []
+        self.reconciliationAction = reconciliationAction
         self.ggActions = ggActions
     }
 

@@ -55,23 +55,18 @@ struct GGStackDrawer: View {
     @State private var isRefreshing = false
 
     private var model: GGStackReadinessModel? {
-        if rps.ggStackLoadState == .loaded, let stack = rps.ggStack {
-            return GGStackReadinessModel.make(
-                stack: stack,
-                action: rps.ggActionState,
-                liveBehindBase: Self.liveBehindBaseOverride(
-                    stack: stack,
-                    selectedBaseBranch: rps.baseBranch,
-                    behindBase: rps.behindBase
-                ),
-                hasBlockingGitOperation: Self.hasBlockingGitOperation(
-                    mergeOperation: rps.mergeOp.current,
-                    pausedGGOperation: rps.ggActionState.pausedOperation
-                ),
-                effectiveConfig: rps.ggEffectiveConfig,
-                localChanges: rps.ggLocalChangeStatistics,
-                undoCandidate: rps.ggUndoCandidate
-            )
+        if let loadedStackModel = GGStackReadinessProjection.make(
+            stackLoadState: rps.ggStackLoadState,
+            stack: rps.ggStack,
+            action: rps.ggActionState,
+            selectedBaseBranch: rps.baseBranch,
+            behindBase: rps.behindBase,
+            mergeOperation: rps.mergeOp.current,
+            effectiveConfig: rps.ggEffectiveConfig,
+            localChanges: rps.ggLocalChangeStatistics,
+            undoCandidate: rps.ggUndoCandidate
+        ) {
+            return loadedStackModel
         }
         if rps.ggActionState.pausedOperation == nil, rps.ggUndoCandidate != nil {
             let inFlight = rps.ggActionState.inFlightAction
@@ -102,22 +97,6 @@ struct GGStackDrawer: View {
             context: rps.ggContext,
             loadState: rps.ggStackLoadState
         )
-    }
-
-    static func liveBehindBaseOverride(
-        stack: GGStack,
-        selectedBaseBranch: String,
-        behindBase: GitService.BehindStatus?
-    ) -> Int? {
-        guard selectedBaseBranch == stack.base else { return nil }
-        return behindBase?.count
-    }
-
-    static func hasBlockingGitOperation(
-        mergeOperation: MergeOperation?,
-        pausedGGOperation: GGPausedOperation?
-    ) -> Bool {
-        mergeOperation != nil && pausedGGOperation == nil
     }
 
     var body: some View {
