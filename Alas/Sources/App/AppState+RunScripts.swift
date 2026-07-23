@@ -62,6 +62,18 @@ extension AppState {
     }
 
     private func launchScript(_ script: RunScript, in worktree: Worktree) {
+        // Global scripts live in local Application Support and are read by
+        // path, not content — launching one into a remote worktree would ship
+        // a Mac-only path into the SSH-launched remote shell, which can't see
+        // it. Repo scripts aren't affected: RunScriptStore only discovers them
+        // from a locally-reachable worktree root in the first place.
+        if script.scope == .global, worktree.path.isRemoteAlasPath {
+            showFileActionError(
+                title: "Run Script Failed",
+                message: "Global scripts run on your Mac and can't be launched on a remote worktree yet."
+            )
+            return
+        }
         guard FileManager.default.fileExists(atPath: script.fileURL.path) else {
             showFileActionError(
                 title: "Run Script Failed",
@@ -178,6 +190,10 @@ extension AppState {
         alert.informativeText = "Name for the new script."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
         field.placeholderString = "Dev Server"
+        // NSAlert doesn't reliably cascade the app's forced dark appearance
+        // (WindowAppearance.apply) to a manually-added accessory view, which
+        // otherwise leaves the bezel rendering with a mismatched, muddy tint.
+        field.appearance = NSApp.effectiveAppearance
         alert.accessoryView = field
         alert.addButton(withTitle: "Create")
         alert.addButton(withTitle: "Cancel")
