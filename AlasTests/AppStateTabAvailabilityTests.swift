@@ -116,6 +116,44 @@ struct AppStateTabAvailabilityTests {
         #expect(tabs.map(\.stash.sha) == ["old-sha", "new-sha"])
     }
 
+    @Test func openStashDiffTabKeepsTrackedAndUntrackedFilesWithTheSamePathDistinct() {
+        let state = AppState()
+        let worktreeId = "wt-stash-origin-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let worktree = Worktree(
+            id: worktreeId,
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let stash = GitStash(ref: "stash@{0}", subject: "same path", relativeTime: "now", sha: "stash-sha")
+        let tracked = GitStashFile(path: "Assets/icon.png", status: "M", add: 1, del: 1)
+        let untracked = GitStashFile(
+            path: "Assets/icon.png",
+            status: "A",
+            add: 1,
+            del: 0,
+            isUntracked: true
+        )
+
+        #expect(tracked.id != untracked.id)
+        state.openStashDiffTab(worktree: worktree, stash: stash, file: tracked)
+        state.openStashDiffTab(worktree: worktree, stash: stash, file: untracked)
+
+        let tabs = state.tabs.tabs(forWorktree: worktree.id).compactMap { tab -> StashDiffTabState? in
+            if case .stashDiff(let stashDiff) = tab { return stashDiff }
+            return nil
+        }
+        #expect(tabs.count == 2)
+        #expect(tabs.map(\.file.isUntracked) == [false, true])
+        if tabs.count == 2 {
+            #expect(tabs[0].id != tabs[1].id)
+        }
+    }
+
     @Test func hasActiveCodeEditorTabFalseForExternalMarkdownEditor() async throws {
         let repo = try await makeRepo(name: "external-markdown-editor")
         defer { try? FileManager.default.removeItem(at: repo) }

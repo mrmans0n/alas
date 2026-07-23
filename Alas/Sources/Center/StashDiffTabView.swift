@@ -67,8 +67,10 @@ struct StashDiffTabView: View {
             guard !Task.isCancelled else { return }
             imagePair = pair
         } catch {
+            guard !Task.isCancelled else { return }
             // Leave imagePair nil; the placeholder shows the error path.
         }
+        guard !Task.isCancelled else { return }
         imagePairLoaded = true
     }
 

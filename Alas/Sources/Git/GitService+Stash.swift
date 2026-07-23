@@ -10,7 +10,7 @@ struct GitStash: Codable, Equatable, Identifiable, Sendable {
 }
 
 struct GitStashFile: Codable, Equatable, Identifiable, Sendable {
-    var id: String { path }
+    var id: String { "\(path)\u{0}\(isUntracked)" }
 
     let path: String
     let status: String
