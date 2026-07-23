@@ -87,6 +87,7 @@ struct NewWorktreeDialog: View {
                             Text("Off").tag(GGWorktreeMode.off)
                         }
                         .pickerStyle(.segmented)
+                        .labelsHidden()
                     }
                     Text(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))
                         .font(.system(size: 11))
