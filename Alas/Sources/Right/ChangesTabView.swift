@@ -30,7 +30,8 @@ struct ChangesTabView: View {
                     stackLoadState: rps.ggStackLoadState,
                     stack: rps.ggStack,
                     currentHeadSHA: rps.currentHeadSHA
-                )
+                ),
+                reconciliationAction: Self.reconciliationAction(from: ggReadinessModel)
             )
         }
         let readiness = ReviewReadinessModel(
@@ -81,6 +82,28 @@ struct ChangesTabView: View {
             pausedOperation: rps.ggActionState.pausedOperation,
             inFlightAction: rps.ggActionState.inFlightAction,
             mergeOperation: rps.mergeOp.current
+        )
+    }
+
+    private var ggReadinessModel: GGStackReadinessModel? {
+        guard rps.ggStackLoadState == .loaded, let stack = rps.ggStack else {
+            return nil
+        }
+        return GGStackReadinessModel.make(
+            stack: stack,
+            action: rps.ggActionState,
+            liveBehindBase: GGStackDrawer.liveBehindBaseOverride(
+                stack: stack,
+                selectedBaseBranch: rps.baseBranch,
+                behindBase: rps.behindBase
+            ),
+            hasBlockingGitOperation: GGStackDrawer.hasBlockingGitOperation(
+                mergeOperation: rps.mergeOp.current,
+                pausedGGOperation: rps.ggActionState.pausedOperation
+            ),
+            effectiveConfig: rps.ggEffectiveConfig,
+            localChanges: rps.ggLocalChangeStatistics,
+            undoCandidate: rps.ggUndoCandidate
         )
     }
 
@@ -141,6 +164,14 @@ struct ChangesTabView: View {
             return "Checkout the stack head to create a new stack commit."
         }
         return nil
+    }
+
+    static func reconciliationAction(
+        from readiness: GGStackReadinessModel?
+    ) -> GGStackReadinessModel.Action? {
+        readiness?.primaryActions.first {
+            $0.kind == .sync || $0.kind == .rebase
+        }
     }
 
     private var scrollContent: some View {

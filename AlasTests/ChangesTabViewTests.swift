@@ -125,6 +125,60 @@ struct ChangesTabViewTests {
         ))
     }
 
+    @Test func prepareSelectsSyncForUnsyncedStack() {
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(syncedCommits: 0, prState: .open),
+            action: GGStackActionState()
+        )
+
+        #expect(ChangesTabView.reconciliationAction(from: readiness)?.kind == .sync)
+    }
+
+    @Test func prepareSelectsSyncForPublishableStack() {
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(syncedCommits: 1, prState: nil),
+            action: GGStackActionState()
+        )
+
+        #expect(ChangesTabView.reconciliationAction(from: readiness)?.kind == .sync)
+    }
+
+    @Test func prepareSelectsSyncWithRebaseDetailForAutoRebase() {
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(syncedCommits: 1, behindBase: 2, prState: .open),
+            action: GGStackActionState(),
+            effectiveConfig: .init(syncAutoRebase: true, syncBehindThreshold: 1)
+        )
+
+        let action = ChangesTabView.reconciliationAction(from: readiness)
+        #expect(action?.kind == .sync)
+        #expect(action?.detail == "Includes rebase onto main")
+    }
+
+    @Test func prepareSelectsRebaseForManualRebase() {
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(syncedCommits: 1, behindBase: 2, prState: .open),
+            action: GGStackActionState(),
+            effectiveConfig: .init(syncAutoRebase: false, syncBehindThreshold: 1)
+        )
+
+        #expect(ChangesTabView.reconciliationAction(from: readiness)?.kind == .rebase)
+    }
+
+    @Test func prepareOmitsNonReconciliationReadiness() {
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(
+                syncedCommits: 1,
+                prState: .open,
+                approved: true,
+                ciStatus: .success
+            ),
+            action: GGStackActionState()
+        )
+
+        #expect(ChangesTabView.reconciliationAction(from: readiness) == nil)
+    }
+
     private func stack(
         currentPosition: Int?,
         entries: [GGStackEntry] = [
@@ -149,6 +203,34 @@ struct ChangesTabViewTests {
             currentPosition: currentPosition,
             behindBase: nil,
             entries: entries
+        )
+    }
+
+    private func stack(
+        syncedCommits: Int,
+        behindBase: Int? = nil,
+        prState: GGPRState?,
+        approved: Bool = false,
+        ciStatus: GGCIStatus? = nil
+    ) -> GGStack {
+        let entry = GGStackEntry(
+            position: 1,
+            sha: "1111111",
+            title: "First",
+            prNumber: prState == nil ? nil : 101,
+            prState: prState,
+            approved: approved,
+            ciStatus: ciStatus,
+            isCurrent: true
+        )
+        return GGStack(
+            name: "feat",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: syncedCommits,
+            currentPosition: 1,
+            behindBase: behindBase,
+            entries: [entry]
         )
     }
 }

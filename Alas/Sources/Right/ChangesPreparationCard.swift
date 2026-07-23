@@ -215,18 +215,28 @@ struct ChangesPreparationCard: View {
                     Icon(
                         name: ggReconciliationIconName(for: action.kind),
                         size: 11,
-                        color: theme.color("fg-dim")
+                        color: action.emphasis == .primary
+                            ? theme.color("bg-0")
+                            : theme.color("fg-dim")
                     )
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(action.title)
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundColor(theme.color("fg"))
+                        .foregroundColor(
+                            action.emphasis == .primary
+                                ? theme.color("bg-0")
+                                : theme.color("fg")
+                        )
                         .lineLimit(1)
                     if let detail = action.detail {
                         Text(detail)
                             .font(.system(size: 10.5))
-                            .foregroundColor(theme.color("fg-faint"))
+                            .foregroundColor(
+                                action.emphasis == .primary
+                                    ? theme.color("bg-0").opacity(0.78)
+                                    : theme.color("fg-faint")
+                            )
                             .lineLimit(1)
                     }
                 }
@@ -241,7 +251,11 @@ struct ChangesPreparationCard: View {
         .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(theme.color("bg-2").opacity(0.72))
+                .fill(
+                    action.emphasis == .primary
+                        ? theme.color("accent")
+                        : theme.color("bg-2").opacity(0.72)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
