@@ -95,7 +95,7 @@ struct RepoSelectorDialog: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(renderedRows, id: \.row.stableId) { renderedRow in
+                    ForEach(renderedRows) { renderedRow in
                         RepoSelectorRowView(
                             row: renderedRow.row,
                             isSelected: renderedRow.index == appState.repoSelector.selectedIndex,
@@ -114,10 +114,13 @@ struct RepoSelectorDialog: View {
                                 appState.repoSelector.setSelectedIndex(renderedRow.index, in: rows)
                             }
                         )
-                        // Content-derived id (not the row position): a
-                        // positional id freezes LazyVStack rows against the
-                        // list reordering on each keystroke.
-                        .id(renderedRow.row.stableId)
+                        // `RepoSelectorRenderedRow.id` is `"<index>:<stableId>"`
+                        // — unique (the same worktree can appear in both the
+                        // Recent and project sections, so a bare stableId would
+                        // collide) and content-aware (the stableId component
+                        // changes when the row at a position changes, so
+                        // LazyVStack rebuilds instead of caching a stale row).
+                        .id(renderedRow.id)
                     }
                 }
                 .padding(.vertical, 4)
@@ -129,8 +132,8 @@ struct RepoSelectorDialog: View {
                 // list under the cursor and triggering hover-induced
                 // selection bouncing.
                 let index = appState.repoSelector.selectedIndex
-                if rows.indices.contains(index) {
-                    proxy.scrollTo(rows[index].stableId)
+                if renderedRows.indices.contains(index) {
+                    proxy.scrollTo(renderedRows[index].id)
                 }
             }
         }

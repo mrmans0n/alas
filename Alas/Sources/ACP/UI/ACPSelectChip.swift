@@ -187,12 +187,18 @@ private struct DropdownPanel: View {
     private var showSearch: Bool { items.count > 5 }
 
     private var filtered: [ACPSelectChip.Item] {
-        ACPSelectChip.filteredItems(
+        let matches = ACPSelectChip.filteredItems(
             items,
             query: query,
             searchDescriptions: searchDescriptions,
             searchIdentifiers: searchIdentifiers
         )
+        // Item ids come from agent-supplied model/mode/option lists that
+        // aren't validated upstream. Drop duplicate ids so the row `.id()`
+        // and ForEach identity stay unique — duplicate SwiftUI list ids are
+        // undefined behavior.
+        var seen = Set<String>()
+        return matches.filter { seen.insert($0.id).inserted }
     }
 
     var body: some View {
