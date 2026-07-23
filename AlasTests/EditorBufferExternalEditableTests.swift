@@ -33,6 +33,24 @@ struct EditorBufferExternalEditableTests {
         #expect(!buffer.dirty)
     }
 
+    @Test func editableExternalBufferNotifiesDirtyStateObservers() throws {
+        let url = try makeTempFile(contents: "echo hi\n")
+        let buffer = EditorBuffer(externalAbsoluteURL: url, editable: true)
+        var notifications = 0
+        let token = buffer.onEdit { notifications += 1 }
+        defer { buffer.removeOnEdit(token) }
+
+        let generation = buffer.editGeneration
+        buffer.storage.replaceCharacters(
+            in: NSRange(location: 0, length: buffer.storage.length),
+            with: "echo bye\n"
+        )
+
+        #expect(buffer.editGeneration == generation + 1)
+        #expect(notifications == 1)
+        #expect(buffer.dirty)
+    }
+
     /// Regression test for the Task-9 critical fix: `CodeEditorCoordinator`
     /// computes `textView.isEditable` as `!buffer.isExternal || !buffer.readOnly`
     /// so that non-external buffers (e.g. remote in-worktree files whose

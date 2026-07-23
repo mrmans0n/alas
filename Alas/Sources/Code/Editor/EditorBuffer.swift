@@ -641,9 +641,11 @@ final class EditorBuffer {
         if let edit, markUserEditDuringLoadIfNeeded(edit) {
             return
         }
-        // External buffers are read-only; suppress all observer notifications
-        // so didChange is never propagated to LSP or snapshot scheduler.
-        guard !isExternal else { return }
+        // Read-only external buffers suppress all observer notifications so
+        // didChange is never propagated to LSP or snapshot scheduling. The
+        // explicitly editable external buffers used by run scripts still need
+        // this invalidation path for their dirty indicator and Save All state.
+        guard !isExternal || externalEditable else { return }
         editGeneration &+= 1
         let snapshot = Array(editObservers.values)
         for block in snapshot { block(edit) }
