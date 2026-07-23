@@ -15,6 +15,10 @@ struct ShortcutReservationsTests {
         #expect(reserved.contains(ShortcutAction.resetFontSize.defaultBinding))
     }
 
+    @Test func cmdRIsReservedForRunScript() {
+        #expect(ShortcutReservations.defaultReserved.contains(.init(key: "r", modifiers: [.command])))
+    }
+
     @Test func defaultsIncludeStandardsAndTabSwitchers() {
         let reserved = ShortcutReservations.defaultReserved
         // ⌘W (Close Tab) and ⌘1..⌘9 stay reserved regardless of rebinds.

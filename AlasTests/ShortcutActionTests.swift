@@ -23,7 +23,7 @@ struct ShortcutActionTests {
             (.searchFiles,          "p",          [.command]),
             (.switchRepository,     "k",          [.command]),
             (.findAndReplace,       "f",          [.command]),
-            (.replaceInEditor,      "r",          [.command]),
+            (.replaceInEditor,      "f",          [.command, .option]),
             (.toggleSidebar,        "b",          [.command]),
             (.toggleRightPane,      "b",          [.command, .option]),
             (.createProject,        "n",          [.command, .shift]),
@@ -33,6 +33,7 @@ struct ShortcutActionTests {
             (.launchAgentTerminal,  "t",          [.command, .option]),
             (.launchAgentChat,      "t",          [.command, .option, .shift]),
             (.openReviewPalette,    "r",          [.command, .shift]),
+            (.runScript,            "r",          [.command]),
             (.increaseFontSize,     "=",          [.command]),
             (.decreaseFontSize,     "-",          [.command]),
             (.resetFontSize,        "0",          [.command]),
@@ -61,7 +62,7 @@ struct ShortcutActionTests {
         let global: Set<ShortcutAction> = [
             .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
             .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
-            .openReviewPalette, .focusMainWorktree, .increaseFontSize, .decreaseFontSize, .resetFontSize,
+            .openReviewPalette, .runScript, .focusMainWorktree, .increaseFontSize, .decreaseFontSize, .resetFontSize,
         ]
         let codeEditor: Set<ShortcutAction> = [
             .splitSelectionIntoLines, .toggleMarkdownPreview,
@@ -105,5 +106,16 @@ struct ShortcutActionTests {
         for n in 1...9 {
             #expect(reserved.contains(ShortcutBinding(key: String(n), modifiers: [.command])))
         }
+    }
+
+    @Test func runScriptDefaultsToCmdR() {
+        #expect(ShortcutAction.runScript.defaultBinding == .init(key: "r", modifiers: [.command]))
+        #expect(ShortcutAction.runScript.group == .global)
+        #expect(ShortcutAction.runScript.appliesInTerminal)
+    }
+
+    @Test func replaceInEditorDefaultsToCmdOptF() {
+        #expect(ShortcutAction.replaceInEditor.defaultBinding == .init(key: "f", modifiers: [.command, .option]))
+        #expect(!ShortcutAction.replaceInEditor.appliesInTerminal)
     }
 }
