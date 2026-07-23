@@ -49,6 +49,7 @@ struct ACPPlanPill: View {
             }
             .foregroundStyle(theme.color("accent"))
             .padding(.horizontal, 8)
+            .frame(minWidth: 300, alignment: .leading)
             .frame(height: 24)
             .background(theme.color("accent").opacity(0.10))
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
