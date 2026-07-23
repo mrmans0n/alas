@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 extension AppState {
@@ -107,5 +108,63 @@ extension AppState {
                 revealCharacter: nil
             )
         }
+    }
+
+    // MARK: - Create
+
+    func newRunScript(scope: RunScriptScope, in worktree: Worktree) {
+        if scope == .repo, worktree.path.isRemoteAlasPath {
+            showFileActionError(
+                title: "New Script Failed",
+                message: "Run scripts are not supported on remote worktrees yet."
+            )
+            return
+        }
+        guard let name = promptForRunScriptName() else { return }
+        let dir = scope == .repo
+            ? RunScriptStore.repoScriptsDir(worktreeRoot: worktree.path)
+            : Paths.runScriptsGlobalDir
+        let url = dir.appendingPathComponent(RunScriptTemplate.fileName(for: name))
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            guard !FileManager.default.fileExists(atPath: url.path) else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            try RunScriptTemplate.contents(name: name).data(using: .utf8)!
+                .write(to: url, options: .withoutOverwriting)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        } catch {
+            showFileActionError(title: "New Script Failed", message: error.localizedDescription)
+            return
+        }
+        switch scope {
+        case .repo:
+            openFile(
+                relativePath: "\(RunScriptStore.repoScriptsRelativeDir)/\(url.lastPathComponent)",
+                worktreeId: worktree.id
+            )
+        case .global:
+            _ = tabs.openExternalEditor(
+                worktreeId: worktree.id,
+                absoluteURL: url,
+                revealLine: nil,
+                revealCharacter: nil
+            )
+        }
+    }
+
+    private func promptForRunScriptName() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "New Run Script"
+        alert.informativeText = "Name for the new script."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "Dev Server"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
     }
 }
