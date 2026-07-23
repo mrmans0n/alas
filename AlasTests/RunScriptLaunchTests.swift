@@ -70,4 +70,54 @@ struct RunScriptLaunchTests {
         let lines = suffix.split(separator: "\n", maxSplits: 1)
         #expect(lines[0] == "cd /wt/missing || exit 1")
     }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    /// `runOrFocusScript` checks `runningScriptTab` synchronously, but the
+    /// tab it looks for is only registered once `launchScript`'s async Task
+    /// finishes. Calling it twice back-to-back (no `await` in between,
+    /// simulating a double-click or repeated Enter) exercises exactly that
+    /// window — without the in-flight guard, both calls would launch.
+    @MainActor
+    @Test func launchingTwiceBeforeCompletionCreatesOnlyOneTab() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptURL = dir.appendingPathComponent("dev.sh")
+        try "echo hi\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        let runScript = RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: scriptURL,
+            displayName: "Dev", onExit: .keep, cwd: nil, isExecutable: false
+        )
+        let project = ProjectConfig(id: "project", name: "Project", path: dir.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt", projectId: project.id, name: "main", branch: "main",
+            path: dir, status: .clean, lastActivity: Date()
+        )
+
+        var openCount = 0
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openCount += 1
+                return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        state.runOrFocusScript(runScript, in: worktree)
+        state.runOrFocusScript(runScript, in: worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(openCount == 1)
+        let scriptTabs = state.tabs.tabs(forWorktree: worktree.id).filter { tab in
+            if case .terminal(let s) = tab { return s.runScriptKey == runScript.key }
+            return false
+        }
+        #expect(scriptTabs.count == 1)
+        #expect(state.pendingScriptLaunches.isEmpty)
+    }
 }

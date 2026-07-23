@@ -60,6 +60,13 @@ final class AppState {
     @ObservationIgnored
     private var remoteAccelerationTasks: [String: Task<Void, Never>] = [:]
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
+    /// Keys of in-flight run-script launches (`"<worktreeId>:<scriptKey>"`).
+    /// `RunScript.launchScript` inserts synchronously before starting its
+    /// async `Task` and removes on completion, closing the window where two
+    /// rapid invocations (double-click, repeated Enter) would both see no
+    /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
+    @ObservationIgnored
+    var pendingScriptLaunches: Set<String> = []
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
