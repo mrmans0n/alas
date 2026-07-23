@@ -527,7 +527,9 @@ extension GitService {
             ],
             cwd: worktreePath
         )
-        guard result.exitCode == 0 else { return [] }
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
         return try StatusParser.parse(result.stdout)
     }
 

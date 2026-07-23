@@ -41,6 +41,16 @@ struct ImageDiffPair {
         return false
     }
 
+    static func failedLoading() -> ImageDiffPair {
+        let failure = ImageDiffLoadFailure(message: "Image diff could not be loaded.")
+        return ImageDiffPair(
+            before: .failed(failure),
+            after: .failed(failure),
+            oldPath: nil,
+            kind: .modified
+        )
+    }
+
     init(
         before: ImageDiffSide,
         after: ImageDiffSide,

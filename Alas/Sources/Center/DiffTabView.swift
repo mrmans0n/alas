@@ -116,7 +116,8 @@ struct DiffTabView: View {
             guard !Task.isCancelled else { return }
             imagePair = pair
         } catch {
-            // Leave imagePair nil to show the error placeholder.
+            guard !Task.isCancelled else { return }
+            imagePair = .failedLoading()
         }
         imagePairLoaded = true
     }

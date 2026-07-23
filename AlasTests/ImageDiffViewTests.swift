@@ -107,4 +107,19 @@ struct ImageDiffViewTests {
 
         #expect(state.mode == .sideBySide)
     }
+
+    @Test func topLevelLoadFailureCreatesARetryableFailedPair() {
+        let pair = ImageDiffPair.failedLoading()
+
+        #expect(pair.hasFailure)
+        #expect(pair.kind == .modified)
+        guard case .failed(let beforeFailure) = pair.before,
+              case .failed(let afterFailure) = pair.after
+        else {
+            Issue.record("Expected both image sides to preserve the load failure")
+            return
+        }
+        #expect(beforeFailure == ImageDiffLoadFailure(message: "Image diff could not be loaded."))
+        #expect(afterFailure == beforeFailure)
+    }
 }

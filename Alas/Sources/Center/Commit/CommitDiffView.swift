@@ -115,7 +115,8 @@ struct CommitDiffView: View {
             guard !Task.isCancelled else { return }
             imagePair = pair
         } catch {
-            // Leave imagePair nil; the placeholder shows the error path.
+            guard !Task.isCancelled else { return }
+            imagePair = .failedLoading()
         }
         imagePairLoaded = true
     }

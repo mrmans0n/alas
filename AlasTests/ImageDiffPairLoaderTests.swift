@@ -224,6 +224,23 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.afterImage != nil)
     }
 
+    @Test func nonzeroImageDiffStatusThrowsInsteadOfTreatingTheFileAsAdded() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-imgdiff-not-a-repository-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try PngFixture.green.write(to: directory.appendingPathComponent("logo.png"))
+
+        await #expect(throws: (any Error).self) {
+            try await GitService().imageDiffPair(
+                worktreePath: directory,
+                relativePath: "logo.png",
+                staged: false
+            )
+        }
+    }
+
     @Test func loadsDeletedImagePair() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
