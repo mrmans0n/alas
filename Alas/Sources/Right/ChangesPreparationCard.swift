@@ -14,6 +14,20 @@ enum ChangesPreparationCardText {
     }
 }
 
+struct ChangesPreparationReconciliationPresentation: Equatable {
+    let spinnerColorToken: String?
+    let accessibilityValue: String?
+
+    static func make(
+        for action: GGStackReadinessModel.Action
+    ) -> ChangesPreparationReconciliationPresentation {
+        ChangesPreparationReconciliationPresentation(
+            spinnerColorToken: action.emphasis == .primary ? "bg-0" : nil,
+            accessibilityValue: action.isInFlight ? "In progress" : nil
+        )
+    }
+}
+
 struct ChangesPreparationCard: View {
     let model: ChangesPreparationModel
     let onReviewChanges: () -> Void
@@ -203,12 +217,17 @@ struct ChangesPreparationCard: View {
     }
 
     private func ggReconciliationButton(_ action: GGStackReadinessModel.Action) -> some View {
-        Button {
+        let presentation = ChangesPreparationReconciliationPresentation.make(for: action)
+        return Button {
             onGGStackAction(action.kind)
         } label: {
             HStack(spacing: 8) {
                 if action.isInFlight {
-                    Spinner(lineWidth: 1.5, duration: 0.7)
+                    Spinner(
+                        lineWidth: 1.5,
+                        duration: 0.7,
+                        color: presentation.spinnerColorToken.map { theme.color($0) }
+                    )
                         .frame(width: 11, height: 11)
                         .accessibilityHidden(true)
                 } else {
@@ -262,6 +281,7 @@ struct ChangesPreparationCard: View {
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
         .help(action.detail ?? action.title)
+        .accessibilityValue(presentation.accessibilityValue ?? "")
         .accessibilityIdentifier("changes-preparation-gg-reconciliation")
     }
 

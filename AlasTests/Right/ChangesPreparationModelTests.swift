@@ -166,6 +166,38 @@ struct ChangesPreparationModelTests {
         #expect(model.reconciliationAction == reconciliationAction)
     }
 
+    @Test func primaryInFlightReconciliationUsesContrastingProgressPresentation() {
+        let action = GGStackReadinessModel.Action(
+            kind: .sync,
+            title: "Sync stack",
+            detail: nil,
+            isEnabled: false,
+            isInFlight: true,
+            emphasis: .primary
+        )
+
+        let presentation = ChangesPreparationReconciliationPresentation.make(for: action)
+
+        #expect(presentation.spinnerColorToken == "bg-0")
+        #expect(presentation.accessibilityValue == "In progress")
+    }
+
+    @Test func normalIdleReconciliationKeepsDefaultProgressPresentation() {
+        let action = GGStackReadinessModel.Action(
+            kind: .rebase,
+            title: "Rebase onto main",
+            detail: nil,
+            isEnabled: true,
+            isInFlight: false,
+            emphasis: .normal
+        )
+
+        let presentation = ChangesPreparationReconciliationPresentation.make(for: action)
+
+        #expect(presentation.spinnerColorToken == nil)
+        #expect(presentation.accessibilityValue == nil)
+    }
+
     @Test func oldGGDisablesOnlyUnsafeAmendWithUpdateReason() {
         let model = ChangesPreparationModel.makeGG(
             staged: .init(files: 1, insertions: 2, deletions: 1),

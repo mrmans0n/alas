@@ -161,16 +161,16 @@ struct GGStackReadinessModelTests {
         #expect(model.summaryChip.contains("2"))
     }
 
-    @Test func drawerUsesLiveBehindBaseOnlyForMatchingStackBase() {
+    @Test func projectionUsesLiveBehindBaseOnlyForMatchingStackBase() {
         let stack = stack([entry(position: 1, prState: nil)], synced: 1, behind: 0)
         let behind = GitService.BehindStatus(ref: "origin/main", sha: "abc", count: 2, probedAt: Date())
 
-        #expect(GGStackDrawer.liveBehindBaseOverride(
+        #expect(GGStackReadinessProjection.liveBehindBaseOverride(
             stack: stack,
             selectedBaseBranch: "main",
             behindBase: behind
         ) == 2)
-        #expect(GGStackDrawer.liveBehindBaseOverride(
+        #expect(GGStackReadinessProjection.liveBehindBaseOverride(
             stack: stack,
             selectedBaseBranch: "release",
             behindBase: behind
@@ -187,21 +187,90 @@ struct GGStackReadinessModelTests {
         #expect(model.actions.allSatisfy { !$0.isEnabled })
     }
 
-    @Test func drawerTreatsPlainGitOperationAsBlockingOnlyWhenGGIsNotPaused() {
+    @Test func projectionTreatsPlainGitOperationAsBlockingOnlyWhenGGIsNotPaused() {
         let operation = MergeOperation.merge(sourceBranch: "main")
 
-        #expect(GGStackDrawer.hasBlockingGitOperation(
+        #expect(GGStackReadinessProjection.hasBlockingGitOperation(
             mergeOperation: operation,
             pausedGGOperation: nil
         ))
-        #expect(!GGStackDrawer.hasBlockingGitOperation(
+        #expect(!GGStackReadinessProjection.hasBlockingGitOperation(
             mergeOperation: operation,
             pausedGGOperation: GGPausedOperation(pausedBy: .sync)
         ))
-        #expect(!GGStackDrawer.hasBlockingGitOperation(
+        #expect(!GGStackReadinessProjection.hasBlockingGitOperation(
             mergeOperation: nil,
             pausedGGOperation: nil
         ))
+    }
+
+    @Test func sharedProjectionUsesMatchingLiveBehindAndEffectiveConfig() {
+        let staleStack = stack([entry(position: 1, prState: .open)], synced: 1, behind: 0)
+        let behind = GitService.BehindStatus(
+            ref: "origin/main",
+            sha: "abc",
+            count: 2,
+            probedAt: Date()
+        )
+
+        let model = GGStackReadinessProjection.make(
+            stackLoadState: .loaded,
+            stack: staleStack,
+            action: GGStackActionState(),
+            selectedBaseBranch: "main",
+            behindBase: behind,
+            mergeOperation: nil,
+            effectiveConfig: .init(syncAutoRebase: true, syncBehindThreshold: 1),
+            localChanges: .zero,
+            undoCandidate: nil
+        )
+
+        #expect(model?.primaryActions.first?.kind == .sync)
+        #expect(model?.primaryActions.first?.detail == "Includes rebase onto main")
+        #expect(model?.facts.contains { $0.label == "Behind base" && $0.value == "2" } == true)
+    }
+
+    @Test func sharedProjectionIgnoresMismatchedLiveBehindAndAppliesBlockingGate() {
+        let stack = stack([entry(position: 1, prState: nil)], synced: 1, behind: 0)
+        let behind = GitService.BehindStatus(
+            ref: "origin/release",
+            sha: "abc",
+            count: 2,
+            probedAt: Date()
+        )
+
+        let model = GGStackReadinessProjection.make(
+            stackLoadState: .loaded,
+            stack: stack,
+            action: GGStackActionState(),
+            selectedBaseBranch: "release",
+            behindBase: behind,
+            mergeOperation: .merge(sourceBranch: "main"),
+            effectiveConfig: .defaults,
+            localChanges: .zero,
+            undoCandidate: nil
+        )
+
+        #expect(model?.primaryActions.first?.kind == .sync)
+        #expect(model?.primaryActions.first?.detail == nil)
+        #expect(model?.primaryActions.first?.isEnabled == false)
+        #expect(model?.facts.contains { $0.label == "Behind base" && $0.value == "0" } == true)
+    }
+
+    @Test func sharedProjectionRequiresLoadedStack() {
+        let stack = stack([entry(position: 1, prState: nil)])
+
+        #expect(GGStackReadinessProjection.make(
+            stackLoadState: .loading,
+            stack: stack,
+            action: GGStackActionState(),
+            selectedBaseBranch: "main",
+            behindBase: nil,
+            mergeOperation: nil,
+            effectiveConfig: .defaults,
+            localChanges: .zero,
+            undoCandidate: nil
+        ) == nil)
     }
 
     @Test func freshLandableStackSelectsLandPrimary() {

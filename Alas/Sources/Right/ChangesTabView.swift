@@ -86,21 +86,13 @@ struct ChangesTabView: View {
     }
 
     private var ggReadinessModel: GGStackReadinessModel? {
-        guard rps.ggStackLoadState == .loaded, let stack = rps.ggStack else {
-            return nil
-        }
-        return GGStackReadinessModel.make(
-            stack: stack,
+        GGStackReadinessProjection.make(
+            stackLoadState: rps.ggStackLoadState,
+            stack: rps.ggStack,
             action: rps.ggActionState,
-            liveBehindBase: GGStackDrawer.liveBehindBaseOverride(
-                stack: stack,
-                selectedBaseBranch: rps.baseBranch,
-                behindBase: rps.behindBase
-            ),
-            hasBlockingGitOperation: GGStackDrawer.hasBlockingGitOperation(
-                mergeOperation: rps.mergeOp.current,
-                pausedGGOperation: rps.ggActionState.pausedOperation
-            ),
+            selectedBaseBranch: rps.baseBranch,
+            behindBase: rps.behindBase,
+            mergeOperation: rps.mergeOp.current,
             effectiveConfig: rps.ggEffectiveConfig,
             localChanges: rps.ggLocalChangeStatistics,
             undoCandidate: rps.ggUndoCandidate
@@ -175,7 +167,8 @@ struct ChangesTabView: View {
     }
 
     private var scrollContent: some View {
-        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+        let preparation = preparationModel
+        return LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
             if let err = rps.sidebarError {
                 InlineErrorStrip(
                     message: err,
@@ -219,10 +212,10 @@ struct ChangesTabView: View {
             )
 
             if Self.shouldShowChangesPreparationCard(
-                preparationIsVisible: preparationModel.isVisible
+                preparationIsVisible: preparation.isVisible
             ) {
                 ChangesPreparationCard(
-                    model: preparationModel,
+                    model: preparation,
                     onReviewChanges: openReviewChangesTab,
                     onDraftCommit: openDraftTab,
                     onGGAction: handleGGPreparationAction,

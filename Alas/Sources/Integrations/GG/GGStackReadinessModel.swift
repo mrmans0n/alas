@@ -1,5 +1,54 @@
 import Foundation
 
+struct GGStackReadinessProjection {
+    @MainActor
+    static func make(
+        stackLoadState: GGStackLoadState,
+        stack: GGStack?,
+        action: GGStackActionState,
+        selectedBaseBranch: String,
+        behindBase: GitService.BehindStatus?,
+        mergeOperation: MergeOperation?,
+        effectiveConfig: GGEffectiveConfig,
+        localChanges: GGLocalChangeStatistics,
+        undoCandidate: GGUndoCandidate?
+    ) -> GGStackReadinessModel? {
+        guard stackLoadState == .loaded, let stack else { return nil }
+        return GGStackReadinessModel.make(
+            stack: stack,
+            action: action,
+            liveBehindBase: liveBehindBaseOverride(
+                stack: stack,
+                selectedBaseBranch: selectedBaseBranch,
+                behindBase: behindBase
+            ),
+            hasBlockingGitOperation: hasBlockingGitOperation(
+                mergeOperation: mergeOperation,
+                pausedGGOperation: action.pausedOperation
+            ),
+            effectiveConfig: effectiveConfig,
+            localChanges: localChanges,
+            undoCandidate: undoCandidate
+        )
+    }
+
+    static func liveBehindBaseOverride(
+        stack: GGStack,
+        selectedBaseBranch: String,
+        behindBase: GitService.BehindStatus?
+    ) -> Int? {
+        guard selectedBaseBranch == stack.base else { return nil }
+        return behindBase?.count
+    }
+
+    static func hasBlockingGitOperation(
+        mergeOperation: MergeOperation?,
+        pausedGGOperation: GGPausedOperation?
+    ) -> Bool {
+        mergeOperation != nil && pausedGGOperation == nil
+    }
+}
+
 /// Pure presentation policy for the stack drawer. GG remains authoritative
 /// at execution time; this model only selects the action the current snapshot
 /// calls for and describes its effect.
