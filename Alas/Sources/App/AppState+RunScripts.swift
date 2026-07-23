@@ -37,7 +37,10 @@ extension AppState {
             env: env,
             exitOnCompletion: script.onExit == .close
         )
-        return "cd \(shellQuote(cwd))\n\(run)"
+        // A missing/misspelled `alas-cwd` must stop the run rather than fall
+        // through and execute the script from wherever the shell happened to
+        // start — that's silently dangerous for build/cleanup scripts.
+        return "cd \(shellQuote(cwd)) || exit 1\n\(run)"
     }
 
     func runningScriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {

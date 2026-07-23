@@ -25,7 +25,7 @@ struct RunScriptLaunchTests {
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
         )
-        #expect(suffix.hasPrefix("cd /wt\n"))
+        #expect(suffix.hasPrefix("cd /wt || exit 1\n"))
         #expect(suffix.contains("'/wt/.alas/scripts/dev server.sh'"))
         #expect(suffix.contains("ALAS_WORKTREE_ROOT=/wt"))
         #expect(suffix.contains("ALAS_REPO_ROOT=/repo"))
@@ -58,6 +58,16 @@ struct RunScriptLaunchTests {
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
         )
-        #expect(suffix.hasPrefix("cd /wt/apps/web\n"))
+        #expect(suffix.hasPrefix("cd /wt/apps/web || exit 1\n"))
+    }
+
+    @Test func cdFailureStopsTheRunInsteadOfFallingThrough() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true, cwd: "missing"),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo"
+        )
+        let lines = suffix.split(separator: "\n", maxSplits: 1)
+        #expect(lines[0] == "cd /wt/missing || exit 1")
     }
 }
