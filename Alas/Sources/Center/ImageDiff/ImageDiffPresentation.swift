@@ -1,12 +1,60 @@
 import Observation
 import SwiftUI
 
+struct ImageDiffPairPresentationIdentity: Equatable {
+    private enum Side: Equatable {
+        case image(ObjectIdentifier, Int)
+        case missing
+        case failed(String)
+
+        init(_ side: ImageDiffSide) {
+            switch side {
+            case .image(let image, let frameCount):
+                self = .image(ObjectIdentifier(image), frameCount)
+            case .missing:
+                self = .missing
+            case .failed(let failure):
+                self = .failed(failure.message)
+            }
+        }
+    }
+
+    private let relativePath: String
+    private let oldPath: String?
+    private let kind: ImageDiffPairKind
+    private let before: Side
+    private let after: Side
+
+    init(pair: ImageDiffPair, relativePath: String) {
+        self.relativePath = relativePath
+        self.oldPath = pair.oldPath
+        self.kind = pair.kind
+        self.before = Side(pair.before)
+        self.after = Side(pair.after)
+    }
+}
+
 @Observable
 @MainActor
 final class ImageDiffPresentationState {
     var mode: ImageDiffMode = .sideBySide
     var percentChanged: Double?
     var transform = ImageDiffTransform()
+    @ObservationIgnored private var displayedPairIdentity: ImageDiffPairPresentationIdentity?
+
+    func updateDisplayedPair(
+        _ pair: ImageDiffPair,
+        identity: ImageDiffPairPresentationIdentity
+    ) {
+        defer {
+            displayedPairIdentity = identity
+            snapToApplicableMode(for: pair)
+        }
+
+        if let displayedPairIdentity, displayedPairIdentity != identity {
+            resetForNewPair()
+        }
+    }
 
     func resetForNewPair() {
         mode = .sideBySide

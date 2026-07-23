@@ -15,13 +15,22 @@ struct ImageDiffView: View {
             content
         }
         .background(theme.color("bg-1"))
-        .onAppear { presentation.snapToApplicableMode(for: pair) }
+        .onAppear {
+            presentation.updateDisplayedPair(pair, identity: pairPresentationIdentity)
+        }
+        .onChange(of: pairPresentationIdentity) { _, _ in
+            presentation.updateDisplayedPair(pair, identity: pairPresentationIdentity)
+        }
         .onChange(of: presentation.mode) { _, _ in
             // Bouncing back when user attempts a disabled mode is enforced
             // by the segmented control disabling itself; this is a belt-
             // and-suspenders check.
             presentation.snapToApplicableMode(for: pair)
         }
+    }
+
+    private var pairPresentationIdentity: ImageDiffPairPresentationIdentity {
+        ImageDiffPairPresentationIdentity(pair: pair, relativePath: relativePath)
     }
 
     private var header: some View {

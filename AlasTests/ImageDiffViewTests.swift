@@ -60,8 +60,18 @@ struct ImageDiffViewTests {
     }
 
     @MainActor
-    @Test func presentationResetsWhenPairChanges() {
+    @Test func presentationResetsWhenDisplayedPairChanges() {
+        let firstPair = loadedPair(kind: .modified)
+        let secondPair = loadedPair(kind: .modified)
         let state = ImageDiffPresentationState()
+
+        state.updateDisplayedPair(
+            firstPair,
+            identity: ImageDiffPairPresentationIdentity(
+                pair: firstPair,
+                relativePath: "first.png"
+            )
+        )
         state.mode = .difference
         state.transform = ImageDiffTransform(
             scale: 2,
@@ -69,7 +79,13 @@ struct ImageDiffViewTests {
         )
         state.percentChanged = 42
 
-        state.resetForNewPair()
+        state.updateDisplayedPair(
+            secondPair,
+            identity: ImageDiffPairPresentationIdentity(
+                pair: secondPair,
+                relativePath: "second.png"
+            )
+        )
 
         #expect(state.mode == .sideBySide)
         #expect(state.transform == ImageDiffTransform())

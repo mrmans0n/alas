@@ -78,20 +78,10 @@ struct ImageDiffSideBySideView: View {
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(transform.scale)
                     .offset(transform.offset)
-            case .missing:
-                Text(missingText)
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .padding(16)
-                    .background(.black.opacity(0.25))
-                    .cornerRadius(6)
-            case .failed(let failure):
-                Text(failure.message)
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .padding(16)
-                    .background(.black.opacity(0.25))
-                    .cornerRadius(6)
+            case .missing, .failed:
+                if let message = Self.placeholderMessage(for: side, missingText: missingText) {
+                    placeholder(message)
+                }
             }
         }
         .overlay(alignment: .topLeading) {
@@ -105,6 +95,26 @@ struct ImageDiffSideBySideView: View {
         }
         .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    static func placeholderMessage(for side: ImageDiffSide, missingText: String) -> String? {
+        switch side {
+        case .image:
+            nil
+        case .missing:
+            missingText
+        case .failed(let failure):
+            failure.message
+        }
+    }
+
+    private func placeholder(_ message: String) -> some View {
+        Text(message)
+            .font(.system(size: 12))
+            .foregroundColor(theme.color("fg-faint"))
+            .padding(16)
+            .background(.black.opacity(0.25))
+            .cornerRadius(6)
     }
 
     @ViewBuilder

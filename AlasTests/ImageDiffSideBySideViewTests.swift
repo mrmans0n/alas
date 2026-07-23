@@ -4,6 +4,15 @@ import CoreFoundation
 @testable import Alas
 
 struct ImageDiffSideBySideViewTests {
+    @Test func failedSideUsesFailureMessageAsItsPlaceholder() {
+        let side = ImageDiffSide.failed(ImageDiffLoadFailure(message: "Could not decode image"))
+
+        #expect(
+            ImageDiffSideBySideView.placeholderMessage(for: side, missingText: "No before")
+                == "Could not decode image"
+        )
+    }
+
     @Test func transformResetReturnsToIdentity() {
         var t = ImageDiffTransform(scale: 3.0, offset: .init(width: 50, height: 50))
         t.reset()
