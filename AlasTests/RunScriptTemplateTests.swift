@@ -24,4 +24,9 @@ struct RunScriptTemplateTests {
         #expect(meta.displayName == "Dev Server")
         #expect(meta.onExit == .keep)
     }
+
+    @Test func emptyOrAllPunctuationNameFallsBackToScript() {
+        #expect(RunScriptTemplate.fileName(for: "") == "script.sh")
+        #expect(RunScriptTemplate.fileName(for: "!!!") == "script.sh")
+    }
 }

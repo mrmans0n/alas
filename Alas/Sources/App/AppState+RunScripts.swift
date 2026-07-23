@@ -129,7 +129,9 @@ extension AppState {
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             guard !FileManager.default.fileExists(atPath: url.path) else {
-                throw CocoaError(.fileWriteFileExists)
+                throw CocoaError(.fileWriteFileExists, userInfo: [
+                    NSLocalizedDescriptionKey: "A script named \"\(url.lastPathComponent)\" already exists."
+                ])
             }
             try RunScriptTemplate.contents(name: name).data(using: .utf8)!
                 .write(to: url, options: .withoutOverwriting)
