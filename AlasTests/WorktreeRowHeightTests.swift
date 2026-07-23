@@ -20,6 +20,10 @@ struct WorktreeRowHeightTests {
             == "gg stack · 2 of 3 commits merged")
     }
 
+    @Test func pendingGGStackIndicatorUsesMutedColorUntilCommitSyncs() {
+        #expect(WorktreeRowView.pendingStackIndicatorColorToken() == "fg-faint")
+    }
+
     @Test func rowHeightIsStableWithAndWithoutBadge() throws {
         let withoutBadge = try renderHeight(harnessSummary: nil)
         let withBadge = try renderHeight(harnessSummary: .init(
