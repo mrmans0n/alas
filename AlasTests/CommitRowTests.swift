@@ -72,6 +72,53 @@ struct CommitRowTests {
         #expect(GGCommitAction.checkout != .dropCommit)
     }
 
+    @Test func ggStackChipClickOpensProviderReviewWhenRemoteIsKnown() {
+        let entry = GGStackEntry(
+            position: 1,
+            sha: "deadbee",
+            title: "Wire PR chip",
+            prNumber: 840
+        )
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+
+        #expect(
+            CommitsSectionView.ggStackChipClickAction(for: entry, remote: remote)
+                == .openProviderRequest(number: 840)
+        )
+    }
+
+    @Test func ggStackChipClickIsUnavailableWithoutProviderReviewTarget() {
+        let entryWithReview = GGStackEntry(
+            position: 1,
+            sha: "deadbee",
+            title: "PR without remote",
+            prNumber: 840
+        )
+        let entryWithoutReview = GGStackEntry(
+            position: 1,
+            sha: "deadbee",
+            title: "Local only"
+        )
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+
+        #expect(CommitsSectionView.ggStackChipClickAction(for: entryWithoutReview, remote: remote) == nil)
+        #expect(CommitsSectionView.ggStackChipClickAction(for: entryWithReview, remote: nil) == nil)
+    }
+
     @MainActor
     @Test func copyFeedbackShowsThenDismisses() async throws {
         let feedback = CopyFeedbackState(displayNanoseconds: 10_000_000)

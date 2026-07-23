@@ -199,6 +199,9 @@ struct CommitsSectionView: View {
                     onRevert: { rps.runRevert(sha: commit.sha) },
                     ggMenu: ggMenu(for: commit),
                     onGGAction: { action in onGGAction(action, commit) },
+                    onGGOpenPR: ggOpenReviewRequestAction(for: commit).map { action in
+                        { onGGAction(action, commit) }
+                    },
                     stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
                     codeHostKind: stackCodeHostKind
                 )
@@ -281,6 +284,16 @@ struct CommitsSectionView: View {
             canOpenSplitCommit: rps.requestGGSplitCommit != nil && rps.mergeOp.current == nil,
             providerReviewURL: providerReviewURL
         ))
+    }
+
+    private func ggOpenReviewRequestAction(for commit: CommitInfo) -> GGCommitAction? {
+        guard let entry = ggStack?.entry(matchingCommitSHA: commit.sha) else { return nil }
+        return Self.ggStackChipClickAction(for: entry, remote: rps.commitRemote)
+    }
+
+    static func ggStackChipClickAction(for entry: GGStackEntry, remote: CodeHostRemote?) -> GGCommitAction? {
+        guard let number = entry.prNumber, remote != nil else { return nil }
+        return .openProviderRequest(number: number)
     }
 
     private func openRemoteAction(for commit: CommitInfo, remote: CodeHostRemote?) -> (() -> Void)? {
