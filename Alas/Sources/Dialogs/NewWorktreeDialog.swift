@@ -30,6 +30,7 @@ struct NewWorktreeDialog: View {
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
     @State private var createErrorMessage: String?
+    @FocusState private var focusedGGModeSegment: GGWorktreeMode?
     @FocusState private var focusedLaunchSurfaceSegment: NewWorktreeLaunchSurfaceSegment?
 
     @Environment(\.theme) var theme
@@ -81,13 +82,7 @@ struct NewWorktreeDialog: View {
                 }
                 if ggStackAvailability != .hidden {
                     DialogField(label: "GG mode") {
-                        Picker("GG mode", selection: $ggMode) {
-                            Text("Inherit").tag(GGWorktreeMode.inherit)
-                            Text("On").tag(GGWorktreeMode.on)
-                            Text("Off").tag(GGWorktreeMode.off)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
+                        ggModeSegmented
                     }
                     Text(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))
                         .font(.system(size: 11))
@@ -484,6 +479,33 @@ struct NewWorktreeDialog: View {
         return availableBranches.first ?? configuredDefault
     }
 
+    nonisolated static let ggModeSegments: [(mode: GGWorktreeMode, label: String)] = [
+        (.inherit, "Inherit"),
+        (.on, "On"),
+        (.off, "Off"),
+    ]
+
+    private var ggModeSegmented: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 2) {
+                ForEach(Self.ggModeSegments, id: \.mode) { segmentItem in
+                    segment(
+                        id: segmentItem.mode,
+                        isSelected: ggMode == segmentItem.mode,
+                        icon: nil,
+                        label: segmentItem.label,
+                        isEnabled: true,
+                        focusedSegment: $focusedGGModeSegment
+                    ) {
+                        ggMode = segmentItem.mode
+                    }
+                }
+            }
+            .modifier(SegmentedContainerStyle(theme: theme))
+            Spacer(minLength: 0)
+        }
+    }
+
     // MARK: - Launch surface UI
 
     private var pickerAgents: [AgentDefinition] {
@@ -525,7 +547,8 @@ struct NewWorktreeDialog: View {
                     isSelected: !openAfterCreate,
                     icon: "circle.slash",
                     label: "No tab",
-                    isEnabled: true
+                    isEnabled: true,
+                    focusedSegment: $focusedLaunchSurfaceSegment
                 ) {
                     openAfterCreate = false
                 }
@@ -534,7 +557,8 @@ struct NewWorktreeDialog: View {
                     isSelected: openAfterCreate && launchMode == .terminal,
                     icon: "terminal",
                     label: "Terminal",
-                    isEnabled: true
+                    isEnabled: true,
+                    focusedSegment: $focusedLaunchSurfaceSegment
                 ) {
                     openAfterCreate = true
                     launchMode = .terminal
@@ -551,7 +575,8 @@ struct NewWorktreeDialog: View {
                     icon: "sparkle",
                     label: "Chat",
                     isEnabled: acpSegmentEnabled,
-                    disabledHelp: "Enable an ACP-capable agent in Settings → Agents."
+                    disabledHelp: "Enable an ACP-capable agent in Settings → Agents.",
+                    focusedSegment: $focusedLaunchSurfaceSegment
                 ) {
                     openAfterCreate = true
                     launchMode = .acp
@@ -563,35 +588,28 @@ struct NewWorktreeDialog: View {
                     )
                 }
             }
-            .padding(2)
-            .background(theme.color("seg-container-bg"))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .modifier(SegmentedContainerStyle(theme: theme))
             Spacer(minLength: 0)
         }
     }
 
-    private func segment(
-        id: NewWorktreeLaunchSurfaceSegment,
+    private func segment<Segment: Hashable>(
+        id: Segment,
         isSelected: Bool,
-        icon: String,
+        icon: String?,
         label: String,
         isEnabled: Bool,
         disabledHelp: String? = nil,
+        focusedSegment: FocusState<Segment?>.Binding,
         action: @escaping () -> Void
     ) -> some View {
-        let isFocused = focusedLaunchSurfaceSegment == id
-        let isFocusable = isEnabled && Self.launchSurfaceSegmentFocusable(
-            id,
-            acpSegmentEnabled: acpSegmentEnabled
-        )
+        let isFocused = focusedSegment.wrappedValue == id
         return Button(action: action) {
             HStack(spacing: 5) {
-                Icon(name: icon, size: 11,
-                     color: isSelected ? theme.color("fg") : theme.color("fg-muted"))
+                if let icon {
+                    Icon(name: icon, size: 11,
+                         color: isSelected ? theme.color("fg") : theme.color("fg-muted"))
+                }
                 Text(label)
                     .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
                     .foregroundColor(isSelected ? theme.color("fg") : theme.color("fg-muted"))
@@ -616,11 +634,26 @@ struct NewWorktreeDialog: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .focusable(isFocusable)
-        .focused($focusedLaunchSurfaceSegment, equals: id)
+        .focusable(isEnabled)
+        .focused(focusedSegment, equals: id)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
         .modifier(SegmentHelpModifier(text: isEnabled ? nil : disabledHelp))
+    }
+
+    private struct SegmentedContainerStyle: ViewModifier {
+        let theme: Theme
+
+        func body(content: Content) -> some View {
+            content
+                .padding(2)
+                .background(theme.color("seg-container-bg"))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
     }
 
     private struct SegmentHelpModifier: ViewModifier {

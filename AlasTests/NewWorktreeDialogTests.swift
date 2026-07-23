@@ -365,6 +365,11 @@ struct NewWorktreeDialogTests {
         #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .off) == .inherit)
     }
 
+    @Test func ggModeSegmentsMatchDialogOrder() {
+        #expect(NewWorktreeDialog.ggModeSegments.map(\.mode) == [.inherit, .on, .off])
+        #expect(NewWorktreeDialog.ggModeSegments.map(\.label) == ["Inherit", "On", "Off"])
+    }
+
     @Test func canCreateBlocksMissingUsernameOnlyForEffectiveGG() {
         #expect(!NewWorktreeDialog.canCreate(
             projectsEmpty: false,
