@@ -36,6 +36,21 @@ struct DiffReviewRenderableContentEqualityTests {
         #expect(!lhs.hasSameRenderableContent(as: rhs))
     }
 
+    @Test func sameImageProviderIdentityIsEqual() {
+        let provider = imageProvider(revision: "abc123")
+        let lhs = fileModel(path: "a.png", imageProvider: provider)
+        let rhs = fileModel(path: "a.png", imageProvider: provider)
+
+        #expect(lhs.hasSameRenderableContent(as: rhs))
+    }
+
+    @Test func differentImageProviderRevisionIsNotEqual() {
+        let lhs = fileModel(path: "a.png", imageProvider: imageProvider(revision: "abc123"))
+        let rhs = fileModel(path: "a.png", imageProvider: imageProvider(revision: "def456"))
+
+        #expect(!lhs.hasSameRenderableContent(as: rhs))
+    }
+
     @Test func openFilePresenceMismatchIsNotEqual() {
         let lhs = fileModel(path: "a.swift", openFile: {})
         let rhs = fileModel(path: "a.swift")
@@ -126,6 +141,7 @@ private func fileModel(
     lineText: String = "let a = 1",
     openFile: (() -> Void)? = nil,
     contextProvider: DiffReviewContextProvider? = nil,
+    imageProvider: DiffReviewImageProvider? = nil,
     withActions: Bool = false,
     unstageEnabledBase: Bool = true
 ) -> DiffReviewFileSectionModel {
@@ -172,6 +188,7 @@ private func fileModel(
         placeholderMessage: nil,
         openFile: openFile,
         contextProvider: contextProvider,
+        imageProvider: imageProvider,
         stagedMutationActions: withActions
             ? DiffReviewStagedMutationActions(
                 unstageFile: {},
@@ -180,6 +197,22 @@ private func fileModel(
                 unstageEnabledBase: unstageEnabledBase
             )
             : nil
+    )
+}
+
+private func imageProvider(revision: String) -> DiffReviewImageProvider {
+    DiffReviewImageProvider(
+        id: DiffReviewImageProviderID(
+            source: .commit,
+            repository: "/repo",
+            beforeRevision: "\(revision)^",
+            afterRevision: revision,
+            beforePath: "Assets/logo.png",
+            afterPath: "Assets/logo.png"
+        ),
+        load: {
+            ImageDiffPair(before: .missing, after: .missing, oldPath: nil, kind: .modified)
+        }
     )
 }
 

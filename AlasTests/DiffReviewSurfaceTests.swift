@@ -164,6 +164,61 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func fileSectionRendersLazyImageLoadingAndFailureStates() async {
+        let gate = ImagePairLoadGate()
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/logo.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "abc123^",
+                    afterRevision: "abc123",
+                    beforePath: "Assets/logo.png",
+                    afterPath: "Assets/logo.png"
+                ),
+                load: { await gate.wait() }
+            )
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            allowsDraftCommentCreation: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 520)
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-loading-\(file.id.rawValue)", in: controller.view) != nil)
+
+        gate.resume(returning: ImageDiffPair(
+            before: .failed(.init(message: "Could not decode before image")),
+            after: .missing,
+            oldPath: nil,
+            kind: .deleted
+        ))
+        await drainSwiftUI(controller.view)
+
+        #expect(subviews(withAccessibilityIdentifier: "diff-review-image-header-\(file.id.rawValue)", in: controller.view).count == 1)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-loading-\(file.id.rawValue)", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-failure-\(file.id.rawValue)", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-retry-\(file.id.rawValue)", in: controller.view) != nil)
+    }
+
     @Test func fileSectionRefocusesDraftComposerAfterSelectingDifferentGutterRows() async throws {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App/AlphaView.swift"),
@@ -3787,6 +3842,20 @@ struct DiffReviewSurfaceTests {
             return label
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
+    }
+}
+
+@MainActor
+private final class ImagePairLoadGate {
+    private var continuation: CheckedContinuation<ImageDiffPair, Never>?
+
+    func wait() async -> ImageDiffPair {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume(returning pair: ImageDiffPair) {
+        continuation?.resume(returning: pair)
+        continuation = nil
     }
 }
 

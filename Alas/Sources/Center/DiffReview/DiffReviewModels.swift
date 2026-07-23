@@ -195,6 +195,7 @@ struct DiffReviewFileSectionModel: Identifiable {
     let placeholderMessage: String?
     let openFile: (() -> Void)?
     let contextProvider: DiffReviewContextProvider?
+    var imageProvider: DiffReviewImageProvider? = nil
     var stagedMutationActions: DiffReviewStagedMutationActions? = nil
 }
 
@@ -320,6 +321,7 @@ extension DiffReviewFileSectionModel {
             && placeholderMessage == other.placeholderMessage
             && (openFile == nil) == (other.openFile == nil)
             && contextProvider?.id == other.contextProvider?.id
+            && imageProvider?.id == other.imageProvider?.id
             && (stagedMutationActions?.renderableSignature ?? (false, false, false, true))
                 == (other.stagedMutationActions?.renderableSignature ?? (false, false, false, true))
     }

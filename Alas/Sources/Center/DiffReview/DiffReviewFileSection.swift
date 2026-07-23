@@ -128,6 +128,7 @@ struct DiffReviewFileSection: View {
     @State private var contextLoadGeneration = 0
     @State private var contextLoadError: String?
     @State private var pendingContextExpansions: [PendingContextExpansion] = []
+    @State private var imageState = DiffReviewImageState()
     @State private var hoveredInlineFeedbackID: String?
     @State private var hoveredDraftCommentID: String?
     @State private var activeThreadID: String?
@@ -147,7 +148,11 @@ struct DiffReviewFileSection: View {
         VStack(spacing: 0) {
             header
             contextLoadErrorRow
-            if shouldDeferRender {
+            if file.imageProvider != nil {
+                fileLevelDraftCommentStack(renderContext: nil)
+                fileLevelInlineFeedbackStack(renderContext: nil)
+                imageContent
+            } else if shouldDeferRender {
                 renderBudgetPlaceholder
             } else {
                 let renderContext = renderContext
@@ -187,6 +192,10 @@ struct DiffReviewFileSection: View {
         }
         .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
+        }
+        .task(id: file.imageProvider?.id) {
+            guard let provider = file.imageProvider else { return }
+            await imageState.load(provider: provider)
         }
     }
 
@@ -230,6 +239,15 @@ struct DiffReviewFileSection: View {
                         .foregroundColor(theme.color("del"))
                 }
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
+            }
+            if let pair = imageState.pair {
+                ImageDiffControls(pair: pair, state: imageState.presentation)
+                    .background(
+                        DiffReviewAccessibilityMarker(
+                            identifier: "diff-review-image-header-\(file.id.rawValue)",
+                            label: "Image diff controls"
+                        )
+                    )
             }
             if let openFile = file.openFile,
                let openFileTitle = DiffReviewFileSectionActions.openFileButtonTitle(for: file) {
@@ -583,6 +601,72 @@ struct DiffReviewFileSection: View {
             }
         }
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var imageContent: some View {
+        if imageState.isLoading {
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "diff-review-image-loading-\(file.id.rawValue)",
+                        label: "Loading image diff"
+                    )
+                )
+        }
+        if let pair = imageState.pair {
+            ImageDiffComparisonContent(
+                pair: pair,
+                state: imageState.presentation,
+                boundedHeight: 360
+            )
+            if let failureMessage = imageLoadFailureMessage(in: pair) {
+                HStack(spacing: 10) {
+                    Text(failureMessage)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("warn"))
+                    Spacer()
+                    Button("Retry") {
+                        Task { await imageState.retry() }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .accessibilityIdentifier("diff-review-image-retry-\(file.id.rawValue)")
+                    .background(
+                        DiffReviewAccessibilityMarker(
+                            identifier: "diff-review-image-retry-\(file.id.rawValue)",
+                            label: "Retry image diff"
+                        )
+                    )
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(theme.color("bg-1"))
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "diff-review-image-failure-\(file.id.rawValue)",
+                        label: failureMessage
+                    )
+                )
+            }
+        }
+    }
+
+    private func imageLoadFailureMessage(in pair: ImageDiffPair) -> String? {
+        switch (pair.before, pair.after) {
+        case (.failed(let failure), _), (_, .failed(let failure)):
+            failure.message
+        default:
+            nil
+        }
     }
 
     @ViewBuilder
