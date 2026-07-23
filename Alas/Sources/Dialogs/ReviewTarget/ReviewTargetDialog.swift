@@ -136,7 +136,9 @@ struct ReviewTargetDialog: View {
                     }
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         worktreeRow(entry, isSelected: index == model.selectedIndex)
-                            .id(index)
+                            // Data-based id, not the row position: a positional
+                            // id freezes LazyVStack rows against filtering.
+                            .id(entry.id)
                             .onTapGesture {
                                 model.setSelectedIndex(index, selectable: entries.map { _ in true })
                                 Task { await model.activateSelection(environment: environment) }
@@ -154,7 +156,9 @@ struct ReviewTargetDialog: View {
             }
             .frame(minHeight: 200, maxHeight: 420)
             .onChange(of: model.scrollToSelectionTick) { _, _ in
-                proxy.scrollTo(model.selectedIndex)
+                if entries.indices.contains(model.selectedIndex) {
+                    proxy.scrollTo(entries[model.selectedIndex].id)
+                }
             }
         }
     }
@@ -214,7 +218,7 @@ struct ReviewTargetDialog: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    ForEach(Array(rows.enumerated()), id: \.element.stableId) { index, row in
                         targetRowView(
                             row,
                             index: index,
@@ -222,14 +226,18 @@ struct ReviewTargetDialog: View {
                             selectedCommit: selectedCommit,
                             selectable: selectable
                         )
-                        .id(index)
+                        // Content-derived id so filtering rebuilds rows instead
+                        // of leaving stale LazyVStack cells at fixed positions.
+                        .id(row.stableId)
                     }
                 }
                 .padding(.vertical, 4)
             }
             .frame(minHeight: 200, maxHeight: 420)
             .onChange(of: model.scrollToSelectionTick) { _, _ in
-                proxy.scrollTo(model.selectedIndex)
+                if rows.indices.contains(model.selectedIndex) {
+                    proxy.scrollTo(rows[model.selectedIndex].stableId)
+                }
             }
         }
     }

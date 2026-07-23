@@ -25,7 +25,10 @@ struct CompletionPopup: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                             rowView(row)
-                                .id(index)
+                                // Data-based id, not the row position: a
+                                // positional id freezes LazyVStack rows against
+                                // the completion list being re-queried as you type.
+                                .id(row.id)
                                 .background(index == selection ? Color.accentColor.opacity(0.24) : Color.clear)
                                 .contentShape(Rectangle())
                                 .onTapGesture { onChoose(index) }
@@ -58,9 +61,10 @@ struct CompletionPopup: View {
 
     private func scrollSelection(_ selection: Int, proxy: ScrollViewProxy) {
         guard rows.indices.contains(selection) else { return }
+        let id = rows[selection].id
         DispatchQueue.main.async {
             withAnimation(nil) {
-                proxy.scrollTo(selection, anchor: .center)
+                proxy.scrollTo(id, anchor: .center)
             }
         }
     }

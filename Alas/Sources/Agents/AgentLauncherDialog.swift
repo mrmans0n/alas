@@ -200,7 +200,9 @@ struct AgentLauncherDialog: View {
                                 },
                                 onHover: { appState.agentLauncher.selectedIndex = idx }
                             )
-                            .id(idx)
+                            // Data-based id, not the row position: a positional
+                            // id freezes LazyVStack rows against query filtering.
+                            .id(agent.id)
                         }
                     }
                 }
@@ -208,7 +210,10 @@ struct AgentLauncherDialog: View {
             }
             .frame(minHeight: 180, maxHeight: 320)
             .onChange(of: appState.agentLauncher.scrollToSelectionTick) { _, _ in
-                proxy.scrollTo(appState.agentLauncher.selectedIndex, anchor: .center)
+                let index = appState.agentLauncher.selectedIndex
+                if agents.indices.contains(index) {
+                    proxy.scrollTo(agents[index].id, anchor: .center)
+                }
             }
         }
     }

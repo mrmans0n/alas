@@ -95,7 +95,7 @@ struct RepoSelectorDialog: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(renderedRows) { renderedRow in
+                    ForEach(renderedRows, id: \.row.stableId) { renderedRow in
                         RepoSelectorRowView(
                             row: renderedRow.row,
                             isSelected: renderedRow.index == appState.repoSelector.selectedIndex,
@@ -114,7 +114,10 @@ struct RepoSelectorDialog: View {
                                 appState.repoSelector.setSelectedIndex(renderedRow.index, in: rows)
                             }
                         )
-                        .id(renderedRow.index)
+                        // Content-derived id (not the row position): a
+                        // positional id freezes LazyVStack rows against the
+                        // list reordering on each keystroke.
+                        .id(renderedRow.row.stableId)
                     }
                 }
                 .padding(.vertical, 4)
@@ -125,7 +128,10 @@ struct RepoSelectorDialog: View {
                 // .center would re-center on every arrow press, shifting the
                 // list under the cursor and triggering hover-induced
                 // selection bouncing.
-                proxy.scrollTo(appState.repoSelector.selectedIndex)
+                let index = appState.repoSelector.selectedIndex
+                if rows.indices.contains(index) {
+                    proxy.scrollTo(rows[index].stableId)
+                }
             }
         }
     }

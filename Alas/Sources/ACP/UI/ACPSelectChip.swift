@@ -206,7 +206,10 @@ private struct DropdownPanel: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, item in
                             row(idx: idx, item: item)
-                                .id(idx)
+                                // Data-based id, not the row position: a
+                                // positional id freezes LazyVStack rows against
+                                // the substring filter shrinking the list.
+                                .id(item.id)
                         }
                         if filtered.isEmpty {
                             Text("No matches")
@@ -218,8 +221,10 @@ private struct DropdownPanel: View {
                     .padding(.vertical, 4)
                 }
                 .onChange(of: keyboardScrollTick) { _, _ in
+                    let items = filtered
+                    guard items.indices.contains(highlight) else { return }
                     withAnimation(.easeOut(duration: 0.10)) {
-                        proxy.scrollTo(highlight, anchor: .center)
+                        proxy.scrollTo(items[highlight].id, anchor: .center)
                     }
                 }
             }

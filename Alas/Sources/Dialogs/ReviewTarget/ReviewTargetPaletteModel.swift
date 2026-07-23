@@ -34,6 +34,19 @@ final class ReviewTargetPaletteModel {
             case .header, .message: return false
             }
         }
+
+        /// Stable, content-derived identity for SwiftUI list rows. Must not be
+        /// the row's position: a positional id lets LazyVStack cache a row and
+        /// never rebuild it when the filtered content at that position changes,
+        /// freezing stale rows (see FileSearchDialog for the full rationale).
+        var stableId: String {
+            switch self {
+            case .header(let title):  return "header:\(title)"
+            case .commit(let commit): return "commit:\(commit.sha)"
+            case .branch(let name):   return "branch:\(name)"
+            case .message(let text):  return "message:\(text)"
+            }
+        }
     }
 
     private(set) var level: Level = .worktrees
