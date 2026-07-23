@@ -1,14 +1,9 @@
 import SwiftUI
 
 /// Shared body of the plan UI — header (`done / total`) plus the list
-/// of rows with completed / in-progress / pending marks. Used by both
-/// `ACPPlanPill`'s popover (sub-threshold) and `ACPPlanSidebar`
-/// (wide-pane). 320pt content width; the host frames it.
-///
-/// Spec: `docs/superpowers/specs/2026-05-29-acp-plan-sidebar-design.md`
+/// of rows with completed / in-progress / pending marks.
 struct ACPPlanChecklist: View {
     let items: [ACPMessage.PlanItem]
-    var onMinimize: (() -> Void)? = nil
     @Environment(\.theme) private var theme
 
     private var done: Int { items.filter { $0.status == "completed" }.count }
@@ -42,18 +37,6 @@ struct ACPPlanChecklist: View {
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer()
-            if let onMinimize {
-                Button(action: onMinimize) {
-                    Image(systemName: "minus")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(theme.color("fg-faint"))
-                        .frame(width: 20, height: 18)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Minimize tasks to toolbar")
-                .accessibilityLabel("Minimize tasks")
-            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(theme.color("bg-2").opacity(0.4))

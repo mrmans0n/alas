@@ -101,8 +101,6 @@ private struct ACPSessionView: View {
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
-    @State private var showPlanSidebar: Bool = false
-    @State private var suppressRestoredPlanSidebarPlanChange: Bool = false
     @State private var composerFocusRequest: Int = 0
 
     private var adapterTarget: ACPAdapterTarget {
@@ -121,101 +119,38 @@ private struct ACPSessionView: View {
         return host
     }
 
-    /// Re-evaluated on every width / plan change. Pure call into the
-    /// hysteresis reducer; the `.spring` wrap lives at the call site.
-    ///
-    /// Intentionally not debounced. Spec §5 mentioned an ~80ms debounce
-    /// against divider-drag thrash, but the 80pt hysteresis dead band +
-    /// the spring animation absorb that case in practice — and the
-    /// per-tick work here is just an isEmpty check, a Bool compare, and
-    /// an equality test. Revisit if profiling shows otherwise.
-    private func updatePlanSidebar(paneWidth: CGFloat) {
-        let hasPlan = (session.transcript.latestPlan?.isEmpty == false)
-        let next = ACPPlanSidebarVisibility.next(
-            paneWidth: paneWidth,
-            hasPlan: hasPlan,
-            current: showPlanSidebar,
-            userMinimized: session.planSidebarMinimized
-        )
-        if next != showPlanSidebar {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                showPlanSidebar = next
-            }
-        }
-        manager.rememberPlanSidebarVisibility(next, for: sessionId)
-    }
-
-    /// Restore the last layout when SwiftUI reconstructs this tab. Without
-    /// this, a hidden toolbar plan can promote to the inline sidebar solely
-    /// because the pane is wide when the user returns to the tab.
-    private func restoreOrInitializePlanSidebar(paneWidth: CGFloat) {
-        if let remembered = manager.rememberedPlanSidebarVisibility(for: sessionId) {
-            showPlanSidebar = remembered
-            if session.hydrationState == .loading {
-                suppressRestoredPlanSidebarPlanChange = true
-            }
-        } else {
-            updatePlanSidebar(paneWidth: paneWidth)
-        }
-    }
-
     var body: some View {
-        // Keep sidebar visibility tied to the full pane, outside the subtree
-        // whose width changes when the sidebar is inserted or removed.
-        GeometryReader { paneProxy in
-            VStack(spacing: 0) {
-                if ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: isFirstRunConnecting) {
-                    ACPToolbar(
-                        session: session,
-                        manager: manager,
-                        agentLookup: { state.agent(id: $0) },
-                        state: state,
-                        worktree: worktree,
-                        planSidebarUserMinimized: session.planSidebarMinimized,
-                        onRestorePlanSidebar: {
-                            session.planSidebarMinimized = false
-                        }
-                    )
-                    adapterBanner()
-                    contextRestoreBanner()
-                    if isMirror {
-                        mirrorBanner()
-                    }
-                    if let err = session.lastError {
-                        errorBanner(err)
-                    }
-                    if case .failed(let msg) = session.hydrationState {
-                        hydrationFailureBanner(message: msg)
-                    }
-                }
-                transcriptAndComposer
-            }
-            .frame(width: paneProxy.size.width, height: paneProxy.size.height)
-            .onAppear { restoreOrInitializePlanSidebar(paneWidth: paneProxy.size.width) }
-            .onChange(of: paneProxy.size.width) { _, newWidth in
-                updatePlanSidebar(paneWidth: newWidth)
-            }
-            .onChange(of: session.transcript.latestPlan) { _, _ in
-                if suppressRestoredPlanSidebarPlanChange {
-                    suppressRestoredPlanSidebarPlanChange = false
-                    manager.rememberPlanSidebarVisibility(showPlanSidebar, for: sessionId)
-                    return
-                }
-                updatePlanSidebar(paneWidth: paneProxy.size.width)
-            }
-            .onChange(of: session.planSidebarMinimized) { _, _ in
-                updatePlanSidebar(paneWidth: paneProxy.size.width)
-            }
-            .onChange(of: isFirstRunConnecting) { oldValue, newValue in
-                composerFocusRequest = ACPComposerFocusPolicy.focusRequest(
-                    current: composerFocusRequest,
-                    oldFirstRunConnecting: oldValue,
-                    newFirstRunConnecting: newValue,
-                    composerReady: composerCanAcceptInput
+        VStack(spacing: 0) {
+            if ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: isFirstRunConnecting) {
+                ACPToolbar(
+                    session: session,
+                    manager: manager,
+                    agentLookup: { state.agent(id: $0) },
+                    state: state,
+                    worktree: worktree
                 )
+                adapterBanner()
+                contextRestoreBanner()
+                if isMirror {
+                    mirrorBanner()
+                }
+                if let err = session.lastError {
+                    errorBanner(err)
+                }
+                if case .failed(let msg) = session.hydrationState {
+                    hydrationFailureBanner(message: msg)
+                }
             }
+            transcriptAndComposer
         }
-        .environment(\.acpPlanSidebarVisible, showPlanSidebar)
+        .onChange(of: isFirstRunConnecting) { oldValue, newValue in
+            composerFocusRequest = ACPComposerFocusPolicy.focusRequest(
+                current: composerFocusRequest,
+                oldFirstRunConnecting: oldValue,
+                newFirstRunConnecting: newValue,
+                composerReady: composerCanAcceptInput
+            )
+        }
         .task(id: sessionId) {
             await hydrateAndAttach()
         }
@@ -307,25 +242,14 @@ private struct ACPSessionView: View {
     }
 
     private var transcriptAndComposer: some View {
-        HStack(spacing: 0) {
-            GeometryReader { chatProxy in
-                let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
-                    forChatColumnWidth: chatProxy.size.width
-                )
-                chatSurface(contentMaxWidth: chatContentMaxWidth)
-                    .frame(width: chatProxy.size.width, height: chatProxy.size.height)
-                    .animation(emptyStateAnimation, value: isNewEmptySession)
-                    .animation(emptyStateAnimation, value: isFirstRunConnecting)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if showPlanSidebar {
-                ACPPlanSidebar(
-                    transcript: session.transcript,
-                    onMinimize: { session.planSidebarMinimized = true }
-                )
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+        GeometryReader { chatProxy in
+            let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
+                forChatColumnWidth: chatProxy.size.width
+            )
+            chatSurface(contentMaxWidth: chatContentMaxWidth)
+                .frame(width: chatProxy.size.width, height: chatProxy.size.height)
+                .animation(emptyStateAnimation, value: isNewEmptySession)
+                .animation(emptyStateAnimation, value: isFirstRunConnecting)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

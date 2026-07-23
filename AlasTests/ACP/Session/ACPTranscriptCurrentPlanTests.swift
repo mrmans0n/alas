@@ -19,8 +19,8 @@ struct ACPTranscriptCurrentPlanTests {
         #expect(session.transcript.currentPlan == nil)
     }
 
-    @Test("returns the items of the latest plan message")
-    func latestPlanItems() {
+    @Test("returns the items of the current turn's latest plan message")
+    func currentTurnLatestPlanItems() {
         let session = makeSession()
         let firstItems = [ACPMessage.PlanItem(content: "a", status: "completed")]
         let secondItems = [
@@ -149,6 +149,5 @@ struct ACPTranscriptCurrentPlanTests {
 
         #expect(transcript.planCacheRebuildCountForTests == rebuildCount)
         #expect(transcript.currentPlan == updatedPlanItems)
-        #expect(transcript.latestPlan == updatedPlanItems)
     }
 }

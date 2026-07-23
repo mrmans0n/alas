@@ -57,10 +57,6 @@ final class ACPTranscript: ObservableObject {
     /// transcript array changes so high-frequency streaming ticks do not scan
     /// the full message list from `ACPSessionView` / plan UI bodies.
     @Published private(set) var currentPlan: [ACPMessage.PlanItem]?
-    /// The most recent non-empty plan emitted in this session, ignoring turn
-    /// boundaries. Sidebar-only signal that intentionally survives the gap
-    /// between a new user prompt and the next `.plan` arrival.
-    @Published private(set) var latestPlan: [ACPMessage.PlanItem]?
     /// Tick incremented on every streaming chunk that mutates an existing
     /// agent/thought buffer. The buffer itself publishes (so the row's
     /// inner Text re-renders), but the transcript array doesn't change —
@@ -352,18 +348,8 @@ final class ACPTranscript: ObservableObject {
         } else {
             newCurrentPlan = nil
         }
-        let newLatestPlan: [ACPMessage.PlanItem]?
-        if let index = latestPlanMessageIndex,
-           case .plan(_, let items) = messages[index] {
-            newLatestPlan = items.isEmpty ? nil : items
-        } else {
-            newLatestPlan = nil
-        }
         if currentPlan != newCurrentPlan {
             currentPlan = newCurrentPlan
-        }
-        if latestPlan != newLatestPlan {
-            latestPlan = newLatestPlan
         }
     }
 

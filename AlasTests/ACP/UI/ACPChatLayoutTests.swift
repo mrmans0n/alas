@@ -24,20 +24,4 @@ struct ACPChatLayoutTests {
         #expect(ACPChatLayout.contentMaxWidth(forChatColumnWidth: 1_200) == 840)
         #expect(ACPChatLayout.contentMaxWidth(forChatColumnWidth: 880) == 720)
     }
-
-    @Test func planSidebarReducesEffectiveChatColumnWidth() {
-        #expect(ACPChatLayout.chatColumnWidth(
-            forPaneWidth: 1_200,
-            planSidebarVisible: true
-        ) == 880)
-    }
-
-    @Test func planSidebarKeepsMediumPanesAtCurrentChatWidth() {
-        let chatColumnWidth = ACPChatLayout.chatColumnWidth(
-            forPaneWidth: 1_200,
-            planSidebarVisible: true
-        )
-
-        #expect(ACPChatLayout.contentMaxWidth(forPaneWidth: chatColumnWidth) == 720)
-    }
 }

@@ -32,4 +32,25 @@ struct ACPPlanPillState: Equatable {
             self.isAnimating = false
         }
     }
+
+    /// An open popover needs an existing pill to anchor to. Once the plan
+    /// disappears, retain the closed state if a later plan arrives.
+    static func popoverOpenAfterPlanChange(
+        wasOpen: Bool,
+        items: [ACPMessage.PlanItem]?
+    ) -> Bool {
+        wasOpen && ACPPlanPillState(items: items) != nil
+    }
+
+    var progressText: String {
+        "\(done)/\(total)"
+    }
+
+    var accessibilityLabel: String {
+        "Tasks, \(done) of \(total) complete, \(currentStep)"
+    }
+
+    func outlineIsAnimated(reduceMotion: Bool) -> Bool {
+        isAnimating && !reduceMotion
+    }
 }

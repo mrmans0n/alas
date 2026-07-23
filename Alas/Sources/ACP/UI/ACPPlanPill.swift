@@ -1,26 +1,7 @@
 import SwiftUI
 
-/// Environment flag set by `ACPSessionView` when the inline plan
-/// sidebar is currently visible. The toolbar pill reads this and
-/// renders nothing when true (the sidebar is the canonical surface).
-///
-/// Spec §3 / §4a — pill and sidebar are mutually exclusive.
-private struct ACPPlanSidebarVisibleKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var acpPlanSidebarVisible: Bool {
-        get { self[ACPPlanSidebarVisibleKey.self] }
-        set { self[ACPPlanSidebarVisibleKey.self] = newValue }
-    }
-}
-
-/// Floaty pill that lives in the ACP toolbar and surfaces the latest
-/// plan from the session's transcript. Shows `done / total`, the current
-/// step name, a slim progress bar, and an "animated snake" border that
-/// travels around the rounded rectangle while any step is in-progress.
-/// Click expands a popover with the full checklist.
+/// Compact task control in the ACP toolbar. It surfaces the current plan
+/// and opens the full checklist in a popover.
 ///
 /// Observes `ACPTranscript` directly rather than `ACPSession` so the pill
 /// re-renders when only the plan changes (`apply(.plan)` mutates
@@ -28,166 +9,98 @@ extension EnvironmentValues {
 /// `transcript.objectWillChange`).
 struct ACPPlanPill: View {
     @ObservedObject var transcript: ACPTranscript
-    var sidebarUserMinimized: Bool = false
-    var onRestoreSidebar: () -> Void = {}
     @Environment(\.theme) private var theme
-    @Environment(\.acpPlanSidebarVisible) private var sidebarVisible
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var popoverOpen = false
 
     var body: some View {
-        // .onChange lives on the outer Group so it keeps firing even
-        // when the gate below collapses to EmptyView — without that, a
-        // popover open at the moment the sidebar appears would never
-        // be told to close, and would linger next to the sidebar.
         Group {
-            if sidebarUserMinimized,
-               ACPPlanSidebarVisibility.restorePillVisible(
-                    hasPlan: transcript.latestPlan?.isEmpty == false,
-                    userMinimized: sidebarUserMinimized
-               ),
-               let state = ACPPlanPillState(items: transcript.latestPlan) {
-                pill(state: state, mode: .restore)
-            } else if !sidebarVisible, let state = ACPPlanPillState(items: transcript.currentPlan) {
+            if let state = ACPPlanPillState(items: transcript.currentPlan) {
                 pill(state: state)
-            } else {
-                EmptyView()
             }
         }
-        .onChange(of: sidebarVisible) { _, nowVisible in
-            if nowVisible { popoverOpen = false }
+        .onChange(of: transcript.currentPlan) { _, items in
+            popoverOpen = ACPPlanPillState.popoverOpenAfterPlanChange(
+                wasOpen: popoverOpen,
+                items: items
+            )
         }
-    }
-
-    private enum Mode {
-        case popover
-        case restore
     }
 
     @ViewBuilder
-    private func pill(state: ACPPlanPillState, mode: Mode = .popover) -> some View {
+    private func pill(state: ACPPlanPillState) -> some View {
         Button {
-            switch mode {
-            case .popover:
-                popoverOpen.toggle()
-            case .restore:
-                popoverOpen = false
-                onRestoreSidebar()
-            }
+            popoverOpen.toggle()
         } label: {
-            HStack(spacing: 8) {
-                statusDot(animating: state.isAnimating)
-                Text("\(state.done) / \(state.total)")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(theme.color("accent"))
+            HStack(spacing: 5) {
+                Text("Tasks")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(state.progressText)
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                Text("·")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-faint"))
                 Text(state.currentStep)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer(minLength: 8)
-                progressBar(done: state.done, total: state.total)
-                Image(systemName: accessoryIconName(mode: mode))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-faint"))
+                    .frame(maxWidth: 220, alignment: .leading)
             }
-            .padding(.horizontal, 12)
+            .foregroundStyle(theme.color("accent"))
+            .padding(.horizontal, 8)
             .frame(height: 24)
-            .background(pillBackground)
-            .overlay(pillBorder(animating: state.isAnimating))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+            .background(theme.color("accent").opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay {
+                taskOutline(state: state)
+            }
         }
         .buttonStyle(.plain)
-        .help(mode == .restore ? "Restore tasks sidebar" : "Plan — click to view all steps")
+        .help(state.accessibilityLabel)
+        .accessibilityLabel(state.accessibilityLabel)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-            if mode == .popover {
-                if let items = transcript.currentPlan, !items.isEmpty {
-                    ACPPlanChecklist(items: items)
-                        .frame(width: 320)
-                }
+            if let items = transcript.currentPlan, !items.isEmpty {
+                ACPPlanChecklist(items: items)
+                    .frame(width: 320)
             }
-        }
-    }
-
-    private var pillBackground: some View {
-        LinearGradient(
-            colors: [
-                theme.color("accent").opacity(0.16),
-                theme.color("accent").opacity(0.08)
-            ],
-            startPoint: .top, endPoint: .bottom
-        )
-    }
-
-    private func accessoryIconName(mode: Mode) -> String {
-        switch mode {
-        case .restore:
-            return "sidebar.right"
-        case .popover:
-            return popoverOpen ? "chevron.up" : "chevron.down"
         }
     }
 
     @ViewBuilder
-    private func pillBorder(animating: Bool) -> some View {
-        if animating {
+    private func taskOutline(state: ACPPlanPillState) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        shape
+            .strokeBorder(
+                theme.color("accent").opacity(state.isAnimating ? 0.48 : 0.28),
+                lineWidth: state.isAnimating ? 0.75 : 0.5
+            )
+
+        if state.outlineIsAnimated(reduceMotion: reduceMotion) {
             TimelineView(.animation) { context in
-                let cycleSeconds: Double = 2.2
-                let now = context.date.timeIntervalSinceReferenceDate
-                let phase = (now.truncatingRemainder(dividingBy: cycleSeconds)) / cycleSeconds
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(snakeGradient(phase: phase), lineWidth: 1.25)
+                let cycleSeconds = 1.8
+                let phase = context.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: cycleSeconds) / cycleSeconds
+                shape
+                    .strokeBorder(travelingGradient(phase: phase), lineWidth: 1.25)
             }
-        } else {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(theme.color("accent").opacity(0.35), lineWidth: 1)
         }
     }
 
-    private func snakeGradient(phase: Double) -> AngularGradient {
-        let accent = theme.color("accent")
-        let start = Angle.degrees(phase * 360.0)
+    private func travelingGradient(phase: Double) -> AngularGradient {
+        let start = Angle.degrees(phase * 360)
         return AngularGradient(
             stops: [
-                .init(color: .clear,             location: 0.00),
-                .init(color: .clear,             location: 0.60),
-                .init(color: accent.opacity(0.4),location: 0.75),
-                .init(color: accent,             location: 0.88),
-                .init(color: accent.opacity(0.4),location: 0.96),
-                .init(color: .clear,             location: 1.00)
+                .init(color: .clear, location: 0.00),
+                .init(color: .clear, location: 0.72),
+                .init(color: theme.color("accent").opacity(0.20), location: 0.80),
+                .init(color: theme.color("accent").opacity(0.65), location: 0.90),
+                .init(color: theme.color("accent"), location: 0.97),
+                .init(color: .clear, location: 1.00)
             ],
             center: .center,
             startAngle: start,
             endAngle: start + .degrees(360)
         )
-    }
-
-    @ViewBuilder
-    private func statusDot(animating: Bool) -> some View {
-        Circle()
-            .fill(theme.color("accent"))
-            .opacity(animating ? 1.0 : 0.4)
-            .frame(width: 6, height: 6)
-            .shadow(color: animating ? theme.color("accent").opacity(0.7) : .clear, radius: 3)
-    }
-
-    @ViewBuilder
-    private func progressBar(done: Int, total: Int) -> some View {
-        GeometryReader { geo in
-            let ratio: Double = total > 0 ? Double(done) / Double(total) : 0
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(theme.color("fg-faint").opacity(0.18))
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [theme.color("accent"), theme.color("accent").opacity(0.6)],
-                            startPoint: .leading, endPoint: .trailing
-                        )
-                    )
-                    .frame(width: max(2, geo.size.width * CGFloat(ratio)))
-            }
-        }
-        .frame(width: 48, height: 4)
     }
 }

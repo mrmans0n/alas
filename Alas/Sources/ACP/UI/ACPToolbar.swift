@@ -6,8 +6,6 @@ struct ACPToolbar: View {
     let agentLookup: (String) -> AgentDefinition?
     let state: AppState
     let worktree: Worktree
-    let planSidebarUserMinimized: Bool
-    let onRestorePlanSidebar: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -40,11 +38,7 @@ struct ACPToolbar: View {
             if let currentGoal = session.currentGoal {
                 ACPGoalPill(goal: currentGoal)
             }
-            ACPPlanPill(
-                transcript: session.transcript,
-                sidebarUserMinimized: planSidebarUserMinimized,
-                onRestoreSidebar: onRestorePlanSidebar
-            )
+            ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
         }
         .padding(.horizontal, 12)

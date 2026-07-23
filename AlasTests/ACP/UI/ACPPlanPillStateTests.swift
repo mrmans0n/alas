@@ -16,6 +16,21 @@ struct ACPPlanPillStateTests {
         #expect(ACPPlanPillState(items: []) == nil)
     }
 
+    @Test("closing for a missing plan stays closed when the next plan arrives")
+    func popoverDoesNotReopenAfterPlanReturns() {
+        let items: [Item] = [.init(content: "Implement", status: "in_progress")]
+        let closedForMissingPlan = ACPPlanPillState.popoverOpenAfterPlanChange(
+            wasOpen: true,
+            items: nil
+        )
+
+        #expect(closedForMissingPlan == false)
+        #expect(ACPPlanPillState.popoverOpenAfterPlanChange(
+            wasOpen: closedForMissingPlan,
+            items: items
+        ) == false)
+    }
+
     @Test("in_progress step drives current step and turns animation on")
     func inProgressDrivesEverything() {
         let items: [Item] = [
@@ -68,6 +83,43 @@ struct ACPPlanPillStateTests {
         #expect(state?.done == 1)
         #expect(state?.total == 3)
         #expect(state?.currentStep == "Sketch")
+        #expect(state?.isAnimating == false)
+    }
+
+    @Test("display strings keep compact and accessibility copy distinct")
+    func displayStrings() {
+        let state = ACPPlanPillState(items: [
+            .init(content: "Read code", status: "completed"),
+            .init(content: "Implement toolbar control", status: "in_progress"),
+            .init(content: "Test", status: "pending")
+        ])
+
+        #expect(state?.progressText == "1/3")
+        #expect(state?.accessibilityLabel
+            == "Tasks, 1 of 3 complete, Implement toolbar control")
+    }
+
+    @Test("outline animation respects activity and Reduce Motion")
+    func outlineAnimationPolicy() {
+        let active = ACPPlanPillState(items: [
+            .init(content: "Implement", status: "in_progress")
+        ])
+        let pending = ACPPlanPillState(items: [
+            .init(content: "Implement", status: "pending")
+        ])
+
+        #expect(active?.outlineIsAnimated(reduceMotion: false) == true)
+        #expect(active?.outlineIsAnimated(reduceMotion: true) == false)
+        #expect(pending?.outlineIsAnimated(reduceMotion: false) == false)
+    }
+
+    @Test("unknown status keeps fallback title without animation")
+    func unknownStatusFallback() {
+        let state = ACPPlanPillState(items: [
+            .init(content: "Agent-defined state", status: "blocked")
+        ])
+
+        #expect(state?.currentStep == "Agent-defined state")
         #expect(state?.isAnimating == false)
     }
 }
