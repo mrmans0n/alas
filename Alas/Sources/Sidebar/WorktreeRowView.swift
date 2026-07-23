@@ -52,6 +52,10 @@ struct WorktreeRowView: View {
         stackSummaryText(merged: merged, total: total)
     }
 
+    static func pendingStackIndicatorColorToken() -> String {
+        "fg-faint"
+    }
+
     private static func stackSummaryText(merged: Int, total: Int) -> String {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
     }
@@ -170,7 +174,7 @@ struct WorktreeRowView: View {
                             .accessibilityLabel(Self.stackSummaryAccessibilityLabel(merged: stack.merged, total: stack.total))
                         } else if ggMenuModel.showsStatusIndicator {
                             GGSidebarStackShape()
-                                .fill(theme.color("accent"))
+                                .fill(theme.color(Self.pendingStackIndicatorColorToken()))
                                 .frame(width: 9, height: 9)
                                 .help("gg is active for this worktree.")
                                 .accessibilityLabel("gg is active for this worktree.")
