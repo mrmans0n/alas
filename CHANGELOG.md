@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-24
+
+### ✨ Features
+
+- Add run scripts with persistent script storage, launch flow, palette support, and editor tab integration (#910).
+- Surface `git-gud` stack sync readiness and sync actions in Prepare (#907).
+
+### 🐛 Fixes
+
+- Preserve persistent terminal tabs across Alas instances (#903).
+- Match `git-gud` mode segmented control styling in the new worktree dialog (#904).
+- Mute the pending stack indicator in sidebar rows (#906).
+- Make stack review chips clickable from the changes preparation view (#908).
+- Increase the ACP plan pill minimum size (#909).
+
+### 🏗️ Internal
+
+- Update Rust crate `base64` to 0.23 (#905).
+
 ## [0.12.7] - 2026-07-23
 
 ### ✨ Features
