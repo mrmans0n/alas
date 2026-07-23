@@ -1736,6 +1736,21 @@ final class TabsManager {
                 errors.append((tabId, error))
             }
         }
+        // Editable external buffers (e.g. global run scripts) are tracked in
+        // `externalTabURLs`, not `bufferKeys` — they'd otherwise be silently
+        // skipped by every save sweep. Read-only ones are never dirty, so
+        // this is a no-op for the common ⌘-click navigation case.
+        for tabId in externalTabURLs.keys {
+            guard let buffer = peekExternalBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try buffer.saveRecordingError()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
         for (worktreeId, file) in byWorktree {
             guard let root = worktreeRoots[worktreeId] else { continue }
             for tab in file.tabs {
@@ -1761,6 +1776,19 @@ final class TabsManager {
         var saved = Set<ObjectIdentifier>()
         for (tabId, key) in bufferKeys {
             guard let buffer = buffers[key], buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
+        // See the matching pass in `saveAll(worktreeRoots:)`: editable
+        // external buffers (global run scripts) live outside `bufferKeys`.
+        for tabId in externalTabURLs.keys {
+            guard let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
             saved.insert(id)
@@ -1810,6 +1838,20 @@ final class TabsManager {
                 errors.append((tabId, error))
             }
         }
+        // Pass 1b: editable external buffers (global run scripts) belonging
+        // to this worktree — tracked in `externalTabURLs`, not `bufferKeys`.
+        for (tabId, entry) in externalTabURLs {
+            guard entry.worktreeId == worktreeId,
+                  let buffer = peekExternalBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try buffer.saveRecordingError()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
         // Pass 2: editor tabs with no live buffer but a persisted snapshot.
         guard let file = byWorktree[worktreeId] else { return errors }
         for tab in file.tabs {
@@ -1836,6 +1878,20 @@ final class TabsManager {
         for (tabId, key) in bufferKeys {
             guard key.worktreeId == worktreeId,
                   let buffer = buffers[key], buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
+        // Pass 1b: editable external buffers (global run scripts) belonging
+        // to this worktree — tracked in `externalTabURLs`, not `bufferKeys`.
+        for (tabId, entry) in externalTabURLs {
+            guard entry.worktreeId == worktreeId,
+                  let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
             saved.insert(id)

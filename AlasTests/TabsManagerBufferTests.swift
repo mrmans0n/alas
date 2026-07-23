@@ -432,6 +432,60 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "y")
     }
 
+    @Test func saveAllSavesDirtyEditableExternalBuffers() throws {
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("external-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        let externalURL = externalDir.appendingPathComponent("script.sh")
+        try "old".write(to: externalURL, atomically: true, encoding: .utf8)
+        let (manager, _, _) = makeManager()
+        let buffer = manager.externalBuffer(worktreeId: "wt", tabId: "external-tab", absoluteURL: externalURL, editable: true)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "new")
+        #expect(buffer.dirty)
+
+        let errors = manager.saveAll()
+
+        #expect(errors.isEmpty)
+        #expect(buffer.dirty == false)
+        #expect(try String(contentsOf: externalURL, encoding: .utf8) == "new")
+    }
+
+    @Test func saveAllUnsavedSavesDirtyEditableExternalBuffersForWorktree() throws {
+        let root = tempWorktree()
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("external-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        let externalURL = externalDir.appendingPathComponent("script.sh")
+        try "old".write(to: externalURL, atomically: true, encoding: .utf8)
+        let (manager, _, _) = makeManager()
+        let buffer = manager.externalBuffer(worktreeId: "wt", tabId: "external-tab", absoluteURL: externalURL, editable: true)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "new")
+
+        let errors = manager.saveAllUnsaved(forWorktree: "wt", root: root)
+
+        #expect(errors.isEmpty)
+        #expect(buffer.dirty == false)
+        #expect(try String(contentsOf: externalURL, encoding: .utf8) == "new")
+    }
+
+    @Test func saveAllUnsavedIgnoresExternalBuffersFromOtherWorktrees() throws {
+        let root = tempWorktree()
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("external-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        let externalURL = externalDir.appendingPathComponent("script.sh")
+        try "old".write(to: externalURL, atomically: true, encoding: .utf8)
+        let (manager, _, _) = makeManager()
+        let buffer = manager.externalBuffer(worktreeId: "other-wt", tabId: "external-tab", absoluteURL: externalURL, editable: true)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "new")
+
+        let errors = manager.saveAllUnsaved(forWorktree: "wt", root: root)
+
+        #expect(errors.isEmpty)
+        #expect(buffer.dirty == true)
+        #expect(try String(contentsOf: externalURL, encoding: .utf8) == "old")
+    }
+
     @Test func bufferRestoredToSnapshotPathUpdatesTabAndCacheKey() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
