@@ -120,4 +120,35 @@ struct RunScriptLaunchTests {
         #expect(scriptTabs.count == 1)
         #expect(state.pendingScriptLaunches.isEmpty)
     }
+
+    @MainActor
+    @Test func staleRunScriptTabWithoutLiveSessionIsNotRunning() throws {
+        let state = AppState(store: MemoryStore())
+        let runScript = script(executable: false)
+        let project = ProjectConfig(
+            id: "project",
+            name: "Project",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date()
+        )
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/repo"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        _ = state.tabs.appendTerminal(
+            worktreeId: worktree.id,
+            title: runScript.displayName,
+            sessionId: "missing-session",
+            runScriptKey: runScript.key
+        )
+
+        #expect(state.runningScriptTab(for: runScript, in: worktree) == nil)
+    }
 }

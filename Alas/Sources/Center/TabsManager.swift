@@ -170,6 +170,21 @@ final class TabsManager {
         }
     }
 
+    @discardableResult
+    func clearRunScriptMarker(worktreeId: String, tabId: TabID) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx],
+              state.runScriptKey != nil || state.runScriptLeafId != nil else { return nil }
+        state.runScriptKey = nil
+        state.runScriptLeafId = nil
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     func nextTerminalTitle(worktreeId: String, baseTitle: String) -> String {
         let base = baseTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = base.isEmpty ? "Terminal" : base

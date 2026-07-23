@@ -1154,6 +1154,22 @@ struct TabsManagerPaneTests {
         #expect(mgr.terminalTab(withRunScriptKey: "repo:dev.sh", worktreeId: "wt")?.id == tab.id)
     }
 
+    @Test func clearRunScriptMarkerLeavesTerminalTabOpen() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1", runScriptKey: "repo:dev.sh")
+
+        let updated = try #require(mgr.clearRunScriptMarker(worktreeId: "wt", tabId: tab.id))
+
+        guard case .terminal(let state) = updated else {
+            Issue.record("expected terminal tab")
+            return
+        }
+        #expect(state.runScriptKey == nil)
+        #expect(state.runScriptLeafId == nil)
+        #expect(mgr.tabs(forWorktree: "wt").contains { $0.id == tab.id })
+        #expect(mgr.terminalTab(withRunScriptKey: "repo:dev.sh", worktreeId: "wt") == nil)
+    }
+
     @Test func setSplitFractionClampsBetween0_1And0_9() {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")

@@ -3082,6 +3082,14 @@ final class AppState {
                     legacySessionInfos: $0
                 )
             }
+            if state.runScriptLeafId == leaf.id {
+                let reattachingPersistedSession = preResolvedZmxSessionName.map { sessionName in
+                    legacySessionInfos?.contains { $0.name == sessionName } ?? false
+                } ?? false
+                if !reattachingPersistedSession {
+                    _ = tabs.clearRunScriptMarker(worktreeId: worktreeId, tabId: tabId)
+                }
+            }
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,

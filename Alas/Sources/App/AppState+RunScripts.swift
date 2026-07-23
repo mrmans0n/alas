@@ -44,7 +44,14 @@ extension AppState {
     }
 
     func runningScriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
-        tabs.terminalTab(withRunScriptKey: script.key, worktreeId: worktree.id)
+        tabs.tabs(forWorktree: worktree.id).first { tab in
+            guard case .terminal(let state) = tab,
+                  state.runScriptKey == script.key,
+                  let runScriptLeafId = state.runScriptLeafId,
+                  let leaf = state.root.find(leafId: runScriptLeafId)?.leaf
+            else { return false }
+            return terminal.registry.session(for: leaf.sessionId) != nil
+        }
     }
 
     /// Enter/click semantics: focus the script's open tab when it exists,
