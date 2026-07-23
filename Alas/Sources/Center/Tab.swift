@@ -434,12 +434,16 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     var title: String
     var root: PaneNode
     var focusedLeafId: String
+    /// Key of the RunScript this tab was launched from (`"<scope>:<fileName>"`).
+    /// Nil for plain terminals. Persisted so run/focus dedup survives restarts.
+    var runScriptKey: String?
 
-    init(id: TabID, title: String, root: PaneNode, focusedLeafId: String) {
+    init(id: TabID, title: String, root: PaneNode, focusedLeafId: String, runScriptKey: String? = nil) {
         self.id = id
         self.title = title
         self.root = root
         self.focusedLeafId = focusedLeafId
+        self.runScriptKey = runScriptKey
     }
 
     /// Convenience for callers that still create a single-leaf tab. The
@@ -447,22 +451,24 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     /// registry key and zmx session name (both keyed by leaf id since the
     /// switch to stable identity). Callers MUST pass the live
     /// `TerminalSession.id` here, not an unrelated string.
-    init(id: TabID, title: String, sessionId: String) {
+    init(id: TabID, title: String, sessionId: String, runScriptKey: String? = nil) {
         let leafId = sessionId
         self.id = id
         self.title = title
         self.root = .leaf(PaneLeaf(id: leafId, sessionId: sessionId, lastCwd: nil))
         self.focusedLeafId = leafId
+        self.runScriptKey = runScriptKey
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, root, focusedLeafId, sessionId
+        case id, title, root, focusedLeafId, sessionId, runScriptKey
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(TabID.self, forKey: .id)
         self.title = try c.decode(String.self, forKey: .title)
+        self.runScriptKey = try c.decodeIfPresent(String.self, forKey: .runScriptKey)
         if let root = try c.decodeIfPresent(PaneNode.self, forKey: .root) {
             self.root = root
             self.focusedLeafId = try c.decodeIfPresent(String.self, forKey: .focusedLeafId)
@@ -485,6 +491,7 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
         try c.encode(title, forKey: .title)
         try c.encode(root, forKey: .root)
         try c.encode(focusedLeafId, forKey: .focusedLeafId)
+        try c.encodeIfPresent(runScriptKey, forKey: .runScriptKey)
     }
 }
 

@@ -112,4 +112,17 @@ struct TerminalTabStateCodableTests {
         let decoded = try JSONDecoder().decode(TerminalTabState.self, from: json)
         #expect(decoded.focusedLeafId == "leaf-1")
     }
+
+    @Test func decodesLegacyPayloadWithoutRunScriptKey() throws {
+        let json = #"{"id":"t1","title":"Terminal","sessionId":"s1"}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: json)
+        #expect(decoded.runScriptKey == nil)
+    }
+
+    @Test func roundTripsRunScriptKey() throws {
+        let state = TerminalTabState(id: "t1", title: "Dev", sessionId: "s1", runScriptKey: "repo:dev.sh")
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
+        #expect(decoded.runScriptKey == "repo:dev.sh")
+    }
 }

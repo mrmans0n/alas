@@ -153,11 +153,21 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendTerminal(worktreeId: String, title: String, sessionId: String) -> Tab {
-        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId)
+    func appendTerminal(worktreeId: String, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
+        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
         let tab = Tab.terminal(state)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    /// The terminal tab launched from the given run script, if one is open
+    /// in this worktree. One tab per (script, worktree) is an invariant
+    /// maintained by AppState's run/focus logic.
+    func terminalTab(withRunScriptKey key: String, worktreeId: String) -> Tab? {
+        tabs(forWorktree: worktreeId).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.runScriptKey == key
+        }
     }
 
     func nextTerminalTitle(worktreeId: String, baseTitle: String) -> String {
