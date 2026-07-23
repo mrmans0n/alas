@@ -153,6 +153,41 @@ extension GitService {
         }
     }
 
+    func rangeImageProvider(
+        worktreePath: URL,
+        revisions: (before: String, after: String),
+        file: CommitChangedFile
+    ) -> DiffReviewImageProvider {
+        let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
+
+        return imageProvider(
+            source: .range,
+            worktreePath: worktreePath,
+            beforeRevision: revisions.before,
+            afterRevision: revisions.after,
+            beforePath: resolution.oldPath,
+            afterPath: file.path
+        ) { [self] in
+            let before: ImageDiffSide = switch resolution.kind {
+            case .added: .missing
+            default: await imageSide(
+                worktreePath: worktreePath,
+                revision: revisions.before,
+                path: resolution.oldPath ?? file.path
+            )
+            }
+            let after: ImageDiffSide = switch resolution.kind {
+            case .deleted: .missing
+            default: await imageSide(
+                worktreePath: worktreePath,
+                revision: revisions.after,
+                path: file.path
+            )
+            }
+            return ImageDiffPair(before: before, after: after, oldPath: resolution.oldPath, kind: resolution.kind)
+        }
+    }
+
     /// Commit variant. Returns the before/after `NSImage`s for an image
     /// file changed in commit `sha`. The caller passes the
     /// `CommitChangedFile` (which already carries status + originalPath)
@@ -203,6 +238,26 @@ extension GitService {
             beforeFrameCount: frameCount(for: before),
             afterFrameCount: frameCount(for: after)
         )
+    }
+
+    func imageDiffPairForRange(
+        worktreePath: URL,
+        base: String,
+        head: String,
+        threeDot: Bool,
+        file: CommitChangedFile
+    ) async throws -> ImageDiffPair {
+        let revisions = try await resolvedRangeTrees(
+            worktreePath: worktreePath,
+            base: base,
+            head: head,
+            threeDot: threeDot
+        )
+        return await rangeImageProvider(
+            worktreePath: worktreePath,
+            revisions: revisions,
+            file: file
+        ).load()
     }
 
     /// Working-copy variant. Returns the before/after `NSImage`s and the

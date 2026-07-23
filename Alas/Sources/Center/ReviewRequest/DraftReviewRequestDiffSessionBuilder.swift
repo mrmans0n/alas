@@ -7,7 +7,8 @@ enum DraftReviewRequestDiffSessionBuilder {
         context: ReviewRequestDraftContext,
         worktreePath: URL,
         openFileForPath: @escaping (String) -> (() -> Void)?,
-        contextProviderForPath: @escaping (String, String?) -> DiffReviewContextProvider? = { _, _ in nil }
+        contextProviderForPath: @escaping (String, String?) -> DiffReviewContextProvider? = { _, _ in nil },
+        imageProviderForFile: @escaping (CommitChangedFile) -> DiffReviewImageProvider? = { _ in nil }
     ) async throws -> DiffReviewLoadedSession {
         _ = worktreePath
         var sections: [DiffReviewFileSectionModel] = []
@@ -22,7 +23,11 @@ enum DraftReviewRequestDiffSessionBuilder {
                 for: file,
                 diff: parsed,
                 openFile: openFileForPath(file.path),
-                contextProvider: contextProviderForPath(file.path, file.originalPath)
+                contextProvider: contextProviderForPath(file.path, file.originalPath),
+                imageProvider: ImageFileType.isSupported(relativePath: file.path)
+                    || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
+                    ? imageProviderForFile(file)
+                    : nil
             ))
         }
 
@@ -65,10 +70,13 @@ enum DraftReviewRequestDiffSessionBuilder {
         for file: CommitChangedFile,
         diff: ParsedDiff,
         openFile: (() -> Void)?,
-        contextProvider: DiffReviewContextProvider?
+        contextProvider: DiffReviewContextProvider?,
+        imageProvider: DiffReviewImageProvider?
     ) async throws -> DiffReviewFileSectionModel {
         let isImage = ImageFileType.isSupported(relativePath: file.path)
-        let canRender = !diff.hunks.isEmpty && !isImage
+            || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
+        let canRenderText = !diff.hunks.isEmpty && !isImage
+        let canRender = canRenderText || imageProvider != nil
         let counts = lineCounts(for: file, diff: diff)
         let summary = DiffReviewFileSummary(
             path: file.path,
@@ -85,12 +93,13 @@ enum DraftReviewRequestDiffSessionBuilder {
         return DiffReviewFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRender
+            displayModel: canRenderText
                 ? try await buildDisplayModel(diff: diff, filePath: file.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
             openFile: openFile,
-            contextProvider: contextProvider
+            contextProvider: contextProvider,
+            imageProvider: imageProvider
         )
     }
 

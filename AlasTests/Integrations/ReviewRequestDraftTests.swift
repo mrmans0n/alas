@@ -408,7 +408,7 @@ struct ReviewRequestDraftTests {
         #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: selected) == "A.swift")
     }
 
-    @Test func draftReviewRequestDiffSessionBuilderKeepsImagePlaceholderWithFileCounts() async throws {
+    @Test @MainActor func draftReviewRequestDiffSessionBuilderRendersImagesWhenItReceivesAProvider() async throws {
         let imagePath = "Assets/logo.png"
         let textPath = "Docs/README.md"
         let context = ReviewRequestDraftContext(
@@ -429,10 +429,17 @@ struct ReviewRequestDraftTests {
             hasUncommittedChanges: false
         )
 
+        var recordedPaths: [String] = []
         let session = try await DraftReviewRequestDiffSessionBuilder.build(
             context: context,
             worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
-            openFileForPath: { _ -> (() -> Void)? in nil }
+            openFileForPath: { _ -> (() -> Void)? in nil },
+            imageProviderForFile: { file in
+                recordedPaths.append(file.path)
+                return file.path == imagePath
+                    ? imageProvider(path: file.path, before: "merge-base", after: "head")
+                    : nil
+            }
         )
 
         #expect(session.files.map(\.summary.path) == [imagePath, textPath])
@@ -442,10 +449,12 @@ struct ReviewRequestDraftTests {
         let imageSection = try #require(session.files.first)
         #expect(imageSection.summary.additions == 12)
         #expect(imageSection.summary.deletions == 4)
-        #expect(imageSection.summary.isRenderable == false)
+        #expect(imageSection.summary.isRenderable)
         #expect(imageSection.displayModel == nil)
         #expect(imageSection.parsedDiff?.hunks.isEmpty == true)
-        #expect(imageSection.placeholderMessage == "Image changes are not available in this review view yet.")
+        #expect(imageSection.placeholderMessage == nil)
+        #expect(imageSection.imageProvider != nil)
+        #expect(recordedPaths == [imagePath])
 
         let textSection = try #require(session.files.last)
         #expect(textSection.summary.additions == 3)
@@ -679,6 +688,32 @@ struct ReviewRequestDraftTests {
     private func theme() -> Theme {
         try! ThemeStore().current
     }
+}
+
+@MainActor
+private func imageProvider(
+    path: String,
+    before: String,
+    after: String
+) -> DiffReviewImageProvider {
+    DiffReviewImageProvider(
+        id: DiffReviewImageProviderID(
+            source: .range,
+            repository: "/tmp/repo",
+            beforeRevision: before,
+            afterRevision: after,
+            beforePath: path,
+            afterPath: path
+        ),
+        load: {
+            ImageDiffPair(
+                before: .missing,
+                after: .missing,
+                oldPath: nil,
+                kind: .modified
+            )
+        }
+    )
 }
 
 private final class ThreadObservationBox: @unchecked Sendable {

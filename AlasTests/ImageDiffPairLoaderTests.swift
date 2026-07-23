@@ -232,6 +232,69 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.afterImage != nil)
     }
 
+    @Test func loadsTwoDotRangeImagePairAgainstTheResolvedParentTree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "seed\n".write(to: repo.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "seed.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "root"], cwd: repo)
+        let rootSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try PngFixture.green.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await Process.git(["add", "new.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add image"], cwd: repo)
+        let headSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pair = try await GitService().imageDiffPairForRange(
+            worktreePath: repo,
+            base: "\(rootSHA)^",
+            head: headSHA,
+            threeDot: false,
+            file: CommitChangedFile(path: "new.png", originalPath: nil, status: "A", add: 0, del: 0)
+        )
+
+        #expect(pair.kind == .added)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func loadsThreeDotRangeImagePairAgainstTheMergeBase() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try PngFixture.green.write(to: repo.appendingPathComponent("logo.png"))
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "merge base"], cwd: repo)
+        _ = try await Process.git(["branch", "base-tip"], cwd: repo)
+
+        try PngFixture.red.write(to: repo.appendingPathComponent("logo.png"))
+        _ = try await Process.git(["commit", "-q", "-am", "base edit"], cwd: repo)
+        let baseSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        _ = try await Process.git(["checkout", "-q", "base-tip"], cwd: repo)
+        try PngFixture.blue.write(to: repo.appendingPathComponent("logo.png"))
+        _ = try await Process.git(["commit", "-q", "-am", "head edit"], cwd: repo)
+        let headSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pair = try await GitService().imageDiffPairForRange(
+            worktreePath: repo,
+            base: baseSHA,
+            head: headSHA,
+            threeDot: true,
+            file: CommitChangedFile(path: "logo.png", originalPath: nil, status: "M", add: 0, del: 0)
+        )
+
+        let before = try #require(pair.beforeImage)
+        let tiff = try #require(before.tiffRepresentation)
+        let rep = try #require(NSBitmapImageRep(data: tiff))
+        let color = try #require(rep.colorAt(x: 0, y: 0))
+        #expect(color.greenComponent > color.redComponent)
+        #expect(color.greenComponent > color.blueComponent)
+    }
+
     @Test func picksUnstagedEntryWhenBothStagedAndUnstagedExist() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
