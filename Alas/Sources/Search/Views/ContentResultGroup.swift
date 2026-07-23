@@ -16,10 +16,13 @@ struct ContentResultGroupView: View {
             ForEach(Array(group.hits.enumerated()), id: \.element.id) { offset, hit in
                 let absIndex = baseIndex + offset
                 hitRow(hit: hit, absIndex: absIndex, isSelected: absIndex == selectedIndex)
-                    // Match the scroll-target id used by file rows so the
-                    // dialog's `ScrollViewReader.scrollTo(selectedIndex)`
-                    // can reach content hits as keyboard nav moves them.
-                    .id(absIndex)
+                    // Identity/scroll anchor is the hit id, not the row
+                    // position: a stable position id (`.id(absIndex)`) froze
+                    // rows against data changes (see FileSearchDialog for the
+                    // LazyVStack caching rationale), while a data-based id
+                    // changes with the hit and still lets the dialog's
+                    // `scrollTo(selected hit id)` reach it during keyboard nav.
+                    .id(hit.id)
             }
         }
         .padding(.vertical, 6)
