@@ -83,6 +83,7 @@ struct RootView: View {
             RepoSelectorDialog(appState: state)
             AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
             ReviewTargetDialog(appState: state)
+            RunScriptDialog(appState: state, selectedWorktree: selectedWorktree)
         }
     }
 
@@ -724,7 +725,12 @@ private struct RootBaseHandlers: ViewModifier {
                 let mode = notification.object as? AppConfig.LauncherMode
                 state.openAgentLauncherOverlay(mode: mode)
             }
-        let s = r
+        let r2 = r
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenRunScriptPalette)) { _ in
+                guard selectedWorktree() != nil else { return }
+                state.openRunScriptPaletteOverlay()
+            }
+        let s = r2
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
@@ -816,6 +822,7 @@ extension Notification.Name {
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
     static let alasOpenRepoSelector = Notification.Name("AlasOpenRepoSelector")
     static let alasOpenReviewPalette = Notification.Name("AlasOpenReviewPalette")
+    static let alasOpenRunScriptPalette = Notification.Name("AlasOpenRunScriptPalette")
     static let alasSaveActiveTab   = Notification.Name("AlasSaveActiveTab")
     static let alasSaveActiveTabAs = Notification.Name("AlasSaveActiveTabAs")
     static let alasSaveAllTabs     = Notification.Name("AlasSaveAllTabs")

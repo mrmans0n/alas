@@ -153,6 +153,21 @@ extension AppState {
         }
     }
 
+    // MARK: - Palette
+
+    func runScriptPaletteEnvironment(worktree: Worktree) -> RunScriptPaletteEnvironment {
+        RunScriptPaletteEnvironment(
+            scripts: { RunScriptStore.scripts(worktreeRoot: worktree.path) },
+            isRunning: { [weak self] script in
+                self?.runningScriptTab(for: script, in: worktree) != nil
+            },
+            run: { [weak self] script in self?.runOrFocusScript(script, in: worktree) },
+            restart: { [weak self] script in self?.restartScript(script, in: worktree) },
+            edit: { [weak self] script in self?.editScript(script, in: worktree) },
+            newScript: { [weak self] scope in self?.newRunScript(scope: scope, in: worktree) }
+        )
+    }
+
     private func promptForRunScriptName() -> String? {
         let alert = NSAlert()
         alert.messageText = "New Run Script"

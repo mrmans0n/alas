@@ -218,12 +218,14 @@ final class AppState {
     var isRepoSelectorOpen: Bool = false
     var isAgentLauncherOpen: Bool = false
     var isReviewPaletteOpen: Bool = false
+    var isRunScriptPaletteOpen: Bool = false
     var isKeyboardOverlayOpen: Bool {
-        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen
+        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen || isRunScriptPaletteOpen
     }
     let repoSelector = RepoSelectorModel()
     let agentLauncher = AgentLauncherModel()
     let reviewPalette = ReviewTargetPaletteModel()
+    let runScriptPalette = RunScriptPaletteModel()
 
     func openSearchOverlay() {
         reviewPalette.close()
@@ -232,6 +234,8 @@ final class AppState {
         isRepoSelectorOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
         search.open()
         isSearchOpen = true
     }
@@ -241,6 +245,8 @@ final class AppState {
         isReviewPaletteOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
 
         if isRepoSelectorOpen {
             repoSelector.close()
@@ -259,6 +265,8 @@ final class AppState {
         isSearchOpen = false
         repoSelector.close()
         isRepoSelectorOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
         agentLauncher.prepareForOpen(
             defaultMode: mode ?? config.agents.defaultLauncherMode
         )
@@ -273,6 +281,19 @@ final class AppState {
         } else {
             openAgentLauncherOverlay(mode: nil)
         }
+    }
+
+    func openRunScriptPaletteOverlay() {
+        reviewPalette.close()
+        isReviewPaletteOpen = false
+        search.close()
+        isSearchOpen = false
+        repoSelector.close()
+        isRepoSelectorOpen = false
+        agentLauncher.reset()
+        isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = true
     }
 
     /// Computed each time `config.agents` changes or detection re-runs.

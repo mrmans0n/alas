@@ -10,6 +10,8 @@ extension AppState {
         isRepoSelectorOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
+        runScriptPalette.reset()
+        isRunScriptPaletteOpen = false
         if let worktree {
             reviewPalette.open(prefill: worktree)
         } else {
