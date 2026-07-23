@@ -63,7 +63,7 @@ struct RunScriptDialog: View {
                 .foregroundColor(theme.color("fg"))
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 6)
     }
 
     private var rowList: some View {
@@ -71,9 +71,16 @@ struct RunScriptDialog: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if isEmpty(rows) {
+                    if rows.isEmpty {
                         emptyState
                     } else {
+                        // Scripts may be empty while `rows` still holds the
+                        // "New …" actions (query is empty) — show the hint
+                        // above them instead of hiding the only way to
+                        // create a first script from this palette.
+                        if appState.runScriptPalette.scripts.isEmpty {
+                            noScriptsHint
+                        }
                         ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
                             rowView(row, index: idx)
                                 .id(idx)
@@ -89,16 +96,18 @@ struct RunScriptDialog: View {
         }
     }
 
-    /// True when there are no discovered scripts and the only rows are the
-    /// trailing "New …" actions.
-    private func isEmpty(_ rows: [RunScriptPaletteModel.Row]) -> Bool {
-        appState.runScriptPalette.scripts.isEmpty
-            && rows.allSatisfy { row in
-                switch row {
-                case .newRepoScript, .newGlobalScript: return true
-                default: return false
-                }
-            }
+    private var noScriptsHint: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("No run scripts yet")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(theme.color("fg-dim"))
+            Text("Scripts live in .alas/scripts/ in the repo.")
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("fg-faint"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
