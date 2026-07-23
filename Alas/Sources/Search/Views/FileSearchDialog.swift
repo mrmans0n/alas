@@ -70,7 +70,11 @@ struct FileSearchDialog: View {
                                     onTap: { open(r) },
                                     onHover: { model.selectedIndex = idx }
                                 )
-                                .id(idx)
+                                // Identity is the ForEach's `\.element.id` (the
+                                // file). Do NOT override with `.id(position)`:
+                                // a stable position id lets LazyVStack cache the
+                                // row and never rebuild it when the file at that
+                                // position changes, freezing stale results.
                             }
                         case .content:
                             contentGroupViews(model: model)
@@ -80,7 +84,17 @@ struct FileSearchDialog: View {
                 }
                 .frame(minHeight: 240, maxHeight: 460)
                 .onChange(of: model.scrollToSelectionTick) { _, _ in
-                    proxy.scrollTo(model.selectedIndex, anchor: .center)
+                    // Scroll target is the selected row's element id — matching
+                    // the identities the ForEach rows now use.
+                    let targetId: String? = switch model.kind {
+                    case .files:
+                        model.results.fileResults[safe: model.selectedIndex]?.id
+                    case .content:
+                        hit(at: model.selectedIndex, in: model.results.contentGroups)?.id
+                    }
+                    if let targetId {
+                        proxy.scrollTo(targetId, anchor: .center)
+                    }
                 }
             }
         }
