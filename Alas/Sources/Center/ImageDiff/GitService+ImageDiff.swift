@@ -260,6 +260,53 @@ extension GitService {
         ).load()
     }
 
+    func imageDiffPairForStash(
+        worktreePath: URL,
+        stash: GitStash,
+        file: GitStashFile
+    ) async throws -> ImageDiffPair {
+        let resolution = ImageDiffPairResolver.resolveCommit(
+            entry: CommitChangedFile(
+                path: file.path,
+                originalPath: file.oldPath,
+                status: file.status,
+                add: file.add,
+                del: file.del
+            )
+        )
+
+        let before: NSImage?
+        if file.isUntracked || resolution.kind == .added {
+            before = nil
+        } else {
+            before = try await loadBlobImage(
+                worktreePath: worktreePath,
+                ref: "\(stash.sha)^1",
+                path: resolution.oldPath ?? file.path
+            )
+        }
+
+        let after: NSImage?
+        if resolution.kind == .deleted {
+            after = nil
+        } else {
+            after = try await loadBlobImage(
+                worktreePath: worktreePath,
+                ref: file.isUntracked ? "\(stash.sha)^3" : stash.sha,
+                path: file.path
+            )
+        }
+
+        return ImageDiffPair(
+            before: before,
+            after: after,
+            oldPath: resolution.oldPath,
+            kind: resolution.kind,
+            beforeFrameCount: frameCount(for: before),
+            afterFrameCount: frameCount(for: after)
+        )
+    }
+
     /// Working-copy variant. Returns the before/after `NSImage`s and the
     /// kind of change (added/deleted/renamed/modified) for an image file.
     ///

@@ -13,10 +13,67 @@ struct StashDiffTabView: View {
     @State private var layoutMode: DiffLayoutMode = .split
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var imagePair: ImageDiffPair?
+    @State private var imagePairLoaded = false
 
     private let git = GitService()
 
     var body: some View {
+        if ImageFileType.isSupported(relativePath: state.file.path) {
+            imageBody
+        } else {
+            textBody
+        }
+    }
+
+    @ViewBuilder
+    private var imageBody: some View {
+        Group {
+            if !imagePairLoaded {
+                Spinner()
+                    .frame(width: 20, height: 20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let imagePair {
+                ImageDiffView(
+                    pair: imagePair,
+                    relativePath: state.file.path,
+                    onOpenFile: nil
+                )
+            } else {
+                Text("Could not load image diff for \(state.file.path)")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(theme.color("bg-1"))
+        .task(id: imageLoadKey) { await loadImagePair() }
+    }
+
+    private var imageLoadKey: String {
+        "img-stash:\(worktreePath.path)\u{0}\(state.stash.sha)\u{0}\(state.file.path)\u{0}\(state.file.oldPath ?? "")\u{0}\(state.file.isUntracked)"
+    }
+
+    private func loadImagePair() async {
+        imagePairLoaded = false
+        imagePair = nil
+        do {
+            let pair = try await git.imageDiffPairForStash(
+                worktreePath: worktreePath,
+                stash: state.stash,
+                file: state.file
+            )
+            guard !Task.isCancelled else { return }
+            imagePair = pair
+        } catch {
+            // Leave imagePair nil; the placeholder shows the error path.
+        }
+        imagePairLoaded = true
+    }
+
+    @ViewBuilder
+    private var textBody: some View {
         VStack(spacing: 0) {
             header
             if let error {
