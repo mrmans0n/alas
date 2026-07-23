@@ -1547,7 +1547,7 @@ final class AppState {
         }
     }
 
-    nonisolated private static func shellCommand(
+    nonisolated static func shellCommand(
         command: String,
         args: [String],
         env: [String: String],
@@ -1571,7 +1571,7 @@ final class AppState {
         ) != nil
     }
 
-    nonisolated private static func shellQuote(_ s: String) -> String {
+    nonisolated static func shellQuote(_ s: String) -> String {
         if s.range(of: "[^A-Za-z0-9_/.@%+=,:-]", options: .regularExpression) == nil {
             return s
         }
@@ -2507,7 +2507,9 @@ final class AppState {
         includeUserStartupScript: Bool = true,
         forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
-        environmentRemovals: Set<String> = []
+        environmentRemovals: Set<String> = [],
+        titleOverride: String? = nil,
+        runScriptKey: String? = nil
     ) async throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -2519,7 +2521,9 @@ final class AppState {
             includeUserStartupScript: includeUserStartupScript,
             forceInheritParentEnv: forceInheritParentEnv,
             environmentOverrides: environmentOverrides,
-            environmentRemovals: environmentRemovals
+            environmentRemovals: environmentRemovals,
+            titleOverride: titleOverride,
+            runScriptKey: runScriptKey
         )
     }
 
@@ -2530,7 +2534,9 @@ final class AppState {
         includeUserStartupScript: Bool = true,
         forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
-        environmentRemovals: Set<String> = []
+        environmentRemovals: Set<String> = [],
+        titleOverride: String? = nil,
+        runScriptKey: String? = nil
     ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -2572,7 +2578,7 @@ final class AppState {
             })
         }
         harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
-        let title = tabs.nextTerminalTitle(
+        let title = titleOverride ?? tabs.nextTerminalTitle(
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)
         )
@@ -2580,7 +2586,7 @@ final class AppState {
         // above that equals `leafId` (we passed it in). The injected
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
-        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
+        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
     }
 
     private func prepareRemoteAccelerationIfNeeded(for project: ProjectConfig) async {
@@ -4034,7 +4040,7 @@ final class AppState {
         return rel
     }
 
-    private func showFileActionError(title: String, message: String) {
+    func showFileActionError(title: String, message: String) {
         fileActionErrorHandler(title, message)
     }
 
