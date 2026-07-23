@@ -115,4 +115,40 @@ struct GhosttyConfigBuilderTests {
             #expect(emitted["ZMX_SESSION"] == "")
         }
     }
+
+    @Test @MainActor func remoteSurfaceConfigurationDoesNotEmitZmxSessionOverride() {
+        let project = ProjectConfig(
+            id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date(), host: "devbox"
+        )
+        let worktree = Worktree(
+            id: "w", projectId: "p", name: "m", branch: "m",
+            path: URL(fileURLWithPath: "/wt"),
+            status: .clean, lastActivity: Date()
+        )
+        let env = EnvBuilder.build(
+            project: project,
+            worktree: worktree,
+            sessionId: "s",
+            socketPath: nil,
+            inheritParent: true,
+            parent: ["ZMX_SESSION": "alas-parent"]
+        )
+        let config = GhosttyConfigBuilder.makeSurfaceConfiguration(
+            cwd: worktree.path,
+            env: env,
+            executable: "/usr/bin/ssh",
+            args: ["-tt", "devbox"]
+        )
+
+        config.withCValue(nsView: NSObject(), userdata: nil) { cConfig in
+            let variables = UnsafeBufferPointer(
+                start: cConfig.env_vars,
+                count: cConfig.env_var_count
+            )
+            let emitted = Dictionary(uniqueKeysWithValues: variables.map {
+                (String(cString: $0.key), String(cString: $0.value))
+            })
+            #expect(emitted["ZMX_SESSION"] == nil)
+        }
+    }
 }

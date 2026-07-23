@@ -114,6 +114,22 @@ struct EnvBuilderTests {
         #expect(env["ZMX_SESSION_PREFIX"] == "team-")
     }
 
+    @Test func remoteSessionDoesNotAddZmxSessionOverride() {
+        let project = ProjectConfig(
+            id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date(), host: "devbox"
+        )
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            socketPath: nil,
+            inheritParent: true,
+            parent: ["ZMX_SESSION": "alas-parent"]
+        )
+        #expect(env["ZMX_SESSION"] == nil)
+    }
+
     @Test func zmxDirIsEmittedWhenProvided() {
         let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
         let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",

@@ -21,11 +21,13 @@ enum EnvBuilder {
         var env: [String: String] = inheritParent
             ? parent.filter { !strippedKeys.contains($0.key) }
             : [:]
-        // Ghostty starts from the Alas process environment and overlays these
-        // values, so omission cannot remove a ZMX_SESSION inherited by an Alas
-        // instance launched from a persistent terminal. An empty value makes zmx
-        // take its normal attach path instead of switchSesh.
-        env["ZMX_SESSION"] = ""
+        if project.host == nil {
+            // Local Ghostty starts from the Alas process environment and overlays
+            // these values, so omission cannot remove a ZMX_SESSION inherited by
+            // an Alas instance launched from a persistent terminal. An empty value
+            // makes zmx take its normal attach path instead of switchSesh.
+            env["ZMX_SESSION"] = ""
+        }
         env["ALAS_REPO"] = project.name
         env["ALAS_BRANCH"] = worktree.branch
         env["ALAS_WORKTREE"] = worktree.path.path
