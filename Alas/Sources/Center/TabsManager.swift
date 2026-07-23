@@ -1778,12 +1778,12 @@ final class TabsManager {
             }
         }
         for (worktreeId, file) in byWorktree {
-            guard let root = worktreeRoots[worktreeId] else { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
                       (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+                let root = worktreeRoots[worktreeId]
+                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
                 do {
                     try buffer.saveRecordingError()
                     buffer.close(persistDirtySnapshot: false)
@@ -1825,12 +1825,12 @@ final class TabsManager {
             }
         }
         for (worktreeId, file) in byWorktree {
-            guard let root = worktreeRoots[worktreeId] else { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
                       (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+                let root = worktreeRoots[worktreeId]
+                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
                 do {
                     try await buffer.saveRecordingErrorAwaitingRemote()
                     buffer.close(persistDirtySnapshot: false)
@@ -1884,7 +1884,7 @@ final class TabsManager {
             guard case .editor(let state) = tab,
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
             do {
                 try buffer.saveRecordingError()
                 buffer.close(persistDirtySnapshot: false)
@@ -1933,7 +1933,7 @@ final class TabsManager {
             guard case .editor(let state) = tab,
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
             do {
                 try await buffer.saveRecordingErrorAwaitingRemote()
                 buffer.close(persistDirtySnapshot: false)
@@ -1945,8 +1945,19 @@ final class TabsManager {
         return errors
     }
 
-    private func materializeSnapshotBufferForSave(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer? {
+    private func materializeSnapshotBufferForSave(worktreeId: String, state: EditorTabState, worktreeRoot: URL?) -> EditorBuffer? {
+        let tabId = state.id
         guard let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil else { return nil }
+        if let externalAbsolutePath = state.externalAbsolutePath, state.isExternalEditable {
+            return externalBuffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                absoluteURL: URL(fileURLWithPath: externalAbsolutePath),
+                editable: true
+            )
+        }
+        guard let worktreeRoot else { return nil }
+        let relativePath = state.relativePath
         if snapshot.relativePath != relativePath,
            !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
             bufferStore.discard(worktreeId: worktreeId, tabId: tabId)

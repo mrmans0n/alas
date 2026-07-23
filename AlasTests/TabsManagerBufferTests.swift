@@ -1117,6 +1117,39 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) != nil)
     }
 
+    @Test func saveAllWritesUnloadedEditableExternalSnapshotToAbsoluteFile() throws {
+        let worktreeId = "tabs-manager-external-save-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let root = tempWorktree()
+        try "worktree\n".write(to: root.appendingPathComponent("script.sh"), atomically: true, encoding: .utf8)
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("external-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        let externalURL = externalDir.appendingPathComponent("script.sh")
+        try "old\n".write(to: externalURL, atomically: true, encoding: .utf8)
+        let (_, store, _) = makeManager()
+        let firstManager = TabsManager(bufferStore: store)
+        let tab = firstManager.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: externalURL,
+            revealLine: nil,
+            revealCharacter: nil,
+            editable: true
+        )
+        let first = firstManager.externalBuffer(worktreeId: worktreeId, tabId: tab.id, absoluteURL: externalURL, editable: true)
+        first.storage.replaceCharacters(in: NSRange(location: 0, length: first.storage.length), with: "new\n")
+        firstManager.snapshotDirtyBuffersForQuit()
+
+        let secondManager = TabsManager(bufferStore: store)
+        secondManager.loadAll(worktreeIds: [worktreeId])
+        let errors = secondManager.saveAll(worktreeRoots: [worktreeId: root])
+
+        #expect(errors.isEmpty)
+        #expect(try String(contentsOf: externalURL, encoding: .utf8) == "new\n")
+        #expect(try String(contentsOf: root.appendingPathComponent("script.sh"), encoding: .utf8) == "worktree\n")
+        #expect(try store.read(worktreeId: worktreeId, tabId: tab.id) == nil)
+    }
+
     @Test func externalBufferIsReleasedWhenTabIsClosed() async throws {
         let (manager, store, _) = makeManager()
         let url = FileManager.default.temporaryDirectory

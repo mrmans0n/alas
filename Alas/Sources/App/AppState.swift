@@ -291,6 +291,7 @@ final class AppState {
     }
 
     func openRunScriptPaletteOverlay() {
+        guard !isRunScriptPaletteOpen else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         search.close()

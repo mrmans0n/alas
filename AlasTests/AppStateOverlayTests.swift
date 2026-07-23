@@ -115,4 +115,33 @@ struct AppStateOverlayTests {
         #expect(state.agentLauncher.query == "")
         #expect(state.agentLauncher.selectedIndex == 0)
     }
+
+    @Test func openingRunScriptPaletteWhileOpenKeepsLoadedScripts() {
+        let state = AppState(store: MemoryStore())
+        let script = RunScript(
+            scope: .repo,
+            fileName: "build.sh",
+            fileURL: URL(fileURLWithPath: "/tmp/build.sh"),
+            displayName: "Build",
+            onExit: .keep,
+            cwd: nil,
+            isExecutable: true
+        )
+        state.runScriptPalette.load(environment: RunScriptPaletteEnvironment(
+            scripts: { [script] },
+            isRunning: { _ in false },
+            run: { _ in },
+            restart: { _ in },
+            edit: { _ in },
+            newScript: { _ in }
+        ))
+        state.runScriptPalette.query = "b"
+        state.isRunScriptPaletteOpen = true
+
+        state.openRunScriptPaletteOverlay()
+
+        #expect(state.isRunScriptPaletteOpen)
+        #expect(state.runScriptPalette.scripts == [script])
+        #expect(state.runScriptPalette.query == "b")
+    }
 }
