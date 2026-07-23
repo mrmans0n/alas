@@ -75,6 +75,18 @@ struct DiffReviewActiveCommentIDs {
     }
 }
 
+struct DiffReviewImageProviderThreadPresentation {
+    let onReply: (String) -> Void
+    let onStageReply: (String) -> Void
+    let onResolve: () -> Void
+    let onUnresolve: () -> Void
+    let onEdit: (DiffInlineComment, String) -> Void
+    let onDelete: (DiffInlineComment) -> Void
+    let canReply: Bool
+    let canResolve: Bool
+    let canAddToReview: Bool
+}
+
 struct DiffReviewFileSection: View {
     let file: DiffReviewFileSectionModel
     var inlineFeedback: [DiffReviewInlineFeedback] = []
@@ -151,6 +163,7 @@ struct DiffReviewFileSection: View {
             if file.imageProvider != nil {
                 fileLevelDraftCommentStack(renderContext: nil)
                 fileLevelInlineFeedbackStack(renderContext: nil)
+                imageProviderFeedbackStack
                 imageContent
             } else if shouldDeferRender {
                 renderBudgetPlaceholder
@@ -495,6 +508,69 @@ struct DiffReviewFileSection: View {
             return ReviewDraftCommentPlacement.position(draftComments, in: []).fileLevel
         }
         return renderContext.fileLevelDraftComments
+    }
+
+    @ViewBuilder
+    private var imageProviderFeedbackStack: some View {
+        if !threads.isEmpty || !annotations.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(threads) { thread in
+                    let presentation = imageProviderThreadPresentation(for: thread)
+                    DiffInlineCommentCard(
+                        thread: thread,
+                        onReply: presentation.onReply,
+                        onStageReply: presentation.onStageReply,
+                        onResolve: presentation.onResolve,
+                        onUnresolve: presentation.onUnresolve,
+                        onEdit: presentation.onEdit,
+                        onDelete: presentation.onDelete,
+                        canReply: presentation.canReply,
+                        canResolve: presentation.canResolve,
+                        canAddToReview: presentation.canAddToReview,
+                        onActiveChange: { active in
+                            activeThreadID = active
+                                ? thread.id
+                                : (activeThreadID == thread.id ? nil : activeThreadID)
+                        }
+                    )
+                    .background(
+                        DiffReviewAccessibilityMarker(
+                            identifier: "diff-review-image-thread-\(thread.id)",
+                            label: "Image review thread"
+                        )
+                    )
+                }
+                ForEach(annotations) { annotation in
+                    DiffInlineAnnotationCard(annotation: annotation)
+                        .background(
+                            DiffReviewAccessibilityMarker(
+                                identifier: "diff-review-image-annotation-\(annotation.id)",
+                                label: annotation.message
+                            )
+                        )
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(theme.color("bg-1"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        }
+    }
+
+    func imageProviderThreadPresentation(
+        for thread: DiffInlineCommentThread
+    ) -> DiffReviewImageProviderThreadPresentation {
+        DiffReviewImageProviderThreadPresentation(
+            onReply: { body in onReply(thread, body) },
+            onStageReply: { body in onStageReply(thread, body) },
+            onResolve: { onResolve(thread) },
+            onUnresolve: { onUnresolve(thread) },
+            onEdit: { comment, body in onEdit(thread, comment, body) },
+            onDelete: { comment in onDelete(thread, comment) },
+            canReply: canReply && thread.viewerCanReply,
+            canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+            canAddToReview: canAddToReview
+        )
     }
 
     private var renderContext: DiffReviewRenderContext? {

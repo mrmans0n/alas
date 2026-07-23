@@ -1,5 +1,52 @@
 import SwiftUI
 
+enum DiffReviewProviderFeedbackResolver {
+    static func threads(
+        _ threads: [ReviewThread],
+        for filePath: String,
+        includeFileLevel: Bool
+    ) -> [DiffInlineCommentThread] {
+        threads
+            .filter {
+                $0.path == filePath
+                    && !$0.isOutdated
+                    && (includeFileLevel || !$0.isFileLevel)
+            }
+            .compactMap { thread in
+                let isOldSide: Bool
+                if let side = thread.diffSide {
+                    isOldSide = side.uppercased() == "LEFT"
+                } else {
+                    isOldSide = thread.line == nil && thread.originalLine != nil
+                }
+                guard includeFileLevel || thread.line != nil || thread.originalLine != nil else {
+                    return nil
+                }
+                return DiffInlineCommentThread(
+                    id: thread.id,
+                    filePath: thread.path ?? "",
+                    newLine: thread.line ?? thread.originalLine ?? 1,
+                    startLine: thread.rangeStartLine(isOldSide: isOldSide),
+                    isOldSide: isOldSide,
+                    isResolved: thread.isResolved,
+                    isOutdated: thread.isOutdated,
+                    comments: thread.comments.map { comment in
+                        DiffInlineComment(
+                            id: comment.id,
+                            author: comment.author ?? "unknown",
+                            body: comment.body,
+                            viewerCanUpdate: comment.viewerCanUpdate,
+                            viewerCanDelete: comment.viewerCanDelete
+                        )
+                    },
+                    viewerCanReply: thread.viewerCanReply,
+                    viewerCanResolve: thread.viewerCanResolve,
+                    viewerCanUnresolve: thread.viewerCanUnresolve
+                )
+            }
+    }
+}
+
 struct DiffReviewSurface: View {
     let session: DiffReviewLoadedSession
     @Binding var selectedFileID: DiffReviewFileID?
@@ -329,7 +376,11 @@ struct DiffReviewSurface: View {
                     contextExpandedFileIDs.insert(file.id)
                 },
                 reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                threads: inlineThreads(for: file.summary.path),
+                threads: DiffReviewProviderFeedbackResolver.threads(
+                    threads,
+                    for: file.summary.path,
+                    includeFileLevel: file.imageProvider != nil
+                ),
                 annotations: inlineAnnotations(for: file.summary.path),
                 onReply: onReply,
                 onResolve: onResolve,
@@ -517,38 +568,11 @@ struct DiffReviewSurface: View {
     }
 
     private func inlineThreads(for filePath: String) -> [DiffInlineCommentThread] {
-        threads
-            .filter { $0.path == filePath && !$0.isFileLevel && !$0.isOutdated }
-            .compactMap { thread in
-                let isOldSide: Bool
-                if let side = thread.diffSide {
-                    isOldSide = side.uppercased() == "LEFT"
-                } else {
-                    isOldSide = thread.line == nil && thread.originalLine != nil
-                }
-                guard let line = thread.line ?? thread.originalLine else { return nil }
-                return DiffInlineCommentThread(
-                    id: thread.id,
-                    filePath: thread.path ?? "",
-                    newLine: line,
-                    startLine: thread.rangeStartLine(isOldSide: isOldSide),
-                    isOldSide: isOldSide,
-                    isResolved: thread.isResolved,
-                    isOutdated: thread.isOutdated,
-                    comments: thread.comments.map { c in
-                        DiffInlineComment(
-                            id: c.id,
-                            author: c.author ?? "unknown",
-                            body: c.body,
-                            viewerCanUpdate: c.viewerCanUpdate,
-                            viewerCanDelete: c.viewerCanDelete
-                        )
-                    },
-                    viewerCanReply: thread.viewerCanReply,
-                    viewerCanResolve: thread.viewerCanResolve,
-                    viewerCanUnresolve: thread.viewerCanUnresolve
-                )
-            }
+        DiffReviewProviderFeedbackResolver.threads(
+            threads,
+            for: filePath,
+            includeFileLevel: false
+        )
     }
 }
 

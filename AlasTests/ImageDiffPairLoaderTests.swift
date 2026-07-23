@@ -101,6 +101,88 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.oldPath == nil)
     }
 
+    @Test func corruptWorkingTreeImageIsFailedRatherThanMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try Data("not an image".utf8).write(to: pngURL)
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo,
+            relativePath: "logo.png",
+            staged: false
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt working-tree side to fail")
+            return
+        }
+        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+    }
+
+    @Test func corruptCommitImageIsFailedRatherThanMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try Data("not an image".utf8).write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "corrupt"], cwd: repo)
+        let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pair = try await GitService().imageDiffPairForCommit(
+            worktreePath: repo,
+            sha: sha,
+            file: CommitChangedFile(
+                path: "logo.png",
+                originalPath: nil,
+                status: "M",
+                add: 0,
+                del: 0
+            )
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt commit side to fail")
+            return
+        }
+        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+    }
+
+    @Test func corruptWorkingTreeImageAgainstHeadIsFailedRatherThanMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try Data("not an image".utf8).write(to: pngURL)
+
+        let pair = try await GitService().imageDiffPairAgainstHEAD(
+            worktreePath: repo,
+            relativePath: "logo.png"
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt working-tree side to fail")
+            return
+        }
+        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+        #expect(pair.kind == .modified)
+    }
+
     @Test func loadsImageAtTargetRevisionDespiteWorkingTreeChanges() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
