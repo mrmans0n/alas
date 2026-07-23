@@ -1569,10 +1569,18 @@ final class TabsManager {
         buffer.startWatching()
     }
 
+    /// Excludes external tabs deliberately: `peekBuffer` resolves them via
+    /// its external fallback, but callers here (Save As, Rename) assume a
+    /// worktree-relative `relativePath` and call `saveAs`/`moveTo`, which
+    /// operate against the buffer's own root — the script's parent
+    /// directory for an external buffer, not the worktree. Cmd+S and revert
+    /// don't go through this path (they use `peekBuffer` directly, which is
+    /// exactly where the external fallback is meant to apply).
     func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
         guard let activeId = activeTabId(forWorktree: worktreeId),
               let tab = tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .editor(let state) = tab,
+              !state.isExternal,
               let buffer = peekBuffer(tabId: activeId) else { return nil }
         return (state, buffer)
     }
@@ -1718,6 +1726,15 @@ final class TabsManager {
         for (tabId, _) in bufferKeys {
             guard let buffer = peekBuffer(tabId: tabId), buffer.dirty else { continue }
             buffer.snapshotNow(tabId: tabId)
+        }
+        // Editable external buffers (e.g. global run scripts) have no
+        // hot-exit snapshot store — they always read/write their real file
+        // directly, so the equivalent of "preserve on quit" for them is a
+        // direct synchronous save rather than a snapshot. Errors are
+        // swallowed for the same reason as the loop above.
+        for tabId in externalTabURLs.keys {
+            guard let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
+            try? buffer.save()
         }
     }
 

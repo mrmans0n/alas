@@ -410,6 +410,25 @@ struct TabsManagerTests {
         }
     }
 
+    @Test func activeEditorContextExcludesExternalTabs() {
+        let worktreeId = "tabs-manager-active-context-external"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        _ = mgr.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: URL(fileURLWithPath: "/tmp/some-script.sh"),
+            revealLine: nil, revealCharacter: nil,
+            editable: true
+        )
+
+        // Save As / Rename assume a worktree-relative path; an active
+        // external tab (e.g. an editable global run script) must not
+        // satisfy this context, or those actions would write/rename inside
+        // the external buffer's own root instead of the chosen worktree
+        // location. See `activeEditorContext`'s doc comment.
+        #expect(mgr.activeEditorContext(worktreeId: worktreeId) == nil)
+    }
+
     @Test func openImagePreviewAppendsAndActivates() {
         let worktreeId = "tabs-manager-open-image-preview"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
