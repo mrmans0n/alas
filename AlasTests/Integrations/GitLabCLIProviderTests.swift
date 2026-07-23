@@ -97,6 +97,56 @@ struct GitLabCLIProviderTests {
         }
     }
 
+    @Test func reviewImageRevisionsAndFileDataUseReviewedGitLabDiffRefs() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsWithMultipleHeadsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"content":"iVBO\nRw==","encoding":"base64"}"#, stderr: ""),
+        ])
+        let request = Self.makeRequest(headSHA: "reviewed-head")
+        let provider = GitLabCLIProvider(runner: runner)
+
+        let revisions = try await provider.reviewImageRevisions(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+        let data = try await provider.reviewFileData(
+            remote: Self.remote,
+            revision: revisions.afterSHA,
+            path: "Assets/Diff image.png",
+            cwd: Self.cwd
+        )
+
+        #expect(revisions == CodeHostReviewImageRevisions(
+            beforeSHA: "reviewed-base",
+            afterSHA: "reviewed-head"
+        ))
+        #expect(data == Data([0x89, 0x50, 0x4e, 0x47]))
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/versions",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/repository/files/Assets%2FDiff%20image.png?ref=reviewed-head",
+                    "--method", "GET",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
     @Test func mrListJSONParsesReviewRequest() throws {
         let request = try #require(try GitLabCLIProvider.parseMRList(Self.mrListOutput, remote: Self.remote, headOwner: nil))
 
@@ -2414,6 +2464,7 @@ struct GitLabCLIProviderTests {
     private static let cwd = URL(fileURLWithPath: "/tmp/alas")
 
     private static func makeRequest(
+        baseSHA: String? = nil,
         headSHA: String = "head123",
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = []
@@ -2427,6 +2478,7 @@ struct GitLabCLIProviderTests {
             isDraft: false,
             headRefName: "feature/gitlab-provider",
             baseRefName: "main",
+            baseSHA: baseSHA,
             headSHA: headSHA,
             reviewDecision: .unknown,
             mergeState: .unknown,

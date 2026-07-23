@@ -28,6 +28,11 @@ enum CodeHostProviderError: LocalizedError, Equatable {
     }
 }
 
+struct CodeHostReviewImageRevisions: Equatable, Sendable {
+    let beforeSHA: String
+    let afterSHA: String
+}
+
 protocol CodeHostCommandRunning: Sendable {
     func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult
 }
@@ -107,6 +112,17 @@ protocol CodeHostProvider: Sendable {
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String
+    func reviewImageRevisions(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> CodeHostReviewImageRevisions
+    func reviewFileData(
+        remote: CodeHostRemote,
+        revision: String,
+        path: String,
+        cwd: URL
+    ) async throws -> Data
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem]
     func checkEvidenceDetail(
         remote: CodeHostRemote,
@@ -208,6 +224,23 @@ extension CodeHostProvider {
     var capabilities: CodeHostProviderCapabilities { .readOnly }
 
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
+    }
+
+    func reviewImageRevisions(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> CodeHostReviewImageRevisions {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
+    }
+
+    func reviewFileData(
+        remote: CodeHostRemote,
+        revision: String,
+        path: String,
+        cwd: URL
+    ) async throws -> Data {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 

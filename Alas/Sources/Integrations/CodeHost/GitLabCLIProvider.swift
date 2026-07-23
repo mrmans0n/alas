@@ -189,6 +189,49 @@ struct GitLabCLIProvider: CodeHostProvider {
         return result.stdout
     }
 
+    func reviewImageRevisions(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> CodeHostReviewImageRevisions {
+        let diffRefs = try await mergeRequestDiffRefs(remote: remote, request: request, cwd: cwd)
+        return CodeHostReviewImageRevisions(beforeSHA: diffRefs.baseSHA, afterSHA: diffRefs.headSHA)
+    }
+
+    func reviewFileData(
+        remote: CodeHostRemote,
+        revision: String,
+        path: String,
+        cwd: URL
+    ) async throws -> Data {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/\(Self.encodedProjectPath(remote.repositorySlug))/repository/files/\(Self.encodedFilePath(path))?ref=\(revision)",
+                "--method", "GET",
+                "--hostname", remote.host,
+                "--output", "json",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api repository file", stderr: result.stderr)
+        }
+
+        let response: GitLabFileContentResponse
+        do {
+            response = try JSONDecoder().decode(GitLabFileContentResponse.self, from: Data(result.stdout.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api repository file output")
+        }
+        let normalizedBase64 = response.content.filter { !$0.isWhitespace }
+        guard let data = Data(base64Encoded: normalizedBase64) else {
+            throw CodeHostProviderError.malformedOutput("glab api repository file returned invalid base64 content")
+        }
+        return data
+    }
+
     func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
         let publishableComments = request.comments.filter { $0.side != .unknown }
         let preflightFailures = request.comments
@@ -1025,6 +1068,12 @@ struct GitLabCLIProvider: CodeHostProvider {
         return projectPath.addingPercentEncoding(withAllowedCharacters: allowed) ?? projectPath
     }
 
+    static func encodedFilePath(_ path: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/")
+        return path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+    }
+
     private func sourceProjectPathsByID(
         fromMRListJSON json: String,
         headOwner: String?,
@@ -1685,6 +1734,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             isDraft: request.isDraft,
             headRefName: request.headRefName,
             baseRefName: request.baseRefName,
+            baseSHA: request.baseSHA,
             headSHA: request.headSHA,
             reviewDecision: request.reviewDecision,
             mergeState: request.mergeState,
@@ -1874,6 +1924,10 @@ private struct GitLabMRVersion: Decodable {
             headSHA: try container.decodeIfPresent(String.self, forKey: .headCommitSHA) ?? ""
         )
     }
+}
+
+private struct GitLabFileContentResponse: Decodable {
+    let content: String
 }
 
 private struct GitLabCreateDiscussionPayload: Encodable {

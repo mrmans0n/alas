@@ -410,6 +410,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let isDraft: Bool
     let headRefName: String
     let baseRefName: String
+    let baseSHA: String?
     let headSHA: String?
     /// Owner (login) and name of the repository the head branch lives in.
     /// Differ from `remote` for forked pull requests — including same-owner
@@ -441,6 +442,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         isDraft: Bool,
         headRefName: String,
         baseRefName: String,
+        baseSHA: String? = nil,
         headSHA: String? = nil,
         headRepositoryOwner: String? = nil,
         headRepositoryName: String? = nil,
@@ -460,6 +462,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         self.isDraft = isDraft
         self.headRefName = headRefName
         self.baseRefName = baseRefName
+        self.baseSHA = baseSHA
         self.headSHA = headSHA
         self.headRepositoryOwner = headRepositoryOwner
         self.headRepositoryName = headRepositoryName
@@ -494,6 +497,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             isDraft: isDraft,
             headRefName: headRefName,
             baseRefName: baseRefName,
+            baseSHA: baseSHA,
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
             headRepositoryName: headRepositoryName,
@@ -521,6 +525,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             isDraft: isDraft,
             headRefName: headRefName,
             baseRefName: baseRefName,
+            baseSHA: baseSHA,
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
             headRepositoryName: headRepositoryName,
@@ -544,6 +549,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             isDraft: isDraft,
             headRefName: headRefName,
             baseRefName: baseRefName,
+            baseSHA: baseSHA,
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
             headRepositoryName: headRepositoryName,
