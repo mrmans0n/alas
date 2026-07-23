@@ -194,6 +194,9 @@ struct GitLabCLIProvider: CodeHostProvider {
         request: ReviewRequest,
         cwd: URL
     ) async throws -> CodeHostReviewImageRevisions {
+        guard Self.normalizedOptionalString(request.headSHA) != nil else {
+            throw CodeHostProviderError.malformedOutput("GitLab image revisions require the reviewed merge request head SHA.")
+        }
         let diffRefs = try await mergeRequestDiffRefs(remote: remote, request: request, cwd: cwd)
         return CodeHostReviewImageRevisions(beforeSHA: diffRefs.baseSHA, afterSHA: diffRefs.headSHA)
     }

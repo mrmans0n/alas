@@ -147,6 +147,34 @@ struct GitLabCLIProviderTests {
         ])
     }
 
+    @Test func reviewImageRevisionsRejectsMissingReviewedHeadSHA() async {
+        let runner = FakeRunner(results: [])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("GitLab image revisions require the reviewed merge request head SHA.")) {
+            _ = try await GitLabCLIProvider(runner: runner).reviewImageRevisions(
+                remote: Self.remote,
+                request: Self.makeRequest(headSHA: " \n "),
+                cwd: Self.cwd
+            )
+        }
+        #expect(await runner.commands.isEmpty)
+    }
+
+    @Test func reviewFileDataRejectsInvalidBase64() async {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: #"{"content":"not valid base64!","encoding":"base64"}"#, stderr: ""),
+        ])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("glab api repository file returned invalid base64 content")) {
+            _ = try await GitLabCLIProvider(runner: runner).reviewFileData(
+                remote: Self.remote,
+                revision: "head-sha",
+                path: "Assets/Diff image.png",
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func mrListJSONParsesReviewRequest() throws {
         let request = try #require(try GitLabCLIProvider.parseMRList(Self.mrListOutput, remote: Self.remote, headOwner: nil))
 

@@ -362,6 +362,21 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func reviewFileDataRejectsInvalidBase64() async {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: #"{"content":"not valid base64!","encoding":"base64"}"#, stderr: ""),
+        ])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("gh api contents returned invalid base64 content")) {
+            _ = try await GitHubCLIProvider(runner: runner).reviewFileData(
+                remote: Self.remote,
+                revision: "head-sha",
+                path: "Assets/Diff image.png",
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func reviewDiffSurfacesGitHubCommandFailure() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
