@@ -5,6 +5,13 @@ import AppKit
 
 @Suite(.serialized)
 struct ImageDiffEndToEndTests {
+    @MainActor
+    @Test func standalonePairStillDefaultsToSideBySide() {
+        let state = ImageDiffPresentationState()
+        #expect(state.mode == .sideBySide)
+        #expect(state.transform == ImageDiffTransform())
+    }
+
     private func makeRepo() async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-imgdiff-e2e-\(UUID().uuidString)")
