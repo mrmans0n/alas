@@ -272,6 +272,10 @@ private final class RecordingLifecycleGGRunner: GGCommandRunning, @unchecked Sen
         }
         return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
     }
+
+    func containsCommand(suffix: [String]) -> Bool {
+        arguments.contains { $0.suffix(suffix.count) == suffix }
+    }
 }
 
 private final class AdvancingUndoGGRunner: GGCommandRunning, @unchecked Sendable {
@@ -499,12 +503,12 @@ struct RightPaneGGStackTests {
         )
 
         state.onGGStackAction(.rebase, appState: AppState(store: MemoryStore()))
-        for _ in 0..<500 where !runner.arguments.contains(["rebase", "origin/main"]) {
+        for _ in 0..<500 where !runner.containsCommand(suffix: ["rebase", "origin/main"]) {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        #expect(runner.arguments.contains(["rebase", "origin/main"]))
-        #expect(!runner.arguments.contains(["rebase", "main"]))
+        #expect(runner.containsCommand(suffix: ["rebase", "origin/main"]))
+        #expect(!runner.containsCommand(suffix: ["rebase", "main"]))
     }
 
     @Test func manualRebaseIgnoresBehindRefForADifferentStackBase() async throws {
@@ -530,12 +534,12 @@ struct RightPaneGGStackTests {
         )
 
         state.onGGStackAction(.rebase, appState: AppState(store: MemoryStore()))
-        for _ in 0..<500 where !runner.arguments.contains(["rebase", "release"]) {
+        for _ in 0..<500 where !runner.containsCommand(suffix: ["rebase", "release"]) {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        #expect(runner.arguments.contains(["rebase", "release"]))
-        #expect(!runner.arguments.contains(["rebase", "origin/main"]))
+        #expect(runner.containsCommand(suffix: ["rebase", "release"]))
+        #expect(!runner.containsCommand(suffix: ["rebase", "origin/main"]))
     }
 
     @Test func manualRebaseUsesRemoteQualifiedRefOnlyForTheExactStackBase() {
