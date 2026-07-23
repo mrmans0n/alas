@@ -233,7 +233,6 @@
 		2AC164837BF88D1BD0F20E97 /* TreeSitterCPP in Frameworks */ = {isa = PBXBuildFile; productRef = 5F82D581FFC7034146EAE020 /* TreeSitterCPP */; };
 		2B4CBD06D1568EBC1BD327E0 /* SemanticVersionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BF2EE8A6AAA7F9B45DACC0C /* SemanticVersionTests.swift */; };
 		2B823A7361BB54D8D93D7C99 /* ACPMentionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49006251DFBE67CCD0C4008 /* ACPMentionPicker.swift */; };
-		2C43BFD74EEAE672A9C20242 /* ImageDiffStandaloneFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D4A5CCF8386571C9781115 /* ImageDiffStandaloneFailureTests.swift */; };
 		2C4EDD06B2D26DCBB18DC2D1 /* SettingsBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A190D4B29B35C457AA9829F /* SettingsBinding.swift */; };
 		2C520D1FB289610CEB70BDB6 /* GitServiceDiscardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F936C036893FC70AD506FDD4 /* GitServiceDiscardTests.swift */; };
 		2C96C81EBF3C4B0951FA2A57 /* MarkdownFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */; };
@@ -2419,7 +2418,6 @@
 		C47AF847BD698EAB373D128B /* ZmxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxClient.swift; sourceTree = "<group>"; };
 		C48DB0098D71F26ABF594615 /* permission-request.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "permission-request.json"; sourceTree = "<group>"; };
 		C496549308D5C3DD20E988AD /* ACPComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposer.swift; sourceTree = "<group>"; };
-		C4D4A5CCF8386571C9781115 /* ImageDiffStandaloneFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffStandaloneFailureTests.swift; sourceTree = "<group>"; };
 		C4E0BB32D1A3B26473464A0F /* ZmxEnv.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxEnv.swift; sourceTree = "<group>"; };
 		C506EF972D34E2F937D4FEEC /* InstallerHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallerHost.swift; sourceTree = "<group>"; };
 		C50700F7960B44D0116F09C8 /* DiffCodeText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffCodeText.swift; sourceTree = "<group>"; };
@@ -3126,7 +3124,6 @@
 				EBB8043A52927E5E935E2F9B /* ImageDiffPairLoaderTests.swift */,
 				76942B028C3CBAED16BC4CC1 /* ImageDiffPairResolverTests.swift */,
 				CC13E4C0AF55A2524341EB36 /* ImageDiffSideBySideViewTests.swift */,
-				C4D4A5CCF8386571C9781115 /* ImageDiffStandaloneFailureTests.swift */,
 				7018E992654E19345D8BD723 /* ImageDiffSwipeViewTests.swift */,
 				120D10644A278775A9AE1990 /* ImageDiffViewTests.swift */,
 				A300F7033D91C4A0D283F75E /* ImageFileTypeTests.swift */,
@@ -6472,7 +6469,6 @@
 				BFADE15EC5D60235EF2ACBE1 /* ImageDiffPairLoaderTests.swift in Sources */,
 				E7C047F37A5C7100149FED4A /* ImageDiffPairResolverTests.swift in Sources */,
 				C0A78F790FB9B52621D5798A /* ImageDiffSideBySideViewTests.swift in Sources */,
-				2C43BFD74EEAE672A9C20242 /* ImageDiffStandaloneFailureTests.swift in Sources */,
 				21DDC95793C87C46FB46E3D6 /* ImageDiffSwipeViewTests.swift in Sources */,
 				859AD39BA8D5A9FCC905648D /* ImageDiffViewTests.swift in Sources */,
 				89A5E5AD13431B6C9E16669B /* ImageFileTypeTests.swift in Sources */,
