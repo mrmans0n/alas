@@ -256,24 +256,9 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     func fittingSize(for width: CGFloat) -> CGSize {
         let fittingWidth = max(minimumFittingWidth, width)
         if let cachedHeight = fittingHeightByWidth[fittingWidth] {
-            // `widthTracksTextView` only re-syncs the container off a real
-            // frame change, so a cache hit must still restore the container
-            // to this width itself — otherwise, if the previous call was a
-            // miss at a different width and this width's frame goes
-            // unchanged (e.g. re-probed mid-scroll), drawing/selection would
-            // keep wrapping at that stale width while SwiftUI allocates the
-            // (correct) cached height for this one.
-            textContainer?.containerSize = CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
             return CGSize(width: fittingWidth, height: cachedHeight)
         }
-        guard let textContainer, let layoutManager else {
-            return CGSize(width: fittingWidth, height: 0)
-        }
-
-        textContainer.containerSize = CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
-        layoutManager.ensureLayout(for: textContainer)
-        let used = layoutManager.usedRect(for: textContainer)
-        let height = ceil(used.height)
+        let height = ceil(measuredRect(forWidth: fittingWidth).height)
         #if DEBUG
         fittingComputationCountForTests += 1
         #endif
@@ -286,28 +271,40 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
 
     func naturalFittingSize() -> CGSize {
         if let cachedNaturalFittingSize {
-            // See the matching comment in `fittingSize(for:)`: restore the
-            // container even on a cache hit so a stale width from an
-            // intervening `fittingSize` call can't leak into drawing.
-            textContainer?.containerSize = CGSize(width: maximumNaturalFittingWidth, height: .greatestFiniteMagnitude)
             return cachedNaturalFittingSize
         }
-        guard let textContainer, let layoutManager else {
-            return CGSize(width: minimumFittingWidth, height: 0)
-        }
-
-        textContainer.containerSize = CGSize(width: maximumNaturalFittingWidth, height: .greatestFiniteMagnitude)
-        layoutManager.ensureLayout(for: textContainer)
-        let used = layoutManager.usedRect(for: textContainer)
+        let rect = measuredRect(forWidth: maximumNaturalFittingWidth)
         #if DEBUG
         fittingComputationCountForTests += 1
         #endif
         let size = CGSize(
-            width: max(minimumFittingWidth, ceil(used.width)),
-            height: ceil(used.height)
+            width: max(minimumFittingWidth, ceil(rect.width)),
+            height: ceil(rect.height)
         )
         cachedNaturalFittingSize = size
         return size
+    }
+
+    /// Measure the current text wrapped at `width`, as a pure function of the
+    /// attributed content and the width.
+    ///
+    /// We deliberately do NOT measure via `layoutManager.usedRect(for:)` here.
+    /// The text container has `widthTracksTextView = true`, so it ignores an
+    /// explicitly-set `containerSize.width` and tracks the view's own bounds
+    /// width instead — which, when SwiftUI probes `sizeThatFits` before the
+    /// row has its final frame, is stale or zero. The text then measured as a
+    /// single unwrapped line, and the height cache (added in #889) froze that
+    /// too-small height, so SwiftUI laid the row out short and the next
+    /// transcript row drew on top of it. Measuring the attributed string
+    /// itself at `width` is independent of the view's bounds and TextKit
+    /// version, and matches drawing because SwiftUI assigns this same width as
+    /// the row's frame (which the container then tracks).
+    private func measuredRect(forWidth width: CGFloat) -> CGRect {
+        guard let textStorage, textStorage.length > 0 else { return .zero }
+        return textStorage.boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
     }
 
     override var intrinsicContentSize: NSSize {
