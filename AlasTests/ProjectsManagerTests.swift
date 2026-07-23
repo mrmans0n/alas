@@ -552,38 +552,115 @@ extension ProjectsManagerTests {
             lastActivity: Date()
         )
         mgr.insertOptimisticWorktree(optimistic)
-        mgr.setOperationState(id: optimistic.id, state: .createFailed(message: "disk full", base: "main"))
+        mgr.setOperationState(
+            id: optimistic.id,
+            state: .createFailed(
+                projectId: project.id,
+                message: "disk full",
+                base: "main",
+                ggWorktreeMode: .inherit
+            )
+        )
 
         try await mgr.refreshWorktrees(projectId: project.id)
         let trees = mgr.worktrees(projectId: project.id)
         #expect(trees.contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == .createFailed(message: "disk full", base: "main"))
+        #expect(mgr.operationState(for: optimistic.id) == .createFailed(
+            projectId: project.id,
+            message: "disk full",
+            base: "main",
+            ggWorktreeMode: .inherit
+        ))
     }
 
-    @Test func refreshClearsCreateFailedWhenWorktreeAppears() async throws {
-        let repo = try await makeRepo(name: "create-failed-live")
+    @Test(arguments: [GGWorktreeMode.on, .off, .inherit])
+    func refreshPromotesCreateFailedGGModeWhenWorktreeAppears(mode: GGWorktreeMode) async throws {
+        let repo = try await makeRepo(name: "create-failed-live-\(mode.rawValue)")
         defer { try? FileManager.default.removeItem(at: repo) }
         let mgr = ProjectsManager(persistedProjects: [])
-        let project = try await mgr.addProject(path: repo, displayName: "create-failed-live", color: "#5fb7c4")
+        let project = try await mgr.addProject(
+            path: repo,
+            displayName: "create-failed-live-\(mode.rawValue)",
+            color: "#5fb7c4"
+        )
         try await mgr.refreshWorktrees(projectId: project.id)
 
         let svc = WorktreeService()
-        let dest = repo.appendingPathComponent("wt-cf-live")
+        let dest = repo.appendingPathComponent("wt-cf-live-\(mode.rawValue)")
         let worktree = try await svc.add(
             repoPath: repo,
             base: "main",
-            branch: "cf-live-b",
+            branch: "cf-live-\(mode.rawValue)",
             destination: dest,
             projectId: project.id
         )
         try await mgr.refreshWorktrees(projectId: project.id)
 
-        mgr.setOperationState(id: worktree.id, state: .createFailed(message: "transient", base: "main"))
-        try await mgr.refreshWorktrees(projectId: project.id)
+        if mode == .inherit {
+            mgr.setGGWorktreeMode(projectId: project.id, worktreeId: worktree.id, mode: .on)
+        }
 
+        mgr.setOperationState(
+            id: worktree.id,
+            state: .createFailed(
+                projectId: project.id,
+                message: "transient",
+                base: "main",
+                ggWorktreeMode: mode
+            )
+        )
+        let changed = try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(changed)
         #expect(mgr.operationState(for: worktree.id) == nil)
         let trees = mgr.worktrees(projectId: project.id)
         #expect(trees.contains { $0.id == worktree.id })
+        #expect(mgr.ggWorktreeMode(projectId: project.id, worktreeId: worktree.id) == mode)
+        #expect(mgr.projects[0].ggWorktreeModes[worktree.id] == (mode == .inherit ? nil : mode))
+    }
+
+    @Test func refreshDoesNotConsumeCreateFailureFromAnotherProjectWithSameWorktreeId() async throws {
+        let repo = try await makeRepo(name: "create-failed-project-scope")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let origin = ProjectConfig(
+            id: "origin",
+            name: "origin",
+            path: repo.path,
+            color: "#5fb7c4",
+            addedAt: .now
+        )
+        let other = ProjectConfig(
+            id: "other",
+            name: "other",
+            path: repo.path,
+            color: "#c89d6f",
+            addedAt: .now
+        )
+        let manager = ProjectsManager(persistedProjects: [origin, other])
+        try await manager.refreshWorktrees(projectId: origin.id)
+        try await manager.refreshWorktrees(projectId: other.id)
+        let sharedId = try #require(manager.worktrees(projectId: origin.id).first?.id)
+        #expect(manager.worktrees(projectId: other.id).first?.id == sharedId)
+
+        manager.setOperationState(
+            id: sharedId,
+            state: .createFailed(
+                projectId: origin.id,
+                message: "transient",
+                base: "main",
+                ggWorktreeMode: .on
+            )
+        )
+
+        let otherChanged = try await manager.refreshWorktrees(projectId: other.id)
+        #expect(!otherChanged)
+        #expect(manager.operationState(for: sharedId) != nil)
+        #expect(manager.ggWorktreeMode(projectId: other.id, worktreeId: sharedId) == .inherit)
+
+        let originChanged = try await manager.refreshWorktrees(projectId: origin.id)
+        #expect(originChanged)
+        #expect(manager.operationState(for: sharedId) == nil)
+        #expect(manager.ggWorktreeMode(projectId: origin.id, worktreeId: sharedId) == .on)
     }
 
     @Test func refreshClearsDeletingStateWhenWorktreeDisappears() async throws {

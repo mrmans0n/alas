@@ -33,6 +33,27 @@ enum GGWorktreeContextResolver {
         return name.isEmpty ? nil : name
     }
 
+    static func isPolicyEnabled(
+        projectMode: GGProjectMode,
+        worktreeOverride: GGWorktreeMode,
+        isMainWorktree: Bool,
+        repoHasGGConfig: Bool
+    ) -> Bool {
+        switch worktreeOverride {
+        case .on:
+            return true
+        case .off:
+            return false
+        case .inherit:
+            if isMainWorktree { return false }
+            switch projectMode {
+            case .off: return false
+            case .auto: return repoHasGGConfig
+            case .on: return true
+            }
+        }
+    }
+
     static func resolve(
         masterEnabled: Bool,
         ggInstalled: Bool,
@@ -48,24 +69,12 @@ enum GGWorktreeContextResolver {
         guard ggInstalled else { return .inactive(reason: .cliMissing) }
         guard !isRemoteProject else { return .inactive(reason: .remoteProject) }
 
-        let policyEnabled: Bool
-        switch worktreeOverride {
-        case .on:
-            policyEnabled = true
-        case .off:
-            policyEnabled = false
-        case .inherit:
-            if isMainWorktree {
-                policyEnabled = false
-            } else {
-                switch projectMode {
-                case .off: policyEnabled = false
-                case .auto: policyEnabled = repoHasGGConfig
-                case .on: policyEnabled = true
-                }
-            }
-        }
-        guard policyEnabled else { return .inactive(reason: .policyOff) }
+        guard isPolicyEnabled(
+            projectMode: projectMode,
+            worktreeOverride: worktreeOverride,
+            isMainWorktree: isMainWorktree,
+            repoHasGGConfig: repoHasGGConfig
+        ) else { return .inactive(reason: .policyOff) }
 
         guard let branchUsername, !branchUsername.isEmpty else {
             return .inactive(reason: .branchUsernameMissing)

@@ -90,7 +90,15 @@ struct ProjectsManagerHeadUpdatesTests {
         let (mgr, project) = makeManager()
         let row = wt(path: "/wts/feat", branch: "feat/intent")
         seed(mgr, projectId: project.id, [row])
-        mgr.setOperationState(id: row.id, state: .createFailed(message: "x", base: "main"))
+        mgr.setOperationState(
+            id: row.id,
+            state: .createFailed(
+                projectId: project.id,
+                message: "x",
+                base: "main",
+                ggWorktreeMode: .inherit
+            )
+        )
 
         mgr.applyHeadUpdates(
             projectId: project.id,

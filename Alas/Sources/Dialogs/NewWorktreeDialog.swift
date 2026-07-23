@@ -19,7 +19,7 @@ struct NewWorktreeDialog: View {
     @State private var branch: String = ""
     @State private var stackName: String = ""
     @State private var runStartup: Bool = true
-    @State private var createAsGGStack: Bool = false
+    @State private var ggMode: GGWorktreeMode = .inherit
     @State private var openAfterCreate: Bool = true
     @State private var launchMode: AppConfig.LauncherMode = .terminal
     /// The launcher mode to persist — preserves the user's intent even when
@@ -65,7 +65,7 @@ struct NewWorktreeDialog: View {
                     Text("Pinned to gg's stack base").font(.system(size: 11))
                         .foregroundColor(theme.color("fg-dim"))
                 }
-                DialogField(label: createAsGGStack ? "Stack name" : "Branch name") {
+                DialogField(label: createsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
                         text: activeNameBinding,
                         monospaced: true,
@@ -80,16 +80,24 @@ struct NewWorktreeDialog: View {
                         .foregroundColor(theme.color("fg"))
                 }
                 if ggStackAvailability != .hidden {
-                    HStack(spacing: 10) {
-                        AlasToggle(on: $createAsGGStack)
-                            .disabled({ if case .disabled = ggStackAvailability { return true } else { return false } }())
-                        Text("Create as gg stack").font(.system(size: 12))
-                            .foregroundColor(theme.color("fg"))
+                    DialogField(label: "GG mode") {
+                        Picker("GG mode", selection: $ggMode) {
+                            Text("Inherit").tag(GGWorktreeMode.inherit)
+                            Text("On").tag(GGWorktreeMode.on)
+                            Text("Off").tag(GGWorktreeMode.off)
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    if case .disabled(let hint) = ggStackAvailability {
+                    Text(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                    if createsGGStack, case .disabled(let hint) = ggStackAvailability {
                         Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
-                    } else if createAsGGStack, case .enabled(let username) = ggStackAvailability, !stackName.isEmpty {
-                        Text("Branch: \(GGConfigReader.composeStackBranch(username: username, stackName: stackName))")
+                    } else if createsGGStack, case .enabled(let username) = ggStackAvailability, !stackName.isEmpty {
+                        Text(Self.ggBranchPreview(
+                            branch: GGConfigReader.composeStackBranch(username: username, stackName: stackName),
+                            base: stackPinnedBase
+                        ))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(theme.color("fg-dim"))
                     }
@@ -118,6 +126,7 @@ struct NewWorktreeDialog: View {
                 projectsEmpty: state.projects.isEmpty,
                 branchEmpty: activeName.isEmpty,
                 branchValidation: branchValidationMessage,
+                ggConfigurationMissing: ggConfigurationMissing,
                 requiresAcpAgent: openAfterCreate && launchMode == .acp,
                 hasAcpAgent: launchAgentId != "none"
             )
@@ -131,7 +140,10 @@ struct NewWorktreeDialog: View {
                 }
             }
             if base.isEmpty {
-                base = state.config.worktrees.baseBranch
+                base = Self.initialBase(
+                    configuredDefault: state.config.worktrees.baseBranch,
+                    stackPinnedBase: stackPinnedBase
+                )
             }
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
@@ -141,7 +153,7 @@ struct NewWorktreeDialog: View {
         }
         .onChange(of: projectId) { _, _ in
             applyLaunchDefaults(for: projectId)
-            createAsGGStack = Self.stackModeSurvives(createAsGGStack, availability: ggStackAvailability)
+            ggMode = Self.ggModeAfterRepositoryChange(current: ggMode)
             // Seed the base for the new project synchronously so the picker
             // never shows the previous project's value; the async branch load
             // refines it (guarded: it skips pinned bases and user edits).
@@ -154,8 +166,8 @@ struct NewWorktreeDialog: View {
         .onChange(of: stackName) { _, _ in
             createErrorMessage = nil
         }
-        .onChange(of: createAsGGStack) { _, isOn in
-            if isOn {
+        .onChange(of: ggMode) { _, _ in
+            if createsGGStack {
                 if let pinned = stackPinnedBase { base = pinned }
             }
         }
@@ -170,14 +182,14 @@ struct NewWorktreeDialog: View {
     }
 
     private var activeName: String {
-        Self.activeName(createAsGGStack: createAsGGStack, branch: branch, stackName: stackName)
+        Self.activeName(createsGGStack: createsGGStack, branch: branch, stackName: stackName)
     }
 
     private var activeNameBinding: Binding<String> {
         Binding(
             get: { activeName },
             set: { newValue in
-                if createAsGGStack {
+                if createsGGStack {
                     stackName = newValue
                 } else {
                     branch = newValue
@@ -200,11 +212,7 @@ struct NewWorktreeDialog: View {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return .hidden }
         let gatePassed = state.config.changes.stackedDiffsEnabled
             && GGAvailability.shared.isInstalled
-            && GGStackGate.projectEnabled(
-                masterEnabled: true, ggInstalled: true,
-                mode: project.ggMode, repoPath: project.path,
-                isRemoteProject: project.host != nil
-            )
+            && project.host == nil
         guard gatePassed else { return .hidden }
         return GGStackCreateMode.availability(
             gatePassed: true,
@@ -212,11 +220,29 @@ struct NewWorktreeDialog: View {
         )
     }
 
+    private var createsGGStack: Bool {
+        guard let project = state.projects.first(where: { $0.id == projectId }) else { return false }
+        return GGStackCreateMode.createsStack(
+            masterEnabled: state.config.changes.stackedDiffsEnabled,
+            ggInstalled: GGAvailability.shared.isInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            worktreeMode: ggMode,
+            repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path)
+        )
+    }
+
+    private var ggConfigurationMissing: Bool {
+        guard createsGGStack else { return false }
+        if case .disabled = ggStackAvailability { return true }
+        return false
+    }
+
     /// The branch actually created. In stack mode the real branch follows
     /// gg's `<username>/<name>` convention; otherwise the plain branch field
     /// is used verbatim (including its seeded global branch prefix).
     private var effectiveBranch: String {
-        if createAsGGStack, case .enabled(let username) = ggStackAvailability {
+        if createsGGStack, case .enabled(let username) = ggStackAvailability {
             return GGConfigReader.composeStackBranch(username: username, stackName: stackName)
         }
         return branch
@@ -228,7 +254,7 @@ struct NewWorktreeDialog: View {
     /// syncing/PR-ing against the repo default. Nil when create-as-stack is
     /// off/unavailable or gg config records no base (then the picker stays free).
     private var stackPinnedBase: String? {
-        guard createAsGGStack, case .enabled = ggStackAvailability,
+        guard createsGGStack, case .enabled = ggStackAvailability,
               let project = state.projects.first(where: { $0.id == projectId })
         else { return nil }
         return GGConfigReader.defaultBase(repoPath: project.path)
@@ -347,7 +373,8 @@ struct NewWorktreeDialog: View {
                 branch: effectiveBranch,
                 destination: dest,
                 runStartup: runStartup,
-                launchSurface: surface
+                launchSurface: surface,
+                ggWorktreeMode: ggMode
             )
             guard !id.isEmpty else {
                 createErrorMessage = "A worktree already exists at this path."
@@ -368,6 +395,7 @@ struct NewWorktreeDialog: View {
             projectsEmpty: state.projects.isEmpty,
             branchEmpty: activeName.isEmpty,
             branchValidation: branchValidationMessage,
+            ggConfigurationMissing: ggConfigurationMissing,
             requiresAcpAgent: openAfterCreate && launchMode == .acp,
             hasAcpAgent: launchAgentId != "none"
         ) else { return }
@@ -378,35 +406,53 @@ struct NewWorktreeDialog: View {
         projectsEmpty: Bool,
         branchEmpty: Bool,
         branchValidation: String? = nil,
+        ggConfigurationMissing: Bool = false,
         requiresAcpAgent: Bool = false,
         hasAcpAgent: Bool = true
     ) -> Bool {
-        guard !projectsEmpty, !branchEmpty, branchValidation == nil else { return false }
+        guard !projectsEmpty, !branchEmpty, branchValidation == nil, !ggConfigurationMissing else { return false }
         if requiresAcpAgent, !hasAcpAgent { return false }
         return true
     }
 
-    /// Stack mode only survives while the selected project still offers it.
-    /// Switching to a repo where gg stacks aren't enabled (or `branch_username`
-    /// is unresolved, so availability is `.disabled`/`.hidden` rather than
-    /// `.enabled`) clears the toggle — otherwise Create would silently produce a
-    /// plain branch named after the intended stack, since `effectiveBranch`
-    /// falls back to the raw field when availability isn't `.enabled`.
-    nonisolated static func stackModeSurvives(
-        _ on: Bool,
-        availability: GGStackCreateMode.Availability
-    ) -> Bool {
-        guard on else { return false }
-        if case .enabled = availability { return true }
-        return false
+    nonisolated static func ggModeDescription(
+        mode: GGWorktreeMode,
+        createsGGStack: Bool
+    ) -> String {
+        switch mode {
+        case .inherit:
+            createsGGStack
+                ? "Uses repository default: On."
+                : "Uses repository default: Off. Creates a regular Git branch."
+        case .on:
+            "GG enabled for this worktree."
+        case .off:
+            "GG disabled for this worktree. Creates a regular Git branch."
+        }
+    }
+
+    nonisolated static func ggModeAfterRepositoryChange(current _: GGWorktreeMode) -> GGWorktreeMode {
+        .inherit
+    }
+
+    nonisolated static func initialBase(
+        configuredDefault: String,
+        stackPinnedBase: String?
+    ) -> String {
+        stackPinnedBase ?? configuredDefault
+    }
+
+    nonisolated static func ggBranchPreview(branch: String, base: String?) -> String {
+        guard let base else { return "Branch: \(branch)" }
+        return "Branch: \(branch), based on \(base)"
     }
 
     nonisolated static func activeName(
-        createAsGGStack: Bool,
+        createsGGStack: Bool,
         branch: String,
         stackName: String
     ) -> String {
-        createAsGGStack ? stackName : branch
+        createsGGStack ? stackName : branch
     }
 
     nonisolated static func resolvedPresetProject(

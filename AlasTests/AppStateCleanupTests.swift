@@ -27,6 +27,20 @@ struct AppStateCleanupTests {
         }
     }
 
+    private final class RecordingStore: PersistenceStoreProtocol, @unchecked Sendable {
+        var writtenProjectsFile: ProjectsFile?
+
+        func write<T: Encodable>(_ value: T, to _: URL) throws {
+            if let projectsFile = value as? ProjectsFile {
+                writtenProjectsFile = projectsFile
+            }
+        }
+
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+            nil
+        }
+    }
+
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleanup-\(name)-\(UUID().uuidString)")
@@ -60,6 +74,59 @@ struct AppStateCleanupTests {
         let trees = state.projectsManager.worktrees(projectId: project.id)
         #expect(!ids.isEmpty)
         #expect(ids == Set(trees.map(\.id)))
+    }
+
+    @Test func topologyRefreshReevaluatesCachedGGGateAfterPromotingRecoveredMode() async throws {
+        let repo = try await makeRepo(name: "recovered-gg-gate")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState(store: MemoryStore())
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "recovered-gg-gate",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        let pane = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: state.config.worktrees.baseBranch,
+            comparisonMode: state.config.changes.comparisonMode
+        )
+        state.rightPaneStore.deactivate()
+        pane.baseBranchProbeTask?.cancel()
+        pane.baseBranchProbeTask = nil
+
+        var gateEvaluationCount = 0
+        pane.ggContextProvider = { _ in
+            gateEvaluationCount += 1
+            return .inactive(reason: .policyOff)
+        }
+        await pane.reevaluateGGGate().value
+        pane.stop()
+        try await Task.sleep(for: .milliseconds(250))
+        pane.stop()
+        gateEvaluationCount = 0
+
+        state.projectsManager.setOperationState(
+            id: worktree.id,
+            state: .createFailed(
+                projectId: project.id,
+                message: "transient",
+                base: "main",
+                ggWorktreeMode: .off
+            )
+        )
+
+        await state.refreshProjectTopology(projectId: project.id)
+        for _ in 0..<20 where gateEvaluationCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(state.projectsManager.ggWorktreeMode(
+            projectId: project.id,
+            worktreeId: worktree.id
+        ) == .off)
+        #expect(gateEvaluationCount == 1)
     }
 
     @Test func allWorktreeIdsEmptyBeforeRefresh() async throws {
@@ -319,6 +386,98 @@ struct AppStateCleanupTests {
         try await waitForOperationState(state.projectsManager, id: id, equals: nil)
     }
 
+    @Test func createWorktreeAppliesAndKeepsExplicitGGMode() async throws {
+        let repo = try await makeRepo(name: "create-gg-off")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-gg-off",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "regular-branch",
+            destination: repo.appendingPathComponent("wt-gg-off"),
+            runStartup: false,
+            launchSurface: .none,
+            ggWorktreeMode: .off
+        )
+
+        #expect(state.selectedWorktreeId == id)
+        let optimistic = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id })
+        )
+        #expect(state.ggWorktreeMenuModel(project: project, worktree: optimistic).selectedMode == .off)
+        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: id) == .off)
+    }
+
+    @Test func failedCreateRemovesUnpersistedGGMode() async throws {
+        let repo = try await makeRepo(name: "create-gg-fail")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-gg-fail",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "missing-base",
+            branch: "failed-stack",
+            destination: repo.appendingPathComponent("wt-gg-fail"),
+            runStartup: false,
+            launchSurface: .none,
+            ggWorktreeMode: .on
+        )
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) {
+            if case .createFailed = $0 { return true }
+            return false
+        }
+        #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: id) == .inherit)
+    }
+
+    @Test func createWorktreeDoesNotPersistGGModeBeforeReconciliation() async throws {
+        let repo = try await makeRepo(name: "create-gg-save")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let store = RecordingStore()
+        let state = AppState(store: store)
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-gg-save",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "persist-after-reconcile",
+            destination: repo.appendingPathComponent("wt-gg-save"),
+            runStartup: false,
+            launchSurface: .none,
+            ggWorktreeMode: .on
+        )
+        state.setWorktreeLaunchDefaults(
+            projectId: project.id,
+            openAfterCreate: false,
+            launcherMode: .terminal
+        )
+
+        #expect(state.projectsManager.operationState(for: id) == .creating)
+        #expect(store.writtenProjectsFile != nil)
+        #expect(store.writtenProjectsFile?.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == nil)
+        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        #expect(store.writtenProjectsFile?.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == .on)
+    }
+
     @Test func createWorktreeRejectsExistingDestination() async throws {
         let repo = try await makeRepo(name: "create-existing-destination")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -368,47 +527,114 @@ struct AppStateCleanupTests {
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(let message, _) = state.projectsManager.operationState(for: id) {
+        if case .createFailed(_, let message, _, _) = state.projectsManager.operationState(for: id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")
         }
     }
 
-    @Test func createWorktreeRetryAllowsFailedOptimisticDestination() async throws {
-        let repo = try await makeRepo(name: "create-retry")
+    @Test(arguments: [GGWorktreeMode.on, .off])
+    func createWorktreeRetryPreservesExplicitGGMode(mode: GGWorktreeMode) async throws {
+        let modeName = mode == .on ? "on" : "off"
+        let repo = try await makeRepo(name: "create-retry-\(modeName)")
         defer { try? FileManager.default.removeItem(at: repo) }
         let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "create-retry", color: "#5fb7c4")
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-retry-\(modeName)",
+            color: "#5fb7c4"
+        )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
-        let dest = repo.appendingPathComponent("wt-retry")
+        let retryBase = "retry-base-\(modeName)"
+        let branch = "retry-\(modeName)"
+        let dest = repo.appendingPathComponent("wt-retry-\(modeName)")
         let failedId = await state.createWorktree(
             projectId: project.id,
-            base: "missing-base",
-            branch: "retry-b",
+            base: retryBase,
+            branch: branch,
             destination: dest,
             runStartup: false,
-            launchSurface: .none
+            launchSurface: .none,
+            ggWorktreeMode: mode
         )
         try await waitForOperationStateMatching(state.projectsManager, id: failedId) { state in
             if case .createFailed = state { return true }
             return false
         }
+        let failedWorktree = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first(where: { $0.id == failedId })
+        )
+        #expect(state.ggWorktreeMenuModel(project: project, worktree: failedWorktree).selectedMode == .inherit)
+
+        guard case .createFailed(_, _, let failedBase, let failedMode) =
+            state.projectsManager.operationState(for: failedId)
+        else {
+            Issue.record("Expected createFailed state")
+            return
+        }
+        #expect(failedBase == retryBase)
+        #expect(failedMode == mode)
+
+        let retryParameters = SidebarView.retryCreateParameters(
+            operationState: state.projectsManager.operationState(for: failedId),
+            defaultBase: state.config.worktrees.baseBranch
+        )
+        #expect(retryParameters.base == retryBase)
+        #expect(retryParameters.ggWorktreeMode == mode)
+
+        _ = try await Process.git(["branch", retryBase, "main"], cwd: repo)
 
         let retryId = await state.createWorktree(
             projectId: project.id,
-            base: "main",
-            branch: "retry-b",
+            base: retryParameters.base,
+            branch: branch,
             destination: dest,
             runStartup: false,
-            launchSurface: .none
+            launchSurface: .none,
+            ggWorktreeMode: retryParameters.ggWorktreeMode
         )
 
         #expect(retryId == failedId)
         #expect(state.projectsManager.operationState(for: retryId) == .creating)
         try await waitForOperationState(state.projectsManager, id: retryId, equals: nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == retryId })
+        #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: retryId) == mode)
+        #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[retryId] == mode)
+    }
+
+    @Test func successfulInheritCreationKeepsGGWorktreeModesSparse() async throws {
+        let repo = try await makeRepo(name: "create-inherit-sparse")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let store = RecordingStore()
+        let state = AppState(store: store)
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-inherit-sparse",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "inherit-sparse",
+            destination: repo.appendingPathComponent("wt-inherit-sparse"),
+            runStartup: false,
+            launchSurface: .none,
+            ggWorktreeMode: .inherit
+        )
+
+        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == nil)
+
+        state.setWorktreeLaunchDefaults(
+            projectId: project.id,
+            openAfterCreate: false,
+            launcherMode: .terminal
+        )
+        #expect(store.writtenProjectsFile?.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == nil)
     }
 
     @Test func deleteWorktreeMarksDeletingImmediately() async throws {

@@ -127,21 +127,19 @@ struct SidebarView: View {
                                     pb.setString(message, forType: .string)
                                 },
                                 onRetryCreate: { wt in
-                                    let retryBase: String
-                                    if let op = state.projectsManager.operationState(for: wt.id),
-                                       case .createFailed(_, let base) = op {
-                                        retryBase = base
-                                    } else {
-                                        retryBase = state.config.worktrees.baseBranch
-                                    }
+                                    let retry = Self.retryCreateParameters(
+                                        operationState: state.projectsManager.operationState(for: wt.id),
+                                        defaultBase: state.config.worktrees.baseBranch
+                                    )
                                     Task { @MainActor in
                                         await state.createWorktree(
                                             projectId: project.id,
-                                            base: retryBase,
+                                            base: retry.base,
                                             branch: wt.branch,
                                             destination: wt.path,
                                             runStartup: false,
-                                            launchSurface: .none
+                                            launchSurface: .none,
+                                            ggWorktreeMode: retry.ggWorktreeMode
                                         )
                                     }
                                 },
@@ -235,6 +233,16 @@ struct SidebarView: View {
                     showTransientSpaceTitle()
                 }
             }
+    }
+
+    nonisolated static func retryCreateParameters(
+        operationState: WorktreeOperationState?,
+        defaultBase: String
+    ) -> (base: String, ggWorktreeMode: GGWorktreeMode) {
+        guard case .createFailed(_, _, let base, let ggWorktreeMode) = operationState else {
+            return (defaultBase, .inherit)
+        }
+        return (base, ggWorktreeMode)
     }
 
     private func showTransientSpaceTitle() {
