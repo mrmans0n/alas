@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-07-23
+
+### ✨ Features
+
+- Add mode selection to new `git-gud` worktree creation (#896).
+
+### 🐛 Fixes
+
+- Render ACP transcript rows eagerly to prevent overlapping messages (#892).
+- Measure ACP transcript text height independent of view bounds (#897).
+
+### 🏗️ Internal
+
+- Quiet the `git-gud` sidebar stack marker (#895).
+
 ## [0.12.5] - 2026-07-22
 
 ### ✨ Features
