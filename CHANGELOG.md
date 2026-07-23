@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-07-23
+
+### ✨ Features
+
+- Simplify the ACP task plan toolbar and compact plan controls (#898).
+
+### 🐛 Fixes
+
+- Remove the duplicate `git-gud` mode label in the new worktree dialog (#899).
+- Use the stack icon for the `git-gud` sidebar badge (#900).
+- Keep the Cmd-P result list in sync with the search model (#901).
+- Apply data-based row identity to mention, slash, completion, repository, and review target pickers (#902).
+
 ## [0.12.6] - 2026-07-23
 
 ### ✨ Features
