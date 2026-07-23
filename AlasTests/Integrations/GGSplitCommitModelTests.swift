@@ -4,6 +4,15 @@ import Testing
 
 @MainActor
 struct GGSplitCommitModelTests {
+    @Test func remainderPreviewClassifiesOnlySupportedImagesForVisualPreview() {
+        let paths = ["Assets/logo.png", "Archive/data.zip", "Scripts/run.sh"]
+
+        let result = GGResultingImagePreview.partition(paths)
+
+        #expect(result.imagePaths == ["Assets/logo.png"])
+        #expect(result.otherPaths == ["Archive/data.zip", "Scripts/run.sh"])
+    }
+
     @Test func loadGroupsTextHunksAndKeepsNonTextualFilesInRemainderOnly() async throws {
         let service = SplitServiceStub(description: .fixture)
         let model = GGSplitCommitModel(

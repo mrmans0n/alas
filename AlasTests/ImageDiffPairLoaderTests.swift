@@ -101,6 +101,28 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.oldPath == nil)
     }
 
+    @Test func loadsImageAtTargetRevisionDespiteWorkingTreeChanges() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let assets = repo.appendingPathComponent("Assets")
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        let imageURL = assets.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: imageURL)
+        _ = try await Process.git(["add", "Assets/logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add logo"], cwd: repo)
+        let targetSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try Data("not an image".utf8).write(to: imageURL)
+
+        let image = await GitService().imageSide(
+            worktreePath: repo,
+            revision: targetSHA,
+            path: "Assets/logo.png"
+        )
+        #expect(image.image != nil)
+    }
+
     @Test func loadsAddedImagePair() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
