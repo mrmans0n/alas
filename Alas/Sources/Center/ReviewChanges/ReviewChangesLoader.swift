@@ -4,6 +4,7 @@ protocol ReviewChangesGitClient {
     func status(worktreePath: URL) async throws -> [ChangedFile]
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff
     func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
+    func workingCopyImageProvider(worktreePath: URL, change: ChangedFile) async -> DiffReviewImageProvider
 }
 
 extension GitService: ReviewChangesGitClient {}
@@ -57,7 +58,9 @@ struct ReviewChangesLoader {
     private func fileSection(for change: ChangedFile, diff: ParsedDiff, worktreePath: URL) async throws -> ReviewChangesFileSectionModel {
         let source = ReviewChangesSource(stage: change.stage)
         let staged = change.stage == .staged
-        let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: change.path)
+        let isImage = ImageFileType.isSupported(relativePath: change.path)
+            || change.renameFrom.map(ImageFileType.isSupported(relativePath:)) == true
+        let canRenderText = !diff.hunks.isEmpty && !isImage
         let counts = lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
             path: change.path,
@@ -67,17 +70,17 @@ struct ReviewChangesLoader {
             status: DiffReviewFileStatus(gitStatus: change.status, conflict: change.conflict),
             additions: counts.additions,
             deletions: counts.deletions,
-            isRenderable: canRender,
+            isRenderable: isImage || canRenderText,
             originalPath: change.renameFrom
         )
 
         return ReviewChangesFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRender
+            displayModel: canRenderText
                 ? try await buildDisplayModel(diff: diff, filePath: change.path)
                 : nil,
-            placeholderMessage: canRender ? nil : placeholderMessage(for: change, diff: diff),
+            placeholderMessage: (isImage || canRenderText) ? nil : placeholderMessage(for: change, diff: diff),
             openFile: nil,
             contextProvider: DiffReviewContextProvider {
                 try await git.contextSnapshot(
@@ -86,7 +89,10 @@ struct ReviewChangesLoader {
                     staged: staged,
                     originalPath: change.renameFrom
                 )
-            }
+            },
+            imageProvider: isImage
+                ? await git.workingCopyImageProvider(worktreePath: worktreePath, change: change)
+                : nil
         )
     }
 

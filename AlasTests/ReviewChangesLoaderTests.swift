@@ -37,7 +37,8 @@ struct ReviewChangesLoaderTests {
         )
         let loader = ReviewChangesLoader(git: git)
 
-        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+        let session = try await loader.load(worktreePath: worktreePath)
 
         #expect(session.files.map(\.id.rawValue) == ["unstaged:a.swift", "staged:b.swift"])
         #expect(session.files.map(\.displayModel?.filePath) == ["a.swift", "b.swift"])
@@ -46,7 +47,7 @@ struct ReviewChangesLoaderTests {
         #expect(session.summary.groups.map(\.title) == ["Unstaged", "Staged"])
     }
 
-    @Test func keepsUnsupportedFilesVisibleAsPlaceholders() async throws {
+    @Test func rendersSupportedImageFilesWithAnImageProvider() async throws {
         let git = FakeReviewChangesGitClient(
             status: [
                 ChangedFile(path: "image.png", status: "M", stage: .unstaged, add: 0, del: 0, renameFrom: nil),
@@ -57,14 +58,21 @@ struct ReviewChangesLoaderTests {
         )
         let loader = ReviewChangesLoader(git: git)
 
-        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+        let session = try await loader.load(worktreePath: worktreePath)
 
         let file = try #require(session.files.first)
         #expect(file.summary.path == "image.png")
         #expect(file.summary.groupID == "unstaged")
         #expect(file.summary.reviewChangesSource == .unstaged)
-        #expect(file.summary.isRenderable == false)
-        #expect(file.placeholderMessage != nil)
+        #expect(file.summary.isRenderable)
+        #expect(file.displayModel == nil)
+        #expect(file.placeholderMessage == nil)
+        let provider = try #require(file.imageProvider)
+        _ = await provider.load()
+        #expect(await git.imageProviderCalls.all() == [
+            .init(worktreePath: worktreePath, path: "image.png", stage: .unstaged),
+        ])
     }
 
     @Test func derivesCountsFromSideSpecificDiffsForSamePathChanges() async throws {
@@ -233,6 +241,7 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
     var diffs: [DiffKey: ParsedDiff]
     var snapshots: [DiffKey: DiffReviewFileContextSnapshot] = [:]
     var contextSnapshotCalls = ContextSnapshotCallRecorder()
+    var imageProviderCalls = ImageProviderCallRecorder()
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
         status
@@ -254,6 +263,27 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
             new: .unavailable
         )]
     }
+
+    func workingCopyImageProvider(worktreePath: URL, change: ChangedFile) async -> DiffReviewImageProvider {
+        DiffReviewImageProvider(
+            id: DiffReviewImageProviderID(
+                source: .workingCopy,
+                repository: worktreePath.path,
+                beforeRevision: change.stage.rawValue,
+                afterRevision: "fake",
+                beforePath: change.renameFrom,
+                afterPath: change.path
+            ),
+            load: {
+                await imageProviderCalls.record(.init(
+                    worktreePath: worktreePath,
+                    path: change.path,
+                    stage: change.stage
+                ))
+                return ImageDiffPair(before: .missing, after: .missing, oldPath: change.renameFrom, kind: .modified)
+            }
+        )
+    }
 }
 
 private actor ContextSnapshotCallRecorder {
@@ -266,6 +296,24 @@ private actor ContextSnapshotCallRecorder {
     func all() -> [ContextSnapshotCall] {
         calls
     }
+}
+
+private actor ImageProviderCallRecorder {
+    private var calls: [ImageProviderCall] = []
+
+    func record(_ call: ImageProviderCall) {
+        calls.append(call)
+    }
+
+    func all() -> [ImageProviderCall] {
+        calls
+    }
+}
+
+private struct ImageProviderCall: Equatable, Sendable {
+    let worktreePath: URL
+    let path: String
+    let stage: ChangeStage
 }
 
 private struct ContextSnapshotCall: Equatable, Sendable {

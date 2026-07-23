@@ -3,6 +3,7 @@ import Foundation
 protocol StagedDiffGitClient {
     func stagedChangedFiles(at worktreePath: URL) async throws -> [CommitChangedFile]
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff
+    func stagedImageProvider(worktreePath: URL, file: CommitChangedFile) async -> DiffReviewImageProvider
 }
 
 extension GitService: StagedDiffGitClient {}
@@ -31,7 +32,7 @@ struct StagedDiffLoader {
             )
             try Task.checkCancellation()
 
-            sections.append(try await fileSection(for: file, diff: diff))
+            sections.append(try await fileSection(for: file, diff: diff, worktreePath: worktreePath))
         }
 
         return DiffReviewLoadedSession(
@@ -40,8 +41,14 @@ struct StagedDiffLoader {
         )
     }
 
-    private func fileSection(for file: CommitChangedFile, diff: ParsedDiff) async throws -> DiffReviewFileSectionModel {
-        let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: file.path)
+    private func fileSection(
+        for file: CommitChangedFile,
+        diff: ParsedDiff,
+        worktreePath: URL
+    ) async throws -> DiffReviewFileSectionModel {
+        let isImage = ImageFileType.isSupported(relativePath: file.path)
+            || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
+        let canRenderText = !diff.hunks.isEmpty && !isImage
         let counts = lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
             path: file.path,
@@ -51,7 +58,7 @@ struct StagedDiffLoader {
             status: DiffReviewFileStatus(gitStatus: file.status),
             additions: counts.additions,
             deletions: counts.deletions,
-            isRenderable: canRender,
+            isRenderable: isImage || canRenderText,
             originalPath: file.originalPath,
             gitStatus: file.status
         )
@@ -59,12 +66,15 @@ struct StagedDiffLoader {
         return DiffReviewFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRender
+            displayModel: canRenderText
                 ? try await buildDisplayModel(diff: diff, filePath: file.path)
                 : nil,
-            placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
+            placeholderMessage: (isImage || canRenderText) ? nil : placeholderMessage(for: file, diff: diff),
             openFile: nil,
-            contextProvider: nil
+            contextProvider: nil,
+            imageProvider: isImage
+                ? await git.stagedImageProvider(worktreePath: worktreePath, file: file)
+                : nil
         )
     }
 

@@ -332,4 +332,34 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.beforeImage != nil)
         #expect(pair.afterImage != nil)
     }
+
+    @Test func workingCopyProviderLoadsAnUnstagedRenameAgainstTheOldIndexPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let oldURL = repo.appendingPathComponent("old.png")
+        let newURL = repo.appendingPathComponent("new.png")
+        try PngFixture.red.write(to: oldURL)
+        _ = try await Process.git(["add", "old.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+
+        let provider = await GitService().workingCopyImageProvider(
+            worktreePath: repo,
+            change: ChangedFile(
+                path: "new.png",
+                status: "R",
+                stage: .unstaged,
+                add: 0,
+                del: 0,
+                renameFrom: "old.png"
+            )
+        )
+        let pair = await provider.load()
+
+        #expect(pair.kind == .renamed)
+        #expect(pair.oldPath == "old.png")
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+    }
 }

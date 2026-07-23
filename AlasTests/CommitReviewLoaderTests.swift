@@ -87,7 +87,7 @@ struct CommitReviewLoaderTests {
         #expect(session.files.map(\.summary.status) == [.renamed, .copied])
     }
 
-    @Test func keepsImagesAndEmptyTextDiffsVisibleAsPlaceholders() async throws {
+    @Test func rendersImagesWithProvidersAndKeepsEmptyTextDiffsAsPlaceholders() async throws {
         let git = FakeCommitReviewGitClient(diffs: [
             "Assets/logo.png": diff(lines: [
                 .init(kind: .delete, text: "binary old", oldNumber: 1, newNumber: nil),
@@ -97,23 +97,34 @@ struct CommitReviewLoaderTests {
         ])
         let loader = CommitReviewLoader(git: git)
 
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+        let imageFile = CommitChangedFile(
+            path: "Assets/logo.png",
+            originalPath: "Assets/old-logo.png",
+            status: "R",
+            add: 0,
+            del: 0
+        )
         let session = try await loader.load(
-            worktreePath: URL(fileURLWithPath: "/tmp/repo"),
+            worktreePath: worktreePath,
             sha: "abc123",
             files: [
-                CommitChangedFile(path: "Assets/logo.png", originalPath: nil, status: "M", add: 0, del: 0),
+                imageFile,
                 CommitChangedFile(path: "README.md", originalPath: nil, status: "M", add: 10, del: 10),
             ],
             openFileForPath: { _ in nil }
         )
 
         #expect(session.files.map(\.summary.path) == ["Assets/logo.png", "README.md"])
-        #expect(session.files.map(\.summary.isRenderable) == [false, false])
+        #expect(session.files.map(\.summary.isRenderable) == [true, false])
         #expect(session.files.map { $0.displayModel == nil } == [true, true])
-        #expect(session.files.map(\.placeholderMessage) == [
-            "Image changes are not available in this review view yet.",
-            "No text diff is available for this file.",
+        let image = try #require(session.files.first)
+        #expect(image.placeholderMessage == nil)
+        #expect(image.imageProvider != nil)
+        #expect(git.imageProviderRequests == [
+            .init(worktreePath: worktreePath, sha: "abc123", file: imageFile),
         ])
+        #expect(session.files[1].placeholderMessage == "No text diff is available for this file.")
     }
 
     @Test func storesOpenFileClosureWhenProvidedAndNilWhenNotProvided() async throws {
@@ -221,6 +232,7 @@ private final class FakeCommitReviewGitClient: CommitReviewGitClient, @unchecked
     private let lock = NSLock()
     private var recordedRequests: [Request] = []
     private var recordedContextSnapshotRequests: [Request] = []
+    private var recordedImageProviderRequests: [ImageProviderRequest] = []
 
     init(
         diffs: [String: ParsedDiff],
@@ -236,6 +248,10 @@ private final class FakeCommitReviewGitClient: CommitReviewGitClient, @unchecked
 
     var contextSnapshotRequests: [Request] {
         lock.withLock { recordedContextSnapshotRequests }
+    }
+
+    var imageProviderRequests: [ImageProviderRequest] {
+        lock.withLock { recordedImageProviderRequests }
     }
 
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> ParsedDiff {
@@ -265,6 +281,35 @@ private final class FakeCommitReviewGitClient: CommitReviewGitClient, @unchecked
             ))
         }
         return snapshots["\(sha):\(file)", default: DiffReviewFileContextSnapshot(old: .unavailable, new: .unavailable)]
+    }
+
+    func commitImageProvider(
+        worktreePath: URL,
+        sha: String,
+        file: CommitChangedFile
+    ) -> DiffReviewImageProvider {
+        lock.withLock {
+            recordedImageProviderRequests.append(.init(worktreePath: worktreePath, sha: sha, file: file))
+        }
+        return DiffReviewImageProvider(
+            id: DiffReviewImageProviderID(
+                source: .commit,
+                repository: worktreePath.path,
+                beforeRevision: "\(sha)^",
+                afterRevision: sha,
+                beforePath: file.originalPath,
+                afterPath: file.path
+            ),
+            load: {
+                ImageDiffPair(before: .missing, after: .missing, oldPath: file.originalPath, kind: .modified)
+            }
+        )
+    }
+
+    struct ImageProviderRequest: Equatable {
+        let worktreePath: URL
+        let sha: String
+        let file: CommitChangedFile
     }
 }
 

@@ -3,6 +3,7 @@ import Foundation
 protocol CommitReviewGitClient {
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> ParsedDiff
     func commitContextSnapshot(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
+    func commitImageProvider(worktreePath: URL, sha: String, file: CommitChangedFile) -> DiffReviewImageProvider
 }
 
 extension GitService: CommitReviewGitClient {}
@@ -57,7 +58,9 @@ struct CommitReviewLoader {
         sha: String,
         openFile: (() -> Void)?
     ) async throws -> DiffReviewFileSectionModel {
-        let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: file.path)
+        let isImage = ImageFileType.isSupported(relativePath: file.path)
+            || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
+        let canRenderText = !diff.hunks.isEmpty && !isImage
         let counts = lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
             path: file.path,
@@ -67,17 +70,17 @@ struct CommitReviewLoader {
             status: DiffReviewFileStatus(gitStatus: file.status),
             additions: counts.additions,
             deletions: counts.deletions,
-            isRenderable: canRender,
+            isRenderable: isImage || canRenderText,
             originalPath: file.originalPath
         )
 
         return DiffReviewFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRender
+            displayModel: canRenderText
                 ? try await buildDisplayModel(diff: diff, filePath: file.path)
                 : nil,
-            placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
+            placeholderMessage: (isImage || canRenderText) ? nil : placeholderMessage(for: file, diff: diff),
             openFile: openFile,
             contextProvider: DiffReviewContextProvider {
                 try await git.commitContextSnapshot(
@@ -86,7 +89,10 @@ struct CommitReviewLoader {
                     file: file.path,
                     originalPath: file.originalPath
                 )
-            }
+            },
+            imageProvider: isImage
+                ? git.commitImageProvider(worktreePath: worktreePath, sha: sha, file: file)
+                : nil
         )
     }
 

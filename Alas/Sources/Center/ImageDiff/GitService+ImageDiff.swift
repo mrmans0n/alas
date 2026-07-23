@@ -4,6 +4,153 @@ import os
 
 extension GitService {
     private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+    private static let workingTreeImageRevision = "__alas_working_tree__"
+    private static let blobImageRevisionPrefix = "__alas_blob__:"
+
+    func imageSide(
+        worktreePath: URL,
+        revision: String,
+        path: String
+    ) async -> ImageDiffSide {
+        if revision == Self.workingTreeImageRevision {
+            let fileURL = worktreePath.appendingPathComponent(path)
+            guard let image = NSImage(contentsOf: fileURL) else {
+                Self.logImageSideFailure(
+                    category: "changed-on-disk", worktreePath: worktreePath, revision: revision, path: path,
+                    diagnostic: "Unable to decode working-tree image"
+                )
+                return .failed(ImageDiffLoadFailure(message: "changed-on-disk"))
+            }
+            return .image(image, frameCount: frameCount(for: image))
+        }
+
+        if Self.isImmutableImageRevision(revision) {
+            let key = ImageDiffDecodedCache.Key(
+                repository: worktreePath.standardizedFileURL.path,
+                revision: revision,
+                path: path
+            )
+            let image = await ImageDiffDecodedCache.shared.image(for: key, cost: 1) {
+                await self.loadImageBlob(worktreePath: worktreePath, revision: revision, path: path).image
+            }
+            if let image {
+                return .image(image, frameCount: frameCount(for: image))
+            }
+        }
+
+        return await loadImageBlob(worktreePath: worktreePath, revision: revision, path: path)
+    }
+
+    func workingCopyImageProvider(
+        worktreePath: URL,
+        change: ChangedFile
+    ) async -> DiffReviewImageProvider {
+        let staged = change.stage == .staged
+        let resolution = ImageDiffPairResolver.resolveWorkingCopy(
+            entry: change,
+            fileExistsOnDisk: FileManager.default.fileExists(
+                atPath: worktreePath.appendingPathComponent(change.path).path
+            ),
+            staged: staged
+        )
+        let indexPath = staged ? change.path : (resolution.oldPath ?? change.path)
+        let indexRevision = await indexObjectID(worktreePath: worktreePath, path: indexPath)
+        let diskToken = fileMetadataToken(worktreePath: worktreePath, path: change.path)
+        let indexImageRevision = Self.imageRevision(forIndexObjectID: indexRevision)
+        let beforeRevision = staged ? "HEAD" : indexImageRevision
+        let afterRevision = staged ? indexImageRevision : Self.workingTreeImageRevision
+
+        return imageProvider(
+            source: .workingCopy,
+            worktreePath: worktreePath,
+            beforeRevision: "\(change.stage.rawValue):\(beforeRevision)",
+            afterRevision: "\(afterRevision):\(diskToken)",
+            beforePath: resolution.oldPath,
+            afterPath: change.path
+        ) { [self] in
+            let before: ImageDiffSide = switch resolution.kind {
+            case .added: .missing
+            default: await imageSide(
+                worktreePath: worktreePath,
+                revision: beforeRevision,
+                path: resolution.oldPath ?? change.path
+            )
+            }
+            let after: ImageDiffSide = switch resolution.kind {
+            case .deleted: .missing
+            default: await imageSide(
+                worktreePath: worktreePath,
+                revision: afterRevision,
+                path: change.path
+            )
+            }
+            return ImageDiffPair(before: before, after: after, oldPath: resolution.oldPath, kind: resolution.kind)
+        }
+    }
+
+    func stagedImageProvider(
+        worktreePath: URL,
+        file: CommitChangedFile
+    ) async -> DiffReviewImageProvider {
+        let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
+        let indexRevision = await indexObjectID(worktreePath: worktreePath, path: file.path)
+        let indexImageRevision = Self.imageRevision(forIndexObjectID: indexRevision)
+
+        return imageProvider(
+            source: .workingCopy,
+            worktreePath: worktreePath,
+            beforeRevision: "staged:HEAD",
+            afterRevision: "index:\(indexRevision)",
+            beforePath: resolution.oldPath,
+            afterPath: file.path
+        ) { [self] in
+            let before: ImageDiffSide = switch resolution.kind {
+            case .added: .missing
+            default: await imageSide(
+                worktreePath: worktreePath,
+                revision: "HEAD",
+                path: resolution.oldPath ?? file.path
+            )
+            }
+            let after: ImageDiffSide = switch resolution.kind {
+            case .deleted: .missing
+            default: await imageSide(worktreePath: worktreePath, revision: indexImageRevision, path: file.path)
+            }
+            return ImageDiffPair(before: before, after: after, oldPath: resolution.oldPath, kind: resolution.kind)
+        }
+    }
+
+    func commitImageProvider(
+        worktreePath: URL,
+        sha: String,
+        file: CommitChangedFile
+    ) -> DiffReviewImageProvider {
+        let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
+        let beforeRevision = "\(sha)^"
+
+        return imageProvider(
+            source: .commit,
+            worktreePath: worktreePath,
+            beforeRevision: beforeRevision,
+            afterRevision: sha,
+            beforePath: resolution.oldPath,
+            afterPath: file.path
+        ) { [self] in
+            let before: ImageDiffSide = switch resolution.kind {
+            case .added: .missing
+            default: await imageSide(
+                worktreePath: worktreePath,
+                revision: beforeRevision,
+                path: resolution.oldPath ?? file.path
+            )
+            }
+            let after: ImageDiffSide = switch resolution.kind {
+            case .deleted: .missing
+            default: await imageSide(worktreePath: worktreePath, revision: sha, path: file.path)
+            }
+            return ImageDiffPair(before: before, after: after, oldPath: resolution.oldPath, kind: resolution.kind)
+        }
+    }
 
     /// Commit variant. Returns the before/after `NSImage`s for an image
     /// file changed in commit `sha`. The caller passes the
@@ -244,5 +391,112 @@ extension GitService {
         )
         guard result.exitCode == 0 else { return [] }
         return try StatusParser.parse(result.stdout)
+    }
+
+    private func imageProvider(
+        source: DiffReviewImageProviderID.Source,
+        worktreePath: URL,
+        beforeRevision: String,
+        afterRevision: String,
+        beforePath: String?,
+        afterPath: String,
+        load: @escaping @MainActor () async -> ImageDiffPair
+    ) -> DiffReviewImageProvider {
+        DiffReviewImageProvider(
+            id: DiffReviewImageProviderID(
+                source: source,
+                repository: worktreePath.standardizedFileURL.path,
+                beforeRevision: beforeRevision,
+                afterRevision: afterRevision,
+                beforePath: beforePath,
+                afterPath: afterPath
+            ),
+            load: load
+        )
+    }
+
+    private func indexObjectID(worktreePath: URL, path: String) async -> String {
+        do {
+            let result = try await Process.git(["rev-parse", ":\(path)"], cwd: worktreePath)
+            guard result.exitCode == 0 else { return "missing-index" }
+            let objectID = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return objectID.isEmpty ? "missing-index" : objectID
+        } catch {
+            Self.logImageSideFailure(
+                category: "Git", worktreePath: worktreePath, revision: "index", path: path,
+                diagnostic: error.localizedDescription
+            )
+            return "missing-index"
+        }
+    }
+
+    private func fileMetadataToken(worktreePath: URL, path: String) -> String {
+        let fileURL = worktreePath.appendingPathComponent(path)
+        guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        else { return "missing-on-disk" }
+        let modified = values.contentModificationDate?.timeIntervalSinceReferenceDate ?? 0
+        let size = values.fileSize ?? 0
+        return "\(modified):\(size)"
+    }
+
+    private func loadImageBlob(worktreePath: URL, revision: String, path: String) async -> ImageDiffSide {
+        let spec = Self.blobObjectID(from: revision) ?? "\(revision):\(path)"
+        do {
+            let result = try await Process.gitData(["show", spec], cwd: worktreePath)
+            guard result.exitCode == 0 else {
+                let diagnostic = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                Self.logImageSideFailure(
+                    category: "Git", worktreePath: worktreePath, revision: revision, path: path,
+                    diagnostic: diagnostic
+                )
+                return .failed(ImageDiffLoadFailure(message: "Git"))
+            }
+
+            if let image = await GitLFSBlobResolver.image(fromGitBlobData: result.stdout, worktreePath: worktreePath) {
+                return .image(image, frameCount: frameCount(for: image))
+            }
+
+            let category = Self.isLFSPointer(result.stdout) ? "LFS" : "decode"
+            Self.logImageSideFailure(
+                category: category, worktreePath: worktreePath, revision: revision, path: path,
+                diagnostic: "Image data could not be decoded"
+            )
+            return .failed(ImageDiffLoadFailure(message: category))
+        } catch {
+            Self.logImageSideFailure(
+                category: "Git", worktreePath: worktreePath, revision: revision, path: path,
+                diagnostic: error.localizedDescription
+            )
+            return .failed(ImageDiffLoadFailure(message: "Git"))
+        }
+    }
+
+    private static func isImmutableImageRevision(_ revision: String) -> Bool {
+        revision != "HEAD" && revision != workingTreeImageRevision && revision != "missing-index"
+    }
+
+    private static func imageRevision(forIndexObjectID objectID: String) -> String {
+        objectID == "missing-index" ? objectID : "\(blobImageRevisionPrefix)\(objectID)"
+    }
+
+    private static func blobObjectID(from revision: String) -> String? {
+        guard revision.hasPrefix(blobImageRevisionPrefix) else { return nil }
+        return String(revision.dropFirst(blobImageRevisionPrefix.count))
+    }
+
+    private static func isLFSPointer(_ data: Data) -> Bool {
+        String(data: data, encoding: .utf8)?.hasPrefix("version https://git-lfs.github.com/spec/v1") == true
+    }
+
+    private static func logImageSideFailure(
+        category: String,
+        worktreePath: URL,
+        revision: String,
+        path: String,
+        diagnostic: String
+    ) {
+        imageDiffLogger.error(
+            "Image side \(category, privacy: .public) failed for \(worktreePath.path, privacy: .public) \(revision, privacy: .public):\(path, privacy: .public): \(diagnostic, privacy: .public)"
+        )
     }
 }
