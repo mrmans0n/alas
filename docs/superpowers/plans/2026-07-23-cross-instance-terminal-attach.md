@@ -4,7 +4,7 @@
 
 **Goal:** Prevent a second Alas instance launched from a persistent terminal from switching, closing, and killing the shared zmx-backed terminal session.
 
-**Architecture:** Explicitly shadow `ZMX_SESSION` with an empty environment override before Alas hands a local terminal configuration to Ghostty. Ghostty merges that override over the app process environment, and zmx interprets the empty value as no current session, allowing both Alas instances to attach as clients.
+**Architecture:** Explicitly shadow `ZMX_SESSION` with an empty environment override only before Alas hands a local terminal configuration to Ghostty. Ghostty merges that override over the app process environment, and zmx interprets the empty value as no current session, allowing both Alas instances to attach as clients. Remote project environments remain unchanged and do not add the override.
 
 **Tech Stack:** Swift 5.9+, Swift Testing, SwiftUI/AppKit macOS, embedded Ghostty, zmx
 
@@ -27,7 +27,7 @@
 
 **Interfaces:**
 - Consumes: `EnvBuilder.build(project:worktree:sessionId:socketPath:inheritParent:parent:zmxDir:) -> [String: String]`
-- Produces: An environment dictionary that always contains `"ZMX_SESSION": ""` for local Ghostty surface construction while preserving any inherited `ZMX_SESSION_PREFIX`.
+- Produces: An environment dictionary that contains `"ZMX_SESSION": ""` only for local Ghostty surface construction while preserving any inherited `ZMX_SESSION_PREFIX`; remote project environments retain the prior omission of `ZMX_SESSION`.
 
 - [ ] **Step 1: Change the environment-builder regression test to require an explicit empty override**
 
@@ -114,17 +114,19 @@ Expected: FAIL because `EnvBuilder` omits `ZMX_SESSION`, so both tests receive `
 
 - [ ] **Step 4: Implement the minimal environment override**
 
-In `Alas/Sources/Terminal/EnvBuilder.swift`, retain `ZMX_SESSION` in `strippedKeys` so an inherited non-empty value is never copied, update its comment to explain Ghostty's overlay behavior, and add the explicit override immediately after the inherited/empty environment dictionary is created:
+In `Alas/Sources/Terminal/EnvBuilder.swift`, retain `ZMX_SESSION` in `strippedKeys` so an inherited non-empty value is never copied. For local projects only (`project.host == nil`), add the explicit override immediately after the inherited/empty environment dictionary is created. Remote projects must keep the previous omission so the remote SSH environment is unchanged:
 
 ```swift
 var env: [String: String] = inheritParent
     ? parent.filter { !strippedKeys.contains($0.key) }
     : [:]
-// Ghostty starts from the Alas process environment and overlays these
-// values, so omission cannot remove a ZMX_SESSION inherited by an Alas
-// instance launched from a persistent terminal. An empty value makes zmx
-// take its normal attach path instead of switchSesh.
-env["ZMX_SESSION"] = ""
+if project.host == nil {
+    // Local Ghostty starts from the Alas process environment and overlays
+    // these values, so omission cannot remove a ZMX_SESSION inherited by an
+    // Alas instance launched from a persistent terminal. An empty value makes
+    // zmx take its normal attach path instead of switchSesh.
+    env["ZMX_SESSION"] = ""
+}
 ```
 
 - [ ] **Step 5: Run the focused tests and verify they pass**
