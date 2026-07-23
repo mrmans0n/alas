@@ -70,11 +70,14 @@ struct FileSearchDialog: View {
                                     onTap: { open(r) },
                                     onHover: { model.selectedIndex = idx }
                                 )
-                                // Identity is the ForEach's `\.element.id` (the
-                                // file). Do NOT override with `.id(position)`:
-                                // a stable position id lets LazyVStack cache the
-                                // row and never rebuild it when the file at that
-                                // position changes, freezing stale results.
+                                // Identity/scroll anchor is the file id, not the
+                                // row position. A stable position id (`.id(idx)`)
+                                // let LazyVStack cache the row and never rebuild
+                                // it when the file at that position changed,
+                                // freezing stale results; a data-based id changes
+                                // with the file and still gives `scrollTo` an
+                                // explicit target for keyboard navigation.
+                                .id(r.id)
                             }
                         case .content:
                             contentGroupViews(model: model)
