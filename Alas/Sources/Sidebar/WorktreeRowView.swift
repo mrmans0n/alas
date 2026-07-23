@@ -169,10 +169,11 @@ struct WorktreeRowView: View {
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(Self.stackSummaryAccessibilityLabel(merged: stack.merged, total: stack.total))
                         } else if ggMenuModel.showsStatusIndicator {
-                            Text("GG")
-                                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                                .foregroundColor(theme.color("accent"))
+                            GGSidebarStackShape()
+                                .fill(theme.color("accent"))
+                                .frame(width: 9, height: 9)
                                 .help("gg is active for this worktree.")
+                                .accessibilityLabel("gg is active for this worktree.")
                         }
                         if let summary = harnessSummary {
                             Spacer()
