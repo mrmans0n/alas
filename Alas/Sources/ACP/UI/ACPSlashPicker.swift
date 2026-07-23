@@ -110,18 +110,16 @@ struct ACPSlashPickerView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                     } else {
-                        // Identity is positional (offset == idx), matching
-                        // the row's `.id(idx)` and the index-based
-                        // `selectedIndex` / `scrollTo`. Using `\.element` here
-                        // would collide when the agent emits duplicate
-                        // commands and would disagree with `.id(idx)` when
-                        // the filtered list reorders on every keystroke —
-                        // the LazyVStack then recycles cells by element id but
-                        // re-identifies the row by index, leaving blank
-                        // recycled rows interspersed with live ones.
-                        ForEach(Array(items.enumerated()), id: \.offset) { idx, s in
+                        // Identity is the command string, kept consistent
+                        // across the ForEach `id:`, the row `.id()` and
+                        // `scrollTo`. The model de-duplicates by command in its
+                        // init, so commands are unique here — no element-id
+                        // collision. A positional id would instead freeze
+                        // LazyVStack rows against the list re-sorting on every
+                        // keystroke, leaving stale rows on screen.
+                        ForEach(Array(items.enumerated()), id: \.element.command) { idx, s in
                             row(s, isSelected: idx == model.selectedIndex)
-                                .id(idx)
+                                .id(s.command)
                                 .contentShape(Rectangle())
                                 .onTapGesture { onPick(s) }
                         }
@@ -130,8 +128,9 @@ struct ACPSlashPickerView: View {
                 .padding(.vertical, 4)
             }
             .onChange(of: model.selectedIndex) { _, new in
+                guard items.indices.contains(new) else { return }
                 withAnimation(.easeOut(duration: 0.08)) {
-                    proxy.scrollTo(new, anchor: .center)
+                    proxy.scrollTo(items[new].command, anchor: .center)
                 }
             }
         }

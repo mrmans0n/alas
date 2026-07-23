@@ -77,14 +77,18 @@ struct ACPMentionPickerView: View {
                             .padding(.horizontal, 10).padding(.vertical, 10)
                     } else {
                         ForEach(Array(ranked.enumerated()), id: \.element) { idx, file in
-                            row(idx: idx, file: file).id(idx)
+                            // Data-based id (the file URL), not the row
+                            // position: a positional id freezes LazyVStack rows
+                            // against the ranked list changing as you type.
+                            row(idx: idx, file: file).id(file)
                         }
                     }
                 }
                 .padding(.vertical, 4)
             }
             .onChange(of: highlight) { _, new in
-                proxy.scrollTo(new, anchor: .center)
+                guard ranked.indices.contains(new) else { return }
+                proxy.scrollTo(ranked[new], anchor: .center)
             }
         }
     }

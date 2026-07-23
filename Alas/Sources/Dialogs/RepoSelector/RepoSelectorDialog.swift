@@ -114,7 +114,13 @@ struct RepoSelectorDialog: View {
                                 appState.repoSelector.setSelectedIndex(renderedRow.index, in: rows)
                             }
                         )
-                        .id(renderedRow.index)
+                        // `RepoSelectorRenderedRow.id` is `"<index>:<stableId>"`
+                        // — unique (the same worktree can appear in both the
+                        // Recent and project sections, so a bare stableId would
+                        // collide) and content-aware (the stableId component
+                        // changes when the row at a position changes, so
+                        // LazyVStack rebuilds instead of caching a stale row).
+                        .id(renderedRow.id)
                     }
                 }
                 .padding(.vertical, 4)
@@ -125,7 +131,10 @@ struct RepoSelectorDialog: View {
                 // .center would re-center on every arrow press, shifting the
                 // list under the cursor and triggering hover-induced
                 // selection bouncing.
-                proxy.scrollTo(appState.repoSelector.selectedIndex)
+                let index = appState.repoSelector.selectedIndex
+                if renderedRows.indices.contains(index) {
+                    proxy.scrollTo(renderedRows[index].id)
+                }
             }
         }
     }
