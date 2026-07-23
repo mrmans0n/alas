@@ -7,6 +7,23 @@ extension GitService {
     private static let workingTreeImageRevision = "__alas_working_tree__"
     private static let blobImageRevisionPrefix = "__alas_blob__:"
 
+    /// Decodes image bytes obtained outside of git (for example, from a hosted
+    /// review). Keeping this beside the git-blob path makes LFS-pointer and
+    /// image decoding semantics consistent across local and hosted reviews.
+    static func imageSide(
+        fromRawData data: Data,
+        worktreePath: URL
+    ) async -> ImageDiffSide {
+        guard let image = await GitLFSBlobResolver.image(fromGitBlobData: data, worktreePath: worktreePath) else {
+            return .failed(ImageDiffLoadFailure(message: isLFSPointer(data) ? "LFS" : "decode"))
+        }
+        return imageSide(forDecodedImage: image)
+    }
+
+    static func imageSide(forDecodedImage image: NSImage) -> ImageDiffSide {
+        .image(image, frameCount: imageFrameCount(for: image))
+    }
+
     func imageSide(
         worktreePath: URL,
         revision: String,
@@ -555,8 +572,9 @@ extension GitService {
                 return .failed(ImageDiffLoadFailure(message: "Git"))
             }
 
-            if let image = await GitLFSBlobResolver.image(fromGitBlobData: result.stdout, worktreePath: worktreePath) {
-                return .image(image, frameCount: frameCount(for: image))
+            let side = await Self.imageSide(fromRawData: result.stdout, worktreePath: worktreePath)
+            if case .image = side {
+                return side
             }
 
             let category = Self.isLFSPointer(result.stdout) ? "LFS" : "decode"
@@ -589,6 +607,13 @@ extension GitService {
 
     private static func isLFSPointer(_ data: Data) -> Bool {
         String(data: data, encoding: .utf8)?.hasPrefix("version https://git-lfs.github.com/spec/v1") == true
+    }
+
+    private static func imageFrameCount(for image: NSImage) -> Int {
+        guard let rep = image.representations.first as? NSBitmapImageRep,
+              let value = rep.value(forProperty: .frameCount) as? Int
+        else { return 1 }
+        return value
     }
 
     private static func logImageSideFailure(
