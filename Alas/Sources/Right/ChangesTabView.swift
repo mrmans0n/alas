@@ -195,6 +195,9 @@ struct ChangesTabView: View {
                     onReviewChanges: openReviewChangesTab,
                     onDraftCommit: openDraftTab,
                     onGGAction: handleGGPreparationAction,
+                    onGGStackAction: { action in
+                        rps.onGGStackAction(action, appState: appState)
+                    },
                     onReviewRequestAction: { action in
                         rps.handleReviewReadinessAction(action, appState: appState)
                     }
