@@ -65,6 +65,14 @@ extension AppState {
     }
 
     private func launchScript(_ script: RunScript, in worktree: Worktree) {
+        // The tab that would satisfy `runningScriptTab` isn't registered
+        // until this launch's async Task finishes, so two invocations before
+        // that (double-click, repeated Enter) would both see "not running"
+        // and both launch. Close that window with a synchronous in-flight
+        // guard instead.
+        let launchKey = "\(worktree.id):\(script.key)"
+        guard !pendingScriptLaunches.contains(launchKey) else { return }
+
         // Global scripts live in local Application Support and are read by
         // path, not content — launching one into a remote worktree would ship
         // a Mac-only path into the SSH-launched remote shell, which can't see
@@ -84,8 +92,22 @@ extension AppState {
             )
             return
         }
+        // The run command only ever reaches the shell via the same rc-file
+        // injection StartupScriptInstaller uses for every other startup
+        // script — for a shell it doesn't know how to inject into, `plan`
+        // silently drops the script and just opens a bare login shell. Fail
+        // loudly here instead of leaving the user staring at an empty pane.
+        guard StartupScriptInstaller.supportsStartupScriptInjection(shell: config.terminal.shell) else {
+            showFileActionError(
+                title: "Run Script Failed",
+                message: "Run scripts require zsh or bash as your configured terminal shell (currently \((config.terminal.shell as NSString).lastPathComponent))."
+            )
+            return
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return }
+        pendingScriptLaunches.insert(launchKey)
         Task { @MainActor in
+            defer { pendingScriptLaunches.remove(launchKey) }
             do {
                 let suffix = try Self.runScriptStartupScript(
                     script: script,
