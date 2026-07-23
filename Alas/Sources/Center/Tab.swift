@@ -510,6 +510,10 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     /// holder in nested-package layouts. Nil for tabs persisted before this
     /// field was added (backward-compatible via the default value).
     var originatingRelativePath: String? = nil
+    /// Whether this external tab is editable (opt-in for run-script edits).
+    /// Optional so payloads persisted before this field was added decode to
+    /// nil, preserving the historical read-only-external behavior.
+    var externalEditable: Bool? = nil
     /// Last view mode the user selected for this markdown tab. `nil` means
     /// "use `AppConfig.markdown.defaultViewMode`". Nil for non-markdown tabs.
     var markdownViewMode: MarkdownViewMode? = nil
@@ -518,6 +522,7 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     var markdownSplitFraction: Double? = nil
 
     var isExternal: Bool { externalAbsolutePath != nil }
+    var isExternalEditable: Bool { externalEditable ?? false }
 }
 
 struct DiffTabState: Codable, Equatable, Identifiable {

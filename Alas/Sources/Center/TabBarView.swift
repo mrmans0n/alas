@@ -236,7 +236,7 @@ private struct TabButton: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
-            if case .editor(let state) = tab, state.isExternal {
+            if case .editor(let state) = tab, state.isExternal, !state.isExternalEditable {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(theme.color("fg-faint"))

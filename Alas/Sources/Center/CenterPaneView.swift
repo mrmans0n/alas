@@ -203,6 +203,7 @@ struct CenterPaneView: View {
                                           revealRevision: s.revealRevision,
                                           appState: state,
                                           externalAbsolutePath: s.externalAbsolutePath,
+                                          externalEditable: s.isExternalEditable,
                                           originatingRelativePath: s.originatingRelativePath,
                                           onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         }

@@ -92,10 +92,20 @@ final class EditorBufferStore {
         try? FileManager.default.removeItem(at: file)
     }
 
-    func externalBuffer(worktreeId: String, absoluteURL: URL) -> EditorBuffer {
+    func externalBuffer(worktreeId: String, absoluteURL: URL, editable: Bool = false) -> EditorBuffer {
         let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
-        if let cached = externalBuffers[key] { return cached }
-        let buffer = EditorBuffer(externalAbsoluteURL: absoluteURL)
+        if let cached = externalBuffers[key] {
+            // Upgrade a previously read-only external buffer to an editable one
+            // when an editable open is requested (e.g. a run-script edit reuses
+            // a URL first opened via ⌘-click). Recreate so the buffer's
+            // `externalEditable` flag and readOnly state match the request.
+            if editable, !cached.externalEditable {
+                discardExternalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+            } else {
+                return cached
+            }
+        }
+        let buffer = EditorBuffer(externalAbsoluteURL: absoluteURL, editable: editable)
         externalBuffers[key] = buffer
         return buffer
     }

@@ -119,6 +119,12 @@ final class EditorBuffer {
     /// disk — but they still reload when the file changes on disk.
     let isExternal: Bool
 
+    /// External buffers are read-only by default (SDK files opened via
+    /// ⌘-click). Run-script editing opts in to editing + saving; the save
+    /// path already targets the right file because external buffers use
+    /// parent-dir/filename as their sentinel worktreeRoot/relativePath.
+    let externalEditable: Bool
+
     /// The live AppKit text storage displayed by the text view. The
     /// reference is stable for the lifetime of the buffer; tearing down
     /// the view detaches it without releasing it.
@@ -347,7 +353,7 @@ final class EditorBuffer {
     /// reload only — it never writes back). Uses sentinel worktreeRoot/
     /// relativePath values (directory + filename) so the rest of the buffer
     /// machinery works without optional-unwrap proliferation (option B).
-    convenience init(externalAbsoluteURL: URL) {
+    convenience init(externalAbsoluteURL: URL, editable: Bool = false) {
         let worktreeRoot = externalAbsoluteURL.deletingLastPathComponent()
         let relativePath = externalAbsoluteURL.lastPathComponent
         self.init(
@@ -358,14 +364,16 @@ final class EditorBuffer {
             worktreeId: nil,
             tabId: nil,
             restoreEnabled: false,
-            lsp: nil
+            lsp: nil,
+            externalEditable: editable
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
+        self.externalEditable = externalEditable
         self.remoteHost = RemoteHostRegistry.shared.host(
             forPath: worktreeRoot.appendingPathComponent(relativePath).path
         )
@@ -2113,7 +2121,7 @@ final class EditorBuffer {
         case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
             let detected = LineEnding.detect(in: raw)
             let canonical = LineEnding.lf.normalize(raw)
-            let nextReadOnly = isExternal || isSymlink
+            let nextReadOnly = (isExternal && !externalEditable) || isSymlink
             let didApplyChange = storage.string != canonical
                 || originalText != canonical
                 || lineEnding != detected
@@ -2180,7 +2188,7 @@ final class EditorBuffer {
         lineEnding = detected
         updateOriginalFileAttributes(from: resolvedURL)
         let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-        readOnly = isExternal || isSymlink
+        readOnly = (isExternal && !externalEditable) || isSymlink
         loadKind = .loaded
         return self
     }

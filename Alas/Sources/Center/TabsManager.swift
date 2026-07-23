@@ -527,7 +527,8 @@ final class TabsManager {
         revealEndLine: Int? = nil,
         originatingRelativePath: String? = nil,
         originatingWorktreeRoot: URL? = nil,
-        language: String? = nil
+        language: String? = nil,
+        editable: Bool = false
     ) -> Tab {
         let absPath = absoluteURL.path
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
@@ -549,6 +550,9 @@ final class TabsManager {
                     s.markdownViewMode = .editor
                 }
                 s.originatingRelativePath = originatingRelativePath   // refresh the origin
+                // Upgrade an existing tab to editable if a more-editable open
+                // is requested; never downgrade an already-editable tab.
+                if editable { s.externalEditable = true }
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id
                 byWorktree[worktreeId] = file
@@ -585,7 +589,8 @@ final class TabsManager {
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
             externalAbsolutePath: absPath,
-            originatingRelativePath: originatingRelativePath
+            originatingRelativePath: originatingRelativePath,
+            externalEditable: editable ? true : nil
         )
         if shouldRevealInMarkdownEditor {
             state.markdownViewMode = .editor
@@ -1415,10 +1420,11 @@ final class TabsManager {
         absoluteURL: URL,
         worktreeRoot: URL? = nil,
         originatingFileURL: URL? = nil,
-        language: String? = nil
+        language: String? = nil,
+        editable: Bool = false
     ) -> EditorBuffer {
         externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
-        let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+        let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL, editable: editable)
         buffer.startWatching()
 
         if let root = worktreeRoot {
@@ -1514,7 +1520,7 @@ final class TabsManager {
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
     /// dirty-tab queries.
     func peekBuffer(tabId: TabID) -> EditorBuffer? {
-        tabBuffers[tabId]
+        tabBuffers[tabId] ?? peekExternalBuffer(tabId: tabId)
     }
 
     /// Non-creating lookup for an external editor buffer. Returns nil if no

@@ -105,7 +105,8 @@ extension AppState {
                 worktreeId: worktree.id,
                 absoluteURL: script.fileURL,
                 revealLine: nil,
-                revealCharacter: nil
+                revealCharacter: nil,
+                editable: true
             )
         }
     }
@@ -148,7 +149,8 @@ extension AppState {
                 worktreeId: worktree.id,
                 absoluteURL: url,
                 revealLine: nil,
-                revealCharacter: nil
+                revealCharacter: nil,
+                editable: true
             )
         }
     }

@@ -33,6 +33,7 @@ final class CodeEditorCoordinator {
     private var revealHighlightTask: Task<Void, Never>?
     private var revealHighlightRange: NSRange?
     private var currentExternalAbsolutePath: String?
+    private var currentExternalEditable: Bool = false
     private var currentOriginatingWorktreeRoot: URL?
     private var currentOriginatingRelativePath: String?
 
@@ -77,13 +78,14 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
         self.currentTheme = theme
         self.currentExternalAbsolutePath = externalAbsolutePath
+        self.currentExternalEditable = externalEditable
         if externalAbsolutePath != nil {
             currentOriginatingWorktreeRoot = worktreeRoot
             currentOriginatingRelativePath = originatingRelativePath
@@ -106,9 +108,9 @@ final class CodeEditorCoordinator {
 
         bindBuffer(buffer, theme: theme)
 
-        if buffer.isExternal {
-            textView.isEditable = false
-        }
+        // External buffers load synchronously, so `readOnly` is settled by
+        // bind time; editable external (run-script) buffers are writable.
+        textView.isEditable = !buffer.readOnly
 
         hover = HoverFeature(
             textView: textView,
@@ -285,7 +287,7 @@ final class CodeEditorCoordinator {
         onTextViewAttached?(textView, tabId)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false) {
         // Re-query the registry every time so a registry change (e.g. a
         // server gets installed) still flips this comparison and triggers a
         // rebind. When the same tab is being re-evaluated and has an
@@ -340,6 +342,7 @@ final class CodeEditorCoordinator {
             currentWorktreeId = worktreeId
             currentTabId = tabId
             currentExternalAbsolutePath = externalAbsolutePath
+            currentExternalEditable = externalEditable
             if externalAbsolutePath != nil {
                 currentOriginatingWorktreeRoot = worktreeRoot
                 currentOriginatingRelativePath = originatingRelativePath
@@ -368,7 +371,8 @@ final class CodeEditorCoordinator {
                     absoluteURL: absURL,
                     worktreeRoot: worktreeRoot,
                     originatingFileURL: originatingFileURL,
-                    language: language
+                    language: language,
+                    editable: externalEditable
                 )
             } else {
                 nextBuffer = appState.tabs.buffer(
@@ -380,11 +384,11 @@ final class CodeEditorCoordinator {
             }
             bindBuffer(nextBuffer, theme: theme)
 
-            if nextBuffer.isExternal {
-                textView?.isEditable = false
-            } else {
-                textView?.isEditable = true
-            }
+            // External buffers load synchronously, so `readOnly` is settled by
+            // bind time; for in-worktree buffers `readOnly` is false in the
+            // normal case, preserving current behavior. Editable external
+            // (run-script) buffers stay writable.
+            textView?.isEditable = !nextBuffer.readOnly
             // Note: origin-change rebinding (close-old-holder / open-new-holder)
             // is now handled entirely by TabsManager.rebindExternalLSPHolder,
             // which runs at openExternalEditor() time regardless of tab activation.
@@ -498,6 +502,7 @@ final class CodeEditorCoordinator {
         // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
         // Do NOT call closeExternalDocument here.
         currentExternalAbsolutePath = nil
+        currentExternalEditable = false
         currentOriginatingWorktreeRoot = nil
         currentOriginatingRelativePath = nil
         if let buffer, let token = editObserverToken {

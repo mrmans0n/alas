@@ -48,6 +48,7 @@ struct EditorTabView: View {
     let revealRevision: Int?
     let appState: AppState
     let externalAbsolutePath: String?
+    var externalEditable: Bool = false
     let originatingRelativePath: String?
     let onRevealInFiles: (String) -> Void
     @Environment(\.theme) var theme
@@ -153,6 +154,7 @@ struct EditorTabView: View {
                     revealRevision: revealRevision,
                     appState: appState,
                     externalAbsolutePath: externalAbsolutePath,
+                    externalEditable: externalEditable,
                     originatingRelativePath: originatingRelativePath,
                     fontFamily: appState.config.code.fontFamily,
                     fontSize: appState.config.code.fontSize,

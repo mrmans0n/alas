@@ -112,6 +112,9 @@ struct CodeEditorView: NSViewRepresentable {
     let revealRevision: Int?
     let appState: AppState
     let externalAbsolutePath: String?
+    /// Whether an external tab is editable (opt-in for run-script edits).
+    /// `false` for the default read-only external navigation tabs.
+    var externalEditable: Bool = false
     /// The worktree-relative path of the in-worktree file from which the
     /// user navigated to this external tab. Used to route LSP traffic for
     /// the external file to the correct holder in nested-package layouts.
@@ -160,7 +163,8 @@ struct CodeEditorView: NSViewRepresentable {
                 absoluteURL: absoluteURL,
                 worktreeRoot: worktreeRoot,
                 originatingFileURL: originatingFileURL,
-                language: language
+                language: language,
+                editable: externalEditable
             )
         } else {
             buffer = appState.tabs.buffer(
@@ -216,7 +220,8 @@ struct CodeEditorView: NSViewRepresentable {
             revealRevision: revealRevision,
             theme: theme,
             externalAbsolutePath: externalAbsolutePath,
-            originatingRelativePath: originatingRelativePath
+            originatingRelativePath: originatingRelativePath,
+            externalEditable: externalEditable
         )
         return scroll
     }
@@ -234,7 +239,8 @@ struct CodeEditorView: NSViewRepresentable {
             revealRevision: revealRevision,
             theme: theme,
             externalAbsolutePath: externalAbsolutePath,
-            originatingRelativePath: originatingRelativePath
+            originatingRelativePath: originatingRelativePath,
+            externalEditable: externalEditable
         )
 
         if let textView = nsView.documentView as? CodeTextView {
