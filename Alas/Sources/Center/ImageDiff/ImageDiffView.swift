@@ -12,10 +12,10 @@ struct ImageDiffView: View {
     @Environment(\.theme) private var theme
 
     /// Pure helper exposed for testing. If the currently-selected mode is
-    /// not applicable for `kind`, snap to `.sideBySide`.
+    /// not applicable for `pair`, snap to `.sideBySide`.
     static func snapToApplicableMode(_ mode: inout ImageDiffMode,
-                                     for kind: ImageDiffPairKind) {
-        if !mode.isApplicable(for: kind) {
+                                     for pair: ImageDiffPair) {
+        if !mode.isApplicable(for: pair) {
             mode = .sideBySide
         }
     }
@@ -26,12 +26,12 @@ struct ImageDiffView: View {
             content
         }
         .background(theme.color("bg-1"))
-        .onAppear { Self.snapToApplicableMode(&mode, for: pair.kind) }
+        .onAppear { Self.snapToApplicableMode(&mode, for: pair) }
         .onChange(of: mode) { _, _ in
             // Bouncing back when user attempts a disabled mode is enforced
             // by the segmented control disabling itself; this is a belt-
             // and-suspenders check.
-            Self.snapToApplicableMode(&mode, for: pair.kind)
+            Self.snapToApplicableMode(&mode, for: pair)
         }
     }
 
@@ -45,7 +45,10 @@ struct ImageDiffView: View {
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-dim"))
             if pair.kind == .renamed, let old = pair.oldPath {
-                renameChip(old: old, new: relativePath)
+                pathChangeChip(kind: "RENAMED", old: old, new: relativePath)
+            }
+            if pair.kind == .copied, let old = pair.oldPath {
+                pathChangeChip(kind: "COPIED", old: old, new: relativePath)
             }
             if mode == .difference, let pct = percentChanged {
                 changedChip(percent: pct)
@@ -73,10 +76,10 @@ struct ImageDiffView: View {
     }
 
     @ViewBuilder
-    private func renameChip(old: String, new: String) -> some View {
+    private func pathChangeChip(kind: String, old: String, new: String) -> some View {
         let oldName = (old as NSString).lastPathComponent
         let newName = (new as NSString).lastPathComponent
-        Text("RENAMED \(oldName) → \(newName)")
+        Text("\(kind) \(oldName) → \(newName)")
             .font(.system(size: 9.5, weight: .semibold))
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(theme.color("info").opacity(0.18))
@@ -127,7 +130,7 @@ struct ImageDiffView: View {
 
     @ViewBuilder
     private func modeButton(_ m: ImageDiffMode) -> some View {
-        let enabled = m.isApplicable(for: pair.kind)
+        let enabled = m.isApplicable(for: pair)
         let isOn = mode == m && enabled
         Button {
             if enabled { mode = m }
@@ -166,24 +169,24 @@ struct ImageDiffView: View {
         switch mode {
         case .sideBySide:
             ImageDiffSideBySideView(
-                before: pair.before, after: pair.after,
+                before: pair.beforeImage, after: pair.afterImage,
                 beforeLabel: "Before", afterLabel: "After",
                 transform: $transform
             )
         case .overlay:
-            if let b = pair.before, let a = pair.after {
+            if let b = pair.beforeImage, let a = pair.afterImage {
                 ImageDiffOverlayView(before: b, after: a)
             } else {
                 Color.clear
             }
         case .swipe:
-            if let b = pair.before, let a = pair.after {
+            if let b = pair.beforeImage, let a = pair.afterImage {
                 ImageDiffSwipeView(before: b, after: a)
             } else {
                 Color.clear
             }
         case .difference:
-            if let b = pair.before, let a = pair.after {
+            if let b = pair.beforeImage, let a = pair.afterImage {
                 ImageDiffDifferenceView(
                     before: b, after: a, percentChanged: $percentChanged
                 )

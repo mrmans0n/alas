@@ -44,8 +44,8 @@ struct ImageDiffEndToEndTests {
             worktreePath: repo, relativePath: "art.png", staged: false
         )
         #expect(pair.kind == .modified)
-        let before = try #require(pair.before)
-        let after = try #require(pair.after)
+        let before = try #require(pair.beforeImage)
+        let after = try #require(pair.afterImage)
         let result = ImageDiffDifferenceComputer.compute(before: before, after: after)
         #expect(result.totalPixels >= 1)
         #expect(result.changedPixelCount >= 1)

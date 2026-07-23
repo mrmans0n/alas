@@ -96,8 +96,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
         #expect(pair.oldPath == nil)
     }
 
@@ -116,8 +116,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "new.png", staged: false
         )
         #expect(pair.kind == .added)
-        #expect(pair.before == nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsDeletedImagePair() async throws {
@@ -134,8 +134,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .deleted)
-        #expect(pair.before != nil)
-        #expect(pair.after == nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage == nil)
     }
 
     @Test func loadsRenamedImagePair() async throws {
@@ -159,8 +159,8 @@ struct ImageDiffPairLoaderTests {
         )
         #expect(pair.kind == .renamed)
         #expect(pair.oldPath == "old.png")
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsCommitImageDiffPairModified() async throws {
@@ -182,8 +182,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, sha: sha, file: file
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsCommitImageDiffPairAddedAtInitialCommit() async throws {
@@ -202,8 +202,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, sha: sha, file: file
         )
         #expect(pair.kind == .added)
-        #expect(pair.before == nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsCommitImageDiffPairRenamed() async throws {
@@ -228,8 +228,8 @@ struct ImageDiffPairLoaderTests {
         )
         #expect(pair.kind == .renamed)
         #expect(pair.oldPath == "old.png")
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func picksUnstagedEntryWhenBothStagedAndUnstagedExist() async throws {
@@ -256,16 +256,16 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(unstaged.kind == .deleted)
-        #expect(unstaged.before != nil)
-        #expect(unstaged.after == nil)
+        #expect(unstaged.beforeImage != nil)
+        #expect(unstaged.afterImage == nil)
 
         // staged: true should pick the staged entry → .added.
         let stagedPair = try await GitService().imageDiffPair(
             worktreePath: repo, relativePath: "logo.png", staged: true
         )
         #expect(stagedPair.kind == .added)
-        #expect(stagedPair.before == nil)
-        #expect(stagedPair.after != nil)
+        #expect(stagedPair.beforeImage == nil)
+        #expect(stagedPair.afterImage != nil)
     }
 
     @Test func loadsLFSImageFromHeadPointerForUnstagedDiff() async throws {
@@ -282,8 +282,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsLFSImageFromIndexPointerForStagedDiff() async throws {
@@ -305,8 +305,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "new.png", staged: true
         )
         #expect(pair.kind == .added)
-        #expect(pair.before == nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsLFSImageFromConfiguredStorage() async throws {
@@ -329,7 +329,7 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 }

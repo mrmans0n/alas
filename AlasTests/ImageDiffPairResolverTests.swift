@@ -81,6 +81,21 @@ struct ImageDiffPairResolverTests {
         #expect(r.oldPath == "old/path.png")
     }
 
+    @Test func resolvesCommitFileCopied() {
+        let file = CommitChangedFile(
+            path: "Assets/Copy.png",
+            originalPath: "Assets/Original.png",
+            status: "C",
+            add: 0,
+            del: 0
+        )
+
+        let result = ImageDiffPairResolver.resolveCommit(entry: file)
+
+        #expect(result.kind == .copied)
+        #expect(result.oldPath == "Assets/Original.png")
+    }
+
     @Test func resolvesCommitFileModified() {
         let f = CommitChangedFile(
             path: "logo.png", originalPath: nil, status: "M", add: 0, del: 0

@@ -6,17 +6,14 @@ enum ImageDiffMode: String, CaseIterable, Hashable {
     case swipe
     case difference
 
-    /// Side-by-side works for one-sided diffs (we just show a placeholder
-    /// on the missing side). The other three modes need both blobs to
-    /// produce something meaningful, so they're disabled for adds/deletes.
-    func isApplicable(for kind: ImageDiffPairKind) -> Bool {
+    /// Side-by-side works for one-sided or failed diffs. The other three
+    /// modes require loaded images on both sides.
+    func isApplicable(for pair: ImageDiffPair) -> Bool {
         switch self {
-        case .sideBySide: return true
+        case .sideBySide:
+            return true
         case .overlay, .swipe, .difference:
-            switch kind {
-            case .added, .deleted: return false
-            case .modified, .renamed: return true
-            }
+            return pair.before.isLoadedImage && pair.after.isLoadedImage
         }
     }
 
