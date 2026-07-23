@@ -38,6 +38,48 @@ struct DiffReviewImageStateTests {
 
         #expect(state.retryGeneration == firstGeneration + 1)
     }
+
+    @Test func clearingProviderRemovesLoadedPairAndRetryState() async {
+        let state = DiffReviewImageState()
+        let loadedPair = pair(color: .systemGreen)
+        let provider = provider(revision: "head") { loadedPair }
+
+        await state.load(provider: provider)
+        await state.retry()
+        state.clear()
+
+        #expect(state.providerID == nil)
+        #expect(state.pair == nil)
+        #expect(!state.isLoading)
+        #expect(state.retryGeneration == 0)
+    }
+
+    @Test func lateFirstAttemptIsRejectedAfterRetryBegins() async {
+        let firstAttemptGate = PairLoadGate()
+        let retryGate = PairLoadGate()
+        let state = DiffReviewImageState()
+        var attempt = 0
+        let provider = provider(revision: "head") {
+            attempt += 1
+            if attempt == 1 {
+                return await firstAttemptGate.wait()
+            }
+            return await retryGate.wait()
+        }
+        let retryPair = pair(color: .systemGreen)
+
+        let firstLoad = Task { await state.load(provider: provider) }
+        await Task.yield()
+        let retry = Task { await state.retry() }
+        await Task.yield()
+
+        retryGate.resume(returning: retryPair)
+        await retry.value
+        firstAttemptGate.resume(returning: pair(color: .systemRed))
+        await firstLoad.value
+
+        #expect(state.pair?.afterImage === retryPair.afterImage)
+    }
 }
 
 @MainActor

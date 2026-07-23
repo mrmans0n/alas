@@ -194,7 +194,10 @@ struct DiffReviewFileSection: View {
             resetContextState()
         }
         .task(id: file.imageProvider?.id) {
-            guard let provider = file.imageProvider else { return }
+            guard let provider = file.imageProvider else {
+                imageState.clear()
+                return
+            }
             await imageState.load(provider: provider)
         }
     }

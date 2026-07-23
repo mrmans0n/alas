@@ -48,4 +48,13 @@ final class DiffReviewImageState {
         retryGeneration += 1
         await load(provider: currentProvider)
     }
+
+    func clear() {
+        providerID = nil
+        pair = nil
+        isLoading = false
+        retryGeneration = 0
+        currentProvider = nil
+        presentation.resetForNewPair()
+    }
 }

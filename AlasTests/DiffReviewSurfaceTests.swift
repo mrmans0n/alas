@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import Testing
 @testable import Alas
@@ -217,6 +218,53 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-loading-\(file.id.rawValue)", in: controller.view) == nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-failure-\(file.id.rawValue)", in: controller.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-retry-\(file.id.rawValue)", in: controller.view) != nil)
+    }
+
+    @Test func fileSectionClearsImageControlsWhenProviderIsRemoved() async {
+        let imageFile = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/logo.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "abc123^",
+                    afterRevision: "abc123",
+                    beforePath: "Assets/logo.png",
+                    afterPath: "Assets/logo.png"
+                ),
+                load: {
+                    ImageDiffPair(
+                        before: .failed(.init(message: "Could not decode before image")),
+                        after: .missing,
+                        oldPath: nil,
+                        kind: .deleted
+                    )
+                }
+            )
+        )
+        let model = ImageProviderRemovalModel(file: imageFile)
+        let view = ImageProviderRemovalHarness(theme: theme(), model: model)
+        let controller = host(view, width: 900, height: 520)
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-header-\(imageFile.id.rawValue)", in: controller.view) != nil)
+
+        model.file = DiffReviewFileSectionModel(
+            summary: imageFile.summary,
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-header-\(imageFile.id.rawValue)", in: controller.view) == nil)
     }
 
     @Test func fileSectionRefocusesDraftComposerAfterSelectingDifferentGutterRows() async throws {
@@ -3856,6 +3904,39 @@ private final class ImagePairLoadGate {
     func resume(returning pair: ImageDiffPair) {
         continuation?.resume(returning: pair)
         continuation = nil
+    }
+}
+
+@Observable
+@MainActor
+private final class ImageProviderRemovalModel {
+    var file: DiffReviewFileSectionModel
+
+    init(file: DiffReviewFileSectionModel) {
+        self.file = file
+    }
+}
+
+@MainActor
+private struct ImageProviderRemovalHarness: View {
+    let theme: Theme
+    let model: ImageProviderRemovalModel
+    @State private var layout = DiffLayoutMode.split
+    @State private var wrapLines = false
+    @State private var showWhitespace = false
+
+    var body: some View {
+        DiffReviewFileSection(
+            file: model.file,
+            layoutMode: $layout,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace,
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            allowsDraftCommentCreation: false
+        )
+        .environment(\.theme, theme)
     }
 }
 

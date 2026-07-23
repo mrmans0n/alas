@@ -51,6 +51,13 @@ struct DiffReviewRenderableContentEqualityTests {
         #expect(!lhs.hasSameRenderableContent(as: rhs))
     }
 
+    @Test func imageProviderRemovalIsNotEqual() {
+        let lhs = fileModel(path: "a.png", imageProvider: imageProvider(revision: "abc123"))
+        let rhs = fileModel(path: "a.png")
+
+        #expect(!lhs.hasSameRenderableContent(as: rhs))
+    }
+
     @Test func openFilePresenceMismatchIsNotEqual() {
         let lhs = fileModel(path: "a.swift", openFile: {})
         let rhs = fileModel(path: "a.swift")
