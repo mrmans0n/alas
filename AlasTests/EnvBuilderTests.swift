@@ -89,14 +89,12 @@ struct EnvBuilderTests {
         #expect(env["TERMINFO"] == nil)
     }
 
-    /// zmx injects ZMX_SESSION into the shells it spawns. If Alas inherits
-    /// that env and forwards it into a freshly-spawned pane, any later
-    /// `zmx attach <other>` from that shell silently hits zmx's switchSesh
-    /// path and re-binds the pane to a different daemon's session, leaving
-    /// one Alas tab piped into another tab's shell. See zmx#151.
-    /// `ZMX_SESSION_PREFIX` is left intact so user-configured prefixes flow
-    /// through to both the spawned shell and Alas's own zmx CLI calls.
-    @Test func stripsZmxSessionButKeepsPrefixFromInheritedParent() {
+    /// Ghostty starts with the Alas process environment and overlays the
+    /// dictionary returned by EnvBuilder. Omitting ZMX_SESSION therefore does
+    /// not remove a value inherited when Alas was launched from a zmx terminal;
+    /// an explicit empty override is required to make zmx perform a normal
+    /// multi-client attach. ZMX_SESSION_PREFIX remains inherited user config.
+    @Test func shadowsZmxSessionButKeepsPrefixFromInheritedParent() {
         let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
         let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
                           path: URL(fileURLWithPath: "/wt"),
@@ -112,8 +110,24 @@ struct EnvBuilderTests {
             ]
         )
         #expect(env["PATH"] == "/x")
-        #expect(env["ZMX_SESSION"] == nil)
+        #expect(env["ZMX_SESSION"] == "")
         #expect(env["ZMX_SESSION_PREFIX"] == "team-")
+    }
+
+    @Test func remoteSessionDoesNotAddZmxSessionOverride() {
+        let project = ProjectConfig(
+            id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date(), host: "devbox"
+        )
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            socketPath: nil,
+            inheritParent: true,
+            parent: ["ZMX_SESSION": "alas-parent"]
+        )
+        #expect(env["ZMX_SESSION"] == nil)
     }
 
     @Test func zmxDirIsEmittedWhenProvided() {
