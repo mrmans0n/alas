@@ -35,11 +35,21 @@ struct CodeHostReviewImageRevisions: Equatable, Sendable {
 
 protocol CodeHostCommandRunning: Sendable {
     func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult
+    func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData
 }
 
 extension CodeHostCommandRunning {
     func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
         try await run(executable, args: args, cwd: cwd, stdin: nil)
+    }
+
+    func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
+        let result = try await run(executable, args: args, cwd: cwd, stdin: nil)
+        return ProcessResultData(
+            exitCode: result.exitCode,
+            stdout: Data(result.stdout.utf8),
+            stderr: result.stderr
+        )
     }
 }
 
@@ -56,6 +66,20 @@ struct ProcessCodeHostCommandRunner: CodeHostCommandRunning {
             cwd: invocation.cwd,
             env: invocation.env,
             stdin: stdin
+        )
+    }
+
+    func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
+        let invocation = CodeHostCommandInvocation.build(
+            executable: executable,
+            args: args,
+            cwd: cwd
+        )
+        return try await Process.runData(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env
         )
     }
 }
@@ -119,6 +143,7 @@ protocol CodeHostProvider: Sendable {
     ) async throws -> CodeHostReviewImageRevisions
     func reviewFileData(
         remote: CodeHostRemote,
+        repository: String,
         revision: String,
         path: String,
         cwd: URL
@@ -237,6 +262,7 @@ extension CodeHostProvider {
 
     func reviewFileData(
         remote: CodeHostRemote,
+        repository: String,
         revision: String,
         path: String,
         cwd: URL

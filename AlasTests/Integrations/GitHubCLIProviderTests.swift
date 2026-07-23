@@ -314,12 +314,18 @@ struct GitHubCLIProviderTests {
         ])
     }
 
-    @Test func reviewImageRevisionsAndFileDataUseExactGitHubRevisions() async throws {
+    @Test func reviewImageRevisionsAndRawFileDataUseExactForkRevisionBeyondOneMegabyte() async throws {
+        let rawImage = String(repeating: "a", count: 1_048_577)
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: #"{"merge_base_commit":{"sha":"base-sha"}}"#, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: #"{"content":"iVBO\nRw==","encoding":"base64"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: rawImage, stderr: ""),
         ])
-        let request = Self.makeRequest(baseSHA: "base-sha", headSHA: "head-sha")
+        let request = Self.makeRequest(
+            baseSHA: "base-sha",
+            headSHA: "head-sha",
+            headRepositoryOwner: "fork-owner",
+            headRepositoryName: "alas-fork"
+        )
         let provider = GitHubCLIProvider(runner: runner)
 
         let revisions = try await provider.reviewImageRevisions(
@@ -329,6 +335,7 @@ struct GitHubCLIProviderTests {
         )
         let data = try await provider.reviewFileData(
             remote: Self.remote,
+            repository: "fork-owner/alas-fork",
             revision: revisions.afterSHA,
             path: "Assets/Diff image.png",
             cwd: Self.cwd
@@ -338,7 +345,7 @@ struct GitHubCLIProviderTests {
             beforeSHA: "base-sha",
             afterSHA: "head-sha"
         ))
-        #expect(data == Data([0x89, 0x50, 0x4e, 0x47]))
+        #expect(data == Data(rawImage.utf8))
         #expect(await runner.commands == [
             FakeRunner.Command(
                 executable: "gh",
@@ -355,21 +362,23 @@ struct GitHubCLIProviderTests {
                     "api",
                     "--hostname", "github.com",
                     "--method", "GET",
-                    "repos/mrmans0n/alas/contents/Assets%2FDiff%20image.png?ref=head-sha",
+                    "--header", "Accept: application/vnd.github.raw+json",
+                    "repos/fork-owner/alas-fork/contents/Assets%2FDiff%20image.png?ref=head-sha",
                 ],
                 cwd: Self.cwd
             ),
         ])
     }
 
-    @Test func reviewFileDataRejectsInvalidBase64() async {
+    @Test func reviewFileDataSurfacesRawRouteFailure() async {
         let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: #"{"content":"not valid base64!","encoding":"base64"}"#, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "request failed"),
         ])
 
-        await #expect(throws: CodeHostProviderError.malformedOutput("gh api contents returned invalid base64 content")) {
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "gh api contents", stderr: "request failed")) {
             _ = try await GitHubCLIProvider(runner: runner).reviewFileData(
                 remote: Self.remote,
+                repository: "mrmans0n/alas",
                 revision: "head-sha",
                 path: "Assets/Diff image.png",
                 cwd: Self.cwd

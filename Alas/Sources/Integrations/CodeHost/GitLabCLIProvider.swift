@@ -203,6 +203,7 @@ struct GitLabCLIProvider: CodeHostProvider {
 
     func reviewFileData(
         remote: CodeHostRemote,
+        repository: String,
         revision: String,
         path: String,
         cwd: URL
@@ -211,7 +212,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             "glab",
             args: [
                 "api",
-                "projects/\(Self.encodedProjectPath(remote.repositorySlug))/repository/files/\(Self.encodedFilePath(path))?ref=\(revision)",
+                "projects/\(Self.encodedProjectPath(repository))/repository/files/\(Self.encodedFilePath(path))?ref=\(revision)",
                 "--method", "GET",
                 "--hostname", remote.host,
                 "--output", "json",
@@ -875,7 +876,12 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "glab mr view", stderr: result.stderr)
         }
 
-        return try Self.parseMRView(result.stdout, remote: remote)
+        return try Self.parseMRView(
+            result.stdout,
+            remote: remote,
+            fallbackHeadRepositoryOwner: request.headRepositoryOwner,
+            fallbackHeadRepositoryName: request.headRepositoryName
+        )
     }
 
     private func refreshedReviewRequest(
@@ -1180,7 +1186,12 @@ struct GitLabCLIProvider: CodeHostProvider {
                 }) else {
                     return nil
                 }
-                return try reviewRequest(from: item, remote: remote, context: "glab mr list")
+                return try reviewRequest(
+                    from: item,
+                    remote: remote,
+                    context: "glab mr list",
+                    sourceProjectPathsByID: sourceProjectPathsByID
+                )
             }
 
             guard items.count == 1 else {
@@ -1188,7 +1199,12 @@ struct GitLabCLIProvider: CodeHostProvider {
             }
         }
 
-        return try reviewRequest(from: item, remote: remote, context: "glab mr list")
+        return try reviewRequest(
+            from: item,
+            remote: remote,
+            context: "glab mr list",
+            sourceProjectPathsByID: sourceProjectPathsByID
+        )
     }
 
     static func parseProjectPath(_ json: String) throws -> String {
@@ -1214,7 +1230,12 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
     }
 
-    static func parseMRView(_ json: String, remote: CodeHostRemote) throws -> ReviewRequest {
+    static func parseMRView(
+        _ json: String,
+        remote: CodeHostRemote,
+        fallbackHeadRepositoryOwner: String? = nil,
+        fallbackHeadRepositoryName: String? = nil
+    ) throws -> ReviewRequest {
         let data = Data(json.utf8)
         let item: MRListItem
         do {
@@ -1223,7 +1244,13 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("Unable to parse glab mr view output")
         }
 
-        return try reviewRequest(from: item, remote: remote, context: "glab mr view")
+        return try reviewRequest(
+            from: item,
+            remote: remote,
+            context: "glab mr view",
+            fallbackHeadRepositoryOwner: fallbackHeadRepositoryOwner,
+            fallbackHeadRepositoryName: fallbackHeadRepositoryName
+        )
     }
 
     static func parseDiscussions(
@@ -1439,7 +1466,10 @@ struct GitLabCLIProvider: CodeHostProvider {
     private static func reviewRequest(
         from item: MRListItem,
         remote: CodeHostRemote,
-        context: String
+        context: String,
+        sourceProjectPathsByID: [Int: String] = [:],
+        fallbackHeadRepositoryOwner: String? = nil,
+        fallbackHeadRepositoryName: String? = nil
     ) throws -> ReviewRequest {
         guard let number = item.iid else {
             throw CodeHostProviderError.malformedOutput("\(context) output is missing a merge request iid")
@@ -1448,6 +1478,9 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("\(context) returned an invalid URL")
         }
 
+        let sourceRepository = splitRepositorySlug(
+            item.sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID)
+        )
         return ReviewRequest(
             remote: remote,
             number: number,
@@ -1458,11 +1491,23 @@ struct GitLabCLIProvider: CodeHostProvider {
             headRefName: item.sourceBranch,
             baseRefName: item.targetBranch,
             headSHA: normalizedOptionalString(item.sha),
+            headRepositoryOwner: sourceRepository?.owner ?? fallbackHeadRepositoryOwner,
+            headRepositoryName: sourceRepository?.name ?? fallbackHeadRepositoryName,
             reviewDecision: mapReviewDecision(approvalsRequired: item.approvalsRequired, approvalsLeft: item.approvalsLeft),
             mergeState: mapMergeState(detailed: item.detailedMergeStatus, fallback: item.mergeStatus),
             checks: [],
             threads: []
         )
+    }
+
+    private static func splitRepositorySlug(_ slug: String?) -> (owner: String, name: String)? {
+        guard let slug = normalizedOptionalString(slug),
+              let separator = slug.lastIndex(of: "/")
+        else { return nil }
+        let owner = String(slug[..<separator])
+        let name = String(slug[slug.index(after: separator)...])
+        guard !owner.isEmpty, !name.isEmpty else { return nil }
+        return (owner, name)
     }
 
     private static func mapState(_ value: String) -> ReviewRequestState {
@@ -1739,6 +1784,8 @@ struct GitLabCLIProvider: CodeHostProvider {
             baseRefName: request.baseRefName,
             baseSHA: request.baseSHA,
             headSHA: request.headSHA,
+            headRepositoryOwner: request.headRepositoryOwner,
+            headRepositoryName: request.headRepositoryName,
             reviewDecision: request.reviewDecision,
             mergeState: request.mergeState,
             checks: checks,

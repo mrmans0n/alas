@@ -473,17 +473,19 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     func reviewFileData(
         remote: CodeHostRemote,
+        repository: String,
         revision: String,
         path: String,
         cwd: URL
     ) async throws -> Data {
-        let result = try await runner.run(
+        let result = try await runner.runData(
             "gh",
             args: [
                 "api",
                 "--hostname", remote.host,
                 "--method", "GET",
-                "repos/\(remote.repositorySlug)/contents/\(Self.encodedFilePath(path))?ref=\(revision)",
+                "--header", "Accept: application/vnd.github.raw+json",
+                "repos/\(repository)/contents/\(Self.encodedFilePath(path))?ref=\(revision)",
             ],
             cwd: cwd
         )
@@ -491,17 +493,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh api contents", stderr: result.stderr)
         }
 
-        let response: GitHubFileContentResponse
-        do {
-            response = try JSONDecoder().decode(GitHubFileContentResponse.self, from: Data(result.stdout.utf8))
-        } catch {
-            throw CodeHostProviderError.malformedOutput("Unable to parse gh api contents output")
-        }
-        let normalizedBase64 = response.content.filter { !$0.isWhitespace }
-        guard let data = Data(base64Encoded: normalizedBase64) else {
-            throw CodeHostProviderError.malformedOutput("gh api contents returned invalid base64 content")
-        }
-        return data
+        return result.stdout
     }
 
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
@@ -1943,10 +1935,6 @@ private struct GitHubCompareResponse: Decodable {
 
 private struct GitHubCompareCommit: Decodable {
     let sha: String?
-}
-
-private struct GitHubFileContentResponse: Decodable {
-    let content: String
 }
 
 private struct HeadRepository: Decodable {

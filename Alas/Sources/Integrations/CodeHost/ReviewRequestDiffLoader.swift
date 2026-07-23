@@ -20,7 +20,7 @@ struct ReviewRequestDiffLoader {
         try Task.checkCancellation()
 
         let sections = splitFileSections(diff)
-        let imageRevisions = await hostedImageRevisions(
+        let imageRevisionContext = await hostedImageRevisionContext(
             ifNeededFor: sections,
             remote: remote,
             request: request,
@@ -36,7 +36,7 @@ struct ReviewRequestDiffLoader {
                 remote: remote,
                 request: request,
                 cwd: cwd,
-                imageRevisions: imageRevisions
+                imageRevisionContext: imageRevisionContext
             ))
         }
 
@@ -52,10 +52,13 @@ struct ReviewRequestDiffLoader {
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL,
-        imageRevisions: HostedImageRevisions?
+        imageRevisionContext: HostedImageRevisionContext?
     ) async throws -> DiffReviewFileSectionModel {
         let parsed = DiffParser.parse(section.rawDiff)
-        let isImage = ImageFileType.isSupported(relativePath: section.path)
+        let isImage = ImageFileType.isSupported(
+            currentPath: section.path,
+            originalPath: section.originalPath
+        )
         let canRenderText = !parsed.hunks.isEmpty && !isImage
         let counts = lineCounts(in: parsed)
         let summary = DiffReviewFileSummary(
@@ -85,25 +88,33 @@ struct ReviewRequestDiffLoader {
                     remote: remote,
                     request: request,
                     cwd: cwd,
-                    revisions: imageRevisions
+                    revisionContext: imageRevisionContext
                 )
                 : nil
         )
     }
 
-    private func hostedImageRevisions(
+    private func hostedImageRevisionContext(
         ifNeededFor sections: [ProviderDiffFileSection],
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
-    ) async -> HostedImageRevisions? {
-        guard sections.contains(where: { ImageFileType.isSupported(relativePath: $0.path) }) else {
+    ) async -> HostedImageRevisionContext? {
+        guard sections.contains(where: {
+            ImageFileType.isSupported(currentPath: $0.path, originalPath: $0.originalPath)
+        }) else {
             return nil
         }
 
+        let resolver = HostedImageRevisionResolver(
+            provider: provider,
+            remote: remote,
+            request: request,
+            cwd: cwd
+        )
         do {
-            let revisions = try await provider.reviewImageRevisions(remote: remote, request: request, cwd: cwd)
-            return .resolved(revisions)
+            let revisions = try await resolver.resolve()
+            return HostedImageRevisionContext(resolver: resolver, initialRevisions: revisions)
         } catch {
             Self.logHostedImageFailure(
                 provider: provider.kind,
@@ -112,7 +123,7 @@ struct ReviewRequestDiffLoader {
                 path: "-",
                 error: error
             )
-            return .failed(message: Self.imageFailureMessage(for: error))
+            return HostedImageRevisionContext(resolver: resolver, initialRevisions: nil)
         }
     }
 
@@ -121,60 +132,70 @@ struct ReviewRequestDiffLoader {
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL,
-        revisions: HostedImageRevisions?
+        revisionContext: HostedImageRevisionContext?
     ) -> DiffReviewImageProvider {
         let beforePath = section.originalPath ?? section.path
-        let repository = "\(provider.kind.rawValue):\(remote.host)/\(remote.repositorySlug)#\(request.number)"
-        let beforeRevision: String
-        let afterRevision: String
-        switch revisions {
-        case .resolved(let exact):
-            beforeRevision = exact.beforeSHA
-            afterRevision = exact.afterSHA
-        case .failed:
-            beforeRevision = "unavailable-before"
-            afterRevision = "unavailable-after"
-        case nil:
-            beforeRevision = "unavailable-before"
-            afterRevision = "unavailable-after"
-        }
+        let beforeRepository = remote.repositorySlug
+        let afterRepository = request.headRepositorySlug ?? remote.repositorySlug
+        let repository = "\(provider.kind.rawValue):\(remote.host)/\(beforeRepository)->\(afterRepository)#\(request.number)"
+        let beforeRevision = revisionContext?.initialRevisions?.beforeSHA
+            ?? request.baseSHA
+            ?? "unavailable-before"
+        let afterRevision = revisionContext?.initialRevisions?.afterSHA
+            ?? request.headSHA
+            ?? "unavailable-after"
 
         let id = DiffReviewImageProviderID(
             source: .hostedReview,
             repository: repository,
-            beforeRevision: beforeRevision,
-            afterRevision: afterRevision,
+            beforeRevision: "\(beforeRepository)@\(beforeRevision)",
+            afterRevision: "\(afterRepository)@\(afterRevision)",
             beforePath: section.rawStatus == "A" ? nil : beforePath,
             afterPath: section.path
         )
 
         return DiffReviewImageProvider(id: id) { [provider, kind = provider.kind] in
+            guard let revisionContext else {
+                return Self.hostedRevisionFailurePair(
+                    for: section,
+                    message: "Image revisions are unavailable."
+                )
+            }
+
+            let exact: CodeHostReviewImageRevisions
+            do {
+                exact = try await revisionContext.resolver.resolve()
+            } catch {
+                Self.logHostedImageFailure(
+                    provider: kind,
+                    reviewNumber: request.number,
+                    revision: "metadata",
+                    path: "-",
+                    error: error
+                )
+                return Self.hostedRevisionFailurePair(
+                    for: section,
+                    message: Self.imageFailureMessage(for: error)
+                )
+            }
+
             let before: ImageDiffSide
             let after: ImageDiffSide
-            switch revisions {
-            case .resolved(let exact):
-                if section.rawStatus == "A" {
-                    before = .missing
-                } else {
-                    before = await Self.hostedImageSide(
-                        provider: provider, kind: kind, remote: remote, reviewNumber: request.number,
-                        revision: exact.beforeSHA, path: beforePath, cwd: cwd, repository: repository
-                    )
-                }
-                if section.rawStatus == "D" {
-                    after = .missing
-                } else {
-                    after = await Self.hostedImageSide(
-                        provider: provider, kind: kind, remote: remote, reviewNumber: request.number,
-                        revision: exact.afterSHA, path: section.path, cwd: cwd, repository: repository
-                    )
-                }
-            case .failed(let message):
-                before = section.rawStatus == "A" ? .missing : .failed(ImageDiffLoadFailure(message: message))
-                after = section.rawStatus == "D" ? .missing : .failed(ImageDiffLoadFailure(message: message))
-            case nil:
-                before = section.rawStatus == "A" ? .missing : .failed(ImageDiffLoadFailure(message: "Image revisions are unavailable."))
-                after = section.rawStatus == "D" ? .missing : .failed(ImageDiffLoadFailure(message: "Image revisions are unavailable."))
+            if section.rawStatus == "A" {
+                before = .missing
+            } else {
+                before = await Self.hostedImageSide(
+                    provider: provider, kind: kind, remote: remote, reviewNumber: request.number,
+                    repository: beforeRepository, revision: exact.beforeSHA, path: beforePath, cwd: cwd
+                )
+            }
+            if section.rawStatus == "D" {
+                after = .missing
+            } else {
+                after = await Self.hostedImageSide(
+                    provider: provider, kind: kind, remote: remote, reviewNumber: request.number,
+                    repository: afterRepository, revision: exact.afterSHA, path: section.path, cwd: cwd
+                )
             }
 
             return ImageDiffPair(
@@ -186,16 +207,28 @@ struct ReviewRequestDiffLoader {
         }
     }
 
+    private static func hostedRevisionFailurePair(
+        for section: ProviderDiffFileSection,
+        message: String
+    ) -> ImageDiffPair {
+        ImageDiffPair(
+            before: section.rawStatus == "A" ? .missing : .failed(ImageDiffLoadFailure(message: message)),
+            after: section.rawStatus == "D" ? .missing : .failed(ImageDiffLoadFailure(message: message)),
+            oldPath: section.rawStatus == "R" || section.rawStatus == "C" ? section.originalPath : nil,
+            kind: section.imagePairKind
+        )
+    }
+
     @MainActor
     private static func hostedImageSide(
         provider: any CodeHostProvider,
         kind: CodeHostKind,
         remote: CodeHostRemote,
         reviewNumber: Int,
+        repository: String,
         revision: String,
         path: String,
-        cwd: URL,
-        repository: String
+        cwd: URL
     ) async -> ImageDiffSide {
         let key = ImageDiffDecodedCache.Key(repository: repository, revision: revision, path: path)
         return await ImageDiffDecodedCache.shared.side(
@@ -204,11 +237,22 @@ struct ReviewRequestDiffLoader {
             makeImageSide: GitService.imageSide(forDecodedImage:)
         ) {
             do {
-                let data = try await provider.reviewFileData(remote: remote, revision: revision, path: path, cwd: cwd)
+                let data = try await provider.reviewFileData(
+                    remote: remote,
+                    repository: repository,
+                    revision: revision,
+                    path: path,
+                    cwd: cwd
+                )
                 let side = await GitService.imageSide(fromRawData: data, worktreePath: cwd)
-                if case .failed = side {
-                    Self.logHostedImageFailure(provider: kind, reviewNumber: reviewNumber, revision: revision, path: path, error: HostedImageDecodeError())
-                    return .failed(ImageDiffLoadFailure(message: "Could not decode image."))
+                if case .failed(let failure) = side {
+                    Self.logHostedImageFailure(
+                        provider: kind,
+                        reviewNumber: reviewNumber,
+                        revision: revision,
+                        path: path,
+                        error: HostedImageDecodeError(message: failure.message)
+                    )
                 }
                 return side
             } catch {
@@ -297,7 +341,7 @@ struct ReviewRequestDiffLoader {
     }
 
     private func placeholderMessage(for section: ProviderDiffFileSection, diff: ParsedDiff) -> String {
-        if ImageFileType.isSupported(relativePath: section.path) {
+        if ImageFileType.isSupported(currentPath: section.path, originalPath: section.originalPath) {
             return "Image changes are not available in this review view yet."
         }
         if diff.hunks.isEmpty {
@@ -316,13 +360,47 @@ struct ReviewRequestDiffLoader {
     }
 }
 
-private enum HostedImageRevisions {
-    case resolved(CodeHostReviewImageRevisions)
-    case failed(message: String)
+private struct HostedImageRevisionContext {
+    let resolver: HostedImageRevisionResolver
+    let initialRevisions: CodeHostReviewImageRevisions?
 }
 
 private struct HostedImageDecodeError: LocalizedError {
-    var errorDescription: String? { "Image data could not be decoded" }
+    let message: String
+    var errorDescription: String? { "Image data could not be decoded: \(message)" }
+}
+
+private actor HostedImageRevisionResolver {
+    private let provider: any CodeHostProvider
+    private let remote: CodeHostRemote
+    private let request: ReviewRequest
+    private let cwd: URL
+    private var cached: CodeHostReviewImageRevisions?
+
+    init(
+        provider: any CodeHostProvider,
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) {
+        self.provider = provider
+        self.remote = remote
+        self.request = request
+        self.cwd = cwd
+    }
+
+    func resolve() async throws -> CodeHostReviewImageRevisions {
+        if let cached {
+            return cached
+        }
+        let revisions = try await provider.reviewImageRevisions(
+            remote: remote,
+            request: request,
+            cwd: cwd
+        )
+        cached = revisions
+        return revisions
+    }
 }
 
 private struct ProviderDiffFileSection {

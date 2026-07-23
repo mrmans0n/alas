@@ -412,7 +412,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let baseRefName: String
     let baseSHA: String?
     let headSHA: String?
-    /// Owner (login) and name of the repository the head branch lives in.
+    /// Owner/namespace and name of the repository the head branch lives in.
     /// Differ from `remote` for forked pull requests — including same-owner
     /// forks, where only the name differs. Both are compared before remote-
     /// branch cleanup so a same-named branch in the base repo is never deleted.
@@ -432,6 +432,15 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     var provider: CodeHostKind { remote.kind }
 
     var displayIdentity: String { "\(provider.displayName) \(provider.reviewRequestNumberPrefix)\(number)" }
+
+    var headRepositorySlug: String? {
+        guard let owner = headRepositoryOwner?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let name = headRepositoryName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !owner.isEmpty,
+              !name.isEmpty
+        else { return nil }
+        return "\(owner)/\(name)"
+    }
 
     init(
         remote: CodeHostRemote,

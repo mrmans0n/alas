@@ -112,6 +112,7 @@ struct GitLabCLIProviderTests {
         )
         let data = try await provider.reviewFileData(
             remote: Self.remote,
+            repository: "nacho/alas-fork",
             revision: revisions.afterSHA,
             path: "Assets/Diff image.png",
             cwd: Self.cwd
@@ -137,7 +138,7 @@ struct GitLabCLIProviderTests {
                 executable: "glab",
                 args: [
                     "api",
-                    "projects/platform%2Fmobile%2Falas/repository/files/Assets%2FDiff%20image.png?ref=reviewed-head",
+                    "projects/nacho%2Falas-fork/repository/files/Assets%2FDiff%20image.png?ref=reviewed-head",
                     "--method", "GET",
                     "--hostname", "gitlab.example.com",
                     "--output", "json",
@@ -168,6 +169,7 @@ struct GitLabCLIProviderTests {
         await #expect(throws: CodeHostProviderError.malformedOutput("glab api repository file returned invalid base64 content")) {
             _ = try await GitLabCLIProvider(runner: runner).reviewFileData(
                 remote: Self.remote,
+                repository: "platform/mobile/alas",
                 revision: "head-sha",
                 path: "Assets/Diff image.png",
                 cwd: Self.cwd
@@ -492,6 +494,9 @@ struct GitLabCLIProviderTests {
 
         #expect(request.number == 43)
         #expect(request.title == "Fork MR")
+        #expect(request.headRepositoryOwner == "nacho")
+        #expect(request.headRepositoryName == "alas")
+        #expect(request.headRepositorySlug == "nacho/alas")
     }
 
     @Test func mrListReturnsNilWhenHeadOwnerMetadataDoesNotMatch() throws {
