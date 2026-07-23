@@ -114,14 +114,11 @@ struct EditorTabView: View {
             if isBinary {
                 binaryPlaceholder
             } else {
-                if externalAbsolutePath == nil {
-                    let buffer = appState.tabs.buffer(
-                        worktreeId: worktreeId,
-                        tabId: tabId,
-                        worktreeRoot: worktreePath,
-                        relativePath: relativePath
-                    )
-                    EditorConflictBanner(buffer: buffer)
+                if Self.shouldShowConflictBanner(
+                    externalAbsolutePath: externalAbsolutePath,
+                    externalEditable: externalEditable
+                ) {
+                    EditorConflictBanner(buffer: conflictBannerBuffer)
                 }
                 InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
                 BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
@@ -458,6 +455,29 @@ struct EditorTabView: View {
 
     private var nudgeAbsolutePath: String {
         absoluteFilePath
+    }
+
+    static func shouldShowConflictBanner(externalAbsolutePath: String?, externalEditable: Bool) -> Bool {
+        externalAbsolutePath == nil || externalEditable
+    }
+
+    private var conflictBannerBuffer: EditorBuffer {
+        if let externalAbsolutePath {
+            return appState.tabs.externalBuffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                absoluteURL: URL(fileURLWithPath: externalAbsolutePath),
+                worktreeRoot: worktreePath,
+                originatingFileURL: originatingRelativePath.map { worktreePath.appendingPathComponent($0) },
+                editable: externalEditable
+            )
+        }
+        return appState.tabs.buffer(
+            worktreeId: worktreeId,
+            tabId: tabId,
+            worktreeRoot: worktreePath,
+            relativePath: relativePath
+        )
     }
 
     private var breadcrumbRelativePath: String {

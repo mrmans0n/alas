@@ -51,6 +51,21 @@ struct EditorBufferExternalEditableTests {
         #expect(buffer.dirty)
     }
 
+    @Test func conflictBannerIsShownForEditableExternalBuffers() {
+        #expect(EditorTabView.shouldShowConflictBanner(
+            externalAbsolutePath: nil,
+            externalEditable: false
+        ))
+        #expect(!EditorTabView.shouldShowConflictBanner(
+            externalAbsolutePath: "/tmp/read-only.sh",
+            externalEditable: false
+        ))
+        #expect(EditorTabView.shouldShowConflictBanner(
+            externalAbsolutePath: "/tmp/editable.sh",
+            externalEditable: true
+        ))
+    }
+
     /// Regression test for the Task-9 critical fix: `CodeEditorCoordinator`
     /// computes `textView.isEditable` as `!buffer.isExternal || !buffer.readOnly`
     /// so that non-external buffers (e.g. remote in-worktree files whose
