@@ -30,11 +30,12 @@ extension GitService {
                 revision: revision,
                 path: path
             )
-            let image = await ImageDiffDecodedCache.shared.image(for: key, cost: 1) {
-                await self.loadImageBlob(worktreePath: worktreePath, revision: revision, path: path).image
-            }
-            if let image {
-                return .image(image, frameCount: frameCount(for: image))
+            return await ImageDiffDecodedCache.shared.side(
+                for: key,
+                cost: ImageDiffDecodedCache.decodedImageCost,
+                makeImageSide: { image in .image(image, frameCount: self.frameCount(for: image)) }
+            ) {
+                await self.loadImageBlob(worktreePath: worktreePath, revision: revision, path: path)
             }
         }
 

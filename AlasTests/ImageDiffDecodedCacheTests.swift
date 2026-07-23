@@ -52,6 +52,48 @@ struct ImageDiffDecodedCacheTests {
         let cache = ImageDiffDecodedCache(totalCostLimit: 4096)
         #expect(cache.totalCostLimit == 4096)
     }
+
+    @Test func decodedImageCostUsesBitmapStorageBytes() throws {
+        let representation = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 20,
+            pixelsHigh: 10,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        )
+        let bitmap = try #require(representation)
+        let image = NSImage(size: NSSize(width: 20, height: 10))
+        image.addRepresentation(bitmap)
+
+        #expect(ImageDiffDecodedCache.decodedImageCost(for: image) == bitmap.bytesPerRow * bitmap.pixelsHigh)
+    }
+
+    @Test func failedSideIsReturnedWithoutReloading() async {
+        let cache = ImageDiffDecodedCache(totalCostLimit: 1_024_000)
+        let key = ImageDiffDecodedCache.Key(repository: "/repo", revision: "abc123", path: "bad.png")
+        let calls = LockedCounter()
+
+        let side = await cache.side(
+            for: key,
+            cost: ImageDiffDecodedCache.decodedImageCost,
+            makeImageSide: { .image($0, frameCount: 1) }
+        ) {
+            calls.increment()
+            return .failed(ImageDiffLoadFailure(message: "decode"))
+        }
+
+        if case .failed(let failure) = side {
+            #expect(failure == ImageDiffLoadFailure(message: "decode"))
+        } else {
+            Issue.record("Expected the original failed side")
+        }
+        #expect(calls.value == 1)
+    }
 }
 
 private final class LockedCounter: @unchecked Sendable {
