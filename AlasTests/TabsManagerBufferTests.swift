@@ -486,6 +486,25 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: externalURL, encoding: .utf8) == "old")
     }
 
+    @Test func snapshotDirtyBuffersForQuitSavesDirtyEditableExternalBuffers() throws {
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("external-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        let externalURL = externalDir.appendingPathComponent("script.sh")
+        try "old".write(to: externalURL, atomically: true, encoding: .utf8)
+        let (manager, _, _) = makeManager()
+        let buffer = manager.externalBuffer(worktreeId: "wt", tabId: "external-tab", absoluteURL: externalURL, editable: true)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "new")
+
+        // External buffers have no hot-exit snapshot store, so quitting
+        // with unsaved edits would otherwise lose them entirely (unlike
+        // regular buffers, which recover from a snapshot on next launch).
+        manager.snapshotDirtyBuffersForQuit()
+
+        #expect(buffer.dirty == false)
+        #expect(try String(contentsOf: externalURL, encoding: .utf8) == "new")
+    }
+
     @Test func bufferRestoredToSnapshotPathUpdatesTabAndCacheKey() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
