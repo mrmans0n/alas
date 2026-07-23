@@ -160,7 +160,7 @@ struct ReviewRequestDiffLoaderTests {
         #expect(session.summary.groupsEnabled == false)
     }
 
-    @Test func noHunkPlaceholderFileWithSpacesKeepsHeaderPath() async throws {
+    @Test func noHunkImageFileWithSpacesKeepsHeaderPath() async throws {
         let provider = FakeDiffProvider(diff: """
         diff --git a/Assets/logo file.png b/Assets/logo file.png
         index 111..222 100644
@@ -175,11 +175,12 @@ struct ReviewRequestDiffLoaderTests {
 
         let file = try #require(session.files.first)
         #expect(file.summary.path == "Assets/logo file.png")
-        #expect(file.summary.isRenderable == false)
-        #expect(file.placeholderMessage == "Image changes are not available in this review view yet.")
+        #expect(file.summary.isRenderable)
+        #expect(file.placeholderMessage == nil)
+        #expect(file.imageProvider != nil)
     }
 
-    @Test func noHunkPlaceholderFileWithBSlashSegmentKeepsHeaderPath() async throws {
+    @Test func noHunkImageFileWithBSlashSegmentKeepsHeaderPath() async throws {
         let provider = FakeDiffProvider(diff: """
         diff --git a/foo b/bar.png b/foo b/bar.png
         index 111..222 100644
@@ -194,7 +195,8 @@ struct ReviewRequestDiffLoaderTests {
 
         let file = try #require(session.files.first)
         #expect(file.summary.path == "foo b/bar.png")
-        #expect(file.summary.isRenderable == false)
+        #expect(file.summary.isRenderable)
+        #expect(file.imageProvider != nil)
     }
 
     @Test func unquotedPathHeadersDropTabMetadata() async throws {
@@ -416,12 +418,12 @@ struct ReviewRequestDiffLoaderTests {
             isDraft: false,
             headRefName: "feature/files",
             baseRefName: "main",
+            headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
             reviewDecision: .unknown,
             mergeState: .unknown,
             checks: [],
-            threads: [],
-            headRepositoryOwner: headRepositoryOwner,
-            headRepositoryName: headRepositoryName
+            threads: []
         )
     }
 }
