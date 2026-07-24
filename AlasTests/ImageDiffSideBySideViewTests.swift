@@ -35,4 +35,14 @@ struct ImageDiffSideBySideViewTests {
         #expect(t.offset.width == 15)
         #expect(t.offset.height == 10)
     }
+
+    @Test func unmodifiedScrollIsNotCapturedByImageViewer() {
+        #expect(!ScrollEventCapturingView.shouldCaptureScroll(modifierFlags: []))
+    }
+
+    @Test func commandScrollIsCapturedByImageViewer() {
+        #expect(
+            ScrollEventCapturingView.shouldCaptureScroll(modifierFlags: [.command])
+        )
+    }
 }
