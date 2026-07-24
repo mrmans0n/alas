@@ -19,7 +19,7 @@ struct NewWorktreeDialog: View {
     @State private var branch: String = ""
     @State private var stackName: String = ""
     @State private var runStartup: Bool = true
-    @State private var ggMode: GGWorktreeMode = .inherit
+    @State private var ggMode: GGWorktreeMode = .off
     @State private var openAfterCreate: Bool = true
     @State private var launchMode: AppConfig.LauncherMode = .terminal
     /// The launcher mode to persist — preserves the user's intent even when
@@ -146,6 +146,7 @@ struct NewWorktreeDialog: View {
                     projects: state.projects
                 )
             }
+            applyGGModeDefault(for: projectId)
             if base.isEmpty {
                 base = Self.initialBase(
                     configuredDefault: state.config.worktrees.baseBranch,
@@ -159,8 +160,8 @@ struct NewWorktreeDialog: View {
             loadBranchesForSelectedProject()
         }
         .onChange(of: projectId) { _, _ in
+            applyGGModeDefault(for: projectId)
             applyLaunchDefaults(for: projectId)
-            ggMode = Self.ggModeAfterRepositoryChange(current: ggMode)
             // Seed the base for the new project synchronously so the picker
             // never shows the previous project's value; the async branch load
             // refines it (guarded: it skips pinned bases and user edits).
@@ -354,6 +355,17 @@ struct NewWorktreeDialog: View {
         )
     }
 
+    private func applyGGModeDefault(for selectedProjectId: String) {
+        guard let project = state.projects.first(where: { $0.id == selectedProjectId }) else {
+            ggMode = .off
+            return
+        }
+        ggMode = Self.initialGGMode(
+            projectMode: project.ggMode,
+            repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path)
+        )
+    }
+
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         let dest = URL(fileURLWithPath: renderedPath)
@@ -438,8 +450,26 @@ struct NewWorktreeDialog: View {
         }
     }
 
-    nonisolated static func ggModeAfterRepositoryChange(current _: GGWorktreeMode) -> GGWorktreeMode {
-        .inherit
+    nonisolated static func initialGGMode(
+        projectMode: GGProjectMode,
+        repoHasGGConfig: Bool
+    ) -> GGWorktreeMode {
+        GGWorktreeContextResolver.isPolicyEnabled(
+            projectMode: projectMode,
+            worktreeOverride: .inherit,
+            isMainWorktree: false,
+            repoHasGGConfig: repoHasGGConfig
+        ) ? .on : .off
+    }
+
+    nonisolated static func ggModeAfterRepositoryChange(
+        projectMode: GGProjectMode,
+        repoHasGGConfig: Bool
+    ) -> GGWorktreeMode {
+        initialGGMode(
+            projectMode: projectMode,
+            repoHasGGConfig: repoHasGGConfig
+        )
     }
 
     nonisolated static func initialBase(
@@ -500,7 +530,6 @@ struct NewWorktreeDialog: View {
     }
 
     nonisolated static let ggModeSegments: [(mode: GGWorktreeMode, label: String)] = [
-        (.inherit, "Inherit"),
         (.on, "On"),
         (.off, "Off"),
     ]

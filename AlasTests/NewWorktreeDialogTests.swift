@@ -370,13 +370,6 @@ struct NewWorktreeDialogTests {
         #expect(result.persistableLaunchMode == .terminal)
     }
 
-    @Test func inheritedGGDescriptionReportsEffectiveMode() {
-        #expect(NewWorktreeDialog.ggModeDescription(mode: .inherit, createsGGStack: true) ==
-            "Uses repository default: On.")
-        #expect(NewWorktreeDialog.ggModeDescription(mode: .inherit, createsGGStack: false) ==
-            "Uses repository default: Off. Creates a regular Git branch.")
-    }
-
     @Test func explicitGGDescriptionsExplainCreation() {
         #expect(NewWorktreeDialog.ggModeDescription(mode: .on, createsGGStack: true) ==
             "GG enabled for this worktree.")
@@ -394,14 +387,39 @@ struct NewWorktreeDialogTests {
             "Branch: nacho/feature")
     }
 
-    @Test func repositoryChangeResetsGGModeToInherit() {
-        #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .on) == .inherit)
-        #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(current: .off) == .inherit)
+    @Test(arguments: [
+        (GGProjectMode.off, false, GGWorktreeMode.off),
+        (GGProjectMode.off, true, GGWorktreeMode.off),
+        (GGProjectMode.on, false, GGWorktreeMode.on),
+        (GGProjectMode.on, true, GGWorktreeMode.on),
+        (GGProjectMode.auto, false, GGWorktreeMode.off),
+        (GGProjectMode.auto, true, GGWorktreeMode.on),
+    ])
+    func initialGGModeResolvesRepositoryPolicy(
+        projectMode: GGProjectMode,
+        repoHasGGConfig: Bool,
+        expected: GGWorktreeMode
+    ) {
+        #expect(NewWorktreeDialog.initialGGMode(
+            projectMode: projectMode,
+            repoHasGGConfig: repoHasGGConfig
+        ) == expected)
+    }
+
+    @Test func repositoryChangeReplacesExplicitChoiceWithNewRepositoryDefault() {
+        #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(
+            projectMode: .off,
+            repoHasGGConfig: true
+        ) == .off)
+        #expect(NewWorktreeDialog.ggModeAfterRepositoryChange(
+            projectMode: .auto,
+            repoHasGGConfig: true
+        ) == .on)
     }
 
     @Test func ggModeSegmentsMatchDialogOrder() {
-        #expect(NewWorktreeDialog.ggModeSegments.map(\.mode) == [.inherit, .on, .off])
-        #expect(NewWorktreeDialog.ggModeSegments.map(\.label) == ["Inherit", "On", "Off"])
+        #expect(NewWorktreeDialog.ggModeSegments.map(\.mode) == [.on, .off])
+        #expect(NewWorktreeDialog.ggModeSegments.map(\.label) == ["On", "Off"])
     }
 
     @Test func canCreateBlocksMissingUsernameOnlyForEffectiveGG() {
