@@ -8,18 +8,25 @@ struct RunScriptTemplateTests {
         #expect(RunScriptTemplate.fileName(for: "build.sh") == "build-sh.sh")
     }
 
-    @Test func contentsEmbedNameAndDefaults() {
-        let contents = RunScriptTemplate.contents(name: "Dev Server")
+    @Test func contentsEmbedNameAndKeepDefault() {
+        let contents = RunScriptTemplate.contents(name: "Dev Server", onExit: .keep)
         #expect(contents.hasPrefix("#!/bin/zsh\n"))
         #expect(contents.contains("# alas-name: Dev Server"))
         #expect(contents.contains("# alas-on-exit: keep"))
         #expect(contents.hasSuffix("\n"))
     }
 
+    @Test func contentsEmbedCloseOnExit() {
+        let contents = RunScriptTemplate.contents(name: "Dev Server", onExit: .close)
+        #expect(contents.contains("# alas-on-exit: close"))
+        let meta = RunScriptMetadata.parse(fileName: "dev-server.sh", contents: contents)
+        #expect(meta.onExit == .close)
+    }
+
     @Test func templateRoundTripsThroughMetadataParser() {
         let meta = RunScriptMetadata.parse(
             fileName: RunScriptTemplate.fileName(for: "Dev Server"),
-            contents: RunScriptTemplate.contents(name: "Dev Server")
+            contents: RunScriptTemplate.contents(name: "Dev Server", onExit: .keep)
         )
         #expect(meta.displayName == "Dev Server")
         #expect(meta.onExit == .keep)

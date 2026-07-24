@@ -19,11 +19,14 @@ enum RunScriptTemplate {
         return (slug.isEmpty ? "script" : slug) + ".sh"
     }
 
-    static func contents(name: String) -> String {
+    static func contents(
+        name: String,
+        onExit: RunScriptOnExit = .keep
+    ) -> String {
         """
         #!/bin/zsh
         # alas-name: \(name)
-        # alas-on-exit: keep
+        # alas-on-exit: \(onExit.rawValue)
 
         """
     }
