@@ -4,6 +4,19 @@ import Testing
 @MainActor
 @Suite("ACP session fork presentation")
 struct ACPSessionForkPresentationTests {
+    @Test("native and transcript forks use honest divider copy")
+    func dividerCopy() {
+        #expect(ACPSessionForkPresentation(
+            sourceAgentName: "Claude", mechanism: .nativeACP
+        ).title == "Forked from Claude")
+        let imported = ACPSessionForkPresentation(
+            sourceAgentName: "Claude", mechanism: .transcriptTransfer
+        )
+        #expect(imported.title == "Conversation imported from Claude")
+        #expect(imported.notice ==
+            "Provider-specific tool state, hidden context, and attachments were not transferred. This chat shares the source chat’s current worktree.")
+    }
+
     @Test("current target is first and remaining targets preserve ACP catalog order")
     func targetOrdering() {
         let targets = ACPForkTargetPolicy.targets(

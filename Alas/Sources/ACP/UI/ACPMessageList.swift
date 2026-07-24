@@ -32,6 +32,8 @@ struct ACPMessageList: View {
     let onLoadFullToolCallContent: (String) async -> String?
     let forkTargets: [ACPSessionForkTarget]
     let onFork: (ACPForkMessageBoundary, String) -> Void
+    let onOpenForkSource: (String) -> Void
+    let agentDisplayName: (String) -> String
     @Environment(\.theme) private var theme
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
@@ -174,6 +176,19 @@ struct ACPMessageList: View {
                             }
                             ForEach(visibleRows) { row in
                                 visibleRow(row)
+                                if let fork = session.forkRecord,
+                                   fork.phase == .ready,
+                                   row.index == fork.inheritedMessageCount - 1,
+                                   let mechanism = fork.mechanism {
+                                    ACPSessionForkDivider(
+                                        presentation: .init(
+                                            sourceAgentName: agentDisplayName(fork.sourceAgentID),
+                                            mechanism: mechanism
+                                        ),
+                                        onOpenSource: { onOpenForkSource(fork.sourceSessionID) }
+                                    )
+                                    .id("__fork_divider__")
+                                }
                             }
                             if Self.shouldShowBottomPaginationSentinel(
                                 visibleTail: transcript.visibleTailBound,

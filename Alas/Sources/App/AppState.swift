@@ -5253,6 +5253,35 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
+    func forkACPSession(
+        worktree: Worktree,
+        sourceSessionID: ACPSession.ID,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String
+    ) {
+        guard let manager = acpManager(for: worktree) else { return }
+        Task { @MainActor in
+            do {
+                let target = try await manager.createFork(
+                    sourceSessionID: sourceSessionID,
+                    boundary: boundary,
+                    targetAgentID: targetAgentID,
+                    autoRunDefault: config.harness.acpAutoRunByDefault
+                )
+                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
+                let tab = tabs.append(acpSession: tabState, to: worktree.id)
+                tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+                await manager.attach(
+                    to: target.id,
+                    freshlyCreated: true
+                )
+            } catch {
+                manager.liveSession(for: sourceSessionID)?.lastError =
+                    "Could not create fork: \(error.localizedDescription)"
+            }
+        }
+    }
+
     /// Route a prepared handoff into the active ACP tab when its composer is
     /// safely empty; otherwise preserve the current draft and open a new tab.
     func openACPHandoff(agentID: String, initialPrompt: String) {
