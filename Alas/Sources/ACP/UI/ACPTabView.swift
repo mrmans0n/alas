@@ -399,7 +399,9 @@ private struct ACPSessionView: View {
             onLoadFullToolCallContent: { toolCallId in
                 await manager.reloadFullToolCallContent(
                     sessionId: sessionId, toolCallId: toolCallId)
-            }
+            },
+            forkTargets: state.acpForkTargets(sourceAgentID: session.agentId),
+            onFork: { _, _ in }
         )
     }
 

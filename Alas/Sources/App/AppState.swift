@@ -321,6 +321,19 @@ final class AppState {
         return agentRegistry.agents.first(where: { $0.id == id })
     }
 
+    func acpForkTargets(sourceAgentID: String) -> [ACPSessionForkTarget] {
+        ACPForkTargetPolicy.targets(
+            sourceAgentID: sourceAgentID,
+            enabledAgents: agentRegistry.enabled().map {
+                ACPForkAgentOption(id: $0.id, displayName: $0.displayName)
+            },
+            sourceAgent: agentRegistry.agents.first(where: { $0.id == sourceAgentID }).map {
+                ACPForkAgentOption(id: $0.id, displayName: $0.displayName)
+            },
+            catalogAgentIDs: ACPLaunchCatalog.specs.map(\.agentID)
+        )
+    }
+
     /// Recompute `agentRegistry` from `config.agents` + a fresh detection
     /// scan. Safe to call repeatedly.
     func rescanAgents() {

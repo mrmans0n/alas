@@ -16,6 +16,37 @@ struct ACPSessionForkTarget: Identifiable, Equatable, Sendable {
     let isSameAgent: Bool
 }
 
+struct ACPForkAgentOption: Equatable {
+    let id: String
+    let displayName: String
+}
+
+enum ACPForkTargetPolicy {
+    static func targets(
+        sourceAgentID: String,
+        enabledAgents: [ACPForkAgentOption],
+        sourceAgent: ACPForkAgentOption?,
+        catalogAgentIDs: [String]
+    ) -> [ACPSessionForkTarget] {
+        var byID = Dictionary(uniqueKeysWithValues: enabledAgents.map { ($0.id, $0) })
+        if let sourceAgent {
+            byID[sourceAgent.id] = sourceAgent
+        }
+        let ordered = catalogAgentIDs.compactMap { byID[$0] }
+        let current = ordered.filter { $0.id == sourceAgentID }
+        let others = ordered.filter { $0.id != sourceAgentID }
+        return (current + others).map {
+            .init(id: $0.id, displayName: $0.displayName, isSameAgent: $0.id == sourceAgentID)
+        }
+    }
+}
+
+enum ACPMessageForkMenuPolicy {
+    static func showsForkAction(messageKind: String, isEligible: Bool, targetCount: Int) -> Bool {
+        (messageKind == "user" || messageKind == "agent") && isEligible && targetCount > 0
+    }
+}
+
 enum ACPSessionForkCreationPhase: String, Codable, Equatable, Sendable {
     case negotiatingNative
     case ready

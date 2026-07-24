@@ -36,6 +36,9 @@ struct ACPMessageGutter<Content: View>: View {
     /// a reference to the live buffer so copy reads the latest text without a
     /// per-row closure recreated on every list evaluation.
     let copySource: CopySource
+    let forkBoundary: ACPForkMessageBoundary?
+    let forkTargets: [ACPSessionForkTarget]
+    let onFork: (ACPForkMessageBoundary, String) -> Void
     @ViewBuilder var content: Content
 
     @StateObject private var hover = ACPDelayedHoverVisibility()
@@ -74,7 +77,13 @@ struct ACPMessageGutter<Content: View>: View {
     }
 
     private var dotsMenu: some View {
-        ACPMessageActionsButton(copySource: copySource, tint: theme.color("fg-muted"))
+        ACPMessageActionsButton(
+            copySource: copySource,
+            forkBoundary: forkBoundary,
+            forkTargets: forkTargets,
+            onFork: onFork,
+            tint: theme.color("fg-muted")
+        )
             .frame(width: 19, height: 19)
             .background(theme.color("bg-3").opacity(0.85))
             .clipShape(RoundedRectangle(cornerRadius: 5))
@@ -89,10 +98,18 @@ struct ACPMessageGutter<Content: View>: View {
 
 private struct ACPMessageActionsButton: NSViewRepresentable {
     let copySource: ACPMessageCopySource
+    let forkBoundary: ACPForkMessageBoundary?
+    let forkTargets: [ACPSessionForkTarget]
+    let onFork: (ACPForkMessageBoundary, String) -> Void
     let tint: Color
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(copySource: copySource)
+        Coordinator(
+            copySource: copySource,
+            forkBoundary: forkBoundary,
+            forkTargets: forkTargets,
+            onFork: onFork
+        )
     }
 
     func makeNSView(context: Context) -> NSButton {
@@ -105,15 +122,29 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.copySource = copySource
+        context.coordinator.forkBoundary = forkBoundary
+        context.coordinator.forkTargets = forkTargets
+        context.coordinator.onFork = onFork
         button.contentTintColor = NSColor(tint)
     }
 
     @MainActor
     final class Coordinator: NSObject {
         var copySource: ACPMessageCopySource
+        var forkBoundary: ACPForkMessageBoundary?
+        var forkTargets: [ACPSessionForkTarget]
+        var onFork: (ACPForkMessageBoundary, String) -> Void
 
-        init(copySource: ACPMessageCopySource) {
+        init(
+            copySource: ACPMessageCopySource,
+            forkBoundary: ACPForkMessageBoundary?,
+            forkTargets: [ACPSessionForkTarget],
+            onFork: @escaping (ACPForkMessageBoundary, String) -> Void
+        ) {
             self.copySource = copySource
+            self.forkBoundary = forkBoundary
+            self.forkTargets = forkTargets
+            self.onFork = onFork
         }
 
         @objc func showMenu(_ sender: NSButton) {
@@ -125,6 +156,26 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             )
             copyItem.target = self
             menu.addItem(copyItem)
+            if forkBoundary != nil, !forkTargets.isEmpty {
+                menu.addItem(.separator())
+                let forkItem = NSMenuItem(title: "Fork from here", action: nil, keyEquivalent: "")
+                let submenu = NSMenu()
+                for target in forkTargets {
+                    let title = target.isSameAgent
+                        ? "\(target.displayName)\tSame agent"
+                        : target.displayName
+                    let item = NSMenuItem(
+                        title: title,
+                        action: #selector(forkFromHere(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.target = self
+                    item.representedObject = target.id
+                    submenu.addItem(item)
+                }
+                forkItem.submenu = submenu
+                menu.addItem(forkItem)
+            }
             menu.popUp(
                 positioning: copyItem,
                 at: NSPoint(x: 0, y: sender.bounds.height + 2),
@@ -136,6 +187,13 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             let text = copySource.markdown
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
+        }
+
+        @objc private func forkFromHere(_ sender: NSMenuItem) {
+            guard let boundary = forkBoundary,
+                  let targetID = sender.representedObject as? String
+            else { return }
+            onFork(boundary, targetID)
         }
     }
 }

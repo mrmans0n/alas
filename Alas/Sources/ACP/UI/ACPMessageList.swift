@@ -30,6 +30,8 @@ struct ACPMessageList: View {
     /// to `ACPSessionManager.reloadFullToolCallContent`. Returns nil when
     /// the row is gone or the payload is undecodable.
     let onLoadFullToolCallContent: (String) async -> String?
+    let forkTargets: [ACPSessionForkTarget]
+    let onFork: (ACPForkMessageBoundary, String) -> Void
     @Environment(\.theme) private var theme
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
@@ -1489,6 +1491,7 @@ struct ACPMessageList: View {
             let message = transcript.messages[visibleRow.index]
             ACPTranscriptRowContent(
                 stableId: visibleRow.stableId,
+                messageIndex: visibleRow.index,
                 message: message,
                 contentMaxWidth: contentMaxWidth,
                 typography: typography,
@@ -1496,7 +1499,9 @@ struct ACPMessageList: View {
                 transcript: transcript,
                 session: session,
                 onOpenDiff: onOpenDiff,
-                onLoadFullToolCallContent: onLoadFullToolCallContent
+                onLoadFullToolCallContent: onLoadFullToolCallContent,
+                forkTargets: forkTargets,
+                onFork: onFork
             )
             .equatable()
             .background(rowFrameReporter(id: visibleRow.stableId))
@@ -1522,6 +1527,7 @@ struct ACPMessageList: View {
 struct ACPTranscriptRowContent: View, Equatable {
     // Compared (render-relevant values):
     let stableId: String
+    let messageIndex: Int
     let message: ACPMessage
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
@@ -1554,17 +1560,21 @@ struct ACPTranscriptRowContent: View, Equatable {
     let session: ACPSession
     let onOpenDiff: (String) -> Void
     let onLoadFullToolCallContent: (String) async -> String?
+    let forkTargets: [ACPSessionForkTarget]
+    let onFork: (ACPForkMessageBoundary, String) -> Void
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         equalityKey(
             stableId: lhs.stableId, message: lhs.message,
             contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
-            trustedImageRoot: lhs.trustedImageRoot
+            trustedImageRoot: lhs.trustedImageRoot,
+            isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
             contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
-            trustedImageRoot: rhs.trustedImageRoot
+            trustedImageRoot: rhs.trustedImageRoot,
+            isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets
         )
     }
 
@@ -1575,11 +1585,14 @@ struct ACPTranscriptRowContent: View, Equatable {
         message: ACPMessage,
         contentMaxWidth: CGFloat,
         typography: ACPChatTypography,
-        trustedImageRoot: URL?
+        trustedImageRoot: URL?,
+        isForkEligible: Bool = false,
+        forkTargets: [ACPSessionForkTarget] = []
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message, contentMaxWidth: contentMaxWidth,
-            typography: typography, trustedImageRoot: trustedImageRoot
+            typography: typography, trustedImageRoot: trustedImageRoot,
+            isForkEligible: isForkEligible, forkTargets: forkTargets
         )
     }
 
@@ -1589,12 +1602,23 @@ struct ACPTranscriptRowContent: View, Equatable {
         let contentMaxWidth: CGFloat
         let typography: ACPChatTypography
         let trustedImageRoot: URL?
+        let isForkEligible: Bool
+        let forkTargets: [ACPSessionForkTarget]
+    }
+
+    private var isForkEligible: Bool {
+        session.canForkMessage(at: messageIndex)
     }
 
     var body: some View {
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource):
-            ACPMessageGutter(copySource: .text(text)) {
+            ACPMessageGutter(
+                copySource: .text(text),
+                forkBoundary: forkBoundary(kind: .user),
+                forkTargets: forkTargets,
+                onFork: onFork
+            ) {
                 UserMessageRow(
                     text: text,
                     attachments: attachments,
@@ -1604,7 +1628,12 @@ struct ACPTranscriptRowContent: View, Equatable {
                 )
             }
         case .agent(_, _, let buf):
-            ACPMessageGutter(copySource: .streaming(buf)) {
+            ACPMessageGutter(
+                copySource: .streaming(buf),
+                forkBoundary: forkBoundary(kind: .agent),
+                forkTargets: forkTargets,
+                onFork: onFork
+            ) {
                 AgentMessageRow(
                     messageId: stableId,
                     transcript: transcript,
@@ -1627,6 +1656,15 @@ struct ACPTranscriptRowContent: View, Equatable {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }
+    }
+
+    private func forkBoundary(kind: ACPForkMessageBoundary.Kind) -> ACPForkMessageBoundary? {
+        guard ACPMessageForkMenuPolicy.showsForkAction(
+            messageKind: message.kind,
+            isEligible: isForkEligible,
+            targetCount: forkTargets.count
+        ) else { return nil }
+        return ACPForkMessageBoundary(stableID: stableId, kind: kind)
     }
 }
 
