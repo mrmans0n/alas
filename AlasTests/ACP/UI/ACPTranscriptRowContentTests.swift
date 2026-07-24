@@ -33,6 +33,34 @@ struct ACPTranscriptRowContentTests {
         #expect(a != b)
     }
 
+    @Test("row equality snapshots fork eligibility")
+    @MainActor
+    func rowContentEqualitySnapshotsForkEligibility() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [])
+        let targets = [.init(id: "claude", displayName: "Claude", isSameAgent: true)]
+
+        func row(isForkEligible: Bool) -> ACPTranscriptRowContent {
+            ACPTranscriptRowContent(
+                stableId: message.stableId,
+                messageIndex: 0,
+                message: message,
+                contentMaxWidth: 800,
+                typography: .default,
+                trustedImageRoot: nil,
+                transcript: session.transcript,
+                session: session,
+                onOpenDiff: { _ in },
+                onLoadFullToolCallContent: { _ in nil },
+                isForkEligible: isForkEligible,
+                forkTargets: targets,
+                onFork: { _, _ in }
+            )
+        }
+
+        #expect(row(isForkEligible: false) != row(isForkEligible: true))
+    }
+
     @Test("equality detects fork target changes")
     @MainActor
     func rowContentEqualityDetectsForkTargetChange() {

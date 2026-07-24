@@ -1500,6 +1500,7 @@ struct ACPMessageList: View {
                 session: session,
                 onOpenDiff: onOpenDiff,
                 onLoadFullToolCallContent: onLoadFullToolCallContent,
+                isForkEligible: session.canForkMessage(at: visibleRow.index),
                 forkTargets: forkTargets,
                 onFork: onFork
             )
@@ -1560,6 +1561,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     let session: ACPSession
     let onOpenDiff: (String) -> Void
     let onLoadFullToolCallContent: (String) async -> String?
+    let isForkEligible: Bool
     let forkTargets: [ACPSessionForkTarget]
     let onFork: (ACPForkMessageBoundary, String) -> Void
 
@@ -1604,10 +1606,6 @@ struct ACPTranscriptRowContent: View, Equatable {
         let trustedImageRoot: URL?
         let isForkEligible: Bool
         let forkTargets: [ACPSessionForkTarget]
-    }
-
-    private var isForkEligible: Bool {
-        session.canForkMessage(at: messageIndex)
     }
 
     var body: some View {
