@@ -67,6 +67,25 @@ struct ACPSessionForkPolicyTests {
         #expect(session.canForkMessage(at: 0) == false)
     }
 
+    @Test("completed agent messages require visible text")
+    func completedAgentMessageRequiresVisibleText() {
+        let session = ACPSession(
+            id: "source",
+            agentId: "claude",
+            worktreeId: "wt",
+            title: "Source"
+        )
+        session.transcript.messages = [
+            .agent(id: UUID(), StreamingText("Answer")),
+            .agent(id: UUID(), StreamingText("")),
+            .agent(id: UUID(), StreamingText(" \n "))
+        ]
+
+        #expect(session.canForkMessage(at: 0))
+        #expect(session.canForkMessage(at: 1) == false)
+        #expect(session.canForkMessage(at: 2) == false)
+    }
+
     @Test("duplicate enabled agent ids preserve the first catalog definition")
     func duplicateEnabledAgentIDsAreDeduplicated() {
         let targets = ACPForkTargetPolicy.targets(

@@ -249,7 +249,10 @@ final class ACPSession: ObservableObject, Identifiable {
         switch transcript.messages[index] {
         case .user(_, _, let text, _, _):
             return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .agent:
+        case .agent(_, _, let buffer):
+            guard !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
             guard transcript.streamingState != .idle else { return true }
             return lastAgent() != index
         default:
