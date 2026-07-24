@@ -27,7 +27,6 @@ struct AlasSegmentedControl<ID: Hashable>: View {
     let options: [AlasSegmentedOption<ID>]
     let onSelect: (ID) -> Void
 
-    @FocusState private var focusedOption: ID?
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -47,7 +46,6 @@ struct AlasSegmentedControl<ID: Hashable>: View {
 
     private func segment(_ option: AlasSegmentedOption<ID>) -> some View {
         let isSelected = selection == option.id
-        let isFocused = focusedOption == option.id
 
         return Button {
             onSelect(option.id)
@@ -76,16 +74,13 @@ struct AlasSegmentedControl<ID: Hashable>: View {
                     }
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(theme.color("accent"), lineWidth: isFocused ? 1 : 0)
-            )
             .clipShape(RoundedRectangle(cornerRadius: 4))
+            .shadow(color: isSelected ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusable(option.isEnabled)
-        .focused($focusedOption, equals: option.id)
+        .focusEffectDisabled()
         .disabled(!option.isEnabled)
         .opacity(option.isEnabled ? 1 : 0.4)
         .modifier(AlasSegmentHelpModifier(
