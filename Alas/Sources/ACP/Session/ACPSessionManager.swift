@@ -1803,6 +1803,70 @@ final class ACPSessionManager: ObservableObject {
         session.agentState = .failed(message)
     }
 
+    private func releaseReplayedForkCompletionForTranscriptFallback(
+        targetSessionID: ACPSession.ID,
+        sourceRemoteSessionID: String,
+        connection: ACPConnection
+    ) async {
+        guard let brokerClient = connection.client as? ACPBrokerClient else { return }
+        let operationKey = Self.brokerStartupOperationKey(
+            sessionId: targetSessionID,
+            method: "session/fork",
+            remoteSessionId: sourceRemoteSessionID
+        )
+        guard let replayed = brokerClient.replayedCompletion(
+            forPreRegisteredOperationKey: operationKey
+        ) else {
+            return
+        }
+        if replayed.outcome.error == nil,
+           let result = replayed.outcome.result,
+           let forked = try? JSONDecoder().decode(
+               ACPSessionNewResult.self,
+               from: result.data
+           ),
+           !forked.sessionId.isEmpty {
+            try? await connection.closeSession(sessionId: forked.sessionId)
+        }
+        replayed.acknowledgeDurableConsumption()
+    }
+
+    private func startTranscriptFallbackSession(
+        targetSessionID: ACPSession.ID,
+        sourceRemoteSessionID: String,
+        connection: ACPConnection,
+        wireMCPServers: [ACPMCPServer]
+    ) async throws -> ACPSessionNewResult {
+        await releaseReplayedForkCompletionForTranscriptFallback(
+            targetSessionID: targetSessionID,
+            sourceRemoteSessionID: sourceRemoteSessionID,
+            connection: connection
+        )
+        do {
+            let result = try await connection.newSession(
+                cwd: worktreePath,
+                mcpServers: wireMCPServers,
+                brokerOperationKey: Self.brokerStartupOperationKey(
+                    sessionId: targetSessionID,
+                    method: "session/new"
+                )
+            )
+            await releaseReplayedForkCompletionForTranscriptFallback(
+                targetSessionID: targetSessionID,
+                sourceRemoteSessionID: sourceRemoteSessionID,
+                connection: connection
+            )
+            return result
+        } catch {
+            await releaseReplayedForkCompletionForTranscriptFallback(
+                targetSessionID: targetSessionID,
+                sourceRemoteSessionID: sourceRemoteSessionID,
+                connection: connection
+            )
+            throw error
+        }
+    }
+
     private func startForkTarget(
         session: ACPSession,
         fork: ACPSessionForkRecord,
@@ -1830,11 +1894,14 @@ final class ACPSessionManager: ObservableObject {
                     )
                 )
             } catch {
-                // Only a typed broker error proves that the keyed operation
-                // completed successfully before replay failed. A plain
-                // transport error may have happened before the broker
-                // accepted the send and must take the transcript fallback.
-                if error is ACPBrokerDurableCompletionReplayError {
+                // A successful durable broker completion must retry the
+                // stable fork key so its returned session can be persisted.
+                // A terminal JSON-RPC completion is equally durable, but it
+                // selects transcript fallback and its replayed cursor must be
+                // consumed there. A plain transport error may have happened
+                // before the broker accepted the send and also falls back.
+                let durableReplay = error as? ACPBrokerDurableCompletionReplayError
+                if let durableReplay, durableReplay.outcome.error == nil {
                     throw error
                 }
                 try await persistence.finalizeFork(
@@ -1847,16 +1914,25 @@ final class ACPSessionManager: ObservableObject {
                 fork.contextDeliveryPending = true
                 session.forkRecord = fork
                 connection.acknowledgeDurableSessionResponses()
-                if ACPAuthFailure.message(from: error) != nil {
-                    throw error
+                await releaseReplayedForkCompletionForTranscriptFallback(
+                    targetSessionID: session.id,
+                    sourceRemoteSessionID: sourceRemoteSessionID,
+                    connection: connection
+                )
+                let fallbackError: any Error
+                if let terminalError = durableReplay?.outcome.error {
+                    fallbackError = ACPClientError.jsonrpc(terminalError)
+                } else {
+                    fallbackError = error
                 }
-                let fallback = try await connection.newSession(
-                    cwd: worktreePath,
-                    mcpServers: wireMCPServers,
-                    brokerOperationKey: Self.brokerStartupOperationKey(
-                        sessionId: session.id,
-                        method: "session/new"
-                    )
+                if ACPAuthFailure.message(from: fallbackError) != nil {
+                    throw fallbackError
+                }
+                let fallback = try await startTranscriptFallbackSession(
+                    targetSessionID: session.id,
+                    sourceRemoteSessionID: sourceRemoteSessionID,
+                    connection: connection,
+                    wireMCPServers: wireMCPServers
                 )
                 return (fallback, true)
             }
@@ -1915,27 +1991,14 @@ final class ACPSessionManager: ObservableObject {
         session.forkRecord = fork
         if let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
-           !sourceRemoteSessionID.isEmpty,
-           let brokerClient = connection.client as? ACPBrokerClient {
-            let operationKey = Self.brokerStartupOperationKey(
-                sessionId: session.id,
-                method: "session/fork",
-                remoteSessionId: sourceRemoteSessionID
+           !sourceRemoteSessionID.isEmpty {
+            let result = try await startTranscriptFallbackSession(
+                targetSessionID: session.id,
+                sourceRemoteSessionID: sourceRemoteSessionID,
+                connection: connection,
+                wireMCPServers: wireMCPServers
             )
-            if let replayed = brokerClient.replayedCompletion(
-                forPreRegisteredOperationKey: operationKey
-            ) {
-                if replayed.outcome.error == nil,
-                   let result = replayed.outcome.result,
-                   let forked = try? JSONDecoder().decode(
-                       ACPSessionNewResult.self,
-                       from: result.data
-                   ),
-                   !forked.sessionId.isEmpty {
-                    try? await connection.closeSession(sessionId: forked.sessionId)
-                }
-                replayed.acknowledgeDurableConsumption()
-            }
+            return (result, true)
         }
         let result = try await connection.newSession(
             cwd: worktreePath,
@@ -3417,7 +3480,13 @@ extension ACPSessionManager {
             }
             stderrTask.cancel()
         } catch {
-            let durableRetry = error as? ACPBrokerDurableCompletionReplayError
+            let durableReplay = error as? ACPBrokerDurableCompletionReplayError
+            let durableRetry = durableReplay.flatMap {
+                $0.outcome.error == nil ? $0 : nil
+            }
+            let terminalReplayError: (any Error)? = durableReplay?.outcome.error.map {
+                ACPClientError.jsonrpc($0)
+            }
             let wasNegotiatingFork = session.forkRecord?.phase == .negotiatingNative
             var downgradePersistenceError: (any Error)?
             if durableRetry == nil {
@@ -3435,6 +3504,7 @@ extension ACPSessionManager {
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
             let surfacedError = downgradePersistenceError
+                ?? terminalReplayError
                 ?? durableRetry?.underlying
                 ?? error
             let authReason = ACPAuthFailure.message(from: surfacedError)

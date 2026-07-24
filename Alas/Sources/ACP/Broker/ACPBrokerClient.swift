@@ -20,10 +20,11 @@ struct ACPBrokerDurableState: Equatable, Sendable {
 }
 
 struct ACPBrokerDurableCompletionReplayError: LocalizedError {
+    let outcome: ACPBrokerRPCOutcome
     let underlying: any Error
 
     var errorDescription: String? {
-        underlying.localizedDescription
+        outcome.error?.message ?? underlying.localizedDescription
     }
 }
 
@@ -312,15 +313,23 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             do {
                 try await attachAndReplay()
             } catch {
-                // `service.send` has already returned a final successful
-                // result. The operation is therefore durable at the broker
-                // even though this client could not replay its completion
-                // cursor. Callers that use stable operation keys may retry
-                // this exact operation; failures thrown by `service.send`
-                // itself never receive this classification.
-                if result.error == nil,
-                   result.pending != true || result.result != nil {
-                    throw ACPBrokerDurableCompletionReplayError(underlying: error)
+                // `service.send` has already returned a final outcome. The
+                // operation is therefore durable at the broker even though
+                // this client could not replay its completion cursor.
+                // Preserve both successful results (which callers using
+                // stable keys may retry) and terminal JSON-RPC errors (which
+                // fallback paths must eventually consume). Failures thrown
+                // by `service.send` itself never receive this classification.
+                if result.error != nil
+                    || result.pending != true
+                    || result.result != nil {
+                    throw ACPBrokerDurableCompletionReplayError(
+                        outcome: ACPBrokerRPCOutcome(
+                            result: result.result,
+                            error: result.error
+                        ),
+                        underlying: error
+                    )
                 }
                 throw error
             }
