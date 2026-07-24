@@ -771,6 +771,12 @@ struct ACPAgentSessionInfo: Codable, Equatable, Identifiable {
 typealias ACPSessionResumeParams = ACPSessionLoadParams
 typealias ACPSessionForkParams = ACPSessionLoadParams
 
+// MARK: - session/close
+
+struct ACPSessionCloseParams: Codable, Equatable {
+    let sessionId: String
+}
+
 // MARK: - session/cancel
 
 struct ACPSessionCancelParams: Codable, Equatable {

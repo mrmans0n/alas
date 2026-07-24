@@ -110,14 +110,29 @@ final class ACPConnection: @unchecked Sendable {
         return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body)
     }
 
-    func forkSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
+    func forkSession(
+        cwd: String,
+        sessionId: String,
+        mcpServers: [ACPMCPServer],
+        brokerOperationKey: String? = nil
+    ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/fork",
-            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers)
+            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers),
+            brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
-        defer { resp.acknowledgeDurableConsumption() }
-        return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        deferDurableSessionResponse(resp)
+        return result
+    }
+
+    func closeSession(sessionId: String) async throws {
+        let response = try await client.send(ACPRequest(
+            method: "session/close",
+            params: ACPSessionCloseParams(sessionId: sessionId)
+        ))
+        response.acknowledgeDurableConsumption()
     }
 
     func cancel(sessionId: String) async throws {

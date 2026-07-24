@@ -1726,8 +1726,22 @@ final class ACPSessionManager: ObservableObject {
         // crash. Register it before start() so that replay can't have its
         // completion cursor acked past before the queue flusher (which only
         // runs once this function returns and the runner is registered)
-        // gets a chance to claim it.
-        client.preRegisterAwaitedOperationKeys(session.queue.map(\.brokerOperationKey))
+        // gets a chance to claim it. A negotiating fork has the same replay
+        // gap: its stable startup key must be protected until attach calls
+        // `session/fork` and persists the final mechanism.
+        var awaitedOperationKeys = session.queue.map(\.brokerOperationKey)
+        if let fork = session.forkRecord,
+           fork.phase == .negotiatingNative,
+           let source = try await persistence.loadSession(id: fork.sourceSessionID),
+           let sourceRemoteSessionID = source.remoteSessionId,
+           !sourceRemoteSessionID.isEmpty {
+            awaitedOperationKeys.append(Self.brokerStartupOperationKey(
+                sessionId: sessionId,
+                method: "session/fork",
+                remoteSessionId: sourceRemoteSessionID
+            ))
+        }
+        client.preRegisterAwaitedOperationKeys(awaitedOperationKeys)
         try await client.start()
         Self.applyBrokerTurnState(client.currentTurnState, to: session)
         return ACPConnection(client: client)
@@ -1748,6 +1762,135 @@ final class ACPSessionManager: ObservableObject {
             return "startup:\(sessionId):\(method):\(remoteSessionId)"
         }
         return "startup:\(sessionId):\(method)"
+    }
+
+    private func downgradeNegotiatingForkToTranscript(session: ACPSession) async {
+        guard var fork = session.forkRecord, fork.phase == .negotiatingNative else { return }
+        do {
+            try await persistence.finalizeFork(
+                targetSessionID: session.id,
+                mechanism: .transcriptTransfer,
+                remoteSessionID: nil
+            )
+        } catch {
+            persistenceError = error.localizedDescription
+        }
+        fork.phase = .ready
+        fork.mechanism = .transcriptTransfer
+        fork.contextDeliveryPending = true
+        session.forkRecord = fork
+    }
+
+    private func startForkTarget(
+        session: ACPSession,
+        fork: ACPSessionForkRecord,
+        initialized: ACPInitializeOutcome,
+        connection: ACPConnection,
+        wireMCPServers: [ACPMCPServer]
+    ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
+        var fork = fork
+        if initialized.sessionCapabilities.supportsFork,
+           let source = try await persistence.loadSession(id: fork.sourceSessionID),
+           let sourceRemoteSessionID = source.remoteSessionId,
+           !sourceRemoteSessionID.isEmpty {
+            let result: ACPSessionNewResult
+            do {
+                result = try await connection.forkSession(
+                    cwd: worktreePath,
+                    sessionId: sourceRemoteSessionID,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: session.id,
+                        method: "session/fork",
+                        remoteSessionId: sourceRemoteSessionID
+                    )
+                )
+            } catch {
+                try await persistence.finalizeFork(
+                    targetSessionID: session.id,
+                    mechanism: .transcriptTransfer,
+                    remoteSessionID: nil
+                )
+                fork.phase = .ready
+                fork.mechanism = .transcriptTransfer
+                fork.contextDeliveryPending = true
+                session.forkRecord = fork
+                if ACPAuthFailure.message(from: error) != nil {
+                    throw error
+                }
+                let fallback = try await connection.newSession(
+                    cwd: worktreePath,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: session.id,
+                        method: "session/new"
+                    )
+                )
+                return (fallback, true)
+            }
+
+            do {
+                try await persistence.finalizeFork(
+                    targetSessionID: session.id,
+                    mechanism: .nativeACP,
+                    remoteSessionID: result.sessionId
+                )
+            } catch {
+                try? await connection.closeSession(sessionId: result.sessionId)
+                let transcriptFinalized: Bool
+                do {
+                    try await persistence.finalizeFork(
+                        targetSessionID: session.id,
+                        mechanism: .transcriptTransfer,
+                        remoteSessionID: nil
+                    )
+                    transcriptFinalized = true
+                } catch {
+                    persistenceError = error.localizedDescription
+                    transcriptFinalized = false
+                }
+                fork.phase = .ready
+                fork.mechanism = .transcriptTransfer
+                fork.contextDeliveryPending = true
+                session.forkRecord = fork
+                if transcriptFinalized {
+                    connection.acknowledgeDurableSessionResponses()
+                }
+                await connection.shutdown()
+                throw error
+            }
+            fork.phase = .ready
+            fork.mechanism = .nativeACP
+            fork.contextDeliveryPending = false
+            session.forkRecord = fork
+            if var row = persistedRows[session.id] {
+                row.remoteSessionId = result.sessionId
+                row.origin = .agentForked
+                persistedRows[session.id] = row
+                replaceRecentRow(row)
+            }
+            connection.acknowledgeDurableSessionResponses()
+            return (result, false)
+        }
+
+        try await persistence.finalizeFork(
+            targetSessionID: session.id,
+            mechanism: .transcriptTransfer,
+            remoteSessionID: nil
+        )
+        fork.phase = .ready
+        fork.mechanism = .transcriptTransfer
+        fork.contextDeliveryPending = true
+        session.forkRecord = fork
+        let result = try await connection.newSession(
+            cwd: worktreePath,
+            mcpServers: wireMCPServers,
+            brokerOperationKey: Self.brokerStartupOperationKey(
+                sessionId: session.id,
+                method: "session/new"
+            )
+        )
+        return (result, true)
     }
 
     private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
@@ -2510,6 +2653,7 @@ extension ACPSessionManager {
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
+            await downgradeNegotiatingForkToTranscript(session: session)
             let reason = "No ACP launch spec for \(session.agentId)"
             session.setupState = .needsSetup(reason: reason)
             session.agentState = .failed(reason)
@@ -2518,6 +2662,7 @@ extension ACPSessionManager {
         }
         let setup = await evaluateSetup(for: spec)
         guard case .ready = setup else {
+            await downgradeNegotiatingForkToTranscript(session: session)
             session.setupState = setup.sessionSetupState
             session.agentState = .failed(setup.reasonText)
             await releaseWriterLease(sessionId: sessionId)
@@ -2582,6 +2727,7 @@ extension ACPSessionManager {
                 )
             }
         } catch {
+            await downgradeNegotiatingForkToTranscript(session: session)
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
             session.agentState = .failed(msg)
@@ -2749,6 +2895,7 @@ extension ACPSessionManager {
                     try await connection.authenticate(methodId: pendingAuthMethodId)
                     session.pendingAuthMethodId = nil
                 } catch {
+                    await downgradeNegotiatingForkToTranscript(session: session)
                     let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
                     session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
                     session.agentState = .failed(reason)
@@ -2842,7 +2989,17 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .creatingSession
             }
-            if freshlyCreated {
+            if let fork = session.forkRecord, fork.phase == .negotiatingNative {
+                let started = try await startForkTarget(
+                    session: session,
+                    fork: fork,
+                    initialized: initialized,
+                    connection: connection,
+                    wireMCPServers: wireMCPServers
+                )
+                result = started.result
+                createdFreshRemoteSession = started.createdFreshRemoteSession
+            } else if freshlyCreated {
                 result = try await connection.newSession(
                     cwd: worktreePath,
                     mcpServers: wireMCPServers,
@@ -3177,6 +3334,7 @@ extension ACPSessionManager {
             }
             stderrTask.cancel()
         } catch {
+            await downgradeNegotiatingForkToTranscript(session: session)
             // Give stderr a moment to drain so the message is the real cause.
             try? await Task.sleep(nanoseconds: 200_000_000)
             stderrTask.cancel()
