@@ -36,6 +36,15 @@ struct ImageDiffSideBySideViewTests {
         #expect(t.offset.height == 10)
     }
 
+    @Test func dragTranslationIsAddedToCommittedPanOffset() {
+        let offset = ImageDiffSideBySideView.displayOffset(
+            committed: CGSize(width: 12, height: -8),
+            translation: CGSize(width: 5, height: 11)
+        )
+
+        #expect(offset == CGSize(width: 17, height: 3))
+    }
+
     @Test func unmodifiedScrollIsNotCapturedByImageViewer() {
         #expect(!ScrollEventCapturingView.shouldCaptureScroll(modifierFlags: []))
     }

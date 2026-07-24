@@ -39,6 +39,7 @@ struct ImageDiffSideBySideView: View {
     let afterLabel: String
     @Binding var transform: ImageDiffTransform
     @Environment(\.theme) private var theme
+    @GestureState private var dragTranslation: CGSize = .zero
 
     var body: some View {
         GeometryReader { proxy in
@@ -58,12 +59,11 @@ struct ImageDiffSideBySideView: View {
             ScrollEventCapturingView { dx, dy, isCommand in
                 if isCommand {
                     transform.applyZoomDelta((dy / 50.0))
-                } else {
-                    transform.applyPanDelta(dx: dx, dy: dy)
                 }
             }
         )
         .onTapGesture(count: 2) { transform.reset() }
+        .simultaneousGesture(panGesture)
     }
 
     @ViewBuilder
@@ -77,7 +77,12 @@ struct ImageDiffSideBySideView: View {
                     .interpolation(.none)
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(transform.scale)
-                    .offset(transform.offset)
+                    .offset(
+                        Self.displayOffset(
+                            committed: transform.offset,
+                            translation: dragTranslation
+                        )
+                    )
             case .missing, .failed:
                 if let message = Self.placeholderMessage(for: side, missingText: missingText) {
                     placeholder(message)
@@ -108,6 +113,16 @@ struct ImageDiffSideBySideView: View {
         }
     }
 
+    nonisolated static func displayOffset(
+        committed: CGSize,
+        translation: CGSize
+    ) -> CGSize {
+        CGSize(
+            width: committed.width + translation.width,
+            height: committed.height + translation.height
+        )
+    }
+
     private func placeholder(_ message: String) -> some View {
         Text(message)
             .font(.system(size: 12))
@@ -125,5 +140,18 @@ struct ImageDiffSideBySideView: View {
             Divider().background(theme.color("line"))
                 .frame(width: 1)
         }
+    }
+
+    private var panGesture: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .updating($dragTranslation) { value, translation, _ in
+                translation = value.translation
+            }
+            .onEnded { value in
+                transform.applyPanDelta(
+                    dx: value.translation.width,
+                    dy: value.translation.height
+                )
+            }
     }
 }
