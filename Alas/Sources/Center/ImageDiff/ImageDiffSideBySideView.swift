@@ -33,8 +33,8 @@ struct ImageDiffTransform: Equatable {
 }
 
 struct ImageDiffSideBySideView: View {
-    let before: NSImage?
-    let after: NSImage?
+    let before: ImageDiffSide
+    let after: ImageDiffSide
     let beforeLabel: String
     let afterLabel: String
     @Binding var transform: ImageDiffTransform
@@ -44,9 +44,9 @@ struct ImageDiffSideBySideView: View {
         GeometryReader { proxy in
             let stackVertically = proxy.size.width < 600
             let panes = Group {
-                pane(image: before, label: beforeLabel, missingText: "No before")
+                pane(side: before, label: beforeLabel, missingText: "No before")
                 divider(stack: stackVertically)
-                pane(image: after,  label: afterLabel,  missingText: "No after")
+                pane(side: after,  label: afterLabel,  missingText: "No after")
             }
             if stackVertically {
                 VStack(spacing: 0) { panes }
@@ -67,23 +67,21 @@ struct ImageDiffSideBySideView: View {
     }
 
     @ViewBuilder
-    private func pane(image: NSImage?, label: String, missingText: String) -> some View {
+    private func pane(side: ImageDiffSide, label: String, missingText: String) -> some View {
         ZStack {
             ImageCheckerboardBackground()
-            if let image {
+            switch side {
+            case .image(let image, _):
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.none)
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(transform.scale)
                     .offset(transform.offset)
-            } else {
-                Text(missingText)
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .padding(16)
-                    .background(.black.opacity(0.25))
-                    .cornerRadius(6)
+            case .missing, .failed:
+                if let message = Self.placeholderMessage(for: side, missingText: missingText) {
+                    placeholder(message)
+                }
             }
         }
         .overlay(alignment: .topLeading) {
@@ -97,6 +95,26 @@ struct ImageDiffSideBySideView: View {
         }
         .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    static func placeholderMessage(for side: ImageDiffSide, missingText: String) -> String? {
+        switch side {
+        case .image:
+            nil
+        case .missing:
+            missingText
+        case .failed(let failure):
+            failure.message
+        }
+    }
+
+    private func placeholder(_ message: String) -> some View {
+        Text(message)
+            .font(.system(size: 12))
+            .foregroundColor(theme.color("fg-faint"))
+            .padding(16)
+            .background(.black.opacity(0.25))
+            .cornerRadius(6)
     }
 
     @ViewBuilder

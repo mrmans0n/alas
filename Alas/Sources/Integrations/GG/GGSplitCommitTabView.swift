@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GGSplitCommitTabView: View {
     let tabState: GGSplitCommitTabState
+    let worktreePath: URL
     let capabilities: GGCapabilities
     let workflowAvailable: Bool
     let hasBlockingGitOperation: Bool
@@ -21,6 +22,7 @@ struct GGSplitCommitTabView: View {
 
     init(
         tabState: GGSplitCommitTabState,
+        worktreePath: URL,
         rightPaneState: RightPaneState,
         capabilities: GGCapabilities,
         workflowAvailable: Bool,
@@ -32,6 +34,7 @@ struct GGSplitCommitTabView: View {
         onDraftChange: @escaping (GGSplitCommitDraft) -> Void
     ) {
         self.tabState = tabState
+        self.worktreePath = worktreePath
         self.capabilities = capabilities
         self.workflowAvailable = workflowAvailable
         self.hasBlockingGitOperation = hasBlockingGitOperation
@@ -189,7 +192,11 @@ struct GGSplitCommitTabView: View {
             VSplitView {
                 previewPane(title: "First commit", preview: model.firstPreview)
                     .frame(minHeight: 180)
-                previewPane(title: "Remainder", preview: model.remainderPreview)
+                previewPane(
+                    title: "Remainder",
+                    preview: model.remainderPreview,
+                    showsResultingImages: true
+                )
                     .frame(minHeight: 180)
             }
             Divider()
@@ -224,8 +231,13 @@ struct GGSplitCommitTabView: View {
         .background(theme.color("bg-2"))
     }
 
-    private func previewPane(title: String, preview: GGSplitPreview) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func previewPane(
+        title: String,
+        preview: GGSplitPreview,
+        showsResultingImages: Bool = false
+    ) -> some View {
+        let partition = GGResultingImagePreview.partition(preview.nonTextualFiles)
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(title)
                     .font(.headline)
@@ -248,7 +260,18 @@ struct GGSplitCommitTabView: View {
                         ForEach(preview.files) { file in
                             splitPreviewFile(file)
                         }
-                        ForEach(preview.nonTextualFiles, id: \.self) { path in
+                        if showsResultingImages, let targetSHA = model.targetSHA {
+                            ForEach(partition.imagePaths, id: \.self) { path in
+                                GGSplitResultingImagePreview(
+                                    path: path,
+                                    worktreePath: worktreePath,
+                                    revision: targetSHA,
+                                    codeFontFamily: codeFontFamily,
+                                    codeFontSize: codeFontSize
+                                )
+                            }
+                        }
+                        ForEach(partition.otherPaths, id: \.self) { path in
                             Label(path, systemImage: "doc")
                                 .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
                                 .foregroundStyle(theme.color("fg-dim"))
@@ -368,6 +391,68 @@ struct GGSplitCommitTabView: View {
             } catch {
                 errorMessage = GGErrorPresentation.message(for: error)
             }
+        }
+    }
+}
+
+enum GGResultingImagePreview {
+    struct Partition: Equatable {
+        let imagePaths: [String]
+        let otherPaths: [String]
+    }
+
+    static func partition(_ paths: [String]) -> Partition {
+        Partition(
+            imagePaths: paths.filter(ImageFileType.isSupported(relativePath:)),
+            otherPaths: paths.filter { !ImageFileType.isSupported(relativePath: $0) }
+        )
+    }
+}
+
+private struct GGSplitResultingImagePreview: View {
+    let path: String
+    let worktreePath: URL
+    let revision: String
+    let codeFontFamily: String
+    let codeFontSize: CGFloat
+
+    @State private var imageSide: ImageDiffSide?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(path)
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ZStack {
+                ImageCheckerboardBackground()
+                if let image = imageSide?.image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.none)
+                        .aspectRatio(contentMode: .fit)
+                        .padding(8)
+                } else if imageSide == nil {
+                    Spinner()
+                        .frame(width: 20, height: 20)
+                } else {
+                    Label("Could not load image", systemImage: "photo")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 220)
+        }
+        .task(id: "\(worktreePath.path):\(revision):\(path)") {
+            imageSide = await GitService().imageSide(
+                worktreePath: worktreePath,
+                revision: revision,
+                path: path
+            )
         }
     }
 }

@@ -2,8 +2,10 @@ import Foundation
 
 protocol ReviewChangesGitClient {
     func status(worktreePath: URL) async throws -> [ChangedFile]
+    func imageStatus(worktreePath: URL) async throws -> [ChangedFile]
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff
     func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
+    func workingCopyImageProvider(worktreePath: URL, change: ChangedFile) async -> DiffReviewImageProvider
 }
 
 extension GitService: ReviewChangesGitClient {}
@@ -18,11 +20,14 @@ struct ReviewChangesLoader {
     @MainActor
     func load(worktreePath: URL) async throws -> ReviewChangesLoadedSession {
         try Task.checkCancellation()
-        let status = try await git.status(worktreePath: worktreePath)
+        async let normalStatus = git.status(worktreePath: worktreePath)
+        async let imageStatus = git.imageStatus(worktreePath: worktreePath)
+        let status = try await normalStatus
+        let imageChanges = try await imageStatus
         try Task.checkCancellation()
 
         var files: [ReviewChangesFileSectionModel] = []
-        for change in orderedReviewableChanges(status) {
+        for change in orderedReviewableChanges(reconciling: status, with: imageChanges) {
             try Task.checkCancellation()
             let diff = try await git.diff(
                 worktreePath: worktreePath,
@@ -54,10 +59,40 @@ struct ReviewChangesLoader {
             }
     }
 
+    private func orderedReviewableChanges(
+        reconciling normalStatus: [ChangedFile],
+        with imageStatus: [ChangedFile]
+    ) -> [ChangedFile] {
+        let imageRenames = imageStatus.filter {
+            $0.status == "R"
+                && ImageFileType.isSupported(relativePath: $0.path)
+                && $0.renameFrom.map(ImageFileType.isSupported(relativePath:)) == true
+        }
+        let renamedDestinations = Dictionary(
+            uniqueKeysWithValues: imageRenames.map { (ReviewChangesPathStage(path: $0.path, stage: $0.stage), $0) }
+        )
+        let renamedSources = Set(imageRenames.compactMap { rename in
+            rename.renameFrom.map { ReviewChangesPathStage(path: $0, stage: rename.stage) }
+        })
+
+        return orderedReviewableChanges(normalStatus.compactMap { change in
+            let pathStage = ReviewChangesPathStage(path: change.path, stage: change.stage)
+            if let rename = renamedDestinations[pathStage] {
+                return rename
+            }
+            if renamedSources.contains(pathStage) {
+                return nil
+            }
+            return change
+        })
+    }
+
     private func fileSection(for change: ChangedFile, diff: ParsedDiff, worktreePath: URL) async throws -> ReviewChangesFileSectionModel {
         let source = ReviewChangesSource(stage: change.stage)
         let staged = change.stage == .staged
-        let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: change.path)
+        let isImage = ImageFileType.isSupported(relativePath: change.path)
+            || change.renameFrom.map(ImageFileType.isSupported(relativePath:)) == true
+        let canRenderText = !diff.hunks.isEmpty && !isImage
         let counts = lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
             path: change.path,
@@ -67,17 +102,17 @@ struct ReviewChangesLoader {
             status: DiffReviewFileStatus(gitStatus: change.status, conflict: change.conflict),
             additions: counts.additions,
             deletions: counts.deletions,
-            isRenderable: canRender,
+            isRenderable: isImage || canRenderText,
             originalPath: change.renameFrom
         )
 
         return ReviewChangesFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRender
+            displayModel: canRenderText
                 ? try await buildDisplayModel(diff: diff, filePath: change.path)
                 : nil,
-            placeholderMessage: canRender ? nil : placeholderMessage(for: change, diff: diff),
+            placeholderMessage: (isImage || canRenderText) ? nil : placeholderMessage(for: change, diff: diff),
             openFile: nil,
             contextProvider: DiffReviewContextProvider {
                 try await git.contextSnapshot(
@@ -86,7 +121,10 @@ struct ReviewChangesLoader {
                     staged: staged,
                     originalPath: change.renameFrom
                 )
-            }
+            },
+            imageProvider: isImage
+                ? await git.workingCopyImageProvider(worktreePath: worktreePath, change: change)
+                : nil
         )
     }
 
@@ -123,6 +161,11 @@ struct ReviewChangesLoader {
         }
         return "This file cannot be rendered in the review view."
     }
+}
+
+private struct ReviewChangesPathStage: Hashable {
+    let path: String
+    let stage: ChangeStage
 }
 
 private extension ReviewChangesSource {

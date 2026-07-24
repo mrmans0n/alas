@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct ReviewRequestDiffLoaderTests {
     @Test func providerUnifiedDiffBuildsReviewSessionInProviderOrder() async throws {
-        let provider = FakeDiffProvider(diff: Self.sampleDiff)
+        let provider = FakeHostedImageProvider(diff: Self.sampleDiff)
         let loader = ReviewRequestDiffLoader(provider: provider)
 
         let session = try await loader.load(
@@ -20,10 +20,208 @@ struct ReviewRequestDiffLoaderTests {
         #expect(session.files[0].summary.status == .modified)
         #expect(session.files[1].summary.status == .renamed)
         #expect(session.files[1].summary.originalPath == "Sources/OldName.swift")
-        #expect(session.files[2].summary.isRenderable == false)
-        #expect(session.files[2].placeholderMessage == "Image changes are not available in this review view yet.")
+        let image = try #require(session.files.first { $0.summary.path == "Assets/logo.png" })
+        #expect(image.summary.isRenderable)
+        #expect(image.placeholderMessage == nil)
+        let imageProvider = try #require(image.imageProvider)
+        #expect(await provider.fileRequests.isEmpty)
+
+        let pair = await imageProvider.load()
+
+        #expect(pair.kind == .modified)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+        #expect(await provider.revisionRequests.count == 1)
+        #expect(await provider.fileRequests.map(\.revision) == ["base-sha-516", "head-sha-516"])
         #expect(session.summary.totalAdditions == 4)
         #expect(session.summary.totalDeletions == 3)
+    }
+
+    @Test func hostedAddedImageLoadsOnlyHeadSide() async throws {
+        let provider = FakeHostedImageProvider(diff: Self.imageDiff(status: .added))
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 517), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+
+        #expect(pair.kind == .added)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
+        #expect(await provider.fileRequests.map(\.revision) == ["head-sha-517"])
+    }
+
+    @Test func hostedDeletedImageLoadsOnlyBaseSide() async throws {
+        let provider = FakeHostedImageProvider(diff: Self.imageDiff(status: .deleted))
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 518), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+
+        #expect(pair.kind == .deleted)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage == nil)
+        #expect(await provider.fileRequests.map(\.revision) == ["base-sha-518"])
+    }
+
+    @Test func hostedRenamedImageUsesOriginalPathForBaseSide() async throws {
+        let provider = FakeHostedImageProvider(diff: Self.imageDiff(status: .renamed))
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 519), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+
+        #expect(pair.kind == .renamed)
+        #expect(pair.oldPath == "Assets/old-logo.png")
+        #expect(await provider.fileRequests == [
+            .init(repository: "mrmans0n/alas", revision: "base-sha-519", path: "Assets/old-logo.png"),
+            .init(repository: "mrmans0n/alas", revision: "head-sha-519", path: "Assets/logo.png"),
+        ])
+    }
+
+    @Test func hostedCopiedImageUsesCopiedKindAndOriginalPathForBaseSide() async throws {
+        let provider = FakeHostedImageProvider(diff: Self.imageDiff(status: .copied))
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 520), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+
+        #expect(pair.kind == .copied)
+        #expect(pair.oldPath == "Assets/old-logo.png")
+        #expect(await provider.fileRequests == [
+            .init(repository: "mrmans0n/alas", revision: "base-sha-520", path: "Assets/old-logo.png"),
+            .init(repository: "mrmans0n/alas", revision: "head-sha-520", path: "Assets/logo.png"),
+        ])
+    }
+
+    @Test func hostedRevisionAuthenticationFailureCanRecoverThroughPerFileRetry() async throws {
+        let authenticationError = CodeHostProviderError.unauthenticated("github.com")
+        let provider = FakeHostedImageProvider(
+            diff: Self.imageDiff(status: .modified),
+            revisionErrors: [authenticationError, authenticationError]
+        )
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 521), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let imageState = DiffReviewImageState()
+        await imageState.load(provider: imageProvider)
+        let failedPair = try #require(imageState.pair)
+
+        guard case .failed(let beforeFailure) = failedPair.before else {
+            Issue.record("Expected the unavailable base revision to fail.")
+            return
+        }
+        guard case .failed(let afterFailure) = failedPair.after else {
+            Issue.record("Expected the unavailable head revision to fail.")
+            return
+        }
+        #expect(beforeFailure.message == "Authentication required.")
+        #expect(afterFailure.message == "Authentication required.")
+
+        await imageState.retry()
+
+        let recoveredPair = try #require(imageState.pair)
+        #expect(recoveredPair.beforeImage != nil)
+        #expect(recoveredPair.afterImage != nil)
+        #expect(await provider.revisionRequests.count == 3)
+    }
+
+    @Test func hostedForkImageDoesNotRequireALocalHeadRemote() async throws {
+        let provider = FakeHostedImageProvider(diff: Self.imageDiff(status: .modified))
+        let request = Self.reviewRequest(
+            number: 522,
+            headRepositoryOwner: "fork-owner",
+            headRepositoryName: "alas-fork"
+        )
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: request, cwd: URL(fileURLWithPath: "/tmp/no-local-head-remote")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+        #expect(await provider.fileRequests.map(\.revision) == ["base-sha-522", "head-sha-522"])
+        #expect(await provider.fileRequests.map(\.repository) == [
+            "mrmans0n/alas",
+            "fork-owner/alas-fork",
+        ])
+    }
+
+    @Test func hostedRenameFromImageToNonImageExtensionStillUsesImageProvider() async throws {
+        let provider = FakeHostedImageProvider(diff: """
+        diff --git a/Assets/logo.png b/Assets/logo.bin
+        similarity index 100%
+        rename from Assets/logo.png
+        rename to Assets/logo.bin
+        """)
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 523), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.isRenderable)
+        let imageProvider = try #require(file.imageProvider)
+        let pair = await imageProvider.load()
+        #expect(pair.kind == .renamed)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func hostedLFSPointerFailurePreservesItsSpecificMessage() async throws {
+        let pointer = Data("""
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        size 123
+
+        """.utf8)
+        let provider = FakeHostedImageProvider(
+            diff: Self.imageDiff(status: .added),
+            fileData: pointer
+        )
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 524), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected unresolved hosted LFS data to fail.")
+            return
+        }
+        #expect(failure.message == "LFS")
+    }
+
+    @Test func hostedProviderFailureDoesNotExposeResponseBodyInImageMessage() async throws {
+        let provider = FakeHostedImageProvider(
+            diff: Self.imageDiff(status: .added),
+            fileError: CodeHostProviderError.commandFailed(
+                command: "gh api contents",
+                stderr: "secret response body"
+            )
+        )
+        let session = try await ReviewRequestDiffLoader(provider: provider).load(
+            remote: Self.remote(), request: Self.reviewRequest(number: 525), cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let imageProvider = try #require(session.files.first?.imageProvider)
+        let pair = await imageProvider.load()
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected provider request to fail.")
+            return
+        }
+        #expect(failure.message == "Couldn't load image from the provider.")
+        #expect(!failure.message.contains("secret response body"))
     }
 
     @Test func emptyProviderDiffProducesEmptyUngroupedSession() async throws {
@@ -41,7 +239,7 @@ struct ReviewRequestDiffLoaderTests {
         #expect(session.summary.groupsEnabled == false)
     }
 
-    @Test func noHunkPlaceholderFileWithSpacesKeepsHeaderPath() async throws {
+    @Test func noHunkImageFileWithSpacesKeepsHeaderPath() async throws {
         let provider = FakeDiffProvider(diff: """
         diff --git a/Assets/logo file.png b/Assets/logo file.png
         index 111..222 100644
@@ -56,11 +254,12 @@ struct ReviewRequestDiffLoaderTests {
 
         let file = try #require(session.files.first)
         #expect(file.summary.path == "Assets/logo file.png")
-        #expect(file.summary.isRenderable == false)
-        #expect(file.placeholderMessage == "Image changes are not available in this review view yet.")
+        #expect(file.summary.isRenderable)
+        #expect(file.placeholderMessage == nil)
+        #expect(file.imageProvider != nil)
     }
 
-    @Test func noHunkPlaceholderFileWithBSlashSegmentKeepsHeaderPath() async throws {
+    @Test func noHunkImageFileWithBSlashSegmentKeepsHeaderPath() async throws {
         let provider = FakeDiffProvider(diff: """
         diff --git a/foo b/bar.png b/foo b/bar.png
         index 111..222 100644
@@ -75,7 +274,8 @@ struct ReviewRequestDiffLoaderTests {
 
         let file = try #require(session.files.first)
         #expect(file.summary.path == "foo b/bar.png")
-        #expect(file.summary.isRenderable == false)
+        #expect(file.summary.isRenderable)
+        #expect(file.imageProvider != nil)
     }
 
     @Test func unquotedPathHeadersDropTabMetadata() async throws {
@@ -225,6 +425,52 @@ struct ReviewRequestDiffLoaderTests {
     +binary new
     """
 
+    private enum ImageStatus {
+        case added, deleted, renamed, copied, modified
+    }
+
+    private static func imageDiff(status: ImageStatus) -> String {
+        switch status {
+        case .added:
+            """
+            diff --git a/Assets/logo.png b/Assets/logo.png
+            new file mode 100644
+            index 0000000..1111111
+            --- /dev/null
+            +++ b/Assets/logo.png
+            """
+        case .deleted:
+            """
+            diff --git a/Assets/logo.png b/Assets/logo.png
+            deleted file mode 100644
+            index 1111111..0000000
+            --- a/Assets/logo.png
+            +++ /dev/null
+            """
+        case .renamed:
+            """
+            diff --git a/Assets/old-logo.png b/Assets/logo.png
+            similarity index 100%
+            rename from Assets/old-logo.png
+            rename to Assets/logo.png
+            """
+        case .copied:
+            """
+            diff --git a/Assets/old-logo.png b/Assets/logo.png
+            similarity index 100%
+            copy from Assets/old-logo.png
+            copy to Assets/logo.png
+            """
+        case .modified:
+            """
+            diff --git a/Assets/logo.png b/Assets/logo.png
+            index 1111111..2222222 100644
+            --- a/Assets/logo.png
+            +++ b/Assets/logo.png
+            """
+        }
+    }
+
     private static func remote(kind: CodeHostKind = .github) -> CodeHostRemote {
         CodeHostRemote(
             kind: kind,
@@ -236,16 +482,23 @@ struct ReviewRequestDiffLoaderTests {
         )
     }
 
-    private static func reviewRequest(kind: CodeHostKind = .github) -> ReviewRequest {
+    private static func reviewRequest(
+        kind: CodeHostKind = .github,
+        number: Int = 516,
+        headRepositoryOwner: String? = nil,
+        headRepositoryName: String? = nil
+    ) -> ReviewRequest {
         ReviewRequest(
             remote: remote(kind: kind),
-            number: 516,
+            number: number,
             title: "Files first",
             url: URL(string: "https://github.com/mrmans0n/alas/pull/516")!,
             state: .open,
             isDraft: false,
             headRefName: "feature/files",
             baseRefName: "main",
+            headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
             reviewDecision: .unknown,
             mergeState: .unknown,
             checks: [],
@@ -263,5 +516,69 @@ private struct FakeDiffProvider: CodeHostProvider {
     func createReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, title: String, body: String, isDraft: Bool, cwd: URL) async throws -> URL { URL(fileURLWithPath: "/tmp/pr") }
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, request: ReviewRequest?, cwd: URL) async throws {}
+}
+
+private actor FakeHostedImageProvider: CodeHostProvider {
+    struct FileRequest: Equatable, Sendable {
+        let repository: String
+        let revision: String
+        let path: String
+    }
+
+    nonisolated let kind: CodeHostKind = .github
+    let diff: String
+    private var revisionErrors: [CodeHostProviderError]
+    let fileData: Data
+    let fileError: CodeHostProviderError?
+    private(set) var revisionRequests: [CodeHostRemote] = []
+    private(set) var fileRequests: [FileRequest] = []
+
+    init(
+        diff: String,
+        revisionErrors: [CodeHostProviderError] = [],
+        fileData: Data = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!,
+        fileError: CodeHostProviderError? = nil
+    ) {
+        self.diff = diff
+        self.revisionErrors = revisionErrors
+        self.fileData = fileData
+        self.fileError = fileError
+    }
+
+    func isAvailable(cwd: URL) async -> Bool { true }
+    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+    func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL) async throws -> ReviewRequest? { nil }
+    func createReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, title: String, body: String, isDraft: Bool, cwd: URL) async throws -> URL { URL(fileURLWithPath: "/tmp/pr") }
+    func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+
+    func reviewImageRevisions(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> CodeHostReviewImageRevisions {
+        revisionRequests.append(remote)
+        if !revisionErrors.isEmpty {
+            throw revisionErrors.removeFirst()
+        }
+        return CodeHostReviewImageRevisions(
+            beforeSHA: "base-sha-\(request.number)",
+            afterSHA: "head-sha-\(request.number)"
+        )
+    }
+
+    func reviewFileData(
+        remote: CodeHostRemote,
+        repository: String,
+        revision: String,
+        path: String,
+        cwd: URL
+    ) async throws -> Data {
+        fileRequests.append(FileRequest(repository: repository, revision: revision, path: path))
+        if let fileError { throw fileError }
+        return fileData
+    }
+
     func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, request: ReviewRequest?, cwd: URL) async throws {}
 }

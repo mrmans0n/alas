@@ -40,6 +40,7 @@ struct DiffTabView: View {
     @State private var isFileDeleted: Bool = false
     @State private var imagePair: ImageDiffPair?
     @State private var imagePairLoaded: Bool = false
+    @State private var imageRetryGeneration = 0
     @State private var draftCommentController: ReviewDraftCommentController?
     @State private var loadedDraftSessionID: ReviewDraftSessionID?
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
@@ -57,7 +58,7 @@ struct DiffTabView: View {
     private let git = GitService()
 
     var body: some View {
-        if ImageFileType.isSupported(relativePath: relativePath) {
+        if ImageFileType.isSupported(currentPath: relativePath, originalPath: originalPath) {
             imageBody
         } else {
             textBody
@@ -75,7 +76,8 @@ struct DiffTabView: View {
                 ImageDiffView(
                     pair: pair,
                     relativePath: relativePath,
-                    onOpenFile: onOpenFile
+                    onOpenFile: onOpenFile,
+                    onRetry: { imageRetryGeneration &+= 1 }
                 )
             } else {
                 Text("Could not load image diff for \(relativePath)")
@@ -90,7 +92,7 @@ struct DiffTabView: View {
     }
 
     private var imageLoadKey: String {
-        "img:\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)\u{0}\(originalPath ?? "")\u{0}\(compareWithHEAD)"
+        "img:\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)\u{0}\(originalPath ?? "")\u{0}\(compareWithHEAD)\u{0}\(imageRetryGeneration)"
     }
 
     private func loadImagePair() async {
@@ -114,7 +116,8 @@ struct DiffTabView: View {
             guard !Task.isCancelled else { return }
             imagePair = pair
         } catch {
-            // Leave imagePair nil to show the error placeholder.
+            guard !Task.isCancelled else { return }
+            imagePair = .failedLoading()
         }
         imagePairLoaded = true
     }

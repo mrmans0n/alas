@@ -16,6 +16,7 @@ struct GitHubCLIProviderTests {
                 "headRefName": "feature/github-provider",
                 "headRefOid": "head-sha-42",
                 "baseRefName": "main",
+                "baseRefOid": "base-sha-42",
                 "reviewDecision": "CHANGES_REQUESTED",
                 "mergeStateStatus": "BLOCKED"
               }
@@ -30,6 +31,7 @@ struct GitHubCLIProviderTests {
         #expect(request.reviewDecision == .changesRequested)
         #expect(request.mergeState == .blocked)
         #expect(request.provider == .github)
+        #expect(request.baseSHA == "base-sha-42")
         #expect(request.headSHA == "head-sha-42")
         #expect(request.checks.isEmpty)
         #expect(request.threads.isEmpty)
@@ -211,7 +213,7 @@ struct GitHubCLIProviderTests {
                     "--base", "main",
                     "--state", "open",
                     "--limit", "20",
-                    "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+                    "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
                     "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
@@ -268,7 +270,7 @@ struct GitHubCLIProviderTests {
                 "--base", "main",
                 "--state", "open",
                 "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
                 "-R", "mrmans0n/alas",
             ],
             [
@@ -310,6 +312,78 @@ struct GitHubCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
+    }
+
+    @Test func reviewImageRevisionsAndRawFileDataUseExactForkRevisionBeyondOneMegabyte() async throws {
+        let rawImage = String(repeating: "a", count: 1_048_577)
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: #"{"merge_base_commit":{"sha":"base-sha"}}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: rawImage, stderr: ""),
+        ])
+        let request = Self.makeRequest(
+            baseSHA: "base-sha",
+            headSHA: "head-sha",
+            headRepositoryOwner: "fork-owner",
+            headRepositoryName: "alas-fork"
+        )
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let revisions = try await provider.reviewImageRevisions(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+        let data = try await provider.reviewFileData(
+            remote: Self.remote,
+            repository: "fork-owner/alas-fork",
+            revision: revisions.afterSHA,
+            path: "Assets/Diff image.png",
+            cwd: Self.cwd
+        )
+
+        #expect(revisions == CodeHostReviewImageRevisions(
+            beforeSHA: "base-sha",
+            afterSHA: "head-sha"
+        ))
+        #expect(data == Data(rawImage.utf8))
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "api",
+                    "--hostname", "github.com",
+                    "repos/mrmans0n/alas/compare/base-sha...head-sha",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "api",
+                    "--hostname", "github.com",
+                    "--method", "GET",
+                    "--header", "Accept: application/vnd.github.raw+json",
+                    "repos/fork-owner/alas-fork/contents/Assets%2FDiff%20image.png?ref=head-sha",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func reviewFileDataSurfacesRawRouteFailure() async {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "request failed"),
+        ])
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "gh api contents", stderr: "request failed")) {
+            _ = try await GitHubCLIProvider(runner: runner).reviewFileData(
+                remote: Self.remote,
+                repository: "mrmans0n/alas",
+                revision: "head-sha",
+                path: "Assets/Diff image.png",
+                cwd: Self.cwd
+            )
+        }
     }
 
     @Test func reviewDiffSurfacesGitHubCommandFailure() async throws {
@@ -442,7 +516,7 @@ struct GitHubCLIProviderTests {
         #expect(publishThreads.first?["startSide"] as? String == "RIGHT")
         #expect(commands[2].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[3].args == [
@@ -793,13 +867,13 @@ struct GitHubCLIProviderTests {
         #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[1].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[4].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[5].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
@@ -848,7 +922,7 @@ struct GitHubCLIProviderTests {
         #expect(commands.count == 3)
         #expect(commands[0].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
             "-R", "github.enterprise.example.com/platform/alas",
         ])
         #expect(commands[1].args == [
@@ -1894,6 +1968,7 @@ struct GitHubCLIProviderTests {
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = [],
         reviewDecision: ReviewDecision = .approved,
+        baseSHA: String? = "base-sha-42",
         headSHA: String? = "head-sha-42",
         headRepositoryOwner: String? = "mrmans0n",
         headRepositoryName: String? = "alas",
@@ -1909,6 +1984,7 @@ struct GitHubCLIProviderTests {
             isDraft: false,
             headRefName: "feature/github-provider",
             baseRefName: "main",
+            baseSHA: baseSHA,
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
             headRepositoryName: headRepositoryName,
@@ -1972,6 +2048,7 @@ struct GitHubCLIProviderTests {
         "headRefName": "feature/github-provider",
         "headRefOid": "head-sha-42",
         "baseRefName": "main",
+        "baseRefOid": "base-sha-42",
         "reviewDecision": "APPROVED",
         "mergeStateStatus": "CLEAN"
       }
@@ -1988,6 +2065,7 @@ struct GitHubCLIProviderTests {
       "headRefName": "feature/github-provider",
       "headRefOid": "head-sha-42",
       "baseRefName": "main",
+      "baseRefOid": "base-sha-42",
       "reviewDecision": "APPROVED",
       "mergeStateStatus": "CLEAN"
     }

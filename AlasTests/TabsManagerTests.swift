@@ -1308,7 +1308,7 @@ struct TabsManagerPaneTests {
             Issue.record("Expected stashDiff tab")
             return
         }
-        #expect(state.id == "stash-diff:wt1:stash@{0}:abc:Sources/App.swift")
+        #expect(state.id == "stash-diff:wt1:stash@{0}:abc:Sources/App.swift\u{0}false")
         #expect(state.title == "App.swift @ stash@{0}")
         #expect(state.stash == stash)
         #expect(state.file == file)

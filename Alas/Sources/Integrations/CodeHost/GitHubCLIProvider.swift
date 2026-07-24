@@ -289,7 +289,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--base", base,
                 "--state", "open",
                 "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -432,6 +432,67 @@ struct GitHubCLIProvider: CodeHostProvider {
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr diff", stderr: result.stderr)
         }
+        return result.stdout
+    }
+
+    func reviewImageRevisions(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> CodeHostReviewImageRevisions {
+        guard let baseSHA = Self.normalizedOptionalString(request.baseSHA),
+              let headSHA = Self.normalizedOptionalString(request.headSHA)
+        else {
+            throw CodeHostProviderError.malformedOutput("GitHub image revisions require base and head SHAs.")
+        }
+
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "api",
+                "--hostname", remote.host,
+                "repos/\(remote.repositorySlug)/compare/\(baseSHA)...\(headSHA)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api compare", stderr: result.stderr)
+        }
+
+        let response: GitHubCompareResponse
+        do {
+            response = try JSONDecoder().decode(GitHubCompareResponse.self, from: Data(result.stdout.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh api compare output")
+        }
+        guard let mergeBaseSHA = Self.normalizedOptionalString(response.mergeBaseCommit.sha) else {
+            throw CodeHostProviderError.malformedOutput("gh api compare output is missing merge base SHA")
+        }
+        return CodeHostReviewImageRevisions(beforeSHA: mergeBaseSHA, afterSHA: headSHA)
+    }
+
+    func reviewFileData(
+        remote: CodeHostRemote,
+        repository: String,
+        revision: String,
+        path: String,
+        cwd: URL
+    ) async throws -> Data {
+        let result = try await runner.runData(
+            "gh",
+            args: [
+                "api",
+                "--hostname", remote.host,
+                "--method", "GET",
+                "--header", "Accept: application/vnd.github.raw+json",
+                "repos/\(repository)/contents/\(Self.encodedFilePath(path))?ref=\(revision)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api contents", stderr: result.stderr)
+        }
+
         return result.stdout
     }
 
@@ -747,7 +808,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "pr", "view", "\(request.number)",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -1294,6 +1355,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: item.isDraft,
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
+            baseSHA: normalizedOptionalString(item.baseRefOid),
             headSHA: normalizedOptionalString(item.headRefOid),
             headRepositoryOwner: item.headRepositoryOwner?.login,
             headRepositoryName: item.headRepository?.name,
@@ -1333,6 +1395,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: item.isDraft,
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
+            baseSHA: normalizedOptionalString(item.baseRefOid),
             headSHA: normalizedOptionalString(item.headRefOid),
             headRepositoryOwner: item.headRepositoryOwner?.login,
             headRepositoryName: item.headRepository?.name,
@@ -1812,6 +1875,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         remote.host == "github.com" ? remote.repositorySlug : "\(remote.host)/\(remote.repositorySlug)"
     }
 
+    private static func encodedFilePath(_ path: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/")
+        return path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+    }
+
     static func githubReviewThreadPayload(for draft: ProviderReviewDraftComment) -> GitHubReviewDraftThreadPayload {
         GitHubReviewDraftThreadPayload(
             path: draft.path,
@@ -1851,8 +1920,21 @@ private struct PRListItem: Decodable {
     let headRepositoryOwner: HeadRepositoryOwner?
     let headRepository: HeadRepository?
     let baseRefName: String
+    let baseRefOid: String?
     let reviewDecision: String?
     let mergeStateStatus: String?
+}
+
+private struct GitHubCompareResponse: Decodable {
+    let mergeBaseCommit: GitHubCompareCommit
+
+    private enum CodingKeys: String, CodingKey {
+        case mergeBaseCommit = "merge_base_commit"
+    }
+}
+
+private struct GitHubCompareCommit: Decodable {
+    let sha: String?
 }
 
 private struct HeadRepository: Decodable {

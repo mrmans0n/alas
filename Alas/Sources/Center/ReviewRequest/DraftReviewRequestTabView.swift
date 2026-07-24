@@ -560,6 +560,13 @@ struct DraftReviewRequestTabView: View {
                 worktreePath: worktreePath,
                 baseRef: tabState.baseBranch
             )
+            let resolvedHeadRef = tabState.headSHA.isEmpty ? "HEAD" : tabState.headSHA
+            let imageRevisions = try await git.resolvedRangeTrees(
+                worktreePath: worktreePath,
+                base: tabState.baseBranch,
+                head: resolvedHeadRef,
+                threeDot: true
+            )
             guard !Task.isCancelled, key == contextKey else { return }
             let session = try await DraftReviewRequestDiffSessionBuilder.build(
                 context: loaded,
@@ -577,11 +584,18 @@ struct DraftReviewRequestTabView: View {
                         try await GitService().refContextSnapshot(
                             worktreePath: worktreePath,
                             baseRef: tabState.baseBranch,
-                            headRef: tabState.headSHA.isEmpty ? "HEAD" : tabState.headSHA,
+                            headRef: resolvedHeadRef,
                             file: path,
                             originalPath: originalPath
                         )
                     }
+                },
+                imageProviderForFile: { file in
+                    git.rangeImageProvider(
+                        worktreePath: worktreePath,
+                        revisions: imageRevisions,
+                        file: file
+                    )
                 }
             )
             guard !Task.isCancelled, key == contextKey else { return }

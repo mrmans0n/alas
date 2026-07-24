@@ -363,6 +363,7 @@ struct CenterPaneView: View {
                                 && ggActionState.pausedOperation == nil
                             GGSplitCommitTabView(
                                 tabState: s,
+                                worktreePath: worktree.path,
                                 rightPaneState: rightPaneState,
                                 capabilities: capabilities,
                                 workflowAvailable: workflowAvailable,

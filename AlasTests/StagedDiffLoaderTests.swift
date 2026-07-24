@@ -16,7 +16,8 @@ struct StagedDiffLoaderTests {
         )
         let loader = StagedDiffLoader(git: git)
 
-        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+        let session = try await loader.load(worktreePath: worktreePath)
 
         #expect(session.files.map(\.summary.namespace) == ["staged"])
         #expect(session.summary.files.map(\.namespace) == ["staged"])
@@ -38,7 +39,8 @@ struct StagedDiffLoaderTests {
         )
         let loader = StagedDiffLoader(git: git)
 
-        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+        let session = try await loader.load(worktreePath: worktreePath)
 
         let file = try #require(session.files.first)
         #expect(file.summary.additions == 1)
@@ -67,7 +69,7 @@ struct StagedDiffLoaderTests {
         #expect(file.summary.originalPath == "Sources/OldName.swift")
     }
 
-    @Test func marksImageFilesAsNotRenderable() async throws {
+    @Test func rendersSupportedImageFilesWithAnImageProvider() async throws {
         let git = MockStagedDiffGitClient(
             files: [
                 CommitChangedFile(path: "Assets/logo.png", originalPath: nil, status: "M", add: 0, del: 0),
@@ -81,12 +83,20 @@ struct StagedDiffLoaderTests {
         )
         let loader = StagedDiffLoader(git: git)
 
-        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+        let session = try await loader.load(worktreePath: worktreePath)
 
         let file = try #require(session.files.first)
-        #expect(file.summary.isRenderable == false)
+        #expect(file.summary.isRenderable)
         #expect(file.displayModel == nil)
-        #expect(file.placeholderMessage == "Image changes are not available in this review view yet.")
+        #expect(file.placeholderMessage == nil)
+        let provider = try #require(file.imageProvider)
+        _ = await provider.load()
+        #expect(git.imageProviderRequests == [
+            .init(worktreePath: worktreePath, file: CommitChangedFile(
+                path: "Assets/logo.png", originalPath: nil, status: "M", add: 0, del: 0
+            )),
+        ])
     }
 
     @Test func marksEmptyDiffAsNotRenderable() async throws {
@@ -205,6 +215,7 @@ private final class MockStagedDiffGitClient: StagedDiffGitClient, @unchecked Sen
     private let diffs: [String: ParsedDiff]
     private let lock = NSLock()
     private var recordedDiffRequests: [DiffRequest] = []
+    private var recordedImageProviderRequests: [ImageProviderRequest] = []
 
     init(files: [CommitChangedFile], diffs: [String: ParsedDiff]) {
         self.stagedFiles = files
@@ -213,6 +224,10 @@ private final class MockStagedDiffGitClient: StagedDiffGitClient, @unchecked Sen
 
     var diffRequests: [DiffRequest] {
         lock.withLock { recordedDiffRequests }
+    }
+
+    var imageProviderRequests: [ImageProviderRequest] {
+        lock.withLock { recordedImageProviderRequests }
     }
 
     func stagedChangedFiles(at worktreePath: URL) async throws -> [CommitChangedFile] {
@@ -229,6 +244,30 @@ private final class MockStagedDiffGitClient: StagedDiffGitClient, @unchecked Sen
             ))
         }
         return diffs[file, default: ParsedDiff(hunks: [])]
+    }
+
+    func stagedImageProvider(worktreePath: URL, file: CommitChangedFile) async -> DiffReviewImageProvider {
+        lock.withLock {
+            recordedImageProviderRequests.append(.init(worktreePath: worktreePath, file: file))
+        }
+        return DiffReviewImageProvider(
+            id: DiffReviewImageProviderID(
+                source: .workingCopy,
+                repository: worktreePath.path,
+                beforeRevision: "staged",
+                afterRevision: "fake",
+                beforePath: file.originalPath,
+                afterPath: file.path
+            ),
+            load: {
+                ImageDiffPair(before: .missing, after: .missing, oldPath: file.originalPath, kind: .modified)
+            }
+        )
+    }
+
+    struct ImageProviderRequest: Equatable {
+        let worktreePath: URL
+        let file: CommitChangedFile
     }
 }
 
@@ -251,5 +290,19 @@ private final class BlockingStagedDiffGitClient: StagedDiffGitClient, @unchecked
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff {
         try Task.checkCancellation()
         return ParsedDiff(hunks: [])
+    }
+
+    func stagedImageProvider(worktreePath: URL, file: CommitChangedFile) async -> DiffReviewImageProvider {
+        DiffReviewImageProvider(
+            id: DiffReviewImageProviderID(
+                source: .workingCopy,
+                repository: worktreePath.path,
+                beforeRevision: "staged",
+                afterRevision: "fake",
+                beforePath: file.originalPath,
+                afterPath: file.path
+            ),
+            load: { ImageDiffPair(before: .missing, after: .missing, oldPath: nil, kind: .modified) }
+        )
     }
 }

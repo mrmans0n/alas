@@ -23,6 +23,7 @@ struct CommitDiffView: View {
     @State private var titleHovering = false
     @State private var imagePair: ImageDiffPair?
     @State private var imagePairLoaded: Bool = false
+    @State private var imageRetryGeneration = 0
     private let git = GitService()
 
     init(
@@ -62,7 +63,7 @@ struct CommitDiffView: View {
     }
 
     var body: some View {
-        if ImageFileType.isSupported(relativePath: path) {
+        if ImageFileType.isSupported(currentPath: path, originalPath: file.originalPath) {
             imageBody
         } else {
             VStack(alignment: .leading, spacing: 0) {
@@ -85,7 +86,8 @@ struct CommitDiffView: View {
                 ImageDiffView(
                     pair: pair,
                     relativePath: path,
-                    onOpenFile: onOpenFile
+                    onOpenFile: onOpenFile,
+                    onRetry: { imageRetryGeneration &+= 1 }
                 )
             } else {
                 Text("Could not load image diff for \(path)")
@@ -100,7 +102,7 @@ struct CommitDiffView: View {
     }
 
     private var imageLoadKey: String {
-        "img-commit:\(worktreePath.path)\u{0}\(sha)\u{0}\(path)"
+        "img-commit:\(worktreePath.path)\u{0}\(sha)\u{0}\(path)\u{0}\(imageRetryGeneration)"
     }
 
     private func loadImagePair() async {
@@ -113,7 +115,8 @@ struct CommitDiffView: View {
             guard !Task.isCancelled else { return }
             imagePair = pair
         } catch {
-            // Leave imagePair nil; the placeholder shows the error path.
+            guard !Task.isCancelled else { return }
+            imagePair = .failedLoading()
         }
         imagePairLoaded = true
     }

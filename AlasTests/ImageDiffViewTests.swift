@@ -1,30 +1,125 @@
+import AppKit
 import Testing
 @testable import Alas
 
 struct ImageDiffViewTests {
+    private func pair(
+        kind: ImageDiffPairKind,
+        before: ImageDiffSide = .missing,
+        after: ImageDiffSide = .missing
+    ) -> ImageDiffPair {
+        ImageDiffPair(before: before, after: after, oldPath: nil, kind: kind)
+    }
+
+    private func loadedPair(kind: ImageDiffPairKind) -> ImageDiffPair {
+        let image = NSImage(size: NSSize(width: 1, height: 1))
+        return pair(
+            kind: kind,
+            before: .image(image, frameCount: 1),
+            after: .image(image, frameCount: 1)
+        )
+    }
+
+    @MainActor
     @Test func snapsToSideBySideWhenCurrentModeIsDisabledForAdded() {
-        var mode: ImageDiffMode = .overlay
-        ImageDiffView.snapToApplicableMode(&mode, for: .added)
-        #expect(mode == .sideBySide)
+        let state = ImageDiffPresentationState()
+        state.mode = .overlay
+
+        state.snapToApplicableMode(for: pair(kind: .added))
+
+        #expect(state.mode == .sideBySide)
     }
 
+    @MainActor
     @Test func snapsToSideBySideWhenCurrentModeIsDisabledForDeleted() {
-        var mode: ImageDiffMode = .difference
-        ImageDiffView.snapToApplicableMode(&mode, for: .deleted)
-        #expect(mode == .sideBySide)
+        let state = ImageDiffPresentationState()
+        state.mode = .difference
+
+        state.snapToApplicableMode(for: pair(kind: .deleted))
+
+        #expect(state.mode == .sideBySide)
     }
 
+    @MainActor
     @Test func leavesApplicableModeAloneForModified() {
-        var mode: ImageDiffMode = .difference
-        ImageDiffView.snapToApplicableMode(&mode, for: .modified)
-        #expect(mode == .difference)
+        let state = ImageDiffPresentationState()
+        state.mode = .difference
+
+        state.snapToApplicableMode(for: loadedPair(kind: .modified))
+
+        #expect(state.mode == .difference)
     }
 
+    @MainActor
     @Test func leavesSideBySideAloneAlways() {
         for kind in ImageDiffPairKind.allCases {
-            var mode: ImageDiffMode = .sideBySide
-            ImageDiffView.snapToApplicableMode(&mode, for: kind)
-            #expect(mode == .sideBySide)
+            let state = ImageDiffPresentationState()
+            state.snapToApplicableMode(for: pair(kind: kind))
+            #expect(state.mode == .sideBySide)
         }
+    }
+
+    @MainActor
+    @Test func presentationResetsWhenDisplayedPairChanges() {
+        let firstPair = loadedPair(kind: .modified)
+        let secondPair = loadedPair(kind: .modified)
+        let state = ImageDiffPresentationState()
+
+        state.updateDisplayedPair(
+            firstPair,
+            identity: ImageDiffPairPresentationIdentity(
+                pair: firstPair,
+                relativePath: "first.png"
+            )
+        )
+        state.mode = .difference
+        state.transform = ImageDiffTransform(
+            scale: 2,
+            offset: CGSize(width: 20, height: 10)
+        )
+        state.percentChanged = 42
+
+        state.updateDisplayedPair(
+            secondPair,
+            identity: ImageDiffPairPresentationIdentity(
+                pair: secondPair,
+                relativePath: "second.png"
+            )
+        )
+
+        #expect(state.mode == .sideBySide)
+        #expect(state.transform == ImageDiffTransform())
+        #expect(state.percentChanged == nil)
+    }
+
+    @MainActor
+    @Test func presentationSnapsAwayFromUnavailableMode() {
+        let state = ImageDiffPresentationState()
+        state.mode = .overlay
+        let pair = ImageDiffPair(
+            before: .missing,
+            after: .image(NSImage(size: NSSize(width: 1, height: 1)), frameCount: 1),
+            oldPath: nil,
+            kind: .added
+        )
+
+        state.snapToApplicableMode(for: pair)
+
+        #expect(state.mode == .sideBySide)
+    }
+
+    @Test func topLevelLoadFailureCreatesARetryableFailedPair() {
+        let pair = ImageDiffPair.failedLoading()
+
+        #expect(pair.hasFailure)
+        #expect(pair.kind == .modified)
+        guard case .failed(let beforeFailure) = pair.before,
+              case .failed(let afterFailure) = pair.after
+        else {
+            Issue.record("Expected both image sides to preserve the load failure")
+            return
+        }
+        #expect(beforeFailure == ImageDiffLoadFailure(message: "Image diff could not be loaded."))
+        #expect(afterFailure == beforeFailure)
     }
 }

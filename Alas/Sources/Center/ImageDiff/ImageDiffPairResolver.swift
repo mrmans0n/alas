@@ -74,8 +74,10 @@ enum ImageDiffPairResolver {
             return Result(kind: .added, oldPath: nil)
         case "D":
             return Result(kind: .deleted, oldPath: nil)
-        case "R", "C":
+        case "R":
             return Result(kind: .renamed, oldPath: entry.originalPath)
+        case "C":
+            return Result(kind: .copied, oldPath: entry.originalPath)
         default:
             return Result(kind: .modified, oldPath: nil)
         }

@@ -96,9 +96,113 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
         #expect(pair.oldPath == nil)
+    }
+
+    @Test func corruptWorkingTreeImageIsFailedRatherThanMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try Data("not an image".utf8).write(to: pngURL)
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo,
+            relativePath: "logo.png",
+            staged: false
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt working-tree side to fail")
+            return
+        }
+        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+    }
+
+    @Test func corruptCommitImageIsFailedRatherThanMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try Data("not an image".utf8).write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "corrupt"], cwd: repo)
+        let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pair = try await GitService().imageDiffPairForCommit(
+            worktreePath: repo,
+            sha: sha,
+            file: CommitChangedFile(
+                path: "logo.png",
+                originalPath: nil,
+                status: "M",
+                add: 0,
+                del: 0
+            )
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt commit side to fail")
+            return
+        }
+        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+    }
+
+    @Test func corruptWorkingTreeImageAgainstHeadIsFailedRatherThanMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try Data("not an image".utf8).write(to: pngURL)
+
+        let pair = try await GitService().imageDiffPairAgainstHEAD(
+            worktreePath: repo,
+            relativePath: "logo.png"
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt working-tree side to fail")
+            return
+        }
+        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+        #expect(pair.kind == .modified)
+    }
+
+    @Test func loadsImageAtTargetRevisionDespiteWorkingTreeChanges() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let assets = repo.appendingPathComponent("Assets")
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        let imageURL = assets.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: imageURL)
+        _ = try await Process.git(["add", "Assets/logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add logo"], cwd: repo)
+        let targetSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try Data("not an image".utf8).write(to: imageURL)
+
+        let image = await GitService().imageSide(
+            worktreePath: repo,
+            revision: targetSHA,
+            path: "Assets/logo.png"
+        )
+        #expect(image.image != nil)
     }
 
     @Test func loadsAddedImagePair() async throws {
@@ -116,8 +220,25 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "new.png", staged: false
         )
         #expect(pair.kind == .added)
-        #expect(pair.before == nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func nonzeroImageDiffStatusThrowsInsteadOfTreatingTheFileAsAdded() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-imgdiff-not-a-repository-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try PngFixture.green.write(to: directory.appendingPathComponent("logo.png"))
+
+        await #expect(throws: (any Error).self) {
+            try await GitService().imageDiffPair(
+                worktreePath: directory,
+                relativePath: "logo.png",
+                staged: false
+            )
+        }
     }
 
     @Test func loadsDeletedImagePair() async throws {
@@ -134,8 +255,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .deleted)
-        #expect(pair.before != nil)
-        #expect(pair.after == nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage == nil)
     }
 
     @Test func loadsRenamedImagePair() async throws {
@@ -159,8 +280,8 @@ struct ImageDiffPairLoaderTests {
         )
         #expect(pair.kind == .renamed)
         #expect(pair.oldPath == "old.png")
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsCommitImageDiffPairModified() async throws {
@@ -182,8 +303,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, sha: sha, file: file
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsCommitImageDiffPairAddedAtInitialCommit() async throws {
@@ -202,8 +323,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, sha: sha, file: file
         )
         #expect(pair.kind == .added)
-        #expect(pair.before == nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsCommitImageDiffPairRenamed() async throws {
@@ -228,8 +349,71 @@ struct ImageDiffPairLoaderTests {
         )
         #expect(pair.kind == .renamed)
         #expect(pair.oldPath == "old.png")
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func loadsTwoDotRangeImagePairAgainstTheResolvedParentTree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "seed\n".write(to: repo.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "seed.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "root"], cwd: repo)
+        let rootSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try PngFixture.green.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await Process.git(["add", "new.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add image"], cwd: repo)
+        let headSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pair = try await GitService().imageDiffPairForRange(
+            worktreePath: repo,
+            base: "\(rootSHA)^",
+            head: headSHA,
+            threeDot: false,
+            file: CommitChangedFile(path: "new.png", originalPath: nil, status: "A", add: 0, del: 0)
+        )
+
+        #expect(pair.kind == .added)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func loadsThreeDotRangeImagePairAgainstTheMergeBase() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try PngFixture.green.write(to: repo.appendingPathComponent("logo.png"))
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "merge base"], cwd: repo)
+        _ = try await Process.git(["branch", "base-tip"], cwd: repo)
+
+        try PngFixture.red.write(to: repo.appendingPathComponent("logo.png"))
+        _ = try await Process.git(["commit", "-q", "-am", "base edit"], cwd: repo)
+        let baseSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        _ = try await Process.git(["checkout", "-q", "base-tip"], cwd: repo)
+        try PngFixture.blue.write(to: repo.appendingPathComponent("logo.png"))
+        _ = try await Process.git(["commit", "-q", "-am", "head edit"], cwd: repo)
+        let headSHA = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pair = try await GitService().imageDiffPairForRange(
+            worktreePath: repo,
+            base: baseSHA,
+            head: headSHA,
+            threeDot: true,
+            file: CommitChangedFile(path: "logo.png", originalPath: nil, status: "M", add: 0, del: 0)
+        )
+
+        let before = try #require(pair.beforeImage)
+        let tiff = try #require(before.tiffRepresentation)
+        let rep = try #require(NSBitmapImageRep(data: tiff))
+        let color = try #require(rep.colorAt(x: 0, y: 0))
+        #expect(color.greenComponent > color.redComponent)
+        #expect(color.greenComponent > color.blueComponent)
     }
 
     @Test func picksUnstagedEntryWhenBothStagedAndUnstagedExist() async throws {
@@ -256,16 +440,16 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(unstaged.kind == .deleted)
-        #expect(unstaged.before != nil)
-        #expect(unstaged.after == nil)
+        #expect(unstaged.beforeImage != nil)
+        #expect(unstaged.afterImage == nil)
 
         // staged: true should pick the staged entry → .added.
         let stagedPair = try await GitService().imageDiffPair(
             worktreePath: repo, relativePath: "logo.png", staged: true
         )
         #expect(stagedPair.kind == .added)
-        #expect(stagedPair.before == nil)
-        #expect(stagedPair.after != nil)
+        #expect(stagedPair.beforeImage == nil)
+        #expect(stagedPair.afterImage != nil)
     }
 
     @Test func loadsLFSImageFromHeadPointerForUnstagedDiff() async throws {
@@ -282,8 +466,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsLFSImageFromIndexPointerForStagedDiff() async throws {
@@ -305,8 +489,8 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "new.png", staged: true
         )
         #expect(pair.kind == .added)
-        #expect(pair.before == nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
     }
 
     @Test func loadsLFSImageFromConfiguredStorage() async throws {
@@ -329,7 +513,103 @@ struct ImageDiffPairLoaderTests {
             worktreePath: repo, relativePath: "logo.png", staged: false
         )
         #expect(pair.kind == .modified)
-        #expect(pair.before != nil)
-        #expect(pair.after != nil)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func workingCopyProviderLoadsAnUnstagedRenameAgainstTheOldIndexPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let oldURL = repo.appendingPathComponent("old.png")
+        let newURL = repo.appendingPathComponent("new.png")
+        try PngFixture.red.write(to: oldURL)
+        _ = try await Process.git(["add", "old.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+
+        let provider = await GitService().workingCopyImageProvider(
+            worktreePath: repo,
+            change: ChangedFile(
+                path: "new.png",
+                status: "R",
+                stage: .unstaged,
+                add: 0,
+                del: 0,
+                renameFrom: "old.png"
+            )
+        )
+        let pair = await provider.load()
+
+        #expect(pair.kind == .renamed)
+        #expect(pair.oldPath == "old.png")
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func stagedProviderKeepsTheHeadRevisionCapturedWhenTheDiffWasParsed() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let imageURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: imageURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "red"], cwd: repo)
+        let parsedHead = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try PngFixture.blue.write(to: imageURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        let provider = await GitService().stagedImageProvider(
+            worktreePath: repo,
+            file: CommitChangedFile(
+                path: "logo.png",
+                originalPath: nil,
+                status: "M",
+                add: 0,
+                del: 0
+            )
+        )
+
+        _ = try await Process.git(["commit", "-q", "-m", "blue"], cwd: repo)
+        let pair = await provider.load()
+
+        #expect(provider.id.beforeRevision.contains(parsedHead))
+        let before = try #require(pair.beforeImage)
+        let beforeData = try #require(before.tiffRepresentation)
+        let beforeRep = try #require(NSBitmapImageRep(data: beforeData))
+        let beforeColor = try #require(beforeRep.colorAt(x: 0, y: 0))
+        #expect(beforeColor.redComponent > beforeColor.blueComponent)
+        let after = try #require(pair.afterImage)
+        let afterData = try #require(after.tiffRepresentation)
+        let afterRep = try #require(NSBitmapImageRep(data: afterData))
+        let afterColor = try #require(afterRep.colorAt(x: 0, y: 0))
+        #expect(afterColor.blueComponent > afterColor.redComponent)
+    }
+
+    @Test func stagedWorkingCopyProviderUsesTheEmptyTreeForAnUnbornHead() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try PngFixture.green.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await Process.git(["add", "new.png"], cwd: repo)
+
+        let provider = await GitService().workingCopyImageProvider(
+            worktreePath: repo,
+            change: ChangedFile(
+                path: "new.png",
+                status: "A",
+                stage: .staged,
+                add: 0,
+                del: 0,
+                renameFrom: nil
+            )
+        )
+
+        #expect(provider.id.beforeRevision.contains("4b825dc642cb6eb9a060e54bf8d69288fbee4904"))
+        let pair = await provider.load()
+        #expect(pair.kind == .added)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
     }
 }

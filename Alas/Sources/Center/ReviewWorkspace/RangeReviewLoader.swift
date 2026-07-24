@@ -1,8 +1,10 @@
 import Foundation
 
 protocol RangeReviewGitClient {
-    func rangeDiff(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String?) async throws -> ParsedDiff
+    func resolvedRangeTrees(worktreePath: URL, base: String, head: String, threeDot: Bool) async throws -> (before: String, after: String)
+    func rangeDiff(worktreePath: URL, revisions: (before: String, after: String), file: String, originalPath: String?) async throws -> ParsedDiff
     func rangeContextSnapshot(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
+    func rangeImageProvider(worktreePath: URL, revisions: (before: String, after: String), file: CommitChangedFile) -> DiffReviewImageProvider
 }
 
 extension GitService: RangeReviewGitClient {
@@ -34,12 +36,17 @@ struct RangeReviewLoader {
         openFileForPath: @escaping (String) -> (() -> Void)?
     ) async throws -> DiffReviewLoadedSession {
         var sections: [DiffReviewFileSectionModel] = []
+        let revisions = try await git.resolvedRangeTrees(
+            worktreePath: worktreePath,
+            base: base,
+            head: head,
+            threeDot: threeDot
+        )
 
         for file in files {
             try Task.checkCancellation()
             let diff = try await git.rangeDiff(
-                worktreePath: worktreePath,
-                base: base, head: head, threeDot: threeDot,
+                worktreePath: worktreePath, revisions: revisions,
                 file: file.path, originalPath: file.originalPath
             )
             try Task.checkCancellation()
@@ -48,6 +55,7 @@ struct RangeReviewLoader {
                 for: file,
                 diff: diff,
                 worktreePath: worktreePath,
+                revisions: revisions,
                 base: base,
                 head: head,
                 threeDot: threeDot,
@@ -65,12 +73,19 @@ struct RangeReviewLoader {
         for file: CommitChangedFile,
         diff: ParsedDiff,
         worktreePath: URL,
+        revisions: (before: String, after: String),
         base: String,
         head: String,
         threeDot: Bool,
         openFile: (() -> Void)?
     ) async throws -> DiffReviewFileSectionModel {
-        let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: file.path)
+        let isImage = ImageFileType.isSupported(relativePath: file.path)
+            || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
+        let imageProvider = isImage
+            ? git.rangeImageProvider(worktreePath: worktreePath, revisions: revisions, file: file)
+            : nil
+        let canRenderText = !diff.hunks.isEmpty && !isImage
+        let canRender = canRenderText || imageProvider != nil
         let counts = lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
             path: file.path,
@@ -87,7 +102,7 @@ struct RangeReviewLoader {
         return DiffReviewFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRender
+            displayModel: canRenderText
                 ? try await buildDisplayModel(diff: diff, filePath: file.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
@@ -98,7 +113,8 @@ struct RangeReviewLoader {
                     base: base, head: head, threeDot: threeDot,
                     file: file.path, originalPath: file.originalPath
                 )
-            }
+            },
+            imageProvider: imageProvider
         )
     }
 

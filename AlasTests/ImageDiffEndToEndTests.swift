@@ -5,6 +5,13 @@ import AppKit
 
 @Suite(.serialized)
 struct ImageDiffEndToEndTests {
+    @MainActor
+    @Test func standalonePairStillDefaultsToSideBySide() {
+        let state = ImageDiffPresentationState()
+        #expect(state.mode == .sideBySide)
+        #expect(state.transform == ImageDiffTransform())
+    }
+
     private func makeRepo() async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-imgdiff-e2e-\(UUID().uuidString)")
@@ -44,8 +51,8 @@ struct ImageDiffEndToEndTests {
             worktreePath: repo, relativePath: "art.png", staged: false
         )
         #expect(pair.kind == .modified)
-        let before = try #require(pair.before)
-        let after = try #require(pair.after)
+        let before = try #require(pair.beforeImage)
+        let after = try #require(pair.afterImage)
         let result = ImageDiffDifferenceComputer.compute(before: before, after: after)
         #expect(result.totalPixels >= 1)
         #expect(result.changedPixelCount >= 1)

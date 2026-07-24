@@ -100,6 +100,16 @@ struct GitServiceStashTests {
         ])
     }
 
+    @Test func stashFileDecodesMissingUntrackedOriginAsTracked() throws {
+        let data = Data("""
+        {"path":"file.txt","status":"M","add":1,"del":0}
+        """.utf8)
+
+        let file = try JSONDecoder().decode(GitStashFile.self, from: data)
+
+        #expect(!file.isUntracked)
+    }
+
     @Test func pushListFilesAndDiffStash() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -130,9 +140,59 @@ struct GitServiceStashTests {
         let stash = try #require(try await service.stashes(worktreePath: repo).first)
         let files = try await service.stashFiles(worktreePath: repo, stash: stash)
         let file = try #require(files.first { $0.path == "new.txt" })
-        #expect(file == GitStashFile(path: "new.txt", status: "A", add: 1, del: 0))
+        #expect(file == GitStashFile(path: "new.txt", status: "A", add: 1, del: 0, isUntracked: true))
         let diff = try await service.stashDiff(worktreePath: repo, stash: stash, file: file)
         #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "new" } })
+    }
+
+    @Test func stashImagePairUsesFirstParentAndStashSnapshot() async throws {
+        let fixture = try await StashImageFixture.modified()
+        defer { fixture.remove() }
+
+        let pair = try await GitService().imageDiffPairForStash(
+            worktreePath: fixture.repo,
+            stash: fixture.stash,
+            file: fixture.file
+        )
+
+        #expect(pair.kind == .modified)
+        #expect(pair.beforeImage != nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func untrackedStashImageHasMissingBeforeAndThirdParentAfter() async throws {
+        let fixture = try await StashImageFixture.untracked()
+        defer { fixture.remove() }
+
+        let pair = try await GitService().imageDiffPairForStash(
+            worktreePath: fixture.repo,
+            stash: fixture.stash,
+            file: fixture.file
+        )
+
+        #expect(fixture.file.isUntracked)
+        #expect(pair.kind == .added)
+        #expect(pair.beforeImage == nil)
+        #expect(pair.afterImage != nil)
+    }
+
+    @Test func corruptStashImageIsFailedInsteadOfMissingAndCanBeRetried() async throws {
+        let fixture = try await StashImageFixture.corrupt()
+        defer { fixture.remove() }
+
+        let pair = try await GitService().imageDiffPairForStash(
+            worktreePath: fixture.repo,
+            stash: fixture.stash,
+            file: fixture.file
+        )
+
+        #expect(pair.beforeImage != nil)
+        guard case .failed(let failure) = pair.after else {
+            Issue.record("Expected corrupt stash image data to be a failed side.")
+            return
+        }
+        #expect(failure.message == "decode")
+        #expect(pair.hasFailure)
     }
 
     @Test func stashDiffForRenameIncludesChangedLinesFromOriginalPath() async throws {
@@ -238,4 +298,96 @@ struct GitServiceStashTests {
         }
         #expect(message.contains("CONFLICT"))
     }
+}
+
+private struct StashImageFixture {
+    let repo: URL
+    let stash: GitStash
+    let file: GitStashFile
+
+    func remove() {
+        try? FileManager.default.removeItem(at: repo)
+    }
+
+    static func modified() async throws -> Self {
+        let repo = try await makeRepo()
+        let url = repo.appendingPathComponent("logo.png")
+        try red.write(to: url)
+        try await git(["add", "logo.png"], cwd: repo)
+        try await git(["commit", "-q", "-m", "add image"], cwd: repo)
+        try blue.write(to: url)
+        _ = try await GitService().pushStash(
+            worktreePath: repo,
+            message: "image",
+            includeUntracked: false
+        )
+        return try await fixture(repo: repo, path: "logo.png")
+    }
+
+    static func untracked() async throws -> Self {
+        let repo = try await makeRepo()
+        try red.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await GitService().pushStash(
+            worktreePath: repo,
+            message: "untracked image",
+            includeUntracked: true
+        )
+        return try await fixture(repo: repo, path: "new.png")
+    }
+
+    static func corrupt() async throws -> Self {
+        let repo = try await makeRepo()
+        let url = repo.appendingPathComponent("logo.png")
+        try red.write(to: url)
+        try await git(["add", "logo.png"], cwd: repo)
+        try await git(["commit", "-q", "-m", "add image"], cwd: repo)
+        try Data("not an image".utf8).write(to: url)
+        _ = try await GitService().pushStash(
+            worktreePath: repo,
+            message: "corrupt image",
+            includeUntracked: false
+        )
+        return try await fixture(repo: repo, path: "logo.png")
+    }
+
+    private static func fixture(repo: URL, path: String) async throws -> Self {
+        let service = GitService()
+        let stash = try #require(try await service.stashes(worktreePath: repo).first)
+        let file = try #require(
+            try await service.stashFiles(worktreePath: repo, stash: stash)
+                .first { $0.path == path }
+        )
+        return Self(repo: repo, stash: stash, file: file)
+    }
+
+    private static func makeRepo() async throws -> URL {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-stash-image-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try await git(["init", "-q", "-b", "main"], cwd: repo)
+        try await git(["config", "user.email", "t@example.com"], cwd: repo)
+        try await git(["config", "user.name", "Test User"], cwd: repo)
+        try "seed\n".write(
+            to: repo.appendingPathComponent("seed.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try await git(["add", "seed.txt"], cwd: repo)
+        try await git(["commit", "-q", "-m", "seed"], cwd: repo)
+        return repo
+    }
+
+    private static func git(_ args: [String], cwd: URL) async throws {
+        let result = try await Process.git(args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+    }
+
+    private static let red = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )!
+    private static let blue = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
+    )!
 }

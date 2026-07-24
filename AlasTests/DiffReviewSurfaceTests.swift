@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import Testing
 @testable import Alas
@@ -162,6 +163,307 @@ struct DiffReviewSurfaceTests {
         for ruler in rulers {
             #expect(!ruler.allowsReviewLineSelection)
         }
+    }
+
+    @Test func fileSectionRendersLazyImageLoadingAndFailureStates() async {
+        let gate = ImagePairLoadGate()
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/logo.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "abc123^",
+                    afterRevision: "abc123",
+                    beforePath: "Assets/logo.png",
+                    afterPath: "Assets/logo.png"
+                ),
+                load: { await gate.wait() }
+            )
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            allowsDraftCommentCreation: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 520)
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-loading-\(file.id.rawValue)", in: controller.view) != nil)
+
+        gate.resume(returning: ImageDiffPair(
+            before: .failed(.init(message: "Could not decode before image")),
+            after: .missing,
+            oldPath: nil,
+            kind: .deleted
+        ))
+        await drainSwiftUI(controller.view)
+
+        #expect(subviews(withAccessibilityIdentifier: "diff-review-image-header-\(file.id.rawValue)", in: controller.view).count == 1)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-loading-\(file.id.rawValue)", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-failure-\(file.id.rawValue)", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-retry-\(file.id.rawValue)", in: controller.view) != nil)
+    }
+
+    @Test func imageFileSectionRendersProviderThreadsAndAnnotations() async {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/logo.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "base",
+                    afterRevision: "head",
+                    beforePath: "Assets/logo.png",
+                    afterPath: "Assets/logo.png"
+                ),
+                load: {
+                    let image = NSImage(size: NSSize(width: 1, height: 1))
+                    return ImageDiffPair(
+                        before: .image(image, frameCount: 1),
+                        after: .image(image, frameCount: 1),
+                        oldPath: nil,
+                        kind: .modified
+                    )
+                }
+            )
+        )
+        let thread = DiffInlineCommentThread(
+            id: "provider-thread",
+            filePath: file.summary.path,
+            newLine: 1,
+            isResolved: false,
+            isOutdated: false,
+            comments: [
+                DiffInlineComment(
+                    id: "provider-comment",
+                    author: "reviewer",
+                    body: "Keep this image feedback visible.",
+                    viewerCanUpdate: true,
+                    viewerCanDelete: true
+                ),
+            ]
+        )
+        let annotation = DiffInlineAnnotation(
+            id: "provider-annotation",
+            checkName: "Asset check",
+            newLine: 1,
+            level: .warning,
+            message: "Image dimensions changed.",
+            rawDetails: nil
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            threads: [thread],
+            annotations: [annotation],
+            canReply: true,
+            canResolve: true,
+            canAddToReview: true
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 720)
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-image-thread-\(thread.id)",
+            in: controller.view
+        ) != nil)
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-image-annotation-\(annotation.id)",
+            in: controller.view
+        ) != nil)
+    }
+
+    @Test func imageProviderFeedbackPresentationRoutesEveryAction() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/logo.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: nil
+        )
+        let comment = DiffInlineComment(
+            id: "provider-comment",
+            author: "reviewer",
+            body: "Keep this image feedback visible.",
+            viewerCanUpdate: true,
+            viewerCanDelete: true
+        )
+        let thread = DiffInlineCommentThread(
+            id: "provider-thread",
+            filePath: file.summary.path,
+            newLine: 1,
+            isResolved: false,
+            isOutdated: false,
+            comments: [comment]
+        )
+        var routedActions: [String] = []
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let section = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            onReply: { routedActions.append("reply:\($0.id):\($1)") },
+            onResolve: { routedActions.append("resolve:\($0.id)") },
+            onUnresolve: { routedActions.append("unresolve:\($0.id)") },
+            onEdit: { routedActions.append("edit:\($0.id):\($1.id):\($2)") },
+            onDelete: { routedActions.append("delete:\($0.id):\($1.id)") },
+            canReply: true,
+            canResolve: true,
+            onStageReply: { routedActions.append("stage:\($0.id):\($1)") },
+            canAddToReview: true
+        )
+        let presentation = section.imageProviderThreadPresentation(for: thread)
+
+        presentation.onReply("sent")
+        presentation.onStageReply("draft")
+        presentation.onResolve()
+        presentation.onUnresolve()
+        presentation.onEdit(comment, "edited")
+        presentation.onDelete(comment)
+
+        #expect(presentation.canReply)
+        #expect(presentation.canResolve)
+        #expect(presentation.canAddToReview)
+        #expect(routedActions == [
+            "reply:provider-thread:sent",
+            "stage:provider-thread:draft",
+            "resolve:provider-thread",
+            "unresolve:provider-thread",
+            "edit:provider-thread:provider-comment:edited",
+            "delete:provider-thread:provider-comment",
+        ])
+    }
+
+    @Test func imageProviderFeedbackIncludesFileLevelThreads() {
+        let filePath = "Assets/logo.png"
+        let thread = ReviewThread(
+            id: "file-level-thread",
+            path: filePath,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: false,
+            isOutdated: false,
+            isFileLevel: true,
+            comments: [
+                ReviewComment(
+                    id: "comment",
+                    author: "reviewer",
+                    body: "This applies to the whole image.",
+                    url: nil,
+                    createdAt: nil,
+                    viewerCanUpdate: true,
+                    viewerCanDelete: true,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+
+        let resolved = DiffReviewProviderFeedbackResolver.threads(
+            [thread],
+            for: filePath,
+            includeFileLevel: true
+        )
+
+        #expect(resolved.map(\.id) == [thread.id])
+        #expect(resolved.first?.comments.map(\.id) == ["comment"])
+        #expect(DiffReviewProviderFeedbackResolver.threads(
+            [thread],
+            for: filePath,
+            includeFileLevel: false
+        ).isEmpty)
+    }
+
+    @Test func fileSectionClearsImageControlsWhenProviderIsRemoved() async {
+        let imageFile = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/logo.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "abc123^",
+                    afterRevision: "abc123",
+                    beforePath: "Assets/logo.png",
+                    afterPath: "Assets/logo.png"
+                ),
+                load: {
+                    ImageDiffPair(
+                        before: .failed(.init(message: "Could not decode before image")),
+                        after: .missing,
+                        oldPath: nil,
+                        kind: .deleted
+                    )
+                }
+            )
+        )
+        let model = ImageProviderRemovalModel(file: imageFile)
+        let view = ImageProviderRemovalHarness(theme: theme(), model: model)
+        let controller = host(view, width: 900, height: 520)
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-header-\(imageFile.id.rawValue)", in: controller.view) != nil)
+
+        model.file = DiffReviewFileSectionModel(
+            summary: imageFile.summary,
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-image-header-\(imageFile.id.rawValue)", in: controller.view) == nil)
     }
 
     @Test func fileSectionRefocusesDraftComposerAfterSelectingDifferentGutterRows() async throws {
@@ -3787,6 +4089,53 @@ struct DiffReviewSurfaceTests {
             return label
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
+    }
+}
+
+@MainActor
+private final class ImagePairLoadGate {
+    private var continuation: CheckedContinuation<ImageDiffPair, Never>?
+
+    func wait() async -> ImageDiffPair {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume(returning pair: ImageDiffPair) {
+        continuation?.resume(returning: pair)
+        continuation = nil
+    }
+}
+
+@Observable
+@MainActor
+private final class ImageProviderRemovalModel {
+    var file: DiffReviewFileSectionModel
+
+    init(file: DiffReviewFileSectionModel) {
+        self.file = file
+    }
+}
+
+@MainActor
+private struct ImageProviderRemovalHarness: View {
+    let theme: Theme
+    let model: ImageProviderRemovalModel
+    @State private var layout = DiffLayoutMode.split
+    @State private var wrapLines = false
+    @State private var showWhitespace = false
+
+    var body: some View {
+        DiffReviewFileSection(
+            file: model.file,
+            layoutMode: $layout,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace,
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            allowsDraftCommentCreation: false
+        )
+        .environment(\.theme, theme)
     }
 }
 

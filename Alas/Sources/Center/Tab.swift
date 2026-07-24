@@ -593,7 +593,7 @@ struct StashDiffTabState: Codable, Equatable, Identifiable {
         self.stash = stash
         self.file = file
         self.title = "\((file.path as NSString).lastPathComponent) @ \(stash.ref)"
-        self.id = "stash-diff:\(worktreeId):\(stash.ref):\(stash.sha):\(file.path)"
+        self.id = "stash-diff:\(worktreeId):\(stash.ref):\(stash.sha):\(file.path)\u{0}\(file.isUntracked)"
     }
 }
 

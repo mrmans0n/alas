@@ -5520,6 +5520,7 @@ final class AppState {
                 return state.stash.ref == stash.ref
                     && state.stash.sha == stash.sha
                     && state.file.path == file.path
+                    && state.file.isUntracked == file.isUntracked
             }
             return false
         }

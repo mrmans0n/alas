@@ -3,6 +3,7 @@ import Testing
 @testable import Alas
 
 /// Enable with ALAS_SSH_INTEGRATION=1 and key-authenticated ssh localhost.
+@Suite(.disabled(if: ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] != "1"))
 struct SSHIntegrationTests {
     private var enabled: Bool {
         ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] == "1"

@@ -211,7 +211,7 @@ extension Process {
     }
 }
 
-struct ProcessResultData {
+struct ProcessResultData: Sendable {
     let exitCode: Int32
     let stdout: Data
     let stderr: String

@@ -342,6 +342,30 @@ extension GitService {
         return stdout
     }
 
+    /// Resolves the trees compared by a range. Keeping this in one place
+    /// prevents changed-file listing, text diffs, and image diffs from
+    /// disagreeing about the left side of two-dot and three-dot ranges.
+    func resolvedRangeTrees(
+        worktreePath: URL,
+        base: String,
+        head: String,
+        threeDot: Bool
+    ) async throws -> (before: String, after: String) {
+        let before = threeDot
+            ? try await mergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
+            : try await resolveTwoDotLeftTree(worktreePath: worktreePath, base: base)
+        let result = try await Process.git(["rev-parse", "--verify", "--quiet", head], cwd: worktreePath)
+        let after = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !after.isEmpty else {
+            throw NSError(
+                domain: "GitService.resolvedRangeTrees",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve range head \"\(head)\": \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))"]
+            )
+        }
+        return (before, after)
+    }
+
     private func firstParentOrEmptyTree(worktreePath: URL, sha: String) async throws -> String {
         let parentsResult = try await Process.git(
             ["rev-list", "--parents", "-n", "1", sha],
@@ -475,11 +499,28 @@ extension GitService {
     /// against `head`. Mirrors `diff(worktreePath:sha:file:)`: the multi-file
     /// output (copies) is sliced down to the requested file before parsing.
     func rangeDiff(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
-        let leftTree = threeDot
-            ? try await mergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
-            : try await resolveTwoDotLeftTree(worktreePath: worktreePath, base: base)
+        let revisions = try await resolvedRangeTrees(
+            worktreePath: worktreePath,
+            base: base,
+            head: head,
+            threeDot: threeDot
+        )
+        return try await rangeDiff(
+            worktreePath: worktreePath,
+            revisions: revisions,
+            file: file,
+            originalPath: originalPath
+        )
+    }
+
+    func rangeDiff(
+        worktreePath: URL,
+        revisions: (before: String, after: String),
+        file: String,
+        originalPath: String? = nil
+    ) async throws -> ParsedDiff {
         var args: [String] = ["-c", "core.quotePath=false",
-                              "diff", "--no-color", "-M", "-C", leftTree, head, "--", file]
+                              "diff", "--no-color", "-M", "-C", revisions.before, revisions.after, "--", file]
         if let originalPath { args.append(originalPath) }
         let result = try await Process.git(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
@@ -1027,10 +1068,13 @@ extension GitService {
     /// compares `base` directly against `head`; three-dot uses the merge-base of
     /// `base` and `head` as the left tree (branch-comparison semantics).
     func rangeChangedFiles(at worktree: URL, base: String, head: String, threeDot: Bool) async throws -> [CommitChangedFile] {
-        let leftTree = threeDot
-            ? try await mergeBase(worktreePath: worktree, baseRef: base, headRef: head)
-            : try await resolveTwoDotLeftTree(worktreePath: worktree, base: base)
-        return try await changedFiles(worktree: worktree, leftTree: leftTree, rightTree: head)
+        let revisions = try await resolvedRangeTrees(
+            worktreePath: worktree,
+            base: base,
+            head: head,
+            threeDot: threeDot
+        )
+        return try await changedFiles(worktree: worktree, leftTree: revisions.before, rightTree: revisions.after)
     }
 
     /// Given a numstat path field that may describe a rename via `old => new`

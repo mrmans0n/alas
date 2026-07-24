@@ -191,6 +191,13 @@ struct ReviewSessionLoader {
                     worktreePath: target.repositoryPath,
                     baseRef: base
                 )
+                let resolvedHeadRef = headSHA.flatMap { $0.isEmpty ? nil : $0 } ?? "HEAD"
+                let imageRevisions = try await git.resolvedRangeTrees(
+                    worktreePath: target.repositoryPath,
+                    base: base,
+                    head: resolvedHeadRef,
+                    threeDot: true
+                )
                 return try await DraftReviewRequestDiffSessionBuilder.build(
                     context: context,
                     worktreePath: target.repositoryPath,
@@ -203,7 +210,6 @@ struct ReviewSessionLoader {
                         )
                     },
                     contextProviderForPath: { path, originalPath in
-                        let resolvedHeadRef = headSHA.flatMap { $0.isEmpty ? nil : $0 } ?? "HEAD"
                         return DiffReviewContextProvider {
                             try await GitService().refContextSnapshot(
                                 worktreePath: target.repositoryPath,
@@ -213,6 +219,13 @@ struct ReviewSessionLoader {
                                 originalPath: originalPath
                             )
                         }
+                    },
+                    imageProviderForFile: { file in
+                        git.rangeImageProvider(
+                            worktreePath: target.repositoryPath,
+                            revisions: imageRevisions,
+                            file: file
+                        )
                     }
                 )
             }
