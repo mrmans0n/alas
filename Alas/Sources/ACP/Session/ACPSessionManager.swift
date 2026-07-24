@@ -1897,7 +1897,20 @@ final class ACPSessionManager: ObservableObject {
         wireMCPServers: [ACPMCPServer]
     ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
         var fork = fork
+        let sourceRunner = runners[fork.sourceSessionID]
+        let nativeForkBarrierAcquired = initialized.sessionCapabilities.supportsFork
+            ? sourceRunner?.beginNativeForkBarrier() ?? true
+            : false
+        defer {
+            if nativeForkBarrierAcquired {
+                sourceRunner?.endNativeForkBarrier()
+            }
+        }
+        if nativeForkBarrierAcquired {
+            await sourceRunner?.flushPersistence()
+        }
         if initialized.sessionCapabilities.supportsFork,
+           nativeForkBarrierAcquired,
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
            !sourceRemoteSessionID.isEmpty,
@@ -3642,8 +3655,7 @@ extension ACPSessionManager {
               let prompt = transcriptContextPrompt(for: session, agentName: agentName)
         else { return false }
 
-        session.contextRecoveryStatus = .sendingTranscript
-        runner.sendRecoveryContext(prompt) { delivered in
+        guard runner.sendRecoveryContext(prompt, onCompleted: { delivered in
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
@@ -3651,7 +3663,8 @@ extension ACPSessionManager {
             } else {
                 session.contextRecoveryStatus = .failed("Transcript recovery failed.")
             }
-        }
+        }) else { return false }
+        session.contextRecoveryStatus = .sendingTranscript
         return true
     }
 

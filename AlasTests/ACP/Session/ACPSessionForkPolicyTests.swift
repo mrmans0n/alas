@@ -44,6 +44,46 @@ struct ACPSessionForkPolicyTests {
         ) == .native)
     }
 
+    @Test("attachment-only user messages are not fork boundaries")
+    func attachmentOnlyUserMessageIsIneligible() {
+        let session = ACPSession(
+            id: "source",
+            agentId: "claude",
+            worktreeId: "wt",
+            title: "Source"
+        )
+        session.transcript.appendMessage(.user(
+            id: UUID(),
+            text: " \n ",
+            attachments: [
+                .init(
+                    uri: "file:///tmp/image.png",
+                    name: "image.png",
+                    mimeType: "image/png"
+                )
+            ]
+        ))
+
+        #expect(session.canForkMessage(at: 0) == false)
+    }
+
+    @Test("duplicate enabled agent ids preserve the first catalog definition")
+    func duplicateEnabledAgentIDsAreDeduplicated() {
+        let targets = ACPForkTargetPolicy.targets(
+            sourceAgentID: "claude",
+            enabledAgents: [
+                .init(id: "claude", displayName: "Claude"),
+                .init(id: "claude", displayName: "Custom duplicate")
+            ],
+            sourceAgent: nil,
+            catalogAgentIDs: ["claude"]
+        )
+
+        #expect(targets == [
+            .init(id: "claude", displayName: "Claude", isSameAgent: true)
+        ])
+    }
+
     @Test("snapshot is inclusive and conversation-only")
     func conversationOnlySnapshot() throws {
         let user: ACPMessage = .user(

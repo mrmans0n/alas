@@ -105,6 +105,10 @@ final class ACPSessionRunner {
     /// restored snapshot ahead of the steer's replacement prompt. Once
     /// the redirect is in flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    /// Holds an idle source session at its persisted remote head while
+    /// `session/fork` is in flight. New prompts remain queued until the
+    /// target adapter has created the branch.
+    private var nativeForkBarrierActive = false
     var onUnexpectedDisconnect: (() -> Void)?
 
     /// How many trailing rows to retain in `lastPersistedPayloads`. Only the
@@ -1223,6 +1227,16 @@ extension ACPSessionRunner {
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        if nativeForkBarrierActive {
+            guard !blocks.isEmpty else {
+                Task { @MainActor in onPromptFinished?(false) }
+                return
+            }
+            session.enqueue(blocks: blocks, draft: draft)
+            persistQueue()
+            Task { @MainActor in onPromptFinished?(true) }
+            return
+        }
         let route = ACPSubmitRoute.resolve(
             intent: intent,
             state: session.transcript.streamingState,
@@ -1326,7 +1340,8 @@ extension ACPSessionRunner {
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
         guard holdsLeaseForWrite() else { return }
-        guard !steerInProgress,
+        guard !nativeForkBarrierActive,
+              !steerInProgress,
               session.agentState == .ready,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
@@ -1346,6 +1361,25 @@ extension ACPSessionRunner {
         )
     }
 
+    func beginNativeForkBarrier() -> Bool {
+        guard !nativeForkBarrierActive,
+              !steerInProgress,
+              session.agentState == .ready,
+              activePromptID == nil,
+              session.transcript.streamingState == .idle,
+              session.transcript.pendingUserInputs.isEmpty,
+              session.queue.isEmpty
+        else { return false }
+        nativeForkBarrierActive = true
+        return true
+    }
+
+    func endNativeForkBarrier() {
+        guard nativeForkBarrierActive else { return }
+        nativeForkBarrierActive = false
+        flushQueueIfIdle()
+    }
+
     /// User clicked the row-local "send now" affordance for a queued item.
     /// While idle this just promotes the item to the drainable head. While a
     /// turn is active, it behaves like steering: cancel the current turn,
@@ -1355,6 +1389,12 @@ extension ACPSessionRunner {
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
               session.queue[idx].status == .pending
         else { return }
+
+        if nativeForkBarrierActive {
+            guard session.forceQueueItem(id: id) else { return }
+            persistQueue()
+            return
+        }
 
         if session.transcript.streamingState == .idle,
            activePromptID == nil,
@@ -1706,10 +1746,12 @@ extension ACPSessionRunner {
         }
     }
 
+    @discardableResult
     func sendRecoveryContext(
         _ prompt: String,
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
-    ) {
+    ) -> Bool {
+        guard !nativeForkBarrierActive else { return false }
         flushPendingIncomingUpdates()
         let promptID = nextPromptID
         nextPromptID += 1
@@ -1768,6 +1810,7 @@ extension ACPSessionRunner {
                 }
             }
         }
+        return true
     }
 
     /// First text block as the user-facing preview. Used when recording

@@ -247,8 +247,8 @@ final class ACPSession: ObservableObject, Identifiable {
     func canForkMessage(at index: Int) -> Bool {
         guard transcript.messages.indices.contains(index) else { return false }
         switch transcript.messages[index] {
-        case .user:
-            return true
+        case .user(_, _, let text, _, _):
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .agent:
             guard transcript.streamingState != .idle else { return true }
             return lastAgent() != index

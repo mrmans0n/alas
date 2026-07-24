@@ -28,7 +28,10 @@ enum ACPForkTargetPolicy {
         sourceAgent: ACPForkAgentOption?,
         catalogAgentIDs: [String]
     ) -> [ACPSessionForkTarget] {
-        var byID = Dictionary(uniqueKeysWithValues: enabledAgents.map { ($0.id, $0) })
+        var byID = Dictionary(
+            enabledAgents.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         if let sourceAgent {
             byID[sourceAgent.id] = sourceAgent
         }

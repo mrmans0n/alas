@@ -33,6 +33,155 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == false)
     }
 
+    @Test("native fork holds later source prompts until the remote branch exists")
+    func nativeForkSerializesLaterSourcePrompt() async throws {
+        let store = try seededForkStore()
+        let sourceClient = ACPMockClient()
+        scriptInitialize(sourceClient, supportsFork: true)
+        scriptSessionResult(sourceClient, method: "session/load", sessionId: "source-remote")
+
+        let forkGate = ForkAttachGate()
+        let targetClient = ACPMockClient()
+        scriptInitialize(targetClient, supportsFork: true)
+        targetClient.scriptAsync(method: "session/fork") { _ in
+            await forkGate.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "forked-remote",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        var clients = [sourceClient, targetClient]
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                ACPConnection(client: clients.removeFirst())
+            }
+        )
+        let source = try #require(manager.placeholderSession(id: "source"))
+        await manager.hydrateIfNeeded(id: source.id)
+        await manager.attach(to: source.id, freshlyCreated: false)
+        let target = try await hydratedTarget(manager)
+
+        let attachTask = Task {
+            await manager.attach(to: target.id, freshlyCreated: true)
+        }
+        try await waitUntil {
+            targetClient.sent.contains { $0.method == "session/fork" }
+        }
+
+        source.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
+        #expect(manager.sendTranscriptAsContext(
+            sessionId: source.id,
+            agentName: "Claude"
+        ) == false)
+        #expect(source.contextRecoveryStatus != .sendingTranscript)
+
+        var submitCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: source.id,
+            text: "After the branch",
+            attachments: [],
+            intent: .auto
+        ) { submitCompleted = $0 })
+        try await waitUntil { submitCompleted != nil }
+
+        #expect(sourceClient.sent.contains { $0.method == "session/prompt" } == false)
+        #expect(source.queue.count == 1)
+        #expect(submitCompleted == true)
+
+        await forkGate.release()
+        await attachTask.value
+        try await waitUntil {
+            sourceClient.sent.contains { $0.method == "session/prompt" }
+        }
+    }
+
+    @Test("native fork drains source persistence before revalidating the boundary")
+    func nativeForkDrainsSourcePersistenceBeforeBoundaryCheck() async throws {
+        let store = try seededForkStore()
+        let sourceClient = ACPMockClient()
+        scriptInitialize(sourceClient, supportsFork: true)
+        scriptSessionResult(sourceClient, method: "session/load", sessionId: "source-remote")
+        sourceClient.script(method: "session/prompt") { _ in Data("null".utf8) }
+
+        let initializeGate = ForkAttachGate()
+        let targetClient = ACPMockClient()
+        targetClient.scriptAsync(method: "initialize") { _ in
+            await initializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(
+                    sessionCapabilities: .init(fork: .init())
+                ),
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(targetClient, method: "session/fork", sessionId: "forked-remote")
+        scriptSessionResult(targetClient, method: "session/new", sessionId: "new-remote")
+        var clients = [sourceClient, targetClient]
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                ACPConnection(client: clients.removeFirst())
+            }
+        )
+        let source = try #require(manager.placeholderSession(id: "source"))
+        await manager.hydrateIfNeeded(id: source.id)
+        await manager.attach(to: source.id, freshlyCreated: false)
+        let target = try await hydratedTarget(manager)
+
+        let attachTask = Task {
+            await manager.attach(to: target.id, freshlyCreated: true)
+        }
+        try await waitUntil {
+            targetClient.sent.contains { $0.method == "initialize" }
+        }
+
+        let writeLock = ForkSQLiteWriteLock(path: store.path)
+        defer { writeLock.release() }
+        let (locked, lockContinuation) = AsyncStream<Void>.makeStream()
+        let lockTask = Task.detached {
+            try writeLock.hold {
+                lockContinuation.yield()
+                lockContinuation.finish()
+            }
+        }
+        var lockIterator = locked.makeAsyncIterator()
+        _ = await lockIterator.next()
+
+        source.transcript.appendMessage(.user(
+            id: UUID(),
+            text: "Advanced source",
+            attachments: []
+        ))
+        let sourceRunner = try #require(manager.runners[source.id])
+        #expect(sourceRunner.persistIndices([1]))
+
+        await initializeGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(targetClient.sent.contains { $0.method == "session/fork" } == false)
+
+        writeLock.release()
+        try await lockTask.value
+        await attachTask.value
+        #expect(targetClient.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+    }
+
     @Test("negotiating native fork recovers the durable response after relaunch")
     func negotiatingNativeForkRecoversAfterRelaunch() async throws {
         let storeA = try seededForkStore()
@@ -602,7 +751,11 @@ struct ACPSessionForkAttachTests {
             id: "msg-source-0",
             kind: "user",
             seq: 0,
-            payload: Data(),
+            payload: try ACPMessageCodec.encode(.user(
+                id: UUID(),
+                text: "Source prompt",
+                attachments: []
+            )),
             createdAt: 0
         )
         try store.createFork(
@@ -733,9 +886,48 @@ struct ACPSessionForkAttachTests {
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+
+    private actor ForkAttachGate {
+        private var released = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func enterAndWait() async {
+            guard !released else { return }
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func release() {
+            released = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
 }
 
 private struct ForkAttachTestTimeout: Error {}
+
+private final class ForkSQLiteWriteLock: @unchecked Sendable {
+    let path: String
+    private let releaseSemaphore = DispatchSemaphore(value: 0)
+
+    init(path: String) {
+        self.path = path
+    }
+
+    func hold(didLock: @Sendable () -> Void) throws {
+        let database = try SQLiteDatabase(path: path)
+        try database.exec("BEGIN IMMEDIATE")
+        didLock()
+        releaseSemaphore.wait()
+        try database.exec("ROLLBACK")
+    }
+
+    func release() {
+        releaseSemaphore.signal()
+    }
+}
 
 private final class ForkAcknowledgementRecorder: @unchecked Sendable {
     private let lock = NSLock()
