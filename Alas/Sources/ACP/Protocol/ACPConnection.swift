@@ -122,8 +122,14 @@ final class ACPConnection: @unchecked Sendable {
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
-        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
         deferDurableSessionResponse(resp)
+        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        guard !result.sessionId.isEmpty else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "session/fork response is missing sessionId"
+            ))
+        }
         return result
     }
 

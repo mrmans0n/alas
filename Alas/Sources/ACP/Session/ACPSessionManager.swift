@@ -14,6 +14,14 @@ private enum ACPMirrorRefreshPolicy {
     static let inactivePollNanos: UInt64 = 30_000_000_000
 }
 
+private struct ACPForkDurableRetryError: LocalizedError {
+    let underlying: any Error
+
+    var errorDescription: String? {
+        underlying.localizedDescription
+    }
+}
+
 enum ACPSessionForkCreationError: Error, Equatable {
     case sourceUnavailable
     case sourceReadOnly
@@ -1774,6 +1782,7 @@ final class ACPSessionManager: ObservableObject {
             )
         } catch {
             persistenceError = error.localizedDescription
+            return
         }
         fork.phase = .ready
         fork.mechanism = .transcriptTransfer
@@ -1806,6 +1815,14 @@ final class ACPSessionManager: ObservableObject {
                     )
                 )
             } catch {
+                // A broker may have completed the keyed fork even when the
+                // trailing replay/transport step failed locally. Keep the
+                // durable negotiation intact so reattach can claim that same
+                // completion instead of issuing an unrelated session/new.
+                if connection.client is ACPBrokerClient,
+                   !Self.isDefinitiveForkFailure(error) {
+                    throw ACPForkDurableRetryError(underlying: error)
+                }
                 try await persistence.finalizeFork(
                     targetSessionID: session.id,
                     mechanism: .transcriptTransfer,
@@ -1815,6 +1832,7 @@ final class ACPSessionManager: ObservableObject {
                 fork.mechanism = .transcriptTransfer
                 fork.contextDeliveryPending = true
                 session.forkRecord = fork
+                connection.acknowledgeDurableSessionResponses()
                 if ACPAuthFailure.message(from: error) != nil {
                     throw error
                 }
@@ -1849,14 +1867,13 @@ final class ACPSessionManager: ObservableObject {
                     persistenceError = error.localizedDescription
                     transcriptFinalized = false
                 }
-                fork.phase = .ready
-                fork.mechanism = .transcriptTransfer
-                fork.contextDeliveryPending = true
-                session.forkRecord = fork
                 if transcriptFinalized {
+                    fork.phase = .ready
+                    fork.mechanism = .transcriptTransfer
+                    fork.contextDeliveryPending = true
+                    session.forkRecord = fork
                     connection.acknowledgeDurableSessionResponses()
                 }
-                await connection.shutdown()
                 throw error
             }
             fork.phase = .ready
@@ -1891,6 +1908,16 @@ final class ACPSessionManager: ObservableObject {
             )
         )
         return (result, true)
+    }
+
+    private static func isDefinitiveForkFailure(_ error: any Error) -> Bool {
+        if error is DecodingError || error is JSONRPCError {
+            return true
+        }
+        if case ACPClientError.jsonrpc = error {
+            return true
+        }
+        return false
     }
 
     private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
@@ -3334,13 +3361,23 @@ extension ACPSessionManager {
             }
             stderrTask.cancel()
         } catch {
-            await downgradeNegotiatingForkToTranscript(session: session)
+            let durableRetry = error as? ACPForkDurableRetryError
+            let wasNegotiatingFork = session.forkRecord?.phase == .negotiatingNative
+            if durableRetry == nil {
+                await downgradeNegotiatingForkToTranscript(session: session)
+                if wasNegotiatingFork, session.forkRecord?.phase == .ready {
+                    connection.acknowledgeDurableSessionResponses()
+                }
+            }
             // Give stderr a moment to drain so the message is the real cause.
             try? await Task.sleep(nanoseconds: 200_000_000)
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
-            let authReason = ACPAuthFailure.message(from: error)
-            let baseMessage = authReason ?? (error as? JSONRPCError)?.message ?? error.localizedDescription
+            let surfacedError = durableRetry?.underlying ?? error
+            let authReason = ACPAuthFailure.message(from: surfacedError)
+            let baseMessage = authReason
+                ?? (surfacedError as? JSONRPCError)?.message
+                ?? surfacedError.localizedDescription
             let base = "ACP session attach failed: \(baseMessage)"
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
@@ -3353,7 +3390,13 @@ extension ACPSessionManager {
             }
             startedRunner?.stop()
             await startedRunner?.flushPersistence()
-            await connection.shutdown()
+            let shouldPreserveBroker = connection.client is ACPBrokerClient
+                && session.forkRecord?.phase == .negotiatingNative
+            if durableRetry != nil || shouldPreserveBroker {
+                await connection.detach()
+            } else {
+                await connection.shutdown()
+            }
             await releaseWriterLease(sessionId: sessionId)
         }
     }

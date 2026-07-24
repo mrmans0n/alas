@@ -198,6 +198,119 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == true)
     }
 
+    @Test("downgrade persistence failure keeps the fork negotiating")
+    func downgradePersistenceFailureKeepsForkNegotiating() async throws {
+        let store = try seededForkStore()
+        try installFinalizeFailure(mechanism: .transcriptTransfer, store: store)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .missing(reason: "adapter missing") }
+        )
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(target.setupState == .needsSetup(reason: "adapter missing"))
+        #expect(target.agentState == .failed("adapter missing"))
+        #expect(target.forkRecord?.phase == .negotiatingNative)
+        #expect(target.forkRecord?.mechanism == nil)
+        #expect(target.forkRecord?.contextDeliveryPending == false)
+        let fork = try #require(try store.loadFork(targetSessionID: "target"))
+        #expect(fork.phase == .negotiatingNative)
+        #expect(fork.mechanism == nil)
+        #expect(fork.contextDeliveryPending == false)
+    }
+
+    @Test("native finalization failure closes the remote before acknowledging transcript fallback")
+    func nativeFinalizationFailureClosesRemoteAndOrdersAcknowledgements() async throws {
+        let store = try seededForkStore()
+        try installFinalizeFailure(mechanism: .nativeACP, store: store)
+        let client = ACPMockClient()
+        let acknowledgements = ForkAcknowledgementRecorder()
+        scriptInitialize(client, supportsFork: true)
+        client.scriptResponse(method: "session/fork") { _ in
+            ACPResponse(
+                body: try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "orphaned-remote",
+                    availableModels: [],
+                    availableModes: [],
+                    currentModel: nil,
+                    currentMode: nil,
+                    promptSuggestions: []
+                )),
+                durableConsumptionAcknowledgement: {
+                    acknowledgements.record("fork")
+                }
+            )
+        }
+        client.scriptResponse(method: "session/close") { request in
+            let params = try #require(request.params as? ACPSessionCloseParams)
+            #expect(params.sessionId == "orphaned-remote")
+            return ACPResponse(
+                body: Data(),
+                durableConsumptionAcknowledgement: {
+                    acknowledgements.record("close")
+                }
+            )
+        }
+        let manager = makeManager(store: store, client: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/fork", "session/close"])
+        #expect(manager.runners[target.id] == nil)
+        #expect(target.remoteSessionId == nil)
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(target.forkRecord?.contextDeliveryPending == true)
+        let row = try #require(try store.loadSession(id: "target"))
+        #expect(row.remoteSessionId == nil)
+        #expect(row.origin == .alasCreated)
+        let fork = try #require(try store.loadFork(targetSessionID: "target"))
+        #expect(fork.phase == .ready)
+        #expect(fork.mechanism == .transcriptTransfer)
+        #expect(fork.contextDeliveryPending == true)
+        #expect(acknowledgements.values == ["close", "fork"])
+    }
+
+    @Test("broker replay failure keeps negotiation and reuses the durable fork key")
+    func brokerReplayFailureRetriesStableForkOperation() async throws {
+        let store = try seededForkStore()
+        let broker = ForkReplayBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(target.forkRecord?.phase == .negotiatingNative)
+        #expect(target.forkRecord?.mechanism == nil)
+        #expect(try store.loadFork(targetSessionID: "target")?.phase == .negotiatingNative)
+        #expect(await broker.sentOperationKeys == [
+            ACPBrokerOperationKey(rawValue: "startup:target:session/fork:source-remote")
+        ])
+        #expect(await broker.acknowledgedCursors.isEmpty)
+
+        await manager.reattach(to: target.id)
+
+        #expect(await broker.sentOperationKeys == [
+            ACPBrokerOperationKey(rawValue: "startup:target:session/fork:source-remote"),
+            ACPBrokerOperationKey(rawValue: "startup:target:session/fork:source-remote")
+        ])
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .nativeACP)
+        #expect(target.remoteSessionId == "forked-remote")
+        #expect(await broker.acknowledgedCursors == [ACPBrokerEventCursor(rawValue: 2)])
+    }
+
     private func nativeForkOperationKey() async throws -> String? {
         let store = try seededForkStore()
         let client = ACPMockClient()
@@ -319,5 +432,167 @@ struct ACPSessionForkAttachTests {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-fork-attach-\(UUID().uuidString).sqlite")
             .path
+    }
+
+    private func installFinalizeFailure(
+        mechanism: ACPSessionForkMechanism,
+        store: ACPSessionStore
+    ) throws {
+        try store.db.exec("""
+        CREATE TRIGGER fail_\(mechanism.rawValue)_fork_finalize
+        BEFORE UPDATE OF mechanism ON session_forks
+        WHEN NEW.mechanism = '\(mechanism.rawValue)'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced \(mechanism.rawValue) finalization failure');
+        END
+        """)
+    }
+}
+
+private final class ForkAcknowledgementRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    var values: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func record(_ value: String) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
+    }
+}
+
+private enum ForkReplayBrokerError: Error {
+    case trailingReplayFailure
+}
+
+private actor ForkReplayBrokerService: ACPBrokerServicing {
+    private var attachCount = 0
+    private(set) var sentOperationKeys: [ACPBrokerOperationKey] = []
+    private(set) var acknowledgedCursors: [ACPBrokerEventCursor] = []
+
+    func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        ACPBrokerOpenResult(snapshot: snapshot(
+            brokerId: params.brokerId,
+            sessionId: params.sessionId,
+            acknowledgedCursor: .init(rawValue: 0)
+        ), adopted: false)
+    }
+
+    func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        attachCount += 1
+        switch attachCount {
+        case 2:
+            throw ForkReplayBrokerError.trailingReplayFailure
+        case 3:
+            return ACPBrokerAttachResult(
+                snapshot: snapshot(
+                    brokerId: params.brokerId,
+                    sessionId: "target",
+                    acknowledgedCursor: params.acknowledgedCursor
+                ),
+                events: [forkCompletionEvent]
+            )
+        default:
+            return ACPBrokerAttachResult(
+                snapshot: snapshot(
+                    brokerId: params.brokerId,
+                    sessionId: "target",
+                    acknowledgedCursor: params.acknowledgedCursor
+                ),
+                events: []
+            )
+        }
+    }
+
+    func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        sentOperationKeys.append(params.operationKey)
+        return ACPBrokerSendResult(
+            requestId: ACPBrokerAdapterRequestID(rawValue: UInt64(sentOperationKeys.count)),
+            replayed: sentOperationKeys.count > 1,
+            result: forkResult,
+            pending: false
+        )
+    }
+
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        acknowledgedCursors.append(params.cursor)
+        return ACPBrokerSimpleOK(ok: true)
+    }
+
+    func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    private var forkResult: ACPBrokerJSONValue {
+        .object([
+            "sessionId": .string("forked-remote"),
+            "availableModels": .array([]),
+            "availableModes": .array([]),
+            "promptSuggestions": .array([]),
+            "configOptions": .array([])
+        ])
+    }
+
+    private var forkCompletionEvent: ACPBrokerEvent {
+        ACPBrokerEvent(
+            cursor: ACPBrokerEventCursor(rawValue: 2),
+            kind: .operationCompleted(
+                operationKey: ACPBrokerOperationKey(
+                    rawValue: "startup:target:session/fork:source-remote"
+                ),
+                outcome: ACPBrokerRPCOutcome(result: forkResult, error: nil)
+            )
+        )
+    }
+
+    private func snapshot(
+        brokerId: ACPBrokerID,
+        sessionId: String,
+        acknowledgedCursor: ACPBrokerEventCursor
+    ) -> ACPBrokerSnapshot {
+        ACPBrokerSnapshot(
+            metadata: ACPBrokerMetadata(
+                brokerId: brokerId,
+                generation: ACPBrokerGeneration(rawValue: 7),
+                alasSessionId: sessionId,
+                adapterProgram: "mock",
+                adapterArgs: [],
+                cwd: "/tmp/wt",
+                envKeys: [],
+                createdAtMillis: 10
+            ),
+            initializeResult: .object([
+                "protocolVersion": .number(1),
+                "agentCapabilities": .object([
+                    "sessionCapabilities": .object([
+                        "fork": .object([:])
+                    ])
+                ]),
+                "authMethods": .array([])
+            ]),
+            remoteSessionResult: nil,
+            turnState: .idle,
+            acknowledgedCursor: acknowledgedCursor,
+            journalTail: ACPBrokerEventCursor(rawValue: 2),
+            pendingRequests: [],
+            operations: []
+        )
     }
 }
