@@ -9,6 +9,12 @@ struct ScrollEventCapturingView: NSViewRepresentable {
     let onScroll: (CGFloat, CGFloat, Bool) -> Void
     // (deltaX, deltaY, modifierFlagsContainsCommand)
 
+    static func shouldCaptureScroll(
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        modifierFlags.contains(.command)
+    }
+
     func makeNSView(context: Context) -> Backing {
         let v = Backing()
         v.onScroll = onScroll
@@ -23,8 +29,18 @@ struct ScrollEventCapturingView: NSViewRepresentable {
         var onScroll: ((CGFloat, CGFloat, Bool) -> Void)?
         override var acceptsFirstResponder: Bool { true }
         override func scrollWheel(with event: NSEvent) {
-            let isCommand = event.modifierFlags.contains(.command)
-            onScroll?(event.scrollingDeltaX, event.scrollingDeltaY, isCommand)
+            guard ScrollEventCapturingView.shouldCaptureScroll(
+                modifierFlags: event.modifierFlags
+            ) else {
+                nextResponder?.scrollWheel(with: event)
+                return
+            }
+
+            onScroll?(
+                event.scrollingDeltaX,
+                event.scrollingDeltaY,
+                true
+            )
         }
     }
 }
