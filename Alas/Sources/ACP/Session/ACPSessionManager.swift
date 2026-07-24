@@ -14,6 +14,11 @@ private enum ACPMirrorRefreshPolicy {
     static let inactivePollNanos: UInt64 = 30_000_000_000
 }
 
+enum ACPSessionForkCreationError: Error, Equatable {
+    case sourceUnavailable
+    case sourceReadOnly
+}
+
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
@@ -507,6 +512,99 @@ final class ACPSessionManager: ObservableObject {
         return session
     }
 
+    func createFork(
+        sourceSessionID: ACPSession.ID,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String,
+        autoRunDefault: Bool
+    ) async throws -> ACPSession {
+        guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
+            throw ACPSessionForkCreationError.sourceUnavailable
+        }
+        if !_ownedLeases.contains(sourceSessionID) {
+            guard await acquireWriterLease(sessionId: sourceSessionID) else {
+                throw ACPSessionForkCreationError.sourceReadOnly
+            }
+        }
+
+        await awaitBackfill(id: sourceSessionID)
+        await flushAllPersistence()
+        let storedMessages = try await persistence.loadMessages(sessionId: sourceSessionID)
+        let snapshot = try ACPSessionForkSnapshotResolver.resolve(
+            boundary: boundary,
+            liveMessages: source.transcript.messages,
+            storedMessages: storedMessages
+        )
+        let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
+        let candidate = ACPSessionForkCandidatePolicy.candidate(
+            sourceAgentID: source.agentId,
+            targetAgentID: targetAgentID,
+            boundaryIsRemoteHead: boundaryIsRemoteHead,
+            sourceRemoteSessionID: source.remoteSessionId,
+            forkCapability: source.sessionCapabilities?.supportsFork
+        )
+
+        let targetID = UUID().uuidString
+        let now = Int64(Date().timeIntervalSince1970)
+        let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
+        let targetTitle = source.title == "New session"
+            ? "New session (fork)"
+            : "\(source.title) (fork)"
+        let targetRow = ACPSessionRow(
+            id: targetID,
+            agentId: targetAgentID,
+            title: targetTitle,
+            titleSource: .generated,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: autoRunDefault,
+            createdAt: now,
+            updatedAt: now,
+            lastOpenedAt: now,
+            archived: false
+        )
+        let forkRecord = ACPSessionForkRecord(
+            targetSessionID: targetID,
+            sourceSessionID: sourceSessionID,
+            sourceAgentID: source.agentId,
+            sourceBoundarySequence: snapshot.sourceBoundarySequence,
+            inheritedMessageCount: copiedMessages.count,
+            phase: candidate == .native ? .negotiatingNative : .ready,
+            mechanism: candidate == .native ? nil : .transcriptTransfer,
+            contextDeliveryPending: candidate == .transcript
+        )
+
+        try await persistence.createFork(
+            session: targetRow,
+            messages: copiedMessages,
+            record: forkRecord
+        )
+
+        let target = ACPSession(
+            id: targetRow.id,
+            agentId: targetRow.agentId,
+            worktreeId: worktreeId,
+            title: targetRow.title,
+            titleSource: targetRow.titleSource,
+            origin: targetRow.origin,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(targetRow.createdAt)),
+            hydrationState: .ready
+        )
+        target.autoRunEnabled = targetRow.autoRun
+        target.forkRecord = forkRecord
+        for message in copiedMessages {
+            target.transcript.appendMessage(try ACPMessageCodec.decode(
+                kind: message.kind,
+                payload: message.payload
+            ))
+        }
+        sessions[targetID] = target
+        persistedRows[targetID] = targetRow
+        recent.removeAll { $0.id == targetID }
+        recent.insert(targetRow, at: 0)
+        return target
+    }
+
     /// Returns a cached session or a `.loading` placeholder. Cache hits
     /// are O(1); cache misses do a single indexed `loadSession` query
     /// against SQLite so we don't insert orphan loading entries for
@@ -670,6 +768,7 @@ final class ACPSessionManager: ObservableObject {
         }
         session.currentModel = result.row.currentModel
         session.currentMode = result.row.currentMode
+        session.forkRecord = result.forkRecord
         if session.remoteSessionId == nil || session.remoteSessionId == result.row.remoteSessionId {
             session.remoteSessionId = result.row.remoteSessionId
         }
@@ -2531,6 +2630,7 @@ extension ACPSessionManager {
                 )
             )
             session.promptCapabilities = initialized.promptCapabilities
+            session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()

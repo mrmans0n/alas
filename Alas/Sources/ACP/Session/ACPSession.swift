@@ -74,6 +74,13 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// Session capabilities learned from ACP `initialize`.
+    /// Runtime-only: re-learned on each attach and used to select a fork
+    /// mechanism for this session.
+    @Published var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    /// Persisted fork lineage hydrated with the session. A nil value means
+    /// this session was not created as a fork.
+    @Published var forkRecord: ACPSessionForkRecord?
     /// Auth methods learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
@@ -236,6 +243,19 @@ final class ACPSession: ObservableObject, Identifiable {
 
     var composerDraft: ACPComposerDraft { composer.draft }
     var composerDraftRevision: Int { composer.revision }
+
+    func canForkMessage(at index: Int) -> Bool {
+        guard transcript.messages.indices.contains(index) else { return false }
+        switch transcript.messages[index] {
+        case .user:
+            return true
+        case .agent:
+            guard transcript.streamingState != .idle else { return true }
+            return lastAgent() != index
+        default:
+            return false
+        }
+    }
 
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
         composer.replaceDraft(draft)
