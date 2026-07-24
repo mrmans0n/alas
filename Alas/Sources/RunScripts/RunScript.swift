@@ -11,7 +11,7 @@ enum RunScriptScope: String, Codable, Sendable, CaseIterable {
     }
 }
 
-enum RunScriptOnExit: String, Sendable {
+enum RunScriptOnExit: String, Sendable, Hashable {
     /// Return to the interactive shell prompt when the script exits.
     case keep
     /// Close the pane when the script exits (`exitOnCompletion` semantics).

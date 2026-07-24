@@ -12,6 +12,30 @@ struct TouchTargetSmokeTests {
         try! ThemeStore().current
     }
 
+    @Test func newRunScriptDialogDefaultsAndValidationMatchDesign() {
+        #expect(NewRunScriptDialog.defaultOnExit == .keep)
+        #expect(!NewRunScriptDialog.canCreate(name: " \n"))
+        #expect(NewRunScriptDialog.canCreate(name: "Dev Server"))
+    }
+
+    @Test func newRunScriptDialogRendersWithoutCrashing() {
+        let state = AppState()
+        let presentation = RunScriptCreationPresentation(
+            scope: .repo,
+            projectId: "project",
+            worktreeId: "worktree",
+            repositoryName: "Alas"
+        )
+        let view = NewRunScriptDialog(state: state, presentation: presentation)
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(controller.view.fittingSize.width == DialogContainerLayout.defaultWidth)
+        #expect(controller.view.fittingSize.height > 0)
+    }
+
     @Test func segmentedControlRendersWithoutCrashing() {
         let view = Seg(value: .constant(MarkdownViewMode.editor),
                        options: [(.editor, "Editor"), (.preview, "Preview")])
@@ -28,6 +52,30 @@ struct TouchTargetSmokeTests {
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    @Test func alasSegmentedControlRendersEnabledAndDisabledOptions() {
+        enum Choice: Hashable { case keep, close }
+        let view = AlasSegmentedControl(
+            selection: Choice.keep,
+            options: [
+                AlasSegmentedOption(id: .keep, label: "Keep pane open"),
+                AlasSegmentedOption(
+                    id: .close,
+                    label: "Close pane",
+                    isEnabled: false,
+                    disabledHelp: "Unavailable"
+                ),
+            ],
+            onSelect: { _ in }
+        )
+        .environment(\.theme, currentTheme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(controller.view.fittingSize.width > 0)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func tabBarViewRendersWithoutCrashing() {

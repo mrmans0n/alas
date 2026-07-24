@@ -226,6 +226,7 @@ final class AppState {
     var isAgentLauncherOpen: Bool = false
     var isReviewPaletteOpen: Bool = false
     var isRunScriptPaletteOpen: Bool = false
+    var pendingRunScriptCreation: RunScriptCreationPresentation?
     var isKeyboardOverlayOpen: Bool {
         isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen || isRunScriptPaletteOpen
     }
