@@ -59,6 +59,182 @@ struct ACPSessionForkManagerTests {
         #expect(restored.transcript.messages.count == 2)
     }
 
+    @Test("pending transcript context prevents a native child fork")
+    func pendingTranscriptContextForcesTranscriptTransfer() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let root = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        let message: ACPMessage = .agent(id: UUID(), StreamingText("Root answer"))
+        root.transcript.appendMessage(message)
+        try store.appendMessage(
+            sessionId: root.id,
+            id: "msg-\(root.id)-0",
+            kind: message.kind,
+            seq: 0,
+            payload: try ACPMessageCodec.encode(message),
+            createdAt: 0
+        )
+
+        let pendingSource = try await manager.createFork(
+            sourceSessionID: root.id,
+            boundary: .init(stableID: message.stableId, kind: .agent),
+            targetAgentID: "codex",
+            autoRunDefault: false
+        )
+        pendingSource.remoteSessionId = "remote-pending-source"
+        pendingSource.sessionCapabilities = .init(fork: .init())
+        let pendingBoundary = try #require(pendingSource.transcript.messages.last)
+
+        let target = try await manager.createFork(
+            sourceSessionID: pendingSource.id,
+            boundary: .init(stableID: pendingBoundary.stableId, kind: .agent),
+            targetAgentID: "codex",
+            autoRunDefault: false
+        )
+
+        #expect(pendingSource.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(pendingSource.forkRecord?.contextDeliveryPending == true)
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(target.forkRecord?.contextDeliveryPending == true)
+    }
+
+    @Test("createFork releases a lease acquired only for a successful snapshot")
+    func successfulSnapshotReleasesTemporaryLease() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "forker"
+        )
+        let source = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        let message: ACPMessage = .agent(id: UUID(), StreamingText("Answer"))
+        source.transcript.appendMessage(message)
+        try store.appendMessage(
+            sessionId: source.id,
+            id: "msg-\(source.id)-0",
+            kind: message.kind,
+            seq: 0,
+            payload: try ACPMessageCodec.encode(message),
+            createdAt: 0
+        )
+
+        _ = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: .init(stableID: message.stableId, kind: .agent),
+            targetAgentID: "codex",
+            autoRunDefault: false
+        )
+
+        #expect(try store.loadLease(sessionId: source.id) == nil)
+        #expect(!manager._ownedLeases.contains(source.id))
+    }
+
+    @Test("createFork releases a temporary snapshot lease after an error")
+    func failedSnapshotReleasesTemporaryLease() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "forker"
+        )
+        let source = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+
+        await #expect(throws: ACPSessionForkSnapshotError.self) {
+            try await manager.createFork(
+                sourceSessionID: source.id,
+                boundary: .init(stableID: "missing", kind: .agent),
+                targetAgentID: "codex",
+                autoRunDefault: false
+            )
+        }
+
+        #expect(try store.loadLease(sessionId: source.id) == nil)
+        #expect(!manager._ownedLeases.contains(source.id))
+    }
+
+    @Test("createFork preserves a source lease that was already owned")
+    func successfulSnapshotPreservesExistingLease() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "forker"
+        )
+        let source = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        let message: ACPMessage = .agent(id: UUID(), StreamingText("Answer"))
+        source.transcript.appendMessage(message)
+        try store.appendMessage(
+            sessionId: source.id,
+            id: "msg-\(source.id)-0",
+            kind: message.kind,
+            seq: 0,
+            payload: try ACPMessageCodec.encode(message),
+            createdAt: 0
+        )
+        #expect(await manager.acquireWriterLease(sessionId: source.id))
+
+        _ = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: .init(stableID: message.stableId, kind: .agent),
+            targetAgentID: "codex",
+            autoRunDefault: false
+        )
+
+        #expect(try store.loadLease(sessionId: source.id)?.ownerInstance == "forker")
+        #expect(manager._ownedLeases.contains(source.id))
+        await manager.releaseWriterLease(sessionId: source.id)
+    }
+
+    @Test("createFork rejects a cached source lease lost to takeover")
+    func staleOwnedLeaseIsRejected() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "forker"
+        )
+        let source = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        let message: ACPMessage = .agent(id: UUID(), StreamingText("Answer"))
+        source.transcript.appendMessage(message)
+        try store.appendMessage(
+            sessionId: source.id,
+            id: "msg-\(source.id)-0",
+            kind: message.kind,
+            seq: 0,
+            payload: try ACPMessageCodec.encode(message),
+            createdAt: 0
+        )
+        #expect(await manager.acquireWriterLease(sessionId: source.id))
+        try store.seizeLease(
+            sessionId: source.id,
+            instanceId: "other-instance",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+
+        await #expect(throws: ACPSessionForkCreationError.sourceReadOnly) {
+            try await manager.createFork(
+                sourceSessionID: source.id,
+                boundary: .init(stableID: message.stableId, kind: .agent),
+                targetAgentID: "codex",
+                autoRunDefault: false
+            )
+        }
+
+        #expect(try store.loadLease(sessionId: source.id)?.ownerInstance == "other-instance")
+        #expect(!manager._ownedLeases.contains(source.id))
+    }
+
     @Test("streaming agent is ineligible while earlier messages remain eligible")
     func messageEligibility() {
         let session = ACPSession(

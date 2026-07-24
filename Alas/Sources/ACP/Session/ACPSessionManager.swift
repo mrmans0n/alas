@@ -529,88 +529,108 @@ final class ACPSessionManager: ObservableObject {
         guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
             throw ACPSessionForkCreationError.sourceUnavailable
         }
+        let acquiredSnapshotLease: Bool
         if !_ownedLeases.contains(sourceSessionID) {
             guard await acquireWriterLease(sessionId: sourceSessionID) else {
                 throw ACPSessionForkCreationError.sourceReadOnly
             }
+            acquiredSnapshotLease = true
+        } else {
+            guard await confirmedWriterLease(for: sourceSessionID) else {
+                throw ACPSessionForkCreationError.sourceReadOnly
+            }
+            acquiredSnapshotLease = false
         }
 
-        await awaitBackfill(id: sourceSessionID)
-        await flushAllPersistence()
-        let storedMessages = try await persistence.loadMessages(sessionId: sourceSessionID)
-        let snapshot = try ACPSessionForkSnapshotResolver.resolve(
-            boundary: boundary,
-            liveMessages: source.transcript.messages,
-            storedMessages: storedMessages
-        )
-        let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
-        let candidate = ACPSessionForkCandidatePolicy.candidate(
-            sourceAgentID: source.agentId,
-            targetAgentID: targetAgentID,
-            boundaryIsRemoteHead: boundaryIsRemoteHead,
-            sourceRemoteSessionID: source.remoteSessionId,
-            forkCapability: source.sessionCapabilities?.supportsFork
-        )
+        let result: Result<ACPSession, Error>
+        do {
+            await awaitBackfill(id: sourceSessionID)
+            await flushAllPersistence()
+            let storedMessages = try await persistence.loadMessages(sessionId: sourceSessionID)
+            let snapshot = try ACPSessionForkSnapshotResolver.resolve(
+                boundary: boundary,
+                liveMessages: source.transcript.messages,
+                storedMessages: storedMessages
+            )
+            let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
+            let sourceContextDeliveryPending = source.forkRecord?.mechanism == .transcriptTransfer
+                && source.forkRecord?.contextDeliveryPending == true
+            let candidate = sourceContextDeliveryPending
+                ? ACPSessionForkCandidate.transcript
+                : ACPSessionForkCandidatePolicy.candidate(
+                    sourceAgentID: source.agentId,
+                    targetAgentID: targetAgentID,
+                    boundaryIsRemoteHead: boundaryIsRemoteHead,
+                    sourceRemoteSessionID: source.remoteSessionId,
+                    forkCapability: source.sessionCapabilities?.supportsFork
+                )
 
-        let targetID = UUID().uuidString
-        let now = Int64(Date().timeIntervalSince1970)
-        let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
-        let targetTitle = source.title == "New session"
-            ? "New session (fork)"
-            : "\(source.title) (fork)"
-        let targetRow = ACPSessionRow(
-            id: targetID,
-            agentId: targetAgentID,
-            title: targetTitle,
-            titleSource: .generated,
-            currentModel: nil,
-            currentMode: nil,
-            autoRun: autoRunDefault,
-            createdAt: now,
-            updatedAt: now,
-            lastOpenedAt: now,
-            archived: false
-        )
-        let forkRecord = ACPSessionForkRecord(
-            targetSessionID: targetID,
-            sourceSessionID: sourceSessionID,
-            sourceAgentID: source.agentId,
-            sourceBoundarySequence: snapshot.sourceBoundarySequence,
-            inheritedMessageCount: copiedMessages.count,
-            phase: candidate == .native ? .negotiatingNative : .ready,
-            mechanism: candidate == .native ? nil : .transcriptTransfer,
-            contextDeliveryPending: candidate == .transcript
-        )
+            let targetID = UUID().uuidString
+            let now = Int64(Date().timeIntervalSince1970)
+            let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
+            let targetTitle = source.title == "New session"
+                ? "New session (fork)"
+                : "\(source.title) (fork)"
+            let targetRow = ACPSessionRow(
+                id: targetID,
+                agentId: targetAgentID,
+                title: targetTitle,
+                titleSource: .generated,
+                currentModel: nil,
+                currentMode: nil,
+                autoRun: autoRunDefault,
+                createdAt: now,
+                updatedAt: now,
+                lastOpenedAt: now,
+                archived: false
+            )
+            let forkRecord = ACPSessionForkRecord(
+                targetSessionID: targetID,
+                sourceSessionID: sourceSessionID,
+                sourceAgentID: source.agentId,
+                sourceBoundarySequence: snapshot.sourceBoundarySequence,
+                inheritedMessageCount: copiedMessages.count,
+                phase: candidate == .native ? .negotiatingNative : .ready,
+                mechanism: candidate == .native ? nil : .transcriptTransfer,
+                contextDeliveryPending: candidate == .transcript
+            )
 
-        try await persistence.createFork(
-            session: targetRow,
-            messages: copiedMessages,
-            record: forkRecord
-        )
+            try await persistence.createFork(
+                session: targetRow,
+                messages: copiedMessages,
+                record: forkRecord
+            )
 
-        let target = ACPSession(
-            id: targetRow.id,
-            agentId: targetRow.agentId,
-            worktreeId: worktreeId,
-            title: targetRow.title,
-            titleSource: targetRow.titleSource,
-            origin: targetRow.origin,
-            createdAt: Date(timeIntervalSince1970: TimeInterval(targetRow.createdAt)),
-            hydrationState: .ready
-        )
-        target.autoRunEnabled = targetRow.autoRun
-        target.forkRecord = forkRecord
-        for message in copiedMessages {
-            target.transcript.appendMessage(try ACPMessageCodec.decode(
-                kind: message.kind,
-                payload: message.payload
-            ))
+            let target = ACPSession(
+                id: targetRow.id,
+                agentId: targetRow.agentId,
+                worktreeId: worktreeId,
+                title: targetRow.title,
+                titleSource: targetRow.titleSource,
+                origin: targetRow.origin,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(targetRow.createdAt)),
+                hydrationState: .ready
+            )
+            target.autoRunEnabled = targetRow.autoRun
+            target.forkRecord = forkRecord
+            for message in copiedMessages {
+                target.transcript.appendMessage(try ACPMessageCodec.decode(
+                    kind: message.kind,
+                    payload: message.payload
+                ))
+            }
+            sessions[targetID] = target
+            persistedRows[targetID] = targetRow
+            recent.removeAll { $0.id == targetID }
+            recent.insert(targetRow, at: 0)
+            result = .success(target)
+        } catch {
+            result = .failure(error)
         }
-        sessions[targetID] = target
-        persistedRows[targetID] = targetRow
-        recent.removeAll { $0.id == targetID }
-        recent.insert(targetRow, at: 0)
-        return target
+        if acquiredSnapshotLease {
+            await releaseWriterLease(sessionId: sourceSessionID)
+        }
+        return try result.get()
     }
 
     /// Returns a cached session or a `.loading` placeholder. Cache hits
