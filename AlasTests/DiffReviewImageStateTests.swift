@@ -6,7 +6,7 @@ import Testing
 struct DiffReviewImageStateTests {
     @Test func lateResultFromOldProviderIsRejected() async {
         let gate = PairLoadGate()
-        let state = DiffReviewImageState()
+        let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
         let old = provider(revision: "old") { await gate.wait() }
         let newPair = pair(color: .systemGreen)
         let new = provider(revision: "new") { newPair }
@@ -22,7 +22,7 @@ struct DiffReviewImageStateTests {
     }
 
     @Test func retryIncrementsOnlyTheCurrentSectionGeneration() async {
-        let state = DiffReviewImageState()
+        let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
         let provider = provider(revision: "head") {
             ImageDiffPair(
                 before: .failed(.init(message: "Network error")),
@@ -40,7 +40,7 @@ struct DiffReviewImageStateTests {
     }
 
     @Test func clearingProviderRemovesLoadedPairAndRetryState() async {
-        let state = DiffReviewImageState()
+        let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
         let loadedPair = pair(color: .systemGreen)
         let provider = provider(revision: "head") { loadedPair }
 
@@ -57,7 +57,7 @@ struct DiffReviewImageStateTests {
     @Test func lateFirstAttemptIsRejectedAfterRetryBegins() async {
         let firstAttemptGate = PairLoadGate()
         let retryGate = PairLoadGate()
-        let state = DiffReviewImageState()
+        let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
         var attempt = 0
         let provider = provider(revision: "head") {
             attempt += 1
@@ -79,6 +79,106 @@ struct DiffReviewImageStateTests {
         await firstLoad.value
 
         #expect(state.pair?.afterImage === retryPair.afterImage)
+    }
+
+    @Test func rematerializedStateServesCachedPairWithoutReloading() async {
+        let cache = DiffReviewImagePairCache()
+        let loadedPair = pair(color: .systemGreen)
+        var loadCount = 0
+        let sharedProvider = provider(revision: "head") {
+            loadCount += 1
+            return loadedPair
+        }
+
+        let first = DiffReviewImageState(cache: cache)
+        await first.load(provider: sharedProvider)
+
+        // A lazily re-realized section gets a fresh @State instance; its load
+        // must resolve synchronously from the cache instead of re-fetching.
+        let rematerialized = DiffReviewImageState(cache: cache)
+        await rematerialized.load(provider: sharedProvider)
+
+        #expect(loadCount == 1)
+        #expect(rematerialized.pair?.afterImage === loadedPair.afterImage)
+        #expect(!rematerialized.isLoading)
+    }
+
+    @Test func failedPairsAreNotCached() async {
+        let cache = DiffReviewImagePairCache()
+        var loadCount = 0
+        let failingProvider = provider(revision: "head") {
+            loadCount += 1
+            return ImageDiffPair(
+                before: .failed(.init(message: "Network error")),
+                after: .missing,
+                oldPath: nil,
+                kind: .deleted
+            )
+        }
+
+        let first = DiffReviewImageState(cache: cache)
+        await first.load(provider: failingProvider)
+        let second = DiffReviewImageState(cache: cache)
+        await second.load(provider: failingProvider)
+
+        #expect(loadCount == 2)
+    }
+
+    @Test func clearOnAlreadyClearStateEmitsNoObservationEvents() {
+        let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
+        let invalidations = InvalidationCounter()
+
+        withObservationTracking {
+            _ = state.pair
+            _ = state.isLoading
+            _ = state.providerID
+            _ = state.retryGeneration
+        } onChange: {
+            invalidations.increment()
+        }
+        state.clear()
+
+        #expect(invalidations.count == 0)
+    }
+
+    @Test func loadOnFreshStateDoesNotWritePairBeforeTheFetchCompletes() async {
+        let gate = PairLoadGate()
+        let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
+        let pairInvalidations = InvalidationCounter()
+
+        withObservationTracking {
+            _ = state.pair
+        } onChange: {
+            pairInvalidations.increment()
+        }
+
+        let load = Task { await state.load(provider: provider(revision: "head") { await gate.wait() }) }
+        await Task.yield()
+        // The pre-fetch bookkeeping (provider adoption, isLoading) must not
+        // touch `pair`: a same-value nil write would re-dirty every section
+        // body right after materialization.
+        #expect(pairInvalidations.count == 0)
+
+        gate.resume(returning: pair(color: .systemGreen))
+        await load.value
+        #expect(pairInvalidations.count == 1)
+    }
+}
+
+private final class InvalidationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
 

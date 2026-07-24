@@ -256,7 +256,7 @@ struct DiffReviewFileSection: View {
                 }
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
             }
-            if let pair = imageState.pair {
+            if let pair = displayedImagePair {
                 ImageDiffControls(pair: pair, state: imageState.presentation)
                     .background(
                         DiffReviewAccessibilityMarker(
@@ -682,6 +682,18 @@ struct DiffReviewFileSection: View {
         .accessibilityHidden(true)
     }
 
+    /// The pair from this section's own load, or — right after the review
+    /// stream's `LazyVStack` re-realizes this section (which resets
+    /// `imageState`) — the session-cached pair for the same provider. Reading
+    /// the cache directly here keeps the first body pass at full image height;
+    /// rendering empty/spinner for even one pass flips the section height and
+    /// destabilizes the lazy container's estimates (see
+    /// `DiffReviewImagePairCache`). The `.task` then re-populates `imageState`
+    /// from the same cache entry.
+    private var displayedImagePair: ImageDiffPair? {
+        imageState.pair ?? file.imageProvider.flatMap { DiffReviewImagePairCache.shared.pair(for: $0.id) }
+    }
+
     @ViewBuilder
     private var imageContent: some View {
         if imageState.isLoading {
@@ -696,7 +708,7 @@ struct DiffReviewFileSection: View {
                     )
                 )
         }
-        if let pair = imageState.pair {
+        if let pair = displayedImagePair {
             ImageDiffComparisonContent(
                 pair: pair,
                 state: imageState.presentation,
