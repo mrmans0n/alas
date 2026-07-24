@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-07-24
+
+### ✨ Features
+
+- Improve the new run script creation dialog (#913).
+
+### 🐛 Fixes
+
+- Fix script palette sizing in run script flows (#912).
+- Fix image diff scroll handling and drag panning (#914).
+- Fix `git-gud` mode submenu flicker (#915).
+- Break an image-section rematerialization live-lock in diff review (#916).
+
 ## [0.13.1] - 2026-07-24
 
 ### ✨ Features
