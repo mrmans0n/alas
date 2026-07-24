@@ -373,6 +373,44 @@ struct ACPSessionForkAttachTests {
         #expect(await broker.acknowledgedCursors == [ACPBrokerEventCursor(rawValue: 2)])
     }
 
+    @Test("repeated startup replay failure preserves a completed native fork for retry")
+    func repeatedStartupReplayFailurePreservesCompletedNativeFork() async throws {
+        let store = try seededForkStore()
+        let broker = ForkReplayBrokerService(failSecondStartupReplay: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+        #expect(target.forkRecord?.phase == .negotiatingNative)
+
+        await manager.reattach(to: target.id)
+
+        #expect(target.forkRecord?.phase == .negotiatingNative)
+        #expect(target.forkRecord?.mechanism == nil)
+        #expect(try store.loadFork(targetSessionID: "target")?.phase == .negotiatingNative)
+        #expect(await broker.sentOperationKeys == [
+            ACPBrokerOperationKey(rawValue: "startup:target:session/fork:source-remote")
+        ])
+        #expect(await broker.detachCount == 2)
+
+        await manager.reattach(to: target.id)
+
+        #expect(await broker.sentOperationKeys == [
+            ACPBrokerOperationKey(rawValue: "startup:target:session/fork:source-remote"),
+            ACPBrokerOperationKey(rawValue: "startup:target:session/fork:source-remote")
+        ])
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .nativeACP)
+        #expect(target.remoteSessionId == "forked-remote")
+        #expect(await broker.acknowledgedCursors == [ACPBrokerEventCursor(rawValue: 2)])
+    }
+
     @Test("terminal fork error replay is released before fallback session/new")
     func terminalForkErrorReplayIsReleasedBeforeFallbackSessionNew() async throws {
         let store = try seededForkStore()
@@ -734,6 +772,7 @@ private actor ForkPreSendFailureBrokerService: ACPBrokerServicing {
 
 private actor ForkReplayBrokerService: ACPBrokerServicing {
     private let forkError: JSONRPCError?
+    private let failSecondStartupReplay: Bool
     private var attachCount = 0
     private var replayEvents: [ACPBrokerEvent] = []
     private var nextCursor: UInt64 = 2
@@ -741,9 +780,14 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
     private(set) var sentMethods: [String] = []
     private(set) var closedSessionIDs: [String] = []
     private(set) var acknowledgedCursors: [ACPBrokerEventCursor] = []
+    private(set) var detachCount = 0
 
-    init(forkError: JSONRPCError? = nil) {
+    init(
+        forkError: JSONRPCError? = nil,
+        failSecondStartupReplay: Bool = false
+    ) {
         self.forkError = forkError
+        self.failSecondStartupReplay = failSecondStartupReplay
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -760,6 +804,9 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
         case 2:
             throw ForkReplayBrokerError.trailingReplayFailure
         case 3:
+            if failSecondStartupReplay {
+                throw ForkReplayBrokerError.trailingReplayFailure
+            }
             return ACPBrokerAttachResult(
                 snapshot: snapshot(
                     brokerId: params.brokerId,
@@ -843,7 +890,8 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
     }
 
     func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
-        ACPBrokerSimpleOK(ok: true)
+        detachCount += 1
+        return ACPBrokerSimpleOK(ok: true)
     }
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
@@ -900,7 +948,18 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
             acknowledgedCursor: acknowledgedCursor,
             journalTail: replayEvents.last?.cursor ?? acknowledgedCursor,
             pendingRequests: [],
-            operations: []
+            operations: replayEvents.compactMap { event in
+                guard case .operationCompleted(let operationKey, let outcome) = event.kind else {
+                    return nil
+                }
+                return ACPBrokerOperationSnapshot(
+                    operationKey: operationKey,
+                    adapterRequestId: ACPBrokerAdapterRequestID(rawValue: event.cursor.rawValue),
+                    method: sentOperationKeys.first == operationKey ? "session/fork" : "unknown",
+                    params: .object([:]),
+                    terminalOutcome: outcome
+                )
+            }
         )
     }
 }

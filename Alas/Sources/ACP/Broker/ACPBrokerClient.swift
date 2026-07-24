@@ -87,6 +87,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var preRegisteredOperationKeyRefCounts: [ACPBrokerOperationKey: Int] = [:]
     private var preRegisteredOperationCompletions:
         [ACPBrokerOperationKey: (outcome: ACPBrokerRPCOutcome, cursor: ACPBrokerEventCursor)] = [:]
+    // Operation snapshots carry terminal outcomes but not their journal
+    // cursors. Retain matching pre-registered outcomes separately so a
+    // failed startup replay can still classify the durable operation; a
+    // later client will replay the cursor before consuming the result.
+    private var preRegisteredOperationTerminalOutcomes:
+        [ACPBrokerOperationKey: ACPBrokerRPCOutcome] = [:]
     /// Ref-counted (not a plain `Set`) so two calls that happen to share an
     /// explicit `brokerOperationKey` — unlikely, but the type permits it —
     /// don't have one call's exit clear the flag out from under the other.
@@ -234,6 +240,16 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 self?.ackOperationCompletion(operationKey: key, cursor: completion.cursor)
             }
         )
+    }
+
+    func terminalOutcome(
+        forPreRegisteredOperationKey operationKey: String
+    ) -> ACPBrokerRPCOutcome? {
+        let key = ACPBrokerOperationKey(rawValue: operationKey)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return preRegisteredOperationCompletions[key]?.outcome
+            ?? preRegisteredOperationTerminalOutcomes[key]
     }
 
     @discardableResult
@@ -622,6 +638,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             if preRegisteredOperationKeyRefCounts[operationKey] != nil {
                 preRegisteredOperationCompletions[operationKey] = (outcome, event.cursor)
+                preRegisteredOperationTerminalOutcomes[operationKey] = outcome
             }
             stateLock.unlock()
         case .turnStateChanged(let state):
@@ -847,6 +864,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         if preRegisteredOperationCompletions[operationKey]?.cursor == cursor {
             preRegisteredOperationCompletions.removeValue(forKey: operationKey)
+            preRegisteredOperationTerminalOutcomes.removeValue(forKey: operationKey)
             Self.decrementRefCount(&preRegisteredOperationKeyRefCounts, for: operationKey)
             Self.decrementRefCount(&awaitedOperationKeyRefCounts, for: operationKey)
         }
@@ -891,10 +909,13 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         remoteSessionResult = snapshot.remoteSessionResult ?? remoteSessionResult
         for operation in snapshot.operations {
             let id = operation.adapterRequestId.jsonRPCID
-            if operation.terminalOutcome == nil {
-                pendingOutboundRequestIds.insert(id)
-            } else {
+            if let terminalOutcome = operation.terminalOutcome {
                 pendingOutboundRequestIds.remove(id)
+                if preRegisteredOperationKeyRefCounts[operation.operationKey] != nil {
+                    preRegisteredOperationTerminalOutcomes[operation.operationKey] = terminalOutcome
+                }
+            } else {
+                pendingOutboundRequestIds.insert(id)
             }
         }
         if turnState != snapshot.turnState {

@@ -1738,19 +1738,41 @@ final class ACPSessionManager: ObservableObject {
         // gap: its stable startup key must be protected until attach calls
         // `session/fork` and persists the final mechanism.
         var awaitedOperationKeys = session.queue.map(\.brokerOperationKey)
+        var negotiatingForkOperationKey: String?
         if let fork = session.forkRecord,
            fork.phase == .negotiatingNative,
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
            !sourceRemoteSessionID.isEmpty {
-            awaitedOperationKeys.append(Self.brokerStartupOperationKey(
+            let operationKey = Self.brokerStartupOperationKey(
                 sessionId: sessionId,
                 method: "session/fork",
                 remoteSessionId: sourceRemoteSessionID
-            ))
+            )
+            awaitedOperationKeys.append(operationKey)
+            negotiatingForkOperationKey = operationKey
         }
         client.preRegisterAwaitedOperationKeys(awaitedOperationKeys)
-        try await client.start()
+        do {
+            try await client.start()
+        } catch {
+            // `open` may reveal a completed fork in its operation snapshot
+            // before the following replay fails. Preserve that terminal
+            // classification across this construction boundary: otherwise
+            // the caller sees an ordinary launch failure and durably selects
+            // transcript fallback even when the native fork already exists.
+            let terminalOutcome = negotiatingForkOperationKey.flatMap {
+                client.terminalOutcome(forPreRegisteredOperationKey: $0)
+            }
+            await client.detach()
+            if let terminalOutcome {
+                throw ACPBrokerDurableCompletionReplayError(
+                    outcome: terminalOutcome,
+                    underlying: error
+                )
+            }
+            throw error
+        }
         Self.applyBrokerTurnState(client.currentTurnState, to: session)
         return ACPConnection(client: client)
     }
@@ -2857,14 +2879,20 @@ extension ACPSessionManager {
                 )
             }
         } catch {
-            do {
-                try await downgradeNegotiatingForkToTranscript(session: session)
-            } catch {
-                surfaceForkFallbackPersistenceFailure(error, on: session)
-                await releaseWriterLease(sessionId: sessionId)
-                return
+            let durableForkRetry = (error as? ACPBrokerDurableCompletionReplayError).flatMap {
+                $0.outcome.error == nil ? $0 : nil
             }
-            let msg = "Failed to launch agent: \(error.localizedDescription)"
+            if durableForkRetry == nil {
+                do {
+                    try await downgradeNegotiatingForkToTranscript(session: session)
+                } catch {
+                    surfaceForkFallbackPersistenceFailure(error, on: session)
+                    await releaseWriterLease(sessionId: sessionId)
+                    return
+                }
+            }
+            let surfacedError = durableForkRetry?.underlying ?? error
+            let msg = "Failed to launch agent: \(surfacedError.localizedDescription)"
             session.lastError = msg
             session.agentState = .failed(msg)
             await releaseWriterLease(sessionId: sessionId)
