@@ -1072,6 +1072,44 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
+    @Test("load fallback keeps pending fork context out of generic recovery")
+    func loadFallbackDefersPendingForkContextUntilFirstPrompt() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let inherited = try ACPSessionForkSnapshot(
+            sourceBoundarySequence: 0,
+            messages: [.init(role: .user, text: "Prior context")]
+        ).copiedMessages(targetSessionID: "local", createdAt: 0)
+        let fork = ACPSessionForkRecord(
+            targetSessionID: "local",
+            sourceSessionID: "source",
+            sourceAgentID: "claude",
+            sourceBoundarySequence: 0,
+            inheritedMessageCount: 1,
+            phase: .ready,
+            mechanism: .transcriptTransfer,
+            contextDeliveryPending: true
+        )
+        try store.createFork(session: row(remoteSessionId: "remote-old"), messages: inherited, record: fork)
+
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/new"])
+        #expect(session.contextRecoveryStatus != .sendingTranscript)
+        #expect(session.contextRestoreWarning == nil)
+        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
+        #expect(session.forkRecord?.contextDeliveryPending == true)
+    }
+
     @Test("failed automatic transcript recovery keeps queued prompt blocked")
     func failedAutomaticTranscriptRecoveryKeepsQueuedPromptBlocked() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

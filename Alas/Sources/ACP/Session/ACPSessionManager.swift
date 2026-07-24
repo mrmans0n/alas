@@ -2986,7 +2986,7 @@ extension ACPSessionManager {
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             session.contextRecoveryStatus = .sendingTranscript
                         }
                     }
