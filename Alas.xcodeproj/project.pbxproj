@@ -1358,6 +1358,7 @@
 		F8143610563C28604A23B89A /* CenterSelectionStateResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A2A074CEB9C9BA2AD34DD7 /* CenterSelectionStateResolverTests.swift */; };
 		F855DEEEE005795EC6B13544 /* AlasFieldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169FC38D03727F34855EB521 /* AlasFieldTests.swift */; };
 		F88FD8BE546E36A0E3BF2594 /* ProjectGitWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12F540ABB23DDB829E1629D /* ProjectGitWatcher.swift */; };
+		F8C643420F6CF51D3B74164D /* AppStateRunScriptCreationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23190FA641E518CAFA0A8177 /* AppStateRunScriptCreationTests.swift */; };
 		F92535799AE74C9BF1DC3D88 /* EditorLSPStatusOverridePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B17505E5DB94014B6FCB18 /* EditorLSPStatusOverridePicker.swift */; };
 		F9BE25DD2C3A008328978575 /* AgentAutoLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C1AD69581AAE3D34624F23 /* AgentAutoLaunch.swift */; };
 		F9C3EA369FF29AC5D7BCA3C6 /* AgentHookSocketServerCLITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB19F036D793E5DFBBD3C675 /* AgentHookSocketServerCLITests.swift */; };
@@ -1579,6 +1580,7 @@
 		220514C66CF29B6FD04EAB0B /* RepoSelectorModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorModelTests.swift; sourceTree = "<group>"; };
 		22677ECD3E098EBE6389D776 /* session-new-request.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-new-request.json"; sourceTree = "<group>"; };
 		22CF502ECFD2763E52CB022F /* DiffInlineCommentModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineCommentModel.swift; sourceTree = "<group>"; };
+		23190FA641E518CAFA0A8177 /* AppStateRunScriptCreationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRunScriptCreationTests.swift; sourceTree = "<group>"; };
 		23532A4B85092F720FD0E9F9 /* HookCommandShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookCommandShellTests.swift; sourceTree = "<group>"; };
 		2379C3F8504AD2EE73130AC4 /* LSPInstallProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstallProgressSheet.swift; sourceTree = "<group>"; };
 		239125BB939233233D405EB8 /* ACPChipStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChipStateTests.swift; sourceTree = "<group>"; };
@@ -3043,6 +3045,7 @@
 				69FCCEC91C40EBC896CF9089 /* AppStateOverlayTests.swift */,
 				8C11E3449E4A7B4E69E83C1C /* AppStatePersistenceTests.swift */,
 				FED0AAD3FE0E143D409A3E8B /* AppStateRemoteWorktreePathTests.swift */,
+				23190FA641E518CAFA0A8177 /* AppStateRunScriptCreationTests.swift */,
 				EFDB90A7F9E58F4C1A258D23 /* AppStateSpacesTests.swift */,
 				279D43D7F43C40A004A2C4AC /* AppStateTabAvailabilityTests.swift */,
 				6CB9643BE01E416D3D2F4454 /* BaseBranchSelectorTests.swift */,
@@ -6354,6 +6357,7 @@
 				51E0500756DC8DD5238F4D19 /* AppStateOverlayTests.swift in Sources */,
 				25B94D8823F2A5A2BA4545B5 /* AppStatePersistenceTests.swift in Sources */,
 				996B67B45E7247CDED5F98EF /* AppStateRemoteWorktreePathTests.swift in Sources */,
+				F8C643420F6CF51D3B74164D /* AppStateRunScriptCreationTests.swift in Sources */,
 				07385C7266A0694AB7F4E872 /* AppStateSpacesTests.swift in Sources */,
 				956B221EC4FF3A18C713A64F /* AppStateTabAvailabilityTests.swift in Sources */,
 				A5742BE7348C02324B8119D0 /* BaseBranchSelectorTests.swift in Sources */,

@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 extension AppState {
@@ -165,26 +164,42 @@ extension AppState {
             )
             return
         }
-        guard let name = promptForRunScriptName() else { return }
-        let dir = scope == .repo
-            ? RunScriptStore.repoScriptsDir(worktreeRoot: worktree.path)
-            : Paths.runScriptsGlobalDir
-        let url = dir.appendingPathComponent(RunScriptTemplate.fileName(for: name))
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            guard !FileManager.default.fileExists(atPath: url.path) else {
-                throw CocoaError(.fileWriteFileExists, userInfo: [
-                    NSLocalizedDescriptionKey: "A script named \"\(url.lastPathComponent)\" already exists."
-                ])
-            }
-            try RunScriptTemplate.contents(name: name).data(using: .utf8)!
-                .write(to: url, options: .withoutOverwriting)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        } catch {
-            showFileActionError(title: "New Script Failed", message: error.localizedDescription)
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            showFileActionError(
+                title: "New Script Failed",
+                message: "The originating project is no longer available."
+            )
             return
         }
-        switch scope {
+        pendingRunScriptCreation = RunScriptCreationPresentation(
+            scope: scope,
+            projectId: project.id,
+            worktreeId: worktree.id,
+            repositoryName: project.name
+        )
+    }
+
+    func createPendingRunScript(
+        name: String,
+        onExit: RunScriptOnExit,
+        globalDir: URL = Paths.runScriptsGlobalDir
+    ) throws {
+        guard let presentation = pendingRunScriptCreation,
+              let worktree = worktree(withId: presentation.worktreeId),
+              worktree.projectId == presentation.projectId
+        else {
+            throw RunScriptCreationError.worktreeUnavailable
+        }
+
+        let url = try RunScriptCreator.create(
+            scope: presentation.scope,
+            name: name,
+            onExit: onExit,
+            worktreeRoot: worktree.path,
+            globalDir: globalDir
+        )
+
+        switch presentation.scope {
         case .repo:
             openFile(
                 relativePath: "\(RunScriptStore.repoScriptsRelativeDir)/\(url.lastPathComponent)",
@@ -199,6 +214,11 @@ extension AppState {
                 editable: true
             )
         }
+        pendingRunScriptCreation = nil
+    }
+
+    func cancelPendingRunScriptCreation() {
+        pendingRunScriptCreation = nil
     }
 
     // MARK: - Palette
@@ -216,22 +236,4 @@ extension AppState {
         )
     }
 
-    private func promptForRunScriptName() -> String? {
-        let alert = NSAlert()
-        alert.messageText = "New Run Script"
-        alert.informativeText = "Name for the new script."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.placeholderString = "Dev Server"
-        // NSAlert doesn't reliably cascade the app's forced dark appearance
-        // (WindowAppearance.apply) to a manually-added accessory view, which
-        // otherwise leaves the bezel rendering with a mismatched, muddy tint.
-        field.appearance = NSApp.effectiveAppearance
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? nil : name
-    }
 }
