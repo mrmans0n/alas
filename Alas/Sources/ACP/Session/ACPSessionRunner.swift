@@ -1317,16 +1317,55 @@ extension ACPSessionRunner {
         }
     }
 
-    private func persistForkContextDelivered() {
+    private func persistForkContextDelivered(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
         guard holdsLeaseForWrite() else { return }
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        enqueuePersistence { persistence in
-            _ = try await persistence.clearForkContextDeliveryPending(
+        if let acknowledgement {
+            enqueuePersistence({ persistence in
+                try await persistence.clearForkContextDeliveryPending(
+                    targetSessionID: sessionId,
+                    fence: fence
+                )
+            }, completion: { persisted in
+                if persisted == true {
+                    acknowledgement()
+                }
+            })
+        } else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.clearForkContextDeliveryPending(
+                    targetSessionID: sessionId,
+                    fence: fence
+                )
+            }
+        }
+    }
+
+    private func persistForkContextDeliveredAndQueue(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard holdsLeaseForWrite() else { return }
+        let items = session.queue
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            guard try await persistence.clearForkContextDeliveryPending(
                 targetSessionID: sessionId,
                 fence: fence
+            ) else { return false }
+            return try await persistence.upsertQueue(
+                sessionId: sessionId,
+                items: items,
+                fence: fence
             )
-        }
+        }, completion: { persisted in
+            if persisted == true {
+                acknowledgement?()
+            }
+        })
     }
 
     /// Drain the queue head if the runner is still live, setup is not
@@ -1665,11 +1704,12 @@ extension ACPSessionRunner {
                     sessionId: remoteId,
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
-                    acknowledgeDurableConsumption: queuedItemId == nil
+                    acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil
                 )
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    let deliveredForkContext = pendingForkContext != nil
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
                     // "active" by the time we get back on the main actor —
@@ -1685,12 +1725,24 @@ extension ACPSessionRunner {
                        fork.contextDeliveryPending {
                         fork.contextDeliveryPending = false
                         self.session.forkRecord = fork
-                        self.persistForkContextDelivered()
+                    }
+                    if deliveredForkContext {
+                        if queuedItemId == nil {
+                            self.persistForkContextDelivered(acknowledging: promptAcknowledgement)
+                        } else if !isActivePrompt {
+                            self.persistForkContextDelivered(acknowledging: promptAcknowledgement)
+                        }
                     }
                     if isActivePrompt {
                         if queuedItemId != nil {
                             _ = self.session.popQueueHead()
-                            self.persistQueue(acknowledging: promptAcknowledgement)
+                            if deliveredForkContext {
+                                self.persistForkContextDeliveredAndQueue(
+                                    acknowledging: promptAcknowledgement
+                                )
+                            } else {
+                                self.persistQueue(acknowledging: promptAcknowledgement)
+                            }
                         }
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {

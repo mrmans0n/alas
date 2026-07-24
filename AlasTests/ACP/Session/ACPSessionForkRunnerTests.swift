@@ -141,6 +141,212 @@ struct ACPSessionForkRunnerTests {
         #expect(try await persistence.loadFork(targetSessionID: session.id)?.contextDeliveryPending == false)
     }
 
+    @Test("direct first prompt acknowledgement follows durable context delivery")
+    func directFirstPromptAcknowledgesAfterContextDeliveryPersistence() async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkState(
+                        path: path,
+                        targetSessionID: sessionID
+                    )
+                }
+            )
+        }
+
+        runner.sendNow(blocks: [.text("Continue")], queuedItemId: nil)
+
+        try await waitUntil { acknowledgement.recordedCount == 1 }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.persistedPendingStates == [false])
+    }
+
+    @Test("failed fork marker persistence leaves direct prompt unacknowledged")
+    func failedForkMarkerPersistenceDoesNotAcknowledgeDirectPrompt() async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        let database = try SQLiteDatabase(path: persistence.path)
+        try database.exec("DROP TABLE session_forks")
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkState(
+                        path: path,
+                        targetSessionID: sessionID
+                    )
+                }
+            )
+        }
+
+        runner.sendNow(blocks: [.text("Continue")], queuedItemId: nil)
+
+        try await waitUntil {
+            mock.sent.contains { $0.method == "session/prompt" }
+                && session.forkRecord?.contextDeliveryPending == false
+        }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.recordedCount == 0)
+    }
+
+    @Test("queued first prompt acknowledgement follows context delivery and queue removal")
+    func queuedFirstPromptAcknowledgesAfterContextDeliveryAndQueuePersistence() async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkAndQueueState(
+                        path: path,
+                        targetSessionID: sessionID
+                    )
+                }
+            )
+        }
+        session.enqueue(blocks: [.text("Continue")])
+        runner.persistQueue()
+        await runner.flushPersistence()
+
+        runner.flushQueueIfIdle()
+
+        try await waitUntil { acknowledgement.recordedCount == 1 }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.persistedPendingStates == [false])
+        #expect(acknowledgement.persistedQueueCounts == [0])
+    }
+
+    @Test("failed fork marker persistence leaves queued first prompt unacknowledged")
+    func failedForkMarkerPersistenceDoesNotAcknowledgeQueuedPrompt() async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        session.enqueue(blocks: [.text("Continue")])
+        runner.persistQueue()
+        await runner.flushPersistence()
+        let database = try SQLiteDatabase(path: persistence.path)
+        try database.exec("DROP TABLE session_forks")
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkAndQueueState(
+                        path: path,
+                        targetSessionID: sessionID
+                    )
+                }
+            )
+        }
+
+        runner.flushQueueIfIdle()
+
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.recordedCount == 0)
+    }
+
+    @Test("stale queued completion acknowledges after prior queue removal and context delivery")
+    func staleQueuedCompletionAcknowledgesAfterPersistedState() async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        let promptStarted = ForkPromptGate()
+        let finishPrompt = ForkPromptGate()
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            await promptStarted.open()
+            await finishPrompt.wait()
+            return ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkAndQueueState(
+                        path: path,
+                        targetSessionID: sessionID
+                    )
+                }
+            )
+        }
+        session.enqueue(blocks: [.text("Continue")])
+        runner.persistQueue()
+        await runner.flushPersistence()
+        runner.flushQueueIfIdle()
+        await promptStarted.wait()
+
+        // Model steer's ordered queue removal and prompt invalidation without
+        // starting a successor prompt that would obscure this stale completion.
+        session.queue.removeAll()
+        runner.persistQueue()
+        runner.invalidateActivePrompt()
+        await runner.flushPersistence()
+        #expect(try await persistence.loadQueue(sessionId: session.id).isEmpty)
+
+        await finishPrompt.open()
+        try await waitUntil { session.forkRecord?.contextDeliveryPending == false }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.persistedPendingStates == [false])
+        #expect(acknowledgement.persistedQueueCounts == [0])
+    }
+
+    @Test("out-of-order prompts each acknowledge captured fork context")
+    func outOfOrderPromptsEachAcknowledgeCapturedForkContext() async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        let sequence = ForkPromptSequence()
+        let firstStarted = ForkPromptGate()
+        let secondStarted = ForkPromptGate()
+        let finishFirst = ForkPromptGate()
+        let finishSecond = ForkPromptGate()
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            switch await sequence.next() {
+            case 1:
+                await firstStarted.open()
+                await finishFirst.wait()
+            default:
+                await secondStarted.open()
+                await finishSecond.wait()
+            }
+            return ACPResponse(
+                body: Data("null".utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkState(
+                        path: path,
+                        targetSessionID: sessionID
+                    )
+                }
+            )
+        }
+
+        runner.sendNow(blocks: [.text("First")], queuedItemId: nil)
+        await firstStarted.wait()
+        runner.sendNow(blocks: [.text("Second")], queuedItemId: nil)
+        await secondStarted.wait()
+
+        await finishSecond.open()
+        try await waitUntil { acknowledgement.recordedCount == 1 }
+        await finishFirst.open()
+        try await waitUntil { acknowledgement.recordedCount == 2 }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.persistedPendingStates == [false, false])
+    }
+
     @Test("failed first prompt keeps private context pending for a queue retry")
     func failedFirstPromptKeepsContextPending() async throws {
         let (runner, mock, session, persistence) = try await makeRunner()
@@ -239,4 +445,90 @@ struct ACPSessionForkRunnerTests {
     }
 
     private struct TimeoutError: Error {}
+}
+
+private actor ForkPromptGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let continuations = waiters
+        waiters.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+}
+
+private actor ForkPromptSequence {
+    private var value = 0
+
+    func next() -> Int {
+        value += 1
+        return value
+    }
+}
+
+private final class ForkPromptAcknowledgementRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var states: [Bool?] = []
+    private var queueCounts: [Int?] = []
+
+    var recordedCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return states.count
+    }
+
+    var persistedPendingStates: [Bool?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return states
+    }
+
+    var persistedQueueCounts: [Int?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return queueCounts
+    }
+
+    func recordPersistedForkState(path: String, targetSessionID: String) {
+        let pending: Bool?
+        do {
+            pending = try ACPSessionStore(path: path)
+                .loadFork(targetSessionID: targetSessionID)?
+                .contextDeliveryPending
+        } catch {
+            pending = nil
+        }
+        lock.lock()
+        states.append(pending)
+        lock.unlock()
+    }
+
+    func recordPersistedForkAndQueueState(path: String, targetSessionID: String) {
+        let state: (pending: Bool?, queueCount: Int?)
+        do {
+            let store = try ACPSessionStore(path: path)
+            state = (
+                try store.loadFork(targetSessionID: targetSessionID)?.contextDeliveryPending,
+                try store.loadQueue(sessionId: targetSessionID).count
+            )
+        } catch {
+            state = (nil, nil)
+        }
+        lock.lock()
+        states.append(state.pending)
+        queueCounts.append(state.queueCount)
+        lock.unlock()
+    }
 }
