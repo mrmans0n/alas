@@ -82,7 +82,7 @@ struct AppStateRunScriptCreationTests {
             return
         }
         #expect(editor.externalAbsolutePath == global.appendingPathComponent("build.sh").path)
-        #expect(editor.externalEditable)
+        #expect(editor.externalEditable == true)
     }
 
     @Test func failurePreservesPendingPresentation() throws {
