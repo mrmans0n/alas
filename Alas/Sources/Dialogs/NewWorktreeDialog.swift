@@ -30,8 +30,6 @@ struct NewWorktreeDialog: View {
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
     @State private var createErrorMessage: String?
-    @FocusState private var focusedGGModeSegment: GGWorktreeMode?
-    @FocusState private var focusedLaunchSurfaceSegment: NewWorktreeLaunchSurfaceSegment?
 
     @Environment(\.theme) var theme
 
@@ -487,21 +485,13 @@ struct NewWorktreeDialog: View {
 
     private var ggModeSegmented: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 2) {
-                ForEach(Self.ggModeSegments, id: \.mode) { segmentItem in
-                    segment(
-                        id: segmentItem.mode,
-                        isSelected: ggMode == segmentItem.mode,
-                        icon: nil,
-                        label: segmentItem.label,
-                        isEnabled: true,
-                        focusedSegment: $focusedGGModeSegment
-                    ) {
-                        ggMode = segmentItem.mode
-                    }
-                }
-            }
-            .modifier(SegmentedContainerStyle(theme: theme))
+            AlasSegmentedControl(
+                selection: ggMode,
+                options: Self.ggModeSegments.map {
+                    AlasSegmentedOption(id: $0.mode, label: $0.label)
+                },
+                onSelect: { ggMode = $0 }
+            )
             Spacer(minLength: 0)
         }
     }
@@ -541,125 +531,53 @@ struct NewWorktreeDialog: View {
 
     private var launchSurfaceSegmented: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 2) {
-                segment(
-                    id: .none,
-                    isSelected: !openAfterCreate,
-                    icon: "circle.slash",
-                    label: "No tab",
-                    isEnabled: true,
-                    focusedSegment: $focusedLaunchSurfaceSegment
-                ) {
-                    openAfterCreate = false
-                }
-                segment(
-                    id: .terminal,
-                    isSelected: openAfterCreate && launchMode == .terminal,
-                    icon: "terminal",
-                    label: "Terminal",
-                    isEnabled: true,
-                    focusedSegment: $focusedLaunchSurfaceSegment
-                ) {
-                    openAfterCreate = true
-                    launchMode = .terminal
-                    persistableLaunchMode = .terminal
-                    launchAgentId = Self.resolvedLaunchAgent(
-                        initialAgentId: launchAgentId,
-                        mode: .terminal,
-                        enabledAgents: state.agentRegistry.enabled()
-                    )
-                }
-                segment(
-                    id: .acp,
-                    isSelected: openAfterCreate && launchMode == .acp,
-                    icon: "sparkle",
-                    label: "Chat",
-                    isEnabled: acpSegmentEnabled,
-                    disabledHelp: "Enable an ACP-capable agent in Settings → Agents.",
-                    focusedSegment: $focusedLaunchSurfaceSegment
-                ) {
-                    openAfterCreate = true
-                    launchMode = .acp
-                    persistableLaunchMode = .acp
-                    launchAgentId = Self.resolvedLaunchAgent(
-                        initialAgentId: launchAgentId,
-                        mode: .acp,
-                        enabledAgents: state.agentRegistry.enabled()
-                    )
-                }
-            }
-            .modifier(SegmentedContainerStyle(theme: theme))
+            AlasSegmentedControl(
+                selection: selectedLaunchSurfaceSegment,
+                options: [
+                    AlasSegmentedOption(id: .none, label: "No tab", icon: "circle.slash"),
+                    AlasSegmentedOption(id: .terminal, label: "Terminal", icon: "terminal"),
+                    AlasSegmentedOption(
+                        id: .acp,
+                        label: "Chat",
+                        icon: "sparkle",
+                        isEnabled: acpSegmentEnabled,
+                        disabledHelp: "Enable an ACP-capable agent in Settings → Agents."
+                    ),
+                ],
+                onSelect: selectLaunchSurface
+            )
             Spacer(minLength: 0)
         }
     }
 
-    private func segment<Segment: Hashable>(
-        id: Segment,
-        isSelected: Bool,
-        icon: String?,
-        label: String,
-        isEnabled: Bool,
-        disabledHelp: String? = nil,
-        focusedSegment: FocusState<Segment?>.Binding,
-        action: @escaping () -> Void
-    ) -> some View {
-        let isFocused = focusedSegment.wrappedValue == id
-        return Button(action: action) {
-            HStack(spacing: 5) {
-                if let icon {
-                    Icon(name: icon, size: 11,
-                         color: isSelected ? theme.color("fg") : theme.color("fg-muted"))
-                }
-                Text(label)
-                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
-                    .foregroundColor(isSelected ? theme.color("fg") : theme.color("fg-muted"))
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 22)
-            .background(
-                ZStack {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 4).fill(theme.color("bg-3"))
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.white.opacity(0.04), lineWidth: 1)
-                            .blendMode(.plusLighter)
-                    }
-                }
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(theme.color("accent"), lineWidth: isFocused ? 1 : 0)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .focusable(isEnabled)
-        .focused(focusedSegment, equals: id)
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.4)
-        .modifier(SegmentHelpModifier(text: isEnabled ? nil : disabledHelp))
+    private var selectedLaunchSurfaceSegment: NewWorktreeLaunchSurfaceSegment {
+        if !openAfterCreate { return .none }
+        return launchMode == .terminal ? .terminal : .acp
     }
 
-    private struct SegmentedContainerStyle: ViewModifier {
-        let theme: Theme
-
-        func body(content: Content) -> some View {
-            content
-                .padding(2)
-                .background(theme.color("seg-container-bg"))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-    }
-
-    private struct SegmentHelpModifier: ViewModifier {
-        let text: String?
-        func body(content: Content) -> some View {
-            if let text { content.help(text) } else { content }
+    private func selectLaunchSurface(_ segment: NewWorktreeLaunchSurfaceSegment) {
+        switch segment {
+        case .none:
+            openAfterCreate = false
+        case .terminal:
+            openAfterCreate = true
+            launchMode = .terminal
+            persistableLaunchMode = .terminal
+            launchAgentId = Self.resolvedLaunchAgent(
+                initialAgentId: launchAgentId,
+                mode: .terminal,
+                enabledAgents: state.agentRegistry.enabled()
+            )
+        case .acp:
+            guard acpSegmentEnabled else { return }
+            openAfterCreate = true
+            launchMode = .acp
+            persistableLaunchMode = .acp
+            launchAgentId = Self.resolvedLaunchAgent(
+                initialAgentId: launchAgentId,
+                mode: .acp,
+                enabledAgents: state.agentRegistry.enabled()
+            )
         }
     }
 

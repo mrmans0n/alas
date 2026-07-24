@@ -30,6 +30,30 @@ struct TouchTargetSmokeTests {
         #expect(controller.view != nil)
     }
 
+    @Test func alasSegmentedControlRendersEnabledAndDisabledOptions() {
+        enum Choice: Hashable { case keep, close }
+        let view = AlasSegmentedControl(
+            selection: Choice.keep,
+            options: [
+                AlasSegmentedOption(id: .keep, label: "Keep pane open"),
+                AlasSegmentedOption(
+                    id: .close,
+                    label: "Close pane",
+                    isEnabled: false,
+                    disabledHelp: "Unavailable"
+                ),
+            ],
+            onSelect: { _ in }
+        )
+        .environment(\.theme, currentTheme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(controller.view.fittingSize.width > 0)
+        #expect(controller.view.fittingSize.height > 0)
+    }
+
     @Test func tabBarViewRendersWithoutCrashing() {
         let tab = Tab.editor(EditorTabState(
             id: "t1",
