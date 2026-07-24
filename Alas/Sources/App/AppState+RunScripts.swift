@@ -235,5 +235,4 @@ extension AppState {
             newScript: { [weak self] scope in self?.newRunScript(scope: scope, in: worktree) }
         )
     }
-
 }
