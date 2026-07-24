@@ -1913,6 +1913,30 @@ final class ACPSessionManager: ObservableObject {
         fork.mechanism = .transcriptTransfer
         fork.contextDeliveryPending = true
         session.forkRecord = fork
+        if let source = try await persistence.loadSession(id: fork.sourceSessionID),
+           let sourceRemoteSessionID = source.remoteSessionId,
+           !sourceRemoteSessionID.isEmpty,
+           let brokerClient = connection.client as? ACPBrokerClient {
+            let operationKey = Self.brokerStartupOperationKey(
+                sessionId: session.id,
+                method: "session/fork",
+                remoteSessionId: sourceRemoteSessionID
+            )
+            if let replayed = brokerClient.replayedCompletion(
+                forPreRegisteredOperationKey: operationKey
+            ) {
+                if replayed.outcome.error == nil,
+                   let result = replayed.outcome.result,
+                   let forked = try? JSONDecoder().decode(
+                       ACPSessionNewResult.self,
+                       from: result.data
+                   ),
+                   !forked.sessionId.isEmpty {
+                    try? await connection.closeSession(sessionId: forked.sessionId)
+                }
+                replayed.acknowledgeDurableConsumption()
+            }
+        }
         let result = try await connection.newSession(
             cwd: worktreePath,
             mcpServers: wireMCPServers,

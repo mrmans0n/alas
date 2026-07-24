@@ -373,6 +373,49 @@ struct ACPSessionForkAttachTests {
         #expect(await broker.acknowledgedCursors == [ACPBrokerEventCursor(rawValue: 2)])
     }
 
+    @Test("source mismatch closes and releases a replayed fork before session/new")
+    func sourceMismatchClosesAndReleasesReplayedFork() async throws {
+        let store = try seededForkStore()
+        let broker = ForkReplayBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+        try store.appendMessage(
+            sessionId: "source",
+            id: "msg-source-1",
+            kind: "agent",
+            seq: 1,
+            payload: Data(),
+            createdAt: 1
+        )
+
+        await manager.reattach(to: target.id)
+
+        #expect(await broker.sentMethods == [
+            "session/fork",
+            "session/close",
+            "session/new"
+        ])
+        #expect(await broker.closedSessionIDs == ["forked-remote"])
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(target.remoteSessionId == "new-remote")
+        try await waitUntil {
+            await broker.acknowledgedCursors == [
+                ACPBrokerEventCursor(rawValue: 2),
+                ACPBrokerEventCursor(rawValue: 3),
+                ACPBrokerEventCursor(rawValue: 4)
+            ]
+        }
+    }
+
     private func nativeForkOperationKey() async throws -> String? {
         let store = try seededForkStore()
         let client = ACPMockClient()
@@ -517,7 +560,22 @@ struct ACPSessionForkAttachTests {
         END
         """)
     }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        _ predicate: @escaping @MainActor () async -> Bool
+    ) async throws {
+        let start = ContinuousClock.now
+        while !(await predicate()) {
+            if ContinuousClock.now - start > timeout {
+                throw ForkAttachTestTimeout()
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
 }
+
+private struct ForkAttachTestTimeout: Error {}
 
 private final class ForkAcknowledgementRecorder: @unchecked Sendable {
     private let lock = NSLock()
@@ -644,7 +702,11 @@ private actor ForkPreSendFailureBrokerService: ACPBrokerServicing {
 
 private actor ForkReplayBrokerService: ACPBrokerServicing {
     private var attachCount = 0
+    private var replayEvents: [ACPBrokerEvent] = []
+    private var nextCursor: UInt64 = 2
     private(set) var sentOperationKeys: [ACPBrokerOperationKey] = []
+    private(set) var sentMethods: [String] = []
+    private(set) var closedSessionIDs: [String] = []
     private(set) var acknowledgedCursors: [ACPBrokerEventCursor] = []
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -667,7 +729,7 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
                     sessionId: "target",
                     acknowledgedCursor: params.acknowledgedCursor
                 ),
-                events: [forkCompletionEvent]
+                events: replayEvents
             )
         default:
             return ACPBrokerAttachResult(
@@ -676,17 +738,50 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
                     sessionId: "target",
                     acknowledgedCursor: params.acknowledgedCursor
                 ),
-                events: []
+                events: replayEvents
             )
         }
     }
 
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        sentMethods.append(params.method)
         sentOperationKeys.append(params.operationKey)
+        let result: ACPBrokerJSONValue
+        switch params.method {
+        case "session/fork":
+            result = forkResult
+        case "session/close":
+            let closeParams = try JSONDecoder().decode(
+                ACPSessionCloseParams.self,
+                from: params.params.data
+            )
+            closedSessionIDs.append(closeParams.sessionId)
+            result = .null
+        case "session/new":
+            result = sessionNewResult
+        default:
+            result = .null
+        }
+        let wasReplayed = replayEvents.contains(where: { event in
+            if case .operationCompleted(let operationKey, _) = event.kind {
+                return operationKey == params.operationKey
+            }
+            return false
+        })
+        if !wasReplayed {
+            replayEvents.append(ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: nextCursor),
+                kind: .operationCompleted(
+                    operationKey: params.operationKey,
+                    outcome: ACPBrokerRPCOutcome(result: result, error: nil)
+                )
+            ))
+            nextCursor += 1
+        }
         return ACPBrokerSendResult(
             requestId: ACPBrokerAdapterRequestID(rawValue: UInt64(sentOperationKeys.count)),
-            replayed: sentOperationKeys.count > 1,
-            result: forkResult,
+            replayed: wasReplayed,
+            result: result,
             pending: false
         )
     }
@@ -722,16 +817,14 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
         ])
     }
 
-    private var forkCompletionEvent: ACPBrokerEvent {
-        ACPBrokerEvent(
-            cursor: ACPBrokerEventCursor(rawValue: 2),
-            kind: .operationCompleted(
-                operationKey: ACPBrokerOperationKey(
-                    rawValue: "startup:target:session/fork:source-remote"
-                ),
-                outcome: ACPBrokerRPCOutcome(result: forkResult, error: nil)
-            )
-        )
+    private var sessionNewResult: ACPBrokerJSONValue {
+        .object([
+            "sessionId": .string("new-remote"),
+            "availableModels": .array([]),
+            "availableModes": .array([]),
+            "promptSuggestions": .array([]),
+            "configOptions": .array([])
+        ])
     }
 
     private func snapshot(
@@ -762,7 +855,7 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
             remoteSessionResult: nil,
             turnState: .idle,
             acknowledgedCursor: acknowledgedCursor,
-            journalTail: ACPBrokerEventCursor(rawValue: 2),
+            journalTail: replayEvents.last?.cursor ?? acknowledgedCursor,
             pendingRequests: [],
             operations: []
         )

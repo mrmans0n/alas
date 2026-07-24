@@ -27,6 +27,23 @@ struct ACPBrokerDurableCompletionReplayError: LocalizedError {
     }
 }
 
+struct ACPBrokerReplayedOperationCompletion {
+    let outcome: ACPBrokerRPCOutcome
+    private let acknowledgement: @Sendable () -> Void
+
+    init(
+        outcome: ACPBrokerRPCOutcome,
+        acknowledgement: @escaping @Sendable () -> Void
+    ) {
+        self.outcome = outcome
+        self.acknowledgement = acknowledgement
+    }
+
+    func acknowledgeDurableConsumption() {
+        acknowledgement()
+    }
+}
+
 final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let service: ACPBrokerServicing
     private let brokerId: ACPBrokerID
@@ -66,6 +83,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
     private var pendingOutboundRequestIds: Set<JSONRPCID> = []
     private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
+    private var preRegisteredOperationKeyRefCounts: [ACPBrokerOperationKey: Int] = [:]
+    private var preRegisteredOperationCompletions:
+        [ACPBrokerOperationKey: (outcome: ACPBrokerRPCOutcome, cursor: ACPBrokerEventCursor)] = [:]
     /// Ref-counted (not a plain `Set`) so two calls that happen to share an
     /// explicit `brokerOperationKey` — unlikely, but the type permits it —
     /// don't have one call's exit clear the flag out from under the other.
@@ -190,9 +210,29 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     func preRegisterAwaitedOperationKeys(_ operationKeys: some Sequence<String>) {
         stateLock.lock()
         for key in operationKeys {
-            awaitedOperationKeyRefCounts[ACPBrokerOperationKey(rawValue: key), default: 0] += 1
+            let operationKey = ACPBrokerOperationKey(rawValue: key)
+            awaitedOperationKeyRefCounts[operationKey, default: 0] += 1
+            preRegisteredOperationKeyRefCounts[operationKey, default: 0] += 1
         }
         stateLock.unlock()
+    }
+
+    func replayedCompletion(
+        forPreRegisteredOperationKey operationKey: String
+    ) -> ACPBrokerReplayedOperationCompletion? {
+        let key = ACPBrokerOperationKey(rawValue: operationKey)
+        stateLock.lock()
+        guard let completion = preRegisteredOperationCompletions[key] else {
+            stateLock.unlock()
+            return nil
+        }
+        stateLock.unlock()
+        return ACPBrokerReplayedOperationCompletion(
+            outcome: completion.outcome,
+            acknowledgement: { [weak self] in
+                self?.ackOperationCompletion(operationKey: key, cursor: completion.cursor)
+            }
+        )
     }
 
     @discardableResult
@@ -292,7 +332,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 // deliberately no longer acks for, see above), there is no
                 // successful result a caller could still receive for this
                 // operationKey, so nothing else will ever call
-                // `ackResponse` for it. The `attachAndReplay()` just above
+                // `ackOperationCompletion` for it. The `attachAndReplay()` just above
                 // may have already dispatched this exact completion (with
                 // its error outcome) and, since this call registered
                 // interest before the RPC, protected its cursor — ack it
@@ -300,7 +340,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 // later durable event behind a completion nobody is coming
                 // back for.
                 if let cursor = currentOperationCompletionCursor(for: operationKey) {
-                    ackResponse(cursor: cursor)
+                    ackOperationCompletion(operationKey: operationKey, cursor: cursor)
                 }
                 throw ACPClientError.jsonrpc(error)
             }
@@ -314,7 +354,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 body: try (result.result ?? .null).data,
                 durableConsumptionAcknowledgement: { [weak self] in
                     if let cursor {
-                        self?.ackResponse(cursor: cursor)
+                        self?.ackOperationCompletion(operationKey: operationKey, cursor: cursor)
                     }
                 }
             )
@@ -544,7 +584,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 return
             }
             dispatchPendingRequest(request, cursor: event.cursor)
-        case .operationCompleted(let operationKey, _):
+        case .operationCompleted(let operationKey, let outcome):
             stateLock.lock()
             operationCompletionCursors[operationKey] = event.cursor
             // Protect this cursor from `ackAfterEarlierDurableEvents`
@@ -570,6 +610,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             // permanently blocking every later ack.
             if awaitedOperationKeyRefCounts[operationKey] != nil {
                 unacknowledgedDurableEventCursors.insert(event.cursor)
+            }
+            if preRegisteredOperationKeyRefCounts[operationKey] != nil {
+                preRegisteredOperationCompletions[operationKey] = (outcome, event.cursor)
             }
             stateLock.unlock()
         case .turnStateChanged(let state):
@@ -788,8 +831,16 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         ackAfterEarlierDurableEvents(cursor: cursor)
     }
 
-    private func ackResponse(cursor: ACPBrokerEventCursor) {
+    private func ackOperationCompletion(
+        operationKey: ACPBrokerOperationKey,
+        cursor: ACPBrokerEventCursor
+    ) {
         stateLock.lock()
+        if preRegisteredOperationCompletions[operationKey]?.cursor == cursor {
+            preRegisteredOperationCompletions.removeValue(forKey: operationKey)
+            Self.decrementRefCount(&preRegisteredOperationKeyRefCounts, for: operationKey)
+            Self.decrementRefCount(&awaitedOperationKeyRefCounts, for: operationKey)
+        }
         unacknowledgedDurableEventCursors.remove(cursor)
         stateLock.unlock()
         ackAfterEarlierDurableEvents(cursor: cursor)
@@ -937,14 +988,20 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
 
     private func endAwaitingOperationCompletion(_ operationKey: ACPBrokerOperationKey) {
         stateLock.lock()
-        if let count = awaitedOperationKeyRefCounts[operationKey] {
-            if count <= 1 {
-                awaitedOperationKeyRefCounts.removeValue(forKey: operationKey)
-            } else {
-                awaitedOperationKeyRefCounts[operationKey] = count - 1
-            }
-        }
+        Self.decrementRefCount(&awaitedOperationKeyRefCounts, for: operationKey)
         stateLock.unlock()
+    }
+
+    private static func decrementRefCount(
+        _ refCounts: inout [ACPBrokerOperationKey: Int],
+        for operationKey: ACPBrokerOperationKey
+    ) {
+        guard let count = refCounts[operationKey] else { return }
+        if count <= 1 {
+            refCounts.removeValue(forKey: operationKey)
+        } else {
+            refCounts[operationKey] = count - 1
+        }
     }
 
     private func nextOperationKey(method: String) -> ACPBrokerOperationKey {
