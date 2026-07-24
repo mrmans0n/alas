@@ -1361,23 +1361,34 @@ extension ACPSessionRunner {
         )
     }
 
-    func beginNativeForkBarrier() -> Bool {
-        guard !nativeForkBarrierActive,
-              !steerInProgress,
-              session.agentState == .ready,
-              activePromptID == nil,
-              session.transcript.streamingState == .idle,
-              session.transcript.pendingUserInputs.isEmpty,
-              session.queue.isEmpty
+    func beginNativeForkBarrier() async -> Bool {
+        guard canBeginNativeForkBarrier,
+              await hasConfirmedLeaseForSideEffect(),
+              canBeginNativeForkBarrier
         else { return false }
         nativeForkBarrierActive = true
         return true
+    }
+
+    func confirmNativeForkBarrier() async -> Bool {
+        guard nativeForkBarrierActive else { return false }
+        return await hasConfirmedLeaseForSideEffect()
     }
 
     func endNativeForkBarrier() {
         guard nativeForkBarrierActive else { return }
         nativeForkBarrierActive = false
         flushQueueIfIdle()
+    }
+
+    private var canBeginNativeForkBarrier: Bool {
+        !nativeForkBarrierActive
+            && !steerInProgress
+            && session.agentState == .ready
+            && activePromptID == nil
+            && session.transcript.streamingState == .idle
+            && session.transcript.pendingUserInputs.isEmpty
+            && session.queue.isEmpty
     }
 
     /// User clicked the row-local "send now" affordance for a queued item.

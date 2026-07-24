@@ -11,10 +11,13 @@ struct ACPSessionForkAttachTests {
         let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
-        #expect(manager.sessions["source"] == nil)
+        #expect(manager.runners["source"] != nil)
         await manager.attach(to: target.id, freshlyCreated: true)
 
         #expect(client.sent.map(\.method) == ["initialize", "session/fork"])
@@ -41,12 +44,65 @@ struct ACPSessionForkAttachTests {
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "orphaned-remote")
         scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
 
         #expect(client.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(target.remoteSessionId == "new-remote")
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(target.forkRecord?.contextDeliveryPending == true)
+    }
+
+    @Test("missing source runner falls back without issuing session/fork")
+    func missingSourceRunnerFallsBackWithoutForking() async throws {
+        let store = try seededForkStore()
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "orphaned-remote")
+        scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
+        let manager = makeManager(store: store, client: client)
+        let target = try await hydratedTarget(manager)
+
+        #expect(manager.runners["source"] == nil)
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(target.remoteSessionId == "new-remote")
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(target.forkRecord?.contextDeliveryPending == true)
+    }
+
+    @Test("source lease takeover falls back without issuing session/fork")
+    func sourceLeaseTakeoverFallsBackWithoutForking() async throws {
+        let store = try seededForkStore()
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "orphaned-remote")
+        scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
+        let target = try await hydratedTarget(manager)
+        try store.seizeLease(
+            sessionId: "source",
+            instanceId: "other-instance",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+
+        #expect(manager.runners["source"] != nil)
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(manager.runners["source"] == nil)
         #expect(target.remoteSessionId == "new-remote")
         #expect(target.forkRecord?.phase == .ready)
         #expect(target.forkRecord?.mechanism == .transcriptTransfer)
@@ -298,7 +354,10 @@ struct ACPSessionForkAttachTests {
         let client = ACPMockClient()
         scriptInitialize(client, supportsFork: false)
         scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
@@ -328,7 +387,10 @@ struct ACPSessionForkAttachTests {
             ))
         }
         scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
@@ -353,7 +415,10 @@ struct ACPSessionForkAttachTests {
                 data: nil
             ))
         }
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
@@ -391,10 +456,13 @@ struct ACPSessionForkAttachTests {
         let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
-        #expect(manager.sessions["source"] == nil)
+        #expect(manager.runners["source"] != nil)
         await manager.attach(to: target.id, freshlyCreated: true)
 
         let params = try #require(client.sent.last?.params as? ACPSessionForkParams)
@@ -417,7 +485,10 @@ struct ACPSessionForkAttachTests {
         let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
@@ -550,7 +621,10 @@ struct ACPSessionForkAttachTests {
                 }
             )
         }
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
@@ -575,12 +649,9 @@ struct ACPSessionForkAttachTests {
     func brokerPreSendFailureFallsBackToTranscript() async throws {
         let store = try seededForkStore()
         let broker = ForkPreSendFailureBrokerService()
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
+        let manager = try await makeManagerWithAttachedBrokerSource(
             store: store,
-            setupEvaluator: { _ in .ready },
-            brokerServiceFactory: { broker }
+            targetService: broker
         )
         let target = try await hydratedTarget(manager)
 
@@ -601,12 +672,9 @@ struct ACPSessionForkAttachTests {
     func brokerReplayFailureRetriesStableForkOperation() async throws {
         let store = try seededForkStore()
         let broker = ForkReplayBrokerService()
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
+        let manager = try await makeManagerWithAttachedBrokerSource(
             store: store,
-            setupEvaluator: { _ in .ready },
-            brokerServiceFactory: { broker }
+            targetService: broker
         )
         let target = try await hydratedTarget(manager)
 
@@ -636,12 +704,9 @@ struct ACPSessionForkAttachTests {
     func repeatedStartupReplayFailurePreservesCompletedNativeFork() async throws {
         let store = try seededForkStore()
         let broker = ForkReplayBrokerService(failSecondStartupReplay: true)
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
+        let manager = try await makeManagerWithAttachedBrokerSource(
             store: store,
-            setupEvaluator: { _ in .ready },
-            brokerServiceFactory: { broker }
+            targetService: broker
         )
         let target = try await hydratedTarget(manager)
 
@@ -678,12 +743,9 @@ struct ACPSessionForkAttachTests {
             message: "Method not found",
             data: nil
         ))
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
+        let manager = try await makeManagerWithAttachedBrokerSource(
             store: store,
-            setupEvaluator: { _ in .ready },
-            brokerServiceFactory: { broker }
+            targetService: broker
         )
         let target = try await hydratedTarget(manager)
 
@@ -706,12 +768,9 @@ struct ACPSessionForkAttachTests {
     func sourceMismatchClosesAndReleasesReplayedFork() async throws {
         let store = try seededForkStore()
         let broker = ForkReplayBrokerService()
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
+        let manager = try await makeManagerWithAttachedBrokerSource(
             store: store,
-            setupEvaluator: { _ in .ready },
-            brokerServiceFactory: { broker }
+            targetService: broker
         )
         let target = try await hydratedTarget(manager)
 
@@ -750,7 +809,10 @@ struct ACPSessionForkAttachTests {
         let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
-        let manager = makeManager(store: store, client: client)
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
         let target = try await hydratedTarget(manager)
 
         await manager.attach(to: target.id, freshlyCreated: true)
@@ -827,6 +889,66 @@ struct ACPSessionForkAttachTests {
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
+    }
+
+    private func makeManagerWithAttachedSource(
+        store: ACPSessionStore,
+        targetClient: ACPMockClient
+    ) async throws -> ACPSessionManager {
+        let sourceClient = ACPMockClient()
+        scriptInitialize(sourceClient, supportsFork: true)
+        let sourceRemoteSessionID = try #require(
+            try store.loadSession(id: "source")?.remoteSessionId
+        )
+        scriptSessionResult(
+            sourceClient,
+            method: "session/load",
+            sessionId: sourceRemoteSessionID
+        )
+        var clients = [sourceClient, targetClient]
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                ACPConnection(client: clients.removeFirst())
+            }
+        )
+        let source = try #require(manager.placeholderSession(id: "source"))
+        await manager.hydrateIfNeeded(id: source.id)
+        await manager.attach(to: source.id, freshlyCreated: false)
+        #expect(manager.runners[source.id] != nil)
+        return manager
+    }
+
+    private func makeManagerWithAttachedBrokerSource<Service: ACPBrokerServicing>(
+        store: ACPSessionStore,
+        targetService: Service
+    ) async throws -> ACPSessionManager {
+        let sourceRemoteSessionID = try #require(
+            try store.loadSession(id: "source")?.remoteSessionId
+        )
+        let sourceService = ForkSourceBrokerService(remoteSessionID: sourceRemoteSessionID)
+        var providedSourceService = false
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: {
+                if !providedSourceService {
+                    providedSourceService = true
+                    return sourceService
+                }
+                return targetService
+            }
+        )
+        let source = try #require(manager.placeholderSession(id: "source"))
+        await manager.hydrateIfNeeded(id: source.id)
+        await manager.attach(to: source.id, freshlyCreated: false)
+        #expect(manager.runners[source.id] != nil)
+        return manager
     }
 
     private func hydratedTarget(_ manager: ACPSessionManager) async throws -> ACPSession {

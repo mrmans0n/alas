@@ -1897,11 +1897,30 @@ final class ACPSessionManager: ObservableObject {
         wireMCPServers: [ACPMCPServer]
     ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
         var fork = fork
-        let sourceRunner = runners[fork.sourceSessionID]
         let canAttemptNativeFork = initialized.sessionCapabilities.supportsFork
             && connection.client.providesDurableOperationKeyDeduplication
-        let nativeForkBarrierAcquired = canAttemptNativeFork
-            ? sourceRunner?.beginNativeForkBarrier() ?? true
+        let source = canAttemptNativeFork
+            ? try await persistence.loadSession(id: fork.sourceSessionID)
+            : nil
+        let sourceRemoteSessionID = source?.remoteSessionId
+        let forkOperationKey = sourceRemoteSessionID.flatMap { remoteSessionID in
+            remoteSessionID.isEmpty ? nil : Self.brokerStartupOperationKey(
+                sessionId: session.id,
+                method: "session/fork",
+                remoteSessionId: remoteSessionID
+            )
+        }
+        let hasReplayedForkCompletion = if let forkOperationKey,
+                                           let brokerClient = connection.client as? ACPBrokerClient {
+            brokerClient.replayedCompletion(
+                forPreRegisteredOperationKey: forkOperationKey
+            ) != nil
+        } else {
+            false
+        }
+        let sourceRunner = runners[fork.sourceSessionID]
+        let nativeForkBarrierAcquired = canAttemptNativeFork && !hasReplayedForkCompletion
+            ? await sourceRunner?.beginNativeForkBarrier() ?? false
             : false
         defer {
             if nativeForkBarrierAcquired {
@@ -1911,13 +1930,26 @@ final class ACPSessionManager: ObservableObject {
         if nativeForkBarrierAcquired {
             await sourceRunner?.flushPersistence()
         }
+        let sourceBoundaryMatches = if canAttemptNativeFork {
+            try await persistence.latestMessageSeq(sessionId: fork.sourceSessionID)
+                == fork.sourceBoundarySequence
+        } else {
+            false
+        }
+        let hasNativeForkAuthority = if hasReplayedForkCompletion {
+            true
+        } else if nativeForkBarrierAcquired,
+                  let sourceRunner,
+                  runners[fork.sourceSessionID] === sourceRunner {
+            await sourceRunner.confirmNativeForkBarrier()
+        } else {
+            false
+        }
         if canAttemptNativeFork,
-           nativeForkBarrierAcquired,
-           let source = try await persistence.loadSession(id: fork.sourceSessionID),
-           let sourceRemoteSessionID = source.remoteSessionId,
+           hasNativeForkAuthority,
+           let sourceRemoteSessionID,
            !sourceRemoteSessionID.isEmpty,
-           try await persistence.latestMessageSeq(sessionId: fork.sourceSessionID)
-                == fork.sourceBoundarySequence {
+           sourceBoundaryMatches {
             let result: ACPSessionNewResult
             do {
                 result = try await connection.forkSession(
