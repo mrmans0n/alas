@@ -354,6 +354,12 @@ private struct RootPresentationHandlers: ViewModifier {
                 presetProjectId: presentation.projectId
             )
         }
+        .sheet(item: $state.pendingRunScriptCreation) { presentation in
+            NewRunScriptDialog(
+                state: state,
+                presentation: presentation
+            )
+        }
         .alert(
             "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
             isPresented: Binding(
