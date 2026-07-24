@@ -41,6 +41,22 @@ struct ACPSessionForkManagerTests {
         #expect(target.transcript.messages.count == 2)
         #expect(target.forkRecord?.mechanism == .transcriptTransfer)
         #expect(try store.loadMessages(sessionId: source.id) == sourceBefore)
+
+        let targetID = target.id
+        await manager.releaseAllOwnedLeases()
+        let restoredStore = try ACPSessionStore(path: path)
+        let restoredManager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: restoredStore
+        )
+        let restored = try #require(restoredManager.placeholderSession(id: targetID))
+        await restoredManager.hydrateIfNeeded(id: targetID)
+        await restoredManager.awaitBackfill(id: targetID)
+
+        #expect(restored.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(restored.forkRecord?.contextDeliveryPending == true)
+        #expect(restored.transcript.messages.count == 2)
     }
 
     @Test("streaming agent is ineligible while earlier messages remain eligible")

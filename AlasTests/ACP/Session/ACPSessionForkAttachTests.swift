@@ -33,6 +33,96 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == false)
     }
 
+    @Test("negotiating native fork recovers the durable response after relaunch")
+    func negotiatingNativeForkRecoversAfterRelaunch() async throws {
+        let storeA = try seededForkStore()
+        do {
+            let managerA = ACPSessionManager(
+                worktreeId: "wt",
+                worktreePath: "/tmp/wt",
+                store: storeA
+            )
+            let target = try await hydratedTarget(managerA)
+            #expect(target.forkRecord?.phase == .negotiatingNative)
+            managerA.shutdownBackgroundTasks()
+            await managerA.releaseAllOwnedLeases()
+        }
+
+        let storeB = try ACPSessionStore(path: storeA.path)
+        let broker = ForkRelaunchBrokerService(forkResponseAvailable: true)
+        let managerB = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: storeB,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+        let restored = try await hydratedTarget(managerB)
+
+        await managerB.attach(to: restored.id, freshlyCreated: false)
+
+        #expect(restored.forkRecord?.phase == .ready)
+        #expect(restored.forkRecord?.mechanism == .nativeACP)
+        #expect(restored.remoteSessionId == "forked-remote")
+        let sent = await broker.sent
+        #expect(sent.filter { $0.method == "session/fork" }.count == 1)
+        #expect(await broker.replayedForkCount == 1)
+        #expect(sent.first { $0.method == "session/fork" }?.operationKey
+            == ACPBrokerOperationKey(
+                rawValue: "startup:target:session/fork:source-remote"
+            ))
+
+        await managerB.detach(sessionId: restored.id)
+        managerB.shutdownBackgroundTasks()
+        await managerB.releaseAllOwnedLeases()
+    }
+
+    @Test("unavailable durable fork response falls back after relaunch without an unkeyed fork")
+    func unavailableDurableForkResponseFallsBackAfterRelaunch() async throws {
+        let storeA = try seededForkStore()
+        do {
+            let managerA = ACPSessionManager(
+                worktreeId: "wt",
+                worktreePath: "/tmp/wt",
+                store: storeA
+            )
+            _ = try await hydratedTarget(managerA)
+            managerA.shutdownBackgroundTasks()
+            await managerA.releaseAllOwnedLeases()
+        }
+
+        let storeB = try ACPSessionStore(path: storeA.path)
+        let broker = ForkRelaunchBrokerService(forkResponseAvailable: false)
+        let managerB = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: storeB,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker }
+        )
+        let restored = try await hydratedTarget(managerB)
+
+        await managerB.attach(to: restored.id, freshlyCreated: false)
+
+        #expect(restored.forkRecord?.phase == .ready)
+        #expect(restored.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(restored.forkRecord?.contextDeliveryPending == true)
+        let sent = await broker.sent
+        #expect(sent.map(\.method) == ["session/fork", "session/new"])
+        let forkRequests = sent.filter { $0.method == "session/fork" }
+        #expect(forkRequests.count == 1)
+        #expect(await broker.replayedForkCount == 1)
+        #expect(forkRequests.allSatisfy {
+            $0.operationKey == ACPBrokerOperationKey(
+                rawValue: "startup:target:session/fork:source-remote"
+            )
+        })
+
+        await managerB.detach(sessionId: restored.id)
+        managerB.shutdownBackgroundTasks()
+        await managerB.releaseAllOwnedLeases()
+    }
+
     @Test("missing fork capability falls back to transcript transfer and session/new")
     func missingForkCapabilityFallsBackToTranscript() async throws {
         let store = try seededForkStore()
@@ -667,6 +757,180 @@ private final class ForkAcknowledgementRecorder: @unchecked Sendable {
 private enum ForkReplayBrokerError: Error {
     case trailingReplayFailure
     case preSendFailure
+}
+
+private actor ForkRelaunchBrokerService: ACPBrokerServicing {
+    private static let forkOperationKey = ACPBrokerOperationKey(
+        rawValue: "startup:target:session/fork:source-remote"
+    )
+    private static let forkCompletionCursor = ACPBrokerEventCursor(rawValue: 2)
+
+    let forkResponseAvailable: Bool
+    private(set) var sent: [ACPBrokerSendParams] = []
+    private(set) var replayedForkCount = 0
+    private var nextRequestID: UInt64 = 0
+
+    init(forkResponseAvailable: Bool) {
+        self.forkResponseAvailable = forkResponseAvailable
+    }
+
+    func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        ACPBrokerOpenResult(
+            snapshot: snapshot(
+                brokerId: params.brokerId,
+                sessionId: params.sessionId,
+                acknowledgedCursor: .init(rawValue: 0)
+            ),
+            adopted: true
+        )
+    }
+
+    func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        let events = params.acknowledgedCursor < Self.forkCompletionCursor
+            ? [forkCompletionEvent]
+            : []
+        return ACPBrokerAttachResult(
+            snapshot: snapshot(
+                brokerId: params.brokerId,
+                sessionId: "target",
+                acknowledgedCursor: params.acknowledgedCursor
+            ),
+            events: events
+        )
+    }
+
+    func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        sent.append(params)
+        nextRequestID += 1
+        switch params.method {
+        case "session/fork":
+            guard params.operationKey == Self.forkOperationKey else {
+                return ACPBrokerSendResult(
+                    requestId: ACPBrokerAdapterRequestID(rawValue: nextRequestID),
+                    replayed: false,
+                    error: JSONRPCError(
+                        code: -32602,
+                        message: "session/fork did not reuse the durable operation key",
+                        data: nil
+                    ),
+                    pending: false
+                )
+            }
+            replayedForkCount += 1
+            return ACPBrokerSendResult(
+                requestId: ACPBrokerAdapterRequestID(rawValue: nextRequestID),
+                replayed: true,
+                result: forkOutcome.result,
+                error: forkOutcome.error,
+                pending: false
+            )
+        case "session/new":
+            return ACPBrokerSendResult(
+                requestId: ACPBrokerAdapterRequestID(rawValue: nextRequestID),
+                replayed: false,
+                result: sessionResult(id: "new-remote"),
+                pending: false
+            )
+        default:
+            return ACPBrokerSendResult(
+                requestId: ACPBrokerAdapterRequestID(rawValue: nextRequestID),
+                replayed: false,
+                result: .null,
+                pending: false
+            )
+        }
+    }
+
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        ACPBrokerSimpleOK(ok: true)
+    }
+
+    private func sessionResult(id: String) -> ACPBrokerJSONValue {
+        .object([
+            "sessionId": .string(id),
+            "availableModels": .array([]),
+            "availableModes": .array([]),
+            "promptSuggestions": .array([]),
+            "configOptions": .array([])
+        ])
+    }
+
+    private var forkOutcome: ACPBrokerRPCOutcome {
+        ACPBrokerRPCOutcome(
+            result: forkResponseAvailable ? sessionResult(id: "forked-remote") : nil,
+            error: nil
+        )
+    }
+
+    private var forkCompletionEvent: ACPBrokerEvent {
+        ACPBrokerEvent(
+            cursor: Self.forkCompletionCursor,
+            kind: .operationCompleted(
+                operationKey: Self.forkOperationKey,
+                outcome: forkOutcome
+            )
+        )
+    }
+
+    private func snapshot(
+        brokerId: ACPBrokerID,
+        sessionId: String,
+        acknowledgedCursor: ACPBrokerEventCursor
+    ) -> ACPBrokerSnapshot {
+        ACPBrokerSnapshot(
+            metadata: ACPBrokerMetadata(
+                brokerId: brokerId,
+                generation: ACPBrokerGeneration(rawValue: 13),
+                alasSessionId: sessionId,
+                adapterProgram: "mock",
+                adapterArgs: [],
+                cwd: "/tmp/wt",
+                envKeys: [],
+                createdAtMillis: 10
+            ),
+            initializeResult: .object([
+                "protocolVersion": .number(1),
+                "agentCapabilities": .object([
+                    "sessionCapabilities": .object([
+                        "fork": .object([:])
+                    ])
+                ]),
+                "authMethods": .array([])
+            ]),
+            remoteSessionResult: nil,
+            turnState: .idle,
+            acknowledgedCursor: acknowledgedCursor,
+            journalTail: Self.forkCompletionCursor,
+            pendingRequests: [],
+            operations: [
+                ACPBrokerOperationSnapshot(
+                    operationKey: Self.forkOperationKey,
+                    adapterRequestId: ACPBrokerAdapterRequestID(rawValue: 1),
+                    method: "session/fork",
+                    params: .object([
+                        "sessionId": .string("source-remote")
+                    ]),
+                    terminalOutcome: forkOutcome
+                )
+            ]
+        )
+    }
 }
 
 private actor ForkPreSendFailureBrokerService: ACPBrokerServicing {

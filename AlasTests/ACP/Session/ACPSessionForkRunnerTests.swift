@@ -5,6 +5,101 @@ import Testing
 @MainActor
 @Suite("ACP session fork context delivery")
 struct ACPSessionForkRunnerTests {
+    @Test("transcript fork survives relaunch and delivers context on the first prompt")
+    func transcriptForkSurvivesRelaunch() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-fork-relaunch-\(UUID()).sqlite").path
+        let targetID: String
+        let inheritedCount = 2
+        do {
+            let storeA = try ACPSessionStore(path: path)
+            let managerA = ACPSessionManager(
+                worktreeId: "wt",
+                worktreePath: "/tmp/wt",
+                store: storeA
+            )
+            let source = managerA.createSession(agentId: "claude")
+            await managerA.flushPersistence()
+            let inherited: [ACPMessage] = [
+                .user(id: UUID(), text: "Question", attachments: []),
+                .agent(id: UUID(), StreamingText("Answer"))
+            ]
+            for (index, message) in inherited.enumerated() {
+                source.transcript.appendMessage(message)
+                try storeA.appendMessage(
+                    sessionId: source.id,
+                    id: "msg-\(source.id)-\(index)",
+                    kind: message.kind,
+                    seq: Int64(index),
+                    payload: try ACPMessageCodec.encode(message),
+                    createdAt: Int64(index)
+                )
+            }
+            let target = try await managerA.createFork(
+                sourceSessionID: source.id,
+                boundary: .init(stableID: inherited[1].stableId, kind: .agent),
+                targetAgentID: "codex",
+                autoRunDefault: false
+            )
+            targetID = target.id
+            managerA.shutdownBackgroundTasks()
+            await managerA.releaseAllOwnedLeases()
+        }
+
+        let storeB = try ACPSessionStore(path: path)
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(),
+                authMethods: []
+            ))
+        }
+        mock.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "fresh-remote",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let managerB = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: storeB,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: mock) }
+        )
+        let restored = try #require(managerB.placeholderSession(id: targetID))
+        await managerB.hydrateIfNeeded(id: targetID)
+        await managerB.awaitBackfill(id: targetID)
+
+        #expect(restored.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(restored.forkRecord?.contextDeliveryPending == true)
+        #expect(restored.transcript.messages.count == inheritedCount)
+
+        await managerB.attach(to: targetID, freshlyCreated: false)
+        let runner = try #require(managerB.runners[targetID])
+        runner.sendNow(blocks: [.text("Continue")], queuedItemId: nil)
+        try await waitUntil {
+            mock.sent.contains { $0.method == "session/prompt" }
+                && restored.forkRecord?.contextDeliveryPending == false
+        }
+        await runner.flushPersistence()
+
+        #expect(try storeB.loadFork(
+            targetSessionID: restored.id
+        )?.contextDeliveryPending == false)
+        #expect(restored.transcript.messages.count == inheritedCount + 1)
+
+        await managerB.detach(sessionId: targetID)
+        managerB.shutdownBackgroundTasks()
+        await managerB.releaseAllOwnedLeases()
+    }
+
     @Test("fork context serializes the inherited conversation")
     func forkContextSerializesInheritedConversation() {
         let context = ACPTranscriptMarkdown.forkContext(

@@ -38,7 +38,9 @@ struct ACPTranscriptRowContentTests {
     func rowContentEqualitySnapshotsForkEligibility() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [])
-        let targets = [.init(id: "claude", displayName: "Claude", isSameAgent: true)]
+        let targets: [ACPSessionForkTarget] = [
+            .init(id: "claude", displayName: "Claude", isSameAgent: true)
+        ]
 
         func row(isForkEligible: Bool) -> ACPTranscriptRowContent {
             ACPTranscriptRowContent(
