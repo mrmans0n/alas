@@ -6,6 +6,12 @@ enum NewWorktreeLaunchSurfaceSegment: Hashable {
     case acp
 }
 
+struct NewWorktreeGGModeSegment: Equatable {
+    let mode: GGWorktreeMode
+    let label: String
+    let icon: GGStackIconVariant
+}
+
 struct NewWorktreeDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
@@ -529,9 +535,9 @@ struct NewWorktreeDialog: View {
         return availableBranches.first ?? configuredDefault
     }
 
-    nonisolated static let ggModeSegments: [(mode: GGWorktreeMode, label: String)] = [
-        (.on, "On"),
-        (.off, "Off"),
+    nonisolated static let ggModeSegments: [NewWorktreeGGModeSegment] = [
+        .init(mode: .on, label: "On", icon: .stack),
+        .init(mode: .off, label: "Off", icon: .disabled),
     ]
 
     private var ggModeSegmented: some View {
@@ -539,7 +545,11 @@ struct NewWorktreeDialog: View {
             AlasSegmentedControl(
                 selection: ggMode,
                 options: Self.ggModeSegments.map {
-                    AlasSegmentedOption(id: $0.mode, label: $0.label)
+                    AlasSegmentedOption(
+                        id: $0.mode,
+                        label: $0.label,
+                        segmentedIcon: .gg($0.icon)
+                    )
                 },
                 onSelect: { ggMode = $0 }
             )

@@ -1,9 +1,14 @@
 import SwiftUI
 
+enum AlasSegmentedIcon: Equatable {
+    case system(String)
+    case gg(GGStackIconVariant)
+}
+
 struct AlasSegmentedOption<ID: Hashable> {
     let id: ID
     let label: String
-    let icon: String?
+    let icon: AlasSegmentedIcon?
     let isEnabled: Bool
     let disabledHelp: String?
 
@@ -16,7 +21,21 @@ struct AlasSegmentedOption<ID: Hashable> {
     ) {
         self.id = id
         self.label = label
-        self.icon = icon
+        self.icon = icon.map(AlasSegmentedIcon.system)
+        self.isEnabled = isEnabled
+        self.disabledHelp = disabledHelp
+    }
+
+    init(
+        id: ID,
+        label: String,
+        segmentedIcon: AlasSegmentedIcon?,
+        isEnabled: Bool = true,
+        disabledHelp: String? = nil
+    ) {
+        self.id = id
+        self.label = label
+        self.icon = segmentedIcon
         self.isEnabled = isEnabled
         self.disabledHelp = disabledHelp
     }
@@ -54,11 +73,14 @@ struct AlasSegmentedControl<ID: Hashable>: View {
         } label: {
             HStack(spacing: 5) {
                 if let icon = option.icon {
-                    Icon(
-                        name: icon,
-                        size: 11,
-                        color: isSelected ? theme.color("fg") : theme.color("fg-muted")
-                    )
+                    let iconColor = isSelected ? theme.color("fg") : theme.color("fg-muted")
+                    switch icon {
+                    case .system(let name):
+                        Icon(name: name, size: 11, color: iconColor)
+                    case .gg(let variant):
+                        GGStackIcon(variant: variant, size: 11, color: iconColor)
+                            .accessibilityHidden(true)
+                    }
                 }
                 Text(option.label)
                     .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))

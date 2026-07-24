@@ -571,6 +571,7 @@
 		686BB3FB9735836CFCAAE0D1 /* MCPRegistrationDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE42251A40DA18A6DB0E7491 /* MCPRegistrationDecisionTests.swift */; };
 		68D58F9361C2C31EE200479A /* ACPBrokerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A27D9BBDE49BF3A41FAFB7 /* ACPBrokerClient.swift */; };
 		69C592752249412BC8A6EF3C /* GGInboxHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DB6D67179D2557D3A255AA3 /* GGInboxHostTests.swift */; };
+		6A080E2F35BD0D925D5F7BD5 /* GGStackIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCDB66D0948AF52EBA880CD /* GGStackIcon.swift */; };
 		6A10E9DF8A052DBDFF477863 /* OpenCodeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEC2AE8D8A358AC0F83252CD /* OpenCodeInstaller.swift */; };
 		6A386E5CF4C958D9F90DF692 /* InstallSplitButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEFDCAF3F099FE539D9737E9 /* InstallSplitButton.swift */; };
 		6A5B87FF631136E5246D0F38 /* AgentLauncherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A43A7D90E591CFD18088C70 /* AgentLauncherModel.swift */; };
@@ -1479,6 +1480,7 @@
 		0B057D23BD5B72E06E790C5B /* ACPSessionQueueAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionQueueAPITests.swift; sourceTree = "<group>"; };
 		0B2F41880B917155F7ADE622 /* MonospaceFontCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonospaceFontCatalog.swift; sourceTree = "<group>"; };
 		0BCD93747BF71CB256038314 /* ACPPermissionPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionPrompt.swift; sourceTree = "<group>"; };
+		0BCDB66D0948AF52EBA880CD /* GGStackIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackIcon.swift; sourceTree = "<group>"; };
 		0C4F66F89778A1995407BB50 /* ACPElicitation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPElicitation.swift; sourceTree = "<group>"; };
 		0C5373F76231F229D3F96AF3 /* session-update-config-option.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-config-option.json"; sourceTree = "<group>"; };
 		0C8541BE5617C7E212CCD034 /* FilesTabLoadingIndicatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabLoadingIndicatorTests.swift; sourceTree = "<group>"; };
@@ -5061,6 +5063,7 @@
 				B6B7A6EC8A1372E76F0B934D /* GGStackCreateMode.swift */,
 				D7860DF249939BC7FC1EBD76 /* GGStackDrawer.swift */,
 				ABF9F7D29F77AE8524E06EFA /* GGStackGate.swift */,
+				0BCDB66D0948AF52EBA880CD /* GGStackIcon.swift */,
 				86CE36A9A7301E6863CEDFCC /* GGStackModels.swift */,
 				4D59124348BCE765816A0C6C /* GGStackReadinessModel.swift */,
 				B67F46F592EB999B0FEBFCDB /* GGStackSummaryStore.swift */,
@@ -5794,6 +5797,7 @@
 				E5648509F3F1EA4297E856A1 /* GGStackCreateMode.swift in Sources */,
 				3AFEB19356A2BC5E7B6E1E4A /* GGStackDrawer.swift in Sources */,
 				4BA49732C8D13ED574A0E35D /* GGStackGate.swift in Sources */,
+				6A080E2F35BD0D925D5F7BD5 /* GGStackIcon.swift in Sources */,
 				93CE39FC58076587CC85F489 /* GGStackModels.swift in Sources */,
 				8ADC05EBB9FE7D278508A941 /* GGStackReadinessModel.swift in Sources */,
 				DB1877ECE26010476924369F /* GGStackSummaryStore.swift in Sources */,

@@ -417,9 +417,11 @@ struct NewWorktreeDialogTests {
         ) == .on)
     }
 
-    @Test func ggModeSegmentsMatchDialogOrder() {
-        #expect(NewWorktreeDialog.ggModeSegments.map(\.mode) == [.on, .off])
-        #expect(NewWorktreeDialog.ggModeSegments.map(\.label) == ["On", "Off"])
+    @Test func ggModeSegmentsMatchDialogOrderAndIcons() {
+        #expect(NewWorktreeDialog.ggModeSegments == [
+            NewWorktreeGGModeSegment(mode: .on, label: "On", icon: .stack),
+            NewWorktreeGGModeSegment(mode: .off, label: "Off", icon: .disabled),
+        ])
     }
 
     @Test func canCreateBlocksMissingUsernameOnlyForEffectiveGG() {
