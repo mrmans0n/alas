@@ -46,6 +46,8 @@ struct ACPBrokerReplayedOperationCompletion {
 }
 
 final class ACPBrokerClient: ACPClient, @unchecked Sendable {
+    let providesDurableOperationKeyDeduplication = true
+
     private let service: ACPBrokerServicing
     private let brokerId: ACPBrokerID
     private let sessionId: String

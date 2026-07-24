@@ -1898,7 +1898,9 @@ final class ACPSessionManager: ObservableObject {
     ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
         var fork = fork
         let sourceRunner = runners[fork.sourceSessionID]
-        let nativeForkBarrierAcquired = initialized.sessionCapabilities.supportsFork
+        let canAttemptNativeFork = initialized.sessionCapabilities.supportsFork
+            && connection.client.providesDurableOperationKeyDeduplication
+        let nativeForkBarrierAcquired = canAttemptNativeFork
             ? sourceRunner?.beginNativeForkBarrier() ?? true
             : false
         defer {
@@ -1909,7 +1911,7 @@ final class ACPSessionManager: ObservableObject {
         if nativeForkBarrierAcquired {
             await sourceRunner?.flushPersistence()
         }
-        if initialized.sessionCapabilities.supportsFork,
+        if canAttemptNativeFork,
            nativeForkBarrierAcquired,
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,

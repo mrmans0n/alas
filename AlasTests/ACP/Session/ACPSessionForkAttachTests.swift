@@ -8,7 +8,7 @@ struct ACPSessionForkAttachTests {
     @Test("negotiating fork uses native ACP and persists the returned remote session")
     func negotiatingForkUsesNativeACP() async throws {
         let store = try seededForkStore()
-        let client = ACPMockClient()
+        let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
         let manager = makeManager(store: store, client: client)
@@ -34,6 +34,25 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == false)
     }
 
+    @Test("non-durable connection falls back without issuing session/fork")
+    func nonDurableConnectionFallsBackWithoutForking() async throws {
+        let store = try seededForkStore()
+        let client = ACPMockClient()
+        scriptInitialize(client, supportsFork: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "orphaned-remote")
+        scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
+        let manager = makeManager(store: store, client: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(target.remoteSessionId == "new-remote")
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+        #expect(target.forkRecord?.contextDeliveryPending == true)
+    }
+
     @Test("native fork holds later source prompts until the remote branch exists")
     func nativeForkSerializesLaterSourcePrompt() async throws {
         let store = try seededForkStore()
@@ -42,7 +61,7 @@ struct ACPSessionForkAttachTests {
         scriptSessionResult(sourceClient, method: "session/load", sessionId: "source-remote")
 
         let forkGate = ForkAttachGate()
-        let targetClient = ACPMockClient()
+        let targetClient = durableMockClient()
         scriptInitialize(targetClient, supportsFork: true)
         targetClient.scriptAsync(method: "session/fork") { _ in
             await forkGate.enterAndWait()
@@ -116,7 +135,7 @@ struct ACPSessionForkAttachTests {
         sourceClient.script(method: "session/prompt") { _ in Data("null".utf8) }
 
         let initializeGate = ForkAttachGate()
-        let targetClient = ACPMockClient()
+        let targetClient = durableMockClient()
         targetClient.scriptAsync(method: "initialize") { _ in
             await initializeGate.enterAndWait()
             return try JSONEncoder().encode(ACPInitializeResult(
@@ -299,7 +318,7 @@ struct ACPSessionForkAttachTests {
     @Test("session/fork JSON-RPC failure falls back on the same connection")
     func forkJSONRPCFailureFallsBackOnSameConnection() async throws {
         let store = try seededForkStore()
-        let client = ACPMockClient()
+        let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         client.script(method: "session/fork") { _ in
             throw ACPClientError.jsonrpc(.init(
@@ -325,7 +344,7 @@ struct ACPSessionForkAttachTests {
     @Test("fork auth failure finalizes transcript fallback and keeps needs-auth state")
     func forkAuthFailurePreservesNeedsAuth() async throws {
         let store = try seededForkStore()
-        let client = ACPMockClient()
+        let client = durableMockClient()
         scriptInitialize(client, supportsFork: true, authMethods: [terminalAuthMethod()])
         client.script(method: "session/fork") { _ in
             throw ACPClientError.jsonrpc(.init(
@@ -369,7 +388,7 @@ struct ACPSessionForkAttachTests {
     @Test("native fork resolves the source remote ID from persistence")
     func nativeForkResolvesSourceFromPersistence() async throws {
         let store = try seededForkStore(sourceRemoteSessionID: "persisted-source-remote")
-        let client = ACPMockClient()
+        let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
         let manager = makeManager(store: store, client: client)
@@ -395,7 +414,7 @@ struct ACPSessionForkAttachTests {
             payload: Data(),
             createdAt: 1
         )
-        let client = ACPMockClient()
+        let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
         let manager = makeManager(store: store, client: client)
@@ -503,7 +522,7 @@ struct ACPSessionForkAttachTests {
     func nativeFinalizationFailureClosesRemoteAndOrdersAcknowledgements() async throws {
         let store = try seededForkStore()
         try installFinalizeFailure(mechanism: .nativeACP, store: store)
-        let client = ACPMockClient()
+        let client = durableMockClient()
         let acknowledgements = ForkAcknowledgementRecorder()
         scriptInitialize(client, supportsFork: true)
         client.scriptResponse(method: "session/fork") { _ in
@@ -728,7 +747,7 @@ struct ACPSessionForkAttachTests {
 
     private func nativeForkOperationKey() async throws -> String? {
         let store = try seededForkStore()
-        let client = ACPMockClient()
+        let client = durableMockClient()
         scriptInitialize(client, supportsFork: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
         let manager = makeManager(store: store, client: client)
@@ -737,6 +756,10 @@ struct ACPSessionForkAttachTests {
         await manager.attach(to: target.id, freshlyCreated: true)
 
         return client.sent.first { $0.method == "session/fork" }?.brokerOperationKey
+    }
+
+    private func durableMockClient() -> ACPMockClient {
+        ACPMockClient(providesDurableOperationKeyDeduplication: true)
     }
 
     private func seededForkStore(
