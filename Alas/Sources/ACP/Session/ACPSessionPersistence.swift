@@ -94,6 +94,22 @@ actor ACPSessionPersistence {
         try openedStore().clearForkContextDeliveryPending(targetSessionID: targetSessionID)
     }
 
+    @discardableResult
+    func clearForkContextDeliveryPending(
+        targetSessionID: String,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = {
+            try store.clearForkContextDeliveryPending(targetSessionID: targetSessionID)
+        }
+        if let fence {
+            return try store.withLeaseFence(fence, operation) != nil
+        }
+        try operation()
+        return true
+    }
+
     func loadSession(agentId: String, remoteSessionId: String) throws -> ACPSessionRow? {
         try openedStore().loadSession(agentId: agentId, remoteSessionId: remoteSessionId)
     }

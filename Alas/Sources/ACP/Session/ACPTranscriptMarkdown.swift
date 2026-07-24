@@ -43,6 +43,21 @@ enum ACPTranscriptMarkdown {
         }
     }
 
+    @MainActor
+    static func forkContext(sourceAgentID: String, messages: [ACPMessage]) -> String? {
+        let markdown = document(
+            title: "Imported conversation",
+            agentName: sourceAgentID,
+            messages: messages
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !markdown.isEmpty else { return nil }
+        return """
+        The conversation below was imported from \(sourceAgentID). Use it as background context for this branch. Provider-specific tool state, hidden context, and attachments were not transferred. Do not summarize or repeat the imported conversation unless I ask.
+
+        \(markdown)
+        """
+    }
+
     /// Session title → filesystem-safe `.md` filename.
     static func sanitizedFilename(title: String) -> String {
         let base = trimmedNonEmpty(title).flatMap { $0 == "New session" ? nil : $0 } ?? "acp-session"

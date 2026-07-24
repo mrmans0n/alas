@@ -772,7 +772,10 @@ final class ACPSessionManager: ObservableObject {
         if session.remoteSessionId == nil || session.remoteSessionId == result.row.remoteSessionId {
             session.remoteSessionId = result.row.remoteSessionId
         }
-        if result.row.contextRecoveryPending {
+        let forkContextPending = result.forkRecord?.phase == .ready
+            && result.forkRecord?.mechanism == .transcriptTransfer
+            && result.forkRecord?.contextDeliveryPending == true
+        if result.row.contextRecoveryPending, !forkContextPending {
             // Compute `canSendTranscript` against the FULL wire list rather
             // than `session.hasConversationTranscript`. Tail-first hydration
             // leaves only the last 30 messages in the in-memory transcript
@@ -2823,12 +2826,19 @@ extension ACPSessionManager {
             if shouldSuppressLoadReplay {
                 startRunnerIfNeeded()
             }
-            let pendingRecovery = persistedRows[sessionId]?.contextRecoveryPending == true
+            let hasPendingForkContext = session.forkRecord?.phase == .ready
+                && session.forkRecord?.mechanism == .transcriptTransfer
+                && session.forkRecord?.contextDeliveryPending == true
+            let pendingRecovery = !hasPendingForkContext
+                && persistedRows[sessionId]?.contextRecoveryPending == true
             var createdFreshRemoteSession = false
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
-            let hasRestorableContext = pendingRecovery || session.hasConversationTranscript
-            var shouldHoldQueueForRecovery = pendingRecovery && session.hasConversationTranscript
+            let hasRestorableContext = pendingRecovery
+                || (!hasPendingForkContext && session.hasConversationTranscript)
+            var shouldHoldQueueForRecovery = pendingRecovery
+                && !hasPendingForkContext
+                && session.hasConversationTranscript
             if firstRunAttach {
                 session.firstRunConnectingPhase = .creatingSession
             }
@@ -2843,7 +2853,7 @@ extension ACPSessionManager {
                 )
                 createdFreshRemoteSession = true
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
                 }
                 switch restoreOperation {
@@ -2887,7 +2897,7 @@ extension ACPSessionManager {
                             )
                         )
                         createdFreshRemoteSession = true
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             if isWriter(for: sessionId) {
                                 persistContextRecoveryPending(sessionId: sessionId, pending: true)
@@ -2899,7 +2909,7 @@ extension ACPSessionManager {
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             session.contextRecoveryStatus = .sendingTranscript
                         }
                     }
@@ -2961,7 +2971,7 @@ extension ACPSessionManager {
                             )
                         )
                         createdFreshRemoteSession = true
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             // Guard the store write: if another instance took over
                             // while we were awaiting loadSession/newSession, do not
@@ -2993,7 +3003,7 @@ extension ACPSessionManager {
                     )
                 )
                 createdFreshRemoteSession = true
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
                     // Guard the store write: if another instance took over
                     // while we were awaiting newSession, do not persist
@@ -3008,7 +3018,7 @@ extension ACPSessionManager {
                         canSendTranscript: session.hasConversationTranscript
                     )
                 }
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
@@ -3017,7 +3027,7 @@ extension ACPSessionManager {
                     message: "Agent context could not be restored.",
                     canSendTranscript: session.hasConversationTranscript
                 )
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }

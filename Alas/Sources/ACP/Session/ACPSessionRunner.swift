@@ -1303,6 +1303,18 @@ extension ACPSessionRunner {
         }
     }
 
+    private func persistForkContextDelivered() {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            _ = try await persistence.clearForkContextDeliveryPending(
+                targetSessionID: sessionId,
+                fence: fence
+            )
+        }
+    }
+
     /// Drain the queue head if the runner is still live, setup is not
     /// blocked on auth, no prompt owns the transport, transcript state is
     /// `.idle`, the head is `.pending`, and the head has no `lastError`.
@@ -1573,17 +1585,28 @@ extension ACPSessionRunner {
                 // hydrate off-main so file reads + encoding don't block UI.
                 let promptCapabilities = self.session.promptCapabilities
                 let pendingPreamble = self.session.pendingMCPPreamble
+                let pendingForkContext: String? = {
+                    guard let fork = self.session.forkRecord,
+                          fork.phase == .ready,
+                          fork.mechanism == .transcriptTransfer,
+                          fork.contextDeliveryPending
+                    else { return nil }
+                    return ACPTranscriptMarkdown.forkContext(
+                        sourceAgentID: fork.sourceAgentID,
+                        messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
+                    )
+                }()
                 var wireBlocks = await Self.hydrate(
                     blocks,
                     promptCapabilities: promptCapabilities,
                     worktreePath: self.worktreePath
                 )
-                // Wire-only MCP context preamble: prepended for the agent,
-                // never part of the recorded transcript — `recordUserPrompt`
-                // above already ran on the original `blocks`.
-                if let pendingPreamble {
-                    wireBlocks.insert(.text(pendingPreamble), at: 0)
-                }
+                // Wire-only context is prepended for the agent and never part
+                // of the recorded transcript — recording above used `blocks`.
+                var privateBlocks: [ACPContentBlock] = []
+                if let pendingPreamble { privateBlocks.append(.text(pendingPreamble)) }
+                if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
+                wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
@@ -1605,6 +1628,13 @@ extension ACPSessionRunner {
                         self.session.pendingMCPPreamble = nil
                         self.session.mcpPreambleSent = true
                         self.persistMCPPreambleSent()
+                    }
+                    if pendingForkContext != nil,
+                       var fork = self.session.forkRecord,
+                       fork.contextDeliveryPending {
+                        fork.contextDeliveryPending = false
+                        self.session.forkRecord = fork
+                        self.persistForkContextDelivered()
                     }
                     if isActivePrompt {
                         if queuedItemId != nil {
