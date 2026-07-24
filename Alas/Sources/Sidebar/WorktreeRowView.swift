@@ -44,6 +44,34 @@ struct GGWorktreeMenuModel: Equatable {
 }
 
 struct WorktreeRowView: View {
+    struct GGModeMenuItem: Equatable, Identifiable {
+        let mode: GGWorktreeMode
+        let title: String
+        let isSelected: Bool
+
+        var id: GGWorktreeMode { mode }
+    }
+
+    nonisolated static func ggModeMenuItems(selectedMode: GGWorktreeMode) -> [GGModeMenuItem] {
+        [
+            GGModeMenuItem(
+                mode: .inherit,
+                title: "Inherit repository default",
+                isSelected: selectedMode == .inherit
+            ),
+            GGModeMenuItem(
+                mode: .on,
+                title: "On",
+                isSelected: selectedMode == .on
+            ),
+            GGModeMenuItem(
+                mode: .off,
+                title: "Off",
+                isSelected: selectedMode == .off
+            )
+        ]
+    }
+
     static func stackSummaryTooltip(merged: Int, total: Int) -> String {
         stackSummaryText(merged: merged, total: total)
     }
@@ -234,13 +262,16 @@ struct WorktreeRowView: View {
                 }
                 Divider()
                 if ggMenuModel.isVisible {
-                    Picker("GG Mode", selection: Binding(
-                        get: { ggMenuModel.selectedMode },
-                        set: { mode in onSetGGWorktreeMode(mode) }
-                    )) {
-                        Text("Inherit repository default").tag(GGWorktreeMode.inherit)
-                        Text("On").tag(GGWorktreeMode.on)
-                        Text("Off").tag(GGWorktreeMode.off)
+                    Menu("GG Mode") {
+                        ForEach(Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)) { item in
+                            Toggle(item.title, isOn: Binding(
+                                get: { item.isSelected },
+                                set: { isOn in
+                                    guard isOn, item.mode != ggMenuModel.selectedMode else { return }
+                                    onSetGGWorktreeMode(item.mode)
+                                }
+                            ))
+                        }
                     }
                     if let explanation = ggMenuModel.inactiveExplanation {
                         Divider()
