@@ -52,6 +52,40 @@ struct NewWorktreeDialogTests {
         )?.id == "repo-b")
     }
 
+    @Test func initialProjectIdUsesValidPreset() {
+        let projects = [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
+
+        #expect(NewWorktreeDialog.initialProjectId(
+            presetProjectId: "repo-b",
+            projects: projects
+        ) == "repo-b")
+    }
+
+    @Test func initialProjectIdFallsBackToFirstProjectForStalePreset() {
+        let projects = [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
+
+        #expect(NewWorktreeDialog.initialProjectId(
+            presetProjectId: "missing",
+            projects: projects
+        ) == "repo-a")
+    }
+
+    @Test func initialProjectIdUsesFirstProjectWithoutPreset() {
+        let projects = [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
+
+        #expect(NewWorktreeDialog.initialProjectId(
+            presetProjectId: nil,
+            projects: projects
+        ) == "repo-a")
+    }
+
+    @Test func initialProjectIdIsEmptyWithoutProjects() {
+        #expect(NewWorktreeDialog.initialProjectId(
+            presetProjectId: nil,
+            projects: []
+        ) == "")
+    }
+
     @Test func preferredBaseBranchChoosesMainWhenNoConfiguredDefault() {
         let selected = NewWorktreeDialog.preferredBaseBranch(
             availableBranches: ["trunk", "master", "main"],
