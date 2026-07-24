@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-24
+
+### ✨ Features
+
+- Add image diffs across commit, staged, stash, range, review request, and review changes panes (#911).
+
 ## [0.13.0] - 2026-07-24
 
 ### ✨ Features
