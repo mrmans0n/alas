@@ -21,6 +21,7 @@ struct ACPSessionForkAttachTests {
         #expect(client.sent.last?.brokerOperationKey == "startup:target:session/fork:source-remote")
         #expect(manager.runners[target.id] != nil)
         #expect(target.remoteSessionId == "forked-remote")
+        #expect(target.origin == .agentForked)
         #expect(target.forkRecord?.phase == .ready)
         #expect(target.forkRecord?.mechanism == .nativeACP)
         #expect(target.forkRecord?.contextDeliveryPending == false)

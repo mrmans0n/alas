@@ -2005,6 +2005,7 @@ final class ACPSessionManager: ObservableObject {
             fork.mechanism = .nativeACP
             fork.contextDeliveryPending = false
             session.forkRecord = fork
+            session.markAsAgentForked()
             if var row = persistedRows[session.id] {
                 row.remoteSessionId = result.sessionId
                 row.origin = .agentForked

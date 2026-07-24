@@ -43,7 +43,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     @Published var title: String
     @Published var titleSource: ACPSessionTitleSource
-    let origin: ACPSessionOrigin
+    private(set) var origin: ACPSessionOrigin
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
@@ -308,6 +308,10 @@ final class ACPSession: ObservableObject, Identifiable {
         // Foundation cannot await main-actor methods from deinit; dispatch.
         let host = terminalHost
         Task { @MainActor in host.killAll() }
+    }
+
+    func markAsAgentForked() {
+        origin = .agentForked
     }
 
     func recordUserPrompt(
