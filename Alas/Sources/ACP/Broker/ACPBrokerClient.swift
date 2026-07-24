@@ -19,6 +19,14 @@ struct ACPBrokerDurableState: Equatable, Sendable {
     let acknowledgedCursor: ACPBrokerEventCursor
 }
 
+struct ACPBrokerDurableCompletionReplayError: LocalizedError {
+    let underlying: any Error
+
+    var errorDescription: String? {
+        underlying.localizedDescription
+    }
+}
+
 final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let service: ACPBrokerServicing
     private let brokerId: ACPBrokerID
@@ -261,7 +269,21 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 params: params
             ))
             markPendingOutboundRequest(id: result.requestId.jsonRPCID)
-            try await attachAndReplay()
+            do {
+                try await attachAndReplay()
+            } catch {
+                // `service.send` has already returned a final successful
+                // result. The operation is therefore durable at the broker
+                // even though this client could not replay its completion
+                // cursor. Callers that use stable operation keys may retry
+                // this exact operation; failures thrown by `service.send`
+                // itself never receive this classification.
+                if result.error == nil,
+                   result.pending != true || result.result != nil {
+                    throw ACPBrokerDurableCompletionReplayError(underlying: error)
+                }
+                throw error
+            }
             if let error = result.error {
                 clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
                 // A terminal JSON-RPC error IS this operationKey's final,

@@ -14,11 +14,11 @@ private enum ACPMirrorRefreshPolicy {
     static let inactivePollNanos: UInt64 = 30_000_000_000
 }
 
-private struct ACPForkDurableRetryError: LocalizedError {
+private struct ACPForkFallbackPersistenceError: LocalizedError {
     let underlying: any Error
 
     var errorDescription: String? {
-        underlying.localizedDescription
+        "Failed to persist fork fallback: \(underlying.localizedDescription)"
     }
 }
 
@@ -1772,8 +1772,9 @@ final class ACPSessionManager: ObservableObject {
         return "startup:\(sessionId):\(method)"
     }
 
-    private func downgradeNegotiatingForkToTranscript(session: ACPSession) async {
-        guard var fork = session.forkRecord, fork.phase == .negotiatingNative else { return }
+    @discardableResult
+    private func downgradeNegotiatingForkToTranscript(session: ACPSession) async throws -> Bool {
+        guard var fork = session.forkRecord, fork.phase == .negotiatingNative else { return false }
         do {
             try await persistence.finalizeFork(
                 targetSessionID: session.id,
@@ -1782,12 +1783,24 @@ final class ACPSessionManager: ObservableObject {
             )
         } catch {
             persistenceError = error.localizedDescription
-            return
+            throw ACPForkFallbackPersistenceError(underlying: error)
         }
         fork.phase = .ready
         fork.mechanism = .transcriptTransfer
         fork.contextDeliveryPending = true
         session.forkRecord = fork
+        return true
+    }
+
+    private func surfaceForkFallbackPersistenceFailure(
+        _ error: any Error,
+        on session: ACPSession
+    ) {
+        let message = (error as? ACPForkFallbackPersistenceError)?.localizedDescription
+            ?? ACPForkFallbackPersistenceError(underlying: error).localizedDescription
+        session.lastError = message
+        session.contextRecoveryStatus = nil
+        session.agentState = .failed(message)
     }
 
     private func startForkTarget(
@@ -1801,7 +1814,9 @@ final class ACPSessionManager: ObservableObject {
         if initialized.sessionCapabilities.supportsFork,
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
-           !sourceRemoteSessionID.isEmpty {
+           !sourceRemoteSessionID.isEmpty,
+           try await persistence.latestMessageSeq(sessionId: fork.sourceSessionID)
+                == fork.sourceBoundarySequence {
             let result: ACPSessionNewResult
             do {
                 result = try await connection.forkSession(
@@ -1815,13 +1830,12 @@ final class ACPSessionManager: ObservableObject {
                     )
                 )
             } catch {
-                // A broker may have completed the keyed fork even when the
-                // trailing replay/transport step failed locally. Keep the
-                // durable negotiation intact so reattach can claim that same
-                // completion instead of issuing an unrelated session/new.
-                if connection.client is ACPBrokerClient,
-                   !Self.isDefinitiveForkFailure(error) {
-                    throw ACPForkDurableRetryError(underlying: error)
+                // Only a typed broker error proves that the keyed operation
+                // completed successfully before replay failed. A plain
+                // transport error may have happened before the broker
+                // accepted the send and must take the transcript fallback.
+                if error is ACPBrokerDurableCompletionReplayError {
+                    throw error
                 }
                 try await persistence.finalizeFork(
                     targetSessionID: session.id,
@@ -1908,16 +1922,6 @@ final class ACPSessionManager: ObservableObject {
             )
         )
         return (result, true)
-    }
-
-    private static func isDefinitiveForkFailure(_ error: any Error) -> Bool {
-        if error is DecodingError || error is JSONRPCError {
-            return true
-        }
-        if case ACPClientError.jsonrpc = error {
-            return true
-        }
-        return false
     }
 
     private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
@@ -2680,7 +2684,13 @@ extension ACPSessionManager {
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
-            await downgradeNegotiatingForkToTranscript(session: session)
+            do {
+                try await downgradeNegotiatingForkToTranscript(session: session)
+            } catch {
+                surfaceForkFallbackPersistenceFailure(error, on: session)
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             let reason = "No ACP launch spec for \(session.agentId)"
             session.setupState = .needsSetup(reason: reason)
             session.agentState = .failed(reason)
@@ -2689,7 +2699,13 @@ extension ACPSessionManager {
         }
         let setup = await evaluateSetup(for: spec)
         guard case .ready = setup else {
-            await downgradeNegotiatingForkToTranscript(session: session)
+            do {
+                try await downgradeNegotiatingForkToTranscript(session: session)
+            } catch {
+                surfaceForkFallbackPersistenceFailure(error, on: session)
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             session.setupState = setup.sessionSetupState
             session.agentState = .failed(setup.reasonText)
             await releaseWriterLease(sessionId: sessionId)
@@ -2754,7 +2770,13 @@ extension ACPSessionManager {
                 )
             }
         } catch {
-            await downgradeNegotiatingForkToTranscript(session: session)
+            do {
+                try await downgradeNegotiatingForkToTranscript(session: session)
+            } catch {
+                surfaceForkFallbackPersistenceFailure(error, on: session)
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
             session.agentState = .failed(msg)
@@ -2922,7 +2944,17 @@ extension ACPSessionManager {
                     try await connection.authenticate(methodId: pendingAuthMethodId)
                     session.pendingAuthMethodId = nil
                 } catch {
-                    await downgradeNegotiatingForkToTranscript(session: session)
+                    do {
+                        try await downgradeNegotiatingForkToTranscript(session: session)
+                    } catch {
+                        surfaceForkFallbackPersistenceFailure(error, on: session)
+                        if connection.client is ACPBrokerClient {
+                            await connection.detach()
+                        } else {
+                            await connection.shutdown()
+                        }
+                        return
+                    }
                     let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
                     session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
                     session.agentState = .failed(reason)
@@ -3361,28 +3393,39 @@ extension ACPSessionManager {
             }
             stderrTask.cancel()
         } catch {
-            let durableRetry = error as? ACPForkDurableRetryError
+            let durableRetry = error as? ACPBrokerDurableCompletionReplayError
             let wasNegotiatingFork = session.forkRecord?.phase == .negotiatingNative
+            var downgradePersistenceError: (any Error)?
             if durableRetry == nil {
-                await downgradeNegotiatingForkToTranscript(session: session)
-                if wasNegotiatingFork, session.forkRecord?.phase == .ready {
-                    connection.acknowledgeDurableSessionResponses()
+                do {
+                    try await downgradeNegotiatingForkToTranscript(session: session)
+                    if wasNegotiatingFork, session.forkRecord?.phase == .ready {
+                        connection.acknowledgeDurableSessionResponses()
+                    }
+                } catch {
+                    downgradePersistenceError = error
                 }
             }
             // Give stderr a moment to drain so the message is the real cause.
             try? await Task.sleep(nanoseconds: 200_000_000)
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
-            let surfacedError = durableRetry?.underlying ?? error
+            let surfacedError = downgradePersistenceError
+                ?? durableRetry?.underlying
+                ?? error
             let authReason = ACPAuthFailure.message(from: surfacedError)
             let baseMessage = authReason
                 ?? (surfacedError as? JSONRPCError)?.message
                 ?? surfacedError.localizedDescription
-            let base = "ACP session attach failed: \(baseMessage)"
+            let base = downgradePersistenceError == nil
+                ? "ACP session attach failed: \(baseMessage)"
+                : baseMessage
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
             session.contextRecoveryStatus = nil
-            if let authReason {
+            if downgradePersistenceError != nil {
+                session.agentState = .failed(full)
+            } else if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
             } else {
