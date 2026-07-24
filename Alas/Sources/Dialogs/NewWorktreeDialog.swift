@@ -9,9 +9,9 @@ enum NewWorktreeLaunchSurfaceSegment: Hashable {
 struct NewWorktreeDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
-    var presetProjectId: String? = nil
+    var presetProjectId: String?
 
-    @State private var projectId: String = ""
+    @State private var projectId: String
     // Defaults are seeded from the persisted Worktrees settings in .onAppear
     // (these literals are placeholders only — the real defaults come from
     // state.config.worktrees.{baseBranch,branchPrefix}).
@@ -32,6 +32,20 @@ struct NewWorktreeDialog: View {
     @State private var createErrorMessage: String?
 
     @Environment(\.theme) var theme
+
+    init(
+        state: AppState,
+        presented: Binding<Bool>,
+        presetProjectId: String? = nil
+    ) {
+        self.state = state
+        self._presented = presented
+        self.presetProjectId = presetProjectId
+        self._projectId = State(initialValue: Self.initialProjectId(
+            presetProjectId: presetProjectId,
+            projects: state.projects
+        ))
+    }
 
     var body: some View {
         DialogContainer(
@@ -127,11 +141,10 @@ struct NewWorktreeDialog: View {
         )
         .onAppear {
             if projectId.isEmpty {
-                if let preset = presetProjectId, state.projects.contains(where: { $0.id == preset }) {
-                    projectId = preset
-                } else {
-                    projectId = state.projects.first?.id ?? ""
-                }
+                projectId = Self.initialProjectId(
+                    presetProjectId: presetProjectId,
+                    projects: state.projects
+                )
             }
             if base.isEmpty {
                 base = Self.initialBase(
@@ -455,6 +468,15 @@ struct NewWorktreeDialog: View {
     ) -> ProjectConfig? {
         guard let presetProjectId else { return nil }
         return projects.first { $0.id == presetProjectId }
+    }
+
+    nonisolated static func initialProjectId(
+        presetProjectId: String?,
+        projects: [ProjectConfig]
+    ) -> String {
+        resolvedPresetProject(presetProjectId: presetProjectId, projects: projects)?.id
+            ?? projects.first?.id
+            ?? ""
     }
 
     nonisolated static func showsRepositorySelector(
