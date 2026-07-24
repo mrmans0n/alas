@@ -20,8 +20,7 @@ struct RunScriptDialog: View {
                         rowList
                         footer
                     }
-                    .frame(width: 460)
-                    .frame(maxHeight: 420)
+                    .frame(width: 720)
                     .background(theme.color("bg-1").opacity(0.92))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
@@ -89,11 +88,29 @@ struct RunScriptDialog: View {
                 }
                 .padding(.vertical, 4)
             }
-            .frame(minHeight: 180, maxHeight: 320)
+            .frame(height: rowListHeight(rows: rows))
             .onChange(of: appState.runScriptPalette.scrollToSelectionTick) { _, _ in
                 proxy.scrollTo(appState.runScriptPalette.selectedIndex, anchor: .center)
             }
         }
+    }
+
+    private func rowListHeight(rows: [RunScriptPaletteModel.Row]) -> CGFloat {
+        guard !rows.isEmpty else { return 160 }
+
+        let contentPadding: CGFloat = 8
+        let hintHeight: CGFloat = appState.runScriptPalette.scripts.isEmpty ? 48 : 0
+        let rowHeights = rows.reduce(CGFloat.zero) { height, row in
+            switch row {
+            case .header:
+                return height + 25
+            case .script:
+                return height + 38
+            case .newRepoScript, .newGlobalScript:
+                return height + 34
+            }
+        }
+        return min(max(contentPadding + hintHeight + rowHeights, 180), 320)
     }
 
     private var noScriptsHint: some View {
