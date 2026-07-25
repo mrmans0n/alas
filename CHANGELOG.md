@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-07-25
+
+### ✨ Features
+
+- Add per-message ACP session forking, including fork persistence, attachment restoration, and transcript presentation (#920).
+
+### 🐛 Fixes
+
+- Initialize the new worktree name field correctly in `git-gud` flows (#917).
+- Update the new worktree `git-gud` mode control (#918).
+- Remove the segmented control focus ring in the shared UI control (#919).
+
 ## [0.13.2] - 2026-07-24
 
 ### ✨ Features
