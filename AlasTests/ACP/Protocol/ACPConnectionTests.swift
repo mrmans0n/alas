@@ -195,6 +195,74 @@ struct ACPConnectionTests {
         #expect(params.mcpServers == mcpServers)
     }
 
+    @Test("forkSession carries broker key and defers durable acknowledgement")
+    func forkSessionDurableRPC() async throws {
+        let mock = ACPMockClient()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/fork") { _ in
+            ACPResponse(
+                body: try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "forked",
+                    availableModels: [],
+                    availableModes: [],
+                    currentModel: nil,
+                    currentMode: nil,
+                    promptSuggestions: []
+                )),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }
+            )
+        }
+        let connection = ACPConnection(client: mock)
+
+        let result = try await connection.forkSession(
+            cwd: "/tmp/wt",
+            sessionId: "source-remote",
+            mcpServers: [],
+            brokerOperationKey: "startup:target:session/fork:source-remote"
+        )
+
+        #expect(result.sessionId == "forked")
+        #expect(mock.sent.last?.brokerOperationKey == "startup:target:session/fork:source-remote")
+        #expect(acknowledgement.count == 0)
+        connection.acknowledgeDurableSessionResponses()
+        #expect(acknowledgement.count == 1)
+    }
+
+    @Test("forkSession rejects an empty session id without consuming its durable response")
+    func forkSessionRejectsEmptySessionID() async throws {
+        let mock = ACPMockClient()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/fork") { _ in
+            ACPResponse(
+                body: try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "",
+                    availableModels: [],
+                    availableModes: [],
+                    currentModel: nil,
+                    currentMode: nil,
+                    promptSuggestions: []
+                )),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }
+            )
+        }
+        let connection = ACPConnection(client: mock)
+
+        do {
+            _ = try await connection.forkSession(
+                cwd: "/tmp/wt",
+                sessionId: "source-remote",
+                mcpServers: []
+            )
+            Issue.record("Expected an empty fork session id to be rejected")
+        } catch is DecodingError {
+            // Expected.
+        }
+
+        #expect(acknowledgement.count == 0)
+        connection.acknowledgeDurableSessionResponses()
+        #expect(acknowledgement.count == 1)
+    }
+
     @Test("listSessions sends cwd and opaque cursor and decodes a page")
     func listSessionsRPC() async throws {
         let mock = ACPMockClient()
@@ -280,5 +348,22 @@ struct ACPConnectionTests {
         let conn = ACPConnection(client: mock)
         let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))
         #expect(result.isEmpty)
+    }
+}
+
+private final class DurableAcknowledgementRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func record() {
+        lock.lock()
+        value += 1
+        lock.unlock()
     }
 }

@@ -321,6 +321,19 @@ final class AppState {
         return agentRegistry.agents.first(where: { $0.id == id })
     }
 
+    func acpForkTargets(sourceAgentID: String) -> [ACPSessionForkTarget] {
+        ACPForkTargetPolicy.targets(
+            sourceAgentID: sourceAgentID,
+            enabledAgents: agentRegistry.enabled().map {
+                ACPForkAgentOption(id: $0.id, displayName: $0.displayName)
+            },
+            sourceAgent: agentRegistry.agents.first(where: { $0.id == sourceAgentID }).map {
+                ACPForkAgentOption(id: $0.id, displayName: $0.displayName)
+            },
+            catalogAgentIDs: ACPLaunchCatalog.specs.map(\.agentID)
+        )
+    }
+
     /// Recompute `agentRegistry` from `config.agents` + a fresh detection
     /// scan. Safe to call repeatedly.
     func rescanAgents() {
@@ -5238,6 +5251,35 @@ final class AppState {
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    func forkACPSession(
+        worktree: Worktree,
+        sourceSessionID: ACPSession.ID,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String
+    ) {
+        guard let manager = acpManager(for: worktree) else { return }
+        Task { @MainActor in
+            do {
+                let target = try await manager.createFork(
+                    sourceSessionID: sourceSessionID,
+                    boundary: boundary,
+                    targetAgentID: targetAgentID,
+                    autoRunDefault: config.harness.acpAutoRunByDefault
+                )
+                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
+                let tab = tabs.append(acpSession: tabState, to: worktree.id)
+                tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+                await manager.attach(
+                    to: target.id,
+                    freshlyCreated: true
+                )
+            } catch {
+                manager.liveSession(for: sourceSessionID)?.lastError =
+                    "Could not create fork: \(error.localizedDescription)"
+            }
+        }
     }
 
     /// Route a prepared handoff into the active ACP tab when its composer is

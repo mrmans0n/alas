@@ -2,6 +2,7 @@ import Foundation
 
 final class ACPMockClient: ACPClient, @unchecked Sendable {
     var advertisesTerminalCapability = true
+    let providesDurableOperationKeyDeduplication: Bool
 
     private(set) var sent: [ACPRequest] = []
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
@@ -33,7 +34,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
 
     var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
 
-    init() {
+    init(providesDurableOperationKeyDeduplication: Bool = false) {
+        self.providesDurableOperationKeyDeduplication =
+            providesDurableOperationKeyDeduplication
         var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
         self.incomingUpdates = AsyncStream { u = $0 }
         self.updatesCont = u

@@ -48,6 +48,10 @@ enum ACPClientError: LocalizedError {
 }
 
 protocol ACPClient: AnyObject {
+    /// Whether repeated requests carrying the same `brokerOperationKey` are
+    /// durably deduplicated across connection/process restarts.
+    var providesDurableOperationKeyDeduplication: Bool { get }
+
     /// Sends a request and awaits a JSON-RPC response (raw bytes of the `result` field).
     func send(_ request: ACPRequest) async throws -> ACPResponse
 
@@ -99,6 +103,8 @@ protocol ACPClient: AnyObject {
 }
 
 extension ACPClient {
+    var providesDurableOperationKeyDeduplication: Bool { false }
+
     var advertisesTerminalCapability: Bool { true }
 
     var elicitationRequests: AsyncStream<ACPElicitationRequest> {

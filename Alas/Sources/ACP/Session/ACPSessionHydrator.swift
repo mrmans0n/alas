@@ -48,6 +48,7 @@ actor ACPSessionHydrator {
         // Malformed payloads are skipped (matching the legacy try? in
         // openSession) rather than failing the whole hydration.
         let stored = try store.loadMessages(sessionId: sessionId)
+        let forkRecord = try store.loadFork(targetSessionID: sessionId)
         let storedDraft = includeDraft ? try? store.loadComposerDraftRecord(sessionId: sessionId) : nil
         let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
         var staleSubmittedDraft = false
@@ -94,6 +95,7 @@ actor ACPSessionHydrator {
             wireMessages: wire,
             queue: queue,
             draft: draft,
+            forkRecord: forkRecord,
             recent: recent)
     }
 }
@@ -106,6 +108,7 @@ struct HydrationResult: Sendable {
     let wireMessages: [ACPMessageWire]
     let queue: [QueuedPrompt]
     let draft: ACPComposerDraft?
+    let forkRecord: ACPSessionForkRecord?
     let recent: [ACPSessionRow]
 
     func replacingRowLastOpenedAt(_ lastOpenedAt: Int64) -> HydrationResult {
@@ -126,6 +129,7 @@ struct HydrationResult: Sendable {
             wireMessages: wireMessages,
             queue: queue,
             draft: draft,
+            forkRecord: forkRecord,
             recent: recent)
     }
 
@@ -135,6 +139,7 @@ struct HydrationResult: Sendable {
             wireMessages: wireMessages,
             queue: queue,
             draft: draft,
+            forkRecord: forkRecord,
             recent: recent)
     }
 }

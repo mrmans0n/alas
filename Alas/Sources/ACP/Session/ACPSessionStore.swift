@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 14
+    static let targetSchemaVersion = 15
     let path: String
     let db: SQLiteDatabase
 
@@ -41,6 +41,7 @@ final class ACPSessionStore {
         if current < 12 { try migrate_to_v12() }
         if current < 13 { try migrate_to_v13() }
         if current < 14 { try migrate_to_v14() }
+        if current < 15 { try migrate_to_v15() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -236,6 +237,21 @@ final class ACPSessionStore {
         WHERE acp_broker_id IS NOT NULL
         """)
     }
+
+    private func migrate_to_v15() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_forks (
+          target_session_id          TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          source_session_id          TEXT NOT NULL,
+          source_agent_id            TEXT NOT NULL,
+          source_boundary_seq        INTEGER NOT NULL,
+          inherited_message_count    INTEGER NOT NULL,
+          phase                      TEXT NOT NULL,
+          mechanism                  TEXT,
+          context_delivery_pending   INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -334,6 +350,108 @@ extension ACPSessionStore {
 }
 
 extension ACPSessionStore {
+    func createFork(
+        session: ACPSessionRow,
+        messages: [ACPStoredMessage],
+        record: ACPSessionForkRecord
+    ) throws {
+        try db.transaction {
+            try upsertSession(session)
+            for message in messages {
+                try appendMessage(
+                    sessionId: message.sessionId,
+                    id: message.id,
+                    kind: message.kind,
+                    seq: message.seq,
+                    payload: message.payload,
+                    createdAt: message.createdAt
+                )
+            }
+            try upsertFork(record)
+        }
+    }
+
+    func upsertFork(_ record: ACPSessionForkRecord) throws {
+        try db.exec("""
+        INSERT INTO session_forks (
+          target_session_id, source_session_id, source_agent_id,
+          source_boundary_seq, inherited_message_count, phase,
+          mechanism, context_delivery_pending
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(target_session_id) DO UPDATE SET
+          source_session_id = excluded.source_session_id,
+          source_agent_id = excluded.source_agent_id,
+          source_boundary_seq = excluded.source_boundary_seq,
+          inherited_message_count = excluded.inherited_message_count,
+          phase = excluded.phase,
+          mechanism = excluded.mechanism,
+          context_delivery_pending = excluded.context_delivery_pending
+        """, bindings: [
+            record.targetSessionID,
+            record.sourceSessionID,
+            record.sourceAgentID,
+            record.sourceBoundarySequence,
+            record.inheritedMessageCount,
+            record.phase.rawValue,
+            record.mechanism?.rawValue,
+            record.contextDeliveryPending ? 1 : 0
+        ])
+    }
+
+    func loadFork(targetSessionID: String) throws -> ACPSessionForkRecord? {
+        let rows = try db.query(
+            "SELECT * FROM session_forks WHERE target_session_id = ?",
+            bindings: [targetSessionID]
+        )
+        guard let row = rows.first,
+              let phaseValue = row["phase"] as? String,
+              let phase = ACPSessionForkCreationPhase(rawValue: phaseValue)
+        else { return nil }
+        return ACPSessionForkRecord(
+            targetSessionID: row["target_session_id"] as? String ?? "",
+            sourceSessionID: row["source_session_id"] as? String ?? "",
+            sourceAgentID: row["source_agent_id"] as? String ?? "",
+            sourceBoundarySequence: (row["source_boundary_seq"] as? Int64) ?? 0,
+            inheritedMessageCount: Int((row["inherited_message_count"] as? Int64) ?? 0),
+            phase: phase,
+            mechanism: (row["mechanism"] as? String).flatMap(ACPSessionForkMechanism.init(rawValue:)),
+            contextDeliveryPending: ((row["context_delivery_pending"] as? Int64) ?? 0) != 0
+        )
+    }
+
+    func finalizeFork(
+        targetSessionID: String,
+        mechanism: ACPSessionForkMechanism,
+        remoteSessionID: String?
+    ) throws {
+        try db.transaction {
+            try db.exec("""
+            UPDATE session_forks
+            SET phase = ?, mechanism = ?, context_delivery_pending = ?
+            WHERE target_session_id = ?
+            """, bindings: [
+                ACPSessionForkCreationPhase.ready.rawValue,
+                mechanism.rawValue,
+                mechanism == .transcriptTransfer ? 1 : 0,
+                targetSessionID
+            ])
+            if let remoteSessionID {
+                try db.exec(
+                    "UPDATE sessions SET remote_session_id = ?, origin = ? WHERE id = ?",
+                    bindings: [remoteSessionID, ACPSessionOrigin.agentForked.rawValue, targetSessionID]
+                )
+            }
+        }
+    }
+
+    func clearForkContextDeliveryPending(targetSessionID: String) throws {
+        try db.exec("""
+        UPDATE session_forks
+        SET context_delivery_pending = 0
+        WHERE target_session_id = ?
+        """, bindings: [targetSessionID])
+    }
+
     func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,

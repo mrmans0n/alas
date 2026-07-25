@@ -105,6 +105,10 @@ final class ACPSessionRunner {
     /// restored snapshot ahead of the steer's replacement prompt. Once
     /// the redirect is in flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    /// Holds an idle source session at its persisted remote head while
+    /// `session/fork` is in flight. New prompts remain queued until the
+    /// target adapter has created the branch.
+    private var nativeForkBarrierActive = false
     var onUnexpectedDisconnect: (() -> Void)?
 
     /// How many trailing rows to retain in `lastPersistedPayloads`. Only the
@@ -1223,6 +1227,16 @@ extension ACPSessionRunner {
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        if nativeForkBarrierActive {
+            guard !blocks.isEmpty else {
+                Task { @MainActor in onPromptFinished?(false) }
+                return
+            }
+            session.enqueue(blocks: blocks, draft: draft)
+            persistQueue()
+            Task { @MainActor in onPromptFinished?(true) }
+            return
+        }
         let route = ACPSubmitRoute.resolve(
             intent: intent,
             state: session.transcript.streamingState,
@@ -1303,6 +1317,57 @@ extension ACPSessionRunner {
         }
     }
 
+    private func persistForkContextDelivered(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        if let acknowledgement {
+            enqueuePersistence({ persistence in
+                try await persistence.clearForkContextDeliveryPending(
+                    targetSessionID: sessionId,
+                    fence: fence
+                )
+            }, completion: { persisted in
+                if persisted == true {
+                    acknowledgement()
+                }
+            })
+        } else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.clearForkContextDeliveryPending(
+                    targetSessionID: sessionId,
+                    fence: fence
+                )
+            }
+        }
+    }
+
+    private func persistForkContextDeliveredAndQueue(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard holdsLeaseForWrite() else { return }
+        let items = session.queue
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            guard try await persistence.clearForkContextDeliveryPending(
+                targetSessionID: sessionId,
+                fence: fence
+            ) else { return false }
+            return try await persistence.upsertQueue(
+                sessionId: sessionId,
+                items: items,
+                fence: fence
+            )
+        }, completion: { persisted in
+            if persisted == true {
+                acknowledgement?()
+            }
+        })
+    }
+
     /// Drain the queue head if the runner is still live, setup is not
     /// blocked on auth, no prompt owns the transport, transcript state is
     /// `.idle`, the head is `.pending`, and the head has no `lastError`.
@@ -1314,7 +1379,8 @@ extension ACPSessionRunner {
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
         guard holdsLeaseForWrite() else { return }
-        guard !steerInProgress,
+        guard !nativeForkBarrierActive,
+              !steerInProgress,
               session.agentState == .ready,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
@@ -1334,6 +1400,36 @@ extension ACPSessionRunner {
         )
     }
 
+    func beginNativeForkBarrier() async -> Bool {
+        guard canBeginNativeForkBarrier,
+              await hasConfirmedLeaseForSideEffect(),
+              canBeginNativeForkBarrier
+        else { return false }
+        nativeForkBarrierActive = true
+        return true
+    }
+
+    func confirmNativeForkBarrier() async -> Bool {
+        guard nativeForkBarrierActive else { return false }
+        return await hasConfirmedLeaseForSideEffect()
+    }
+
+    func endNativeForkBarrier() {
+        guard nativeForkBarrierActive else { return }
+        nativeForkBarrierActive = false
+        flushQueueIfIdle()
+    }
+
+    private var canBeginNativeForkBarrier: Bool {
+        !nativeForkBarrierActive
+            && !steerInProgress
+            && session.agentState == .ready
+            && activePromptID == nil
+            && session.transcript.streamingState == .idle
+            && session.transcript.pendingUserInputs.isEmpty
+            && session.queue.isEmpty
+    }
+
     /// User clicked the row-local "send now" affordance for a queued item.
     /// While idle this just promotes the item to the drainable head. While a
     /// turn is active, it behaves like steering: cancel the current turn,
@@ -1343,6 +1439,12 @@ extension ACPSessionRunner {
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
               session.queue[idx].status == .pending
         else { return }
+
+        if nativeForkBarrierActive {
+            guard session.forceQueueItem(id: id) else { return }
+            persistQueue()
+            return
+        }
 
         if session.transcript.streamingState == .idle,
            activePromptID == nil,
@@ -1573,17 +1675,28 @@ extension ACPSessionRunner {
                 // hydrate off-main so file reads + encoding don't block UI.
                 let promptCapabilities = self.session.promptCapabilities
                 let pendingPreamble = self.session.pendingMCPPreamble
+                let pendingForkContext: String? = {
+                    guard let fork = self.session.forkRecord,
+                          fork.phase == .ready,
+                          fork.mechanism == .transcriptTransfer,
+                          fork.contextDeliveryPending
+                    else { return nil }
+                    return ACPTranscriptMarkdown.forkContext(
+                        sourceAgentID: fork.sourceAgentID,
+                        messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
+                    )
+                }()
                 var wireBlocks = await Self.hydrate(
                     blocks,
                     promptCapabilities: promptCapabilities,
                     worktreePath: self.worktreePath
                 )
-                // Wire-only MCP context preamble: prepended for the agent,
-                // never part of the recorded transcript — `recordUserPrompt`
-                // above already ran on the original `blocks`.
-                if let pendingPreamble {
-                    wireBlocks.insert(.text(pendingPreamble), at: 0)
-                }
+                // Wire-only context is prepended for the agent and never part
+                // of the recorded transcript — recording above used `blocks`.
+                var privateBlocks: [ACPContentBlock] = []
+                if let pendingPreamble { privateBlocks.append(.text(pendingPreamble)) }
+                if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
+                wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
@@ -1591,11 +1704,12 @@ extension ACPSessionRunner {
                     sessionId: remoteId,
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
-                    acknowledgeDurableConsumption: queuedItemId == nil
+                    acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil
                 )
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    let deliveredForkContext = pendingForkContext != nil
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
                     // "active" by the time we get back on the main actor —
@@ -1606,10 +1720,29 @@ extension ACPSessionRunner {
                         self.session.mcpPreambleSent = true
                         self.persistMCPPreambleSent()
                     }
+                    if pendingForkContext != nil,
+                       var fork = self.session.forkRecord,
+                       fork.contextDeliveryPending {
+                        fork.contextDeliveryPending = false
+                        self.session.forkRecord = fork
+                    }
+                    if deliveredForkContext {
+                        if queuedItemId == nil {
+                            self.persistForkContextDelivered(acknowledging: promptAcknowledgement)
+                        } else if !isActivePrompt {
+                            self.persistForkContextDelivered(acknowledging: promptAcknowledgement)
+                        }
+                    }
                     if isActivePrompt {
                         if queuedItemId != nil {
                             _ = self.session.popQueueHead()
-                            self.persistQueue(acknowledging: promptAcknowledgement)
+                            if deliveredForkContext {
+                                self.persistForkContextDeliveredAndQueue(
+                                    acknowledging: promptAcknowledgement
+                                )
+                            } else {
+                                self.persistQueue(acknowledging: promptAcknowledgement)
+                            }
                         }
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
@@ -1676,10 +1809,12 @@ extension ACPSessionRunner {
         }
     }
 
+    @discardableResult
     func sendRecoveryContext(
         _ prompt: String,
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
-    ) {
+    ) -> Bool {
+        guard !nativeForkBarrierActive else { return false }
         flushPendingIncomingUpdates()
         let promptID = nextPromptID
         nextPromptID += 1
@@ -1738,6 +1873,7 @@ extension ACPSessionRunner {
                 }
             }
         }
+        return true
     }
 
     /// First text block as the user-facing preview. Used when recording

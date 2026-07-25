@@ -43,7 +43,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     @Published var title: String
     @Published var titleSource: ACPSessionTitleSource
-    let origin: ACPSessionOrigin
+    private(set) var origin: ACPSessionOrigin
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
@@ -74,6 +74,13 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// Session capabilities learned from ACP `initialize`.
+    /// Runtime-only: re-learned on each attach and used to select a fork
+    /// mechanism for this session.
+    @Published var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    /// Persisted fork lineage hydrated with the session. A nil value means
+    /// this session was not created as a fork.
+    @Published var forkRecord: ACPSessionForkRecord?
     /// Auth methods learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
@@ -237,6 +244,22 @@ final class ACPSession: ObservableObject, Identifiable {
     var composerDraft: ACPComposerDraft { composer.draft }
     var composerDraftRevision: Int { composer.revision }
 
+    func canForkMessage(at index: Int) -> Bool {
+        guard transcript.messages.indices.contains(index) else { return false }
+        switch transcript.messages[index] {
+        case .user(_, _, let text, _, _):
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .agent(_, _, let buffer):
+            guard !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            guard transcript.streamingState != .idle else { return true }
+            return lastAgent() != index
+        default:
+            return false
+        }
+    }
+
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
         composer.replaceDraft(draft)
     }
@@ -285,6 +308,10 @@ final class ACPSession: ObservableObject, Identifiable {
         // Foundation cannot await main-actor methods from deinit; dispatch.
         let host = terminalHost
         Task { @MainActor in host.killAll() }
+    }
+
+    func markAsAgentForked() {
+        origin = .agentForked
     }
 
     func recordUserPrompt(

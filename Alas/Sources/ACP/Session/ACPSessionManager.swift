@@ -14,6 +14,19 @@ private enum ACPMirrorRefreshPolicy {
     static let inactivePollNanos: UInt64 = 30_000_000_000
 }
 
+private struct ACPForkFallbackPersistenceError: LocalizedError {
+    let underlying: any Error
+
+    var errorDescription: String? {
+        "Failed to persist fork fallback: \(underlying.localizedDescription)"
+    }
+}
+
+enum ACPSessionForkCreationError: Error, Equatable {
+    case sourceUnavailable
+    case sourceReadOnly
+}
+
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
@@ -507,6 +520,119 @@ final class ACPSessionManager: ObservableObject {
         return session
     }
 
+    func createFork(
+        sourceSessionID: ACPSession.ID,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String,
+        autoRunDefault: Bool
+    ) async throws -> ACPSession {
+        guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
+            throw ACPSessionForkCreationError.sourceUnavailable
+        }
+        let acquiredSnapshotLease: Bool
+        if !_ownedLeases.contains(sourceSessionID) {
+            guard await acquireWriterLease(sessionId: sourceSessionID) else {
+                throw ACPSessionForkCreationError.sourceReadOnly
+            }
+            acquiredSnapshotLease = true
+        } else {
+            guard await confirmedWriterLease(for: sourceSessionID) else {
+                throw ACPSessionForkCreationError.sourceReadOnly
+            }
+            acquiredSnapshotLease = false
+        }
+
+        let result: Result<ACPSession, Error>
+        do {
+            await awaitBackfill(id: sourceSessionID)
+            await flushAllPersistence()
+            let storedMessages = try await persistence.loadMessages(sessionId: sourceSessionID)
+            let snapshot = try ACPSessionForkSnapshotResolver.resolve(
+                boundary: boundary,
+                liveMessages: source.transcript.messages,
+                storedMessages: storedMessages
+            )
+            let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
+            let sourceContextDeliveryPending = source.forkRecord?.mechanism == .transcriptTransfer
+                && source.forkRecord?.contextDeliveryPending == true
+            let candidate = sourceContextDeliveryPending
+                ? ACPSessionForkCandidate.transcript
+                : ACPSessionForkCandidatePolicy.candidate(
+                    sourceAgentID: source.agentId,
+                    targetAgentID: targetAgentID,
+                    boundaryIsRemoteHead: boundaryIsRemoteHead,
+                    sourceRemoteSessionID: source.remoteSessionId,
+                    forkCapability: source.sessionCapabilities?.supportsFork
+                )
+
+            let targetID = UUID().uuidString
+            let now = Int64(Date().timeIntervalSince1970)
+            let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
+            let targetTitle = source.title == "New session"
+                ? "New session (fork)"
+                : "\(source.title) (fork)"
+            let targetRow = ACPSessionRow(
+                id: targetID,
+                agentId: targetAgentID,
+                title: targetTitle,
+                titleSource: .generated,
+                currentModel: nil,
+                currentMode: nil,
+                autoRun: autoRunDefault,
+                createdAt: now,
+                updatedAt: now,
+                lastOpenedAt: now,
+                archived: false
+            )
+            let forkRecord = ACPSessionForkRecord(
+                targetSessionID: targetID,
+                sourceSessionID: sourceSessionID,
+                sourceAgentID: source.agentId,
+                sourceBoundarySequence: snapshot.sourceBoundarySequence,
+                inheritedMessageCount: copiedMessages.count,
+                phase: candidate == .native ? .negotiatingNative : .ready,
+                mechanism: candidate == .native ? nil : .transcriptTransfer,
+                contextDeliveryPending: candidate == .transcript
+            )
+
+            try await persistence.createFork(
+                session: targetRow,
+                messages: copiedMessages,
+                record: forkRecord
+            )
+
+            let target = ACPSession(
+                id: targetRow.id,
+                agentId: targetRow.agentId,
+                worktreeId: worktreeId,
+                title: targetRow.title,
+                titleSource: targetRow.titleSource,
+                origin: targetRow.origin,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(targetRow.createdAt)),
+                hydrationState: .ready
+            )
+            target.autoRunEnabled = targetRow.autoRun
+            target.forkRecord = forkRecord
+            for message in copiedMessages {
+                target.transcript.appendMessage(try ACPMessageCodec.decode(
+                    kind: message.kind,
+                    payload: message.payload
+                ))
+            }
+            sessions[targetID] = target
+            persistedRows[targetID] = targetRow
+            recent.removeAll { $0.id == targetID }
+            recent.insert(targetRow, at: 0)
+            result = .success(target)
+        } catch {
+            result = .failure(error)
+        }
+        if acquiredSnapshotLease {
+            await releaseWriterLease(sessionId: sourceSessionID)
+        }
+        return try result.get()
+    }
+
     /// Returns a cached session or a `.loading` placeholder. Cache hits
     /// are O(1); cache misses do a single indexed `loadSession` query
     /// against SQLite so we don't insert orphan loading entries for
@@ -670,10 +796,14 @@ final class ACPSessionManager: ObservableObject {
         }
         session.currentModel = result.row.currentModel
         session.currentMode = result.row.currentMode
+        session.forkRecord = result.forkRecord
         if session.remoteSessionId == nil || session.remoteSessionId == result.row.remoteSessionId {
             session.remoteSessionId = result.row.remoteSessionId
         }
-        if result.row.contextRecoveryPending {
+        let forkContextPending = result.forkRecord?.phase == .ready
+            && result.forkRecord?.mechanism == .transcriptTransfer
+            && result.forkRecord?.contextDeliveryPending == true
+        if result.row.contextRecoveryPending, !forkContextPending {
             // Compute `canSendTranscript` against the FULL wire list rather
             // than `session.hasConversationTranscript`. Tail-first hydration
             // leaves only the last 30 messages in the in-memory transcript
@@ -1624,9 +1754,45 @@ final class ACPSessionManager: ObservableObject {
         // crash. Register it before start() so that replay can't have its
         // completion cursor acked past before the queue flusher (which only
         // runs once this function returns and the runner is registered)
-        // gets a chance to claim it.
-        client.preRegisterAwaitedOperationKeys(session.queue.map(\.brokerOperationKey))
-        try await client.start()
+        // gets a chance to claim it. A negotiating fork has the same replay
+        // gap: its stable startup key must be protected until attach calls
+        // `session/fork` and persists the final mechanism.
+        var awaitedOperationKeys = session.queue.map(\.brokerOperationKey)
+        var negotiatingForkOperationKey: String?
+        if let fork = session.forkRecord,
+           fork.phase == .negotiatingNative,
+           let source = try await persistence.loadSession(id: fork.sourceSessionID),
+           let sourceRemoteSessionID = source.remoteSessionId,
+           !sourceRemoteSessionID.isEmpty {
+            let operationKey = Self.brokerStartupOperationKey(
+                sessionId: sessionId,
+                method: "session/fork",
+                remoteSessionId: sourceRemoteSessionID
+            )
+            awaitedOperationKeys.append(operationKey)
+            negotiatingForkOperationKey = operationKey
+        }
+        client.preRegisterAwaitedOperationKeys(awaitedOperationKeys)
+        do {
+            try await client.start()
+        } catch {
+            // `open` may reveal a completed fork in its operation snapshot
+            // before the following replay fails. Preserve that terminal
+            // classification across this construction boundary: otherwise
+            // the caller sees an ordinary launch failure and durably selects
+            // transcript fallback even when the native fork already exists.
+            let terminalOutcome = negotiatingForkOperationKey.flatMap {
+                client.terminalOutcome(forPreRegisteredOperationKey: $0)
+            }
+            await client.detach()
+            if let terminalOutcome {
+                throw ACPBrokerDurableCompletionReplayError(
+                    outcome: terminalOutcome,
+                    underlying: error
+                )
+            }
+            throw error
+        }
         Self.applyBrokerTurnState(client.currentTurnState, to: session)
         return ACPConnection(client: client)
     }
@@ -1646,6 +1812,293 @@ final class ACPSessionManager: ObservableObject {
             return "startup:\(sessionId):\(method):\(remoteSessionId)"
         }
         return "startup:\(sessionId):\(method)"
+    }
+
+    @discardableResult
+    private func downgradeNegotiatingForkToTranscript(session: ACPSession) async throws -> Bool {
+        guard var fork = session.forkRecord, fork.phase == .negotiatingNative else { return false }
+        do {
+            try await persistence.finalizeFork(
+                targetSessionID: session.id,
+                mechanism: .transcriptTransfer,
+                remoteSessionID: nil
+            )
+        } catch {
+            persistenceError = error.localizedDescription
+            throw ACPForkFallbackPersistenceError(underlying: error)
+        }
+        fork.phase = .ready
+        fork.mechanism = .transcriptTransfer
+        fork.contextDeliveryPending = true
+        session.forkRecord = fork
+        return true
+    }
+
+    private func surfaceForkFallbackPersistenceFailure(
+        _ error: any Error,
+        on session: ACPSession
+    ) {
+        let message = (error as? ACPForkFallbackPersistenceError)?.localizedDescription
+            ?? ACPForkFallbackPersistenceError(underlying: error).localizedDescription
+        session.lastError = message
+        session.contextRecoveryStatus = nil
+        session.agentState = .failed(message)
+    }
+
+    private func releaseReplayedForkCompletionForTranscriptFallback(
+        targetSessionID: ACPSession.ID,
+        sourceRemoteSessionID: String,
+        connection: ACPConnection
+    ) async {
+        guard let brokerClient = connection.client as? ACPBrokerClient else { return }
+        let operationKey = Self.brokerStartupOperationKey(
+            sessionId: targetSessionID,
+            method: "session/fork",
+            remoteSessionId: sourceRemoteSessionID
+        )
+        guard let replayed = brokerClient.replayedCompletion(
+            forPreRegisteredOperationKey: operationKey
+        ) else {
+            return
+        }
+        if replayed.outcome.error == nil,
+           let result = replayed.outcome.result,
+           let forked = try? JSONDecoder().decode(
+               ACPSessionNewResult.self,
+               from: result.data
+           ),
+           !forked.sessionId.isEmpty {
+            try? await connection.closeSession(sessionId: forked.sessionId)
+        }
+        replayed.acknowledgeDurableConsumption()
+    }
+
+    private func startTranscriptFallbackSession(
+        targetSessionID: ACPSession.ID,
+        sourceRemoteSessionID: String,
+        connection: ACPConnection,
+        wireMCPServers: [ACPMCPServer]
+    ) async throws -> ACPSessionNewResult {
+        await releaseReplayedForkCompletionForTranscriptFallback(
+            targetSessionID: targetSessionID,
+            sourceRemoteSessionID: sourceRemoteSessionID,
+            connection: connection
+        )
+        do {
+            let result = try await connection.newSession(
+                cwd: worktreePath,
+                mcpServers: wireMCPServers,
+                brokerOperationKey: Self.brokerStartupOperationKey(
+                    sessionId: targetSessionID,
+                    method: "session/new"
+                )
+            )
+            await releaseReplayedForkCompletionForTranscriptFallback(
+                targetSessionID: targetSessionID,
+                sourceRemoteSessionID: sourceRemoteSessionID,
+                connection: connection
+            )
+            return result
+        } catch {
+            await releaseReplayedForkCompletionForTranscriptFallback(
+                targetSessionID: targetSessionID,
+                sourceRemoteSessionID: sourceRemoteSessionID,
+                connection: connection
+            )
+            throw error
+        }
+    }
+
+    private func startForkTarget(
+        session: ACPSession,
+        fork: ACPSessionForkRecord,
+        initialized: ACPInitializeOutcome,
+        connection: ACPConnection,
+        wireMCPServers: [ACPMCPServer]
+    ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
+        var fork = fork
+        let canAttemptNativeFork = initialized.sessionCapabilities.supportsFork
+            && connection.client.providesDurableOperationKeyDeduplication
+        let source = canAttemptNativeFork
+            ? try await persistence.loadSession(id: fork.sourceSessionID)
+            : nil
+        let sourceRemoteSessionID = source?.remoteSessionId
+        let forkOperationKey = sourceRemoteSessionID.flatMap { remoteSessionID in
+            remoteSessionID.isEmpty ? nil : Self.brokerStartupOperationKey(
+                sessionId: session.id,
+                method: "session/fork",
+                remoteSessionId: remoteSessionID
+            )
+        }
+        let hasReplayedForkCompletion = if let forkOperationKey,
+                                           let brokerClient = connection.client as? ACPBrokerClient {
+            brokerClient.replayedCompletion(
+                forPreRegisteredOperationKey: forkOperationKey
+            ) != nil
+        } else {
+            false
+        }
+        let sourceRunner = runners[fork.sourceSessionID]
+        let nativeForkBarrierAcquired = canAttemptNativeFork && !hasReplayedForkCompletion
+            ? await sourceRunner?.beginNativeForkBarrier() ?? false
+            : false
+        defer {
+            if nativeForkBarrierAcquired {
+                sourceRunner?.endNativeForkBarrier()
+            }
+        }
+        if nativeForkBarrierAcquired {
+            await sourceRunner?.flushPersistence()
+        }
+        let sourceBoundaryMatches = if canAttemptNativeFork {
+            try await persistence.latestMessageSeq(sessionId: fork.sourceSessionID)
+                == fork.sourceBoundarySequence
+        } else {
+            false
+        }
+        let hasNativeForkAuthority = if hasReplayedForkCompletion {
+            true
+        } else if nativeForkBarrierAcquired,
+                  let sourceRunner,
+                  runners[fork.sourceSessionID] === sourceRunner {
+            await sourceRunner.confirmNativeForkBarrier()
+        } else {
+            false
+        }
+        if canAttemptNativeFork,
+           hasNativeForkAuthority,
+           let sourceRemoteSessionID,
+           !sourceRemoteSessionID.isEmpty,
+           sourceBoundaryMatches {
+            let result: ACPSessionNewResult
+            do {
+                result = try await connection.forkSession(
+                    cwd: worktreePath,
+                    sessionId: sourceRemoteSessionID,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: session.id,
+                        method: "session/fork",
+                        remoteSessionId: sourceRemoteSessionID
+                    )
+                )
+            } catch {
+                // A successful durable broker completion must retry the
+                // stable fork key so its returned session can be persisted.
+                // A terminal JSON-RPC completion is equally durable, but it
+                // selects transcript fallback and its replayed cursor must be
+                // consumed there. A plain transport error may have happened
+                // before the broker accepted the send and also falls back.
+                let durableReplay = error as? ACPBrokerDurableCompletionReplayError
+                if let durableReplay, durableReplay.outcome.error == nil {
+                    throw error
+                }
+                try await persistence.finalizeFork(
+                    targetSessionID: session.id,
+                    mechanism: .transcriptTransfer,
+                    remoteSessionID: nil
+                )
+                fork.phase = .ready
+                fork.mechanism = .transcriptTransfer
+                fork.contextDeliveryPending = true
+                session.forkRecord = fork
+                connection.acknowledgeDurableSessionResponses()
+                await releaseReplayedForkCompletionForTranscriptFallback(
+                    targetSessionID: session.id,
+                    sourceRemoteSessionID: sourceRemoteSessionID,
+                    connection: connection
+                )
+                let fallbackError: any Error
+                if let terminalError = durableReplay?.outcome.error {
+                    fallbackError = ACPClientError.jsonrpc(terminalError)
+                } else {
+                    fallbackError = error
+                }
+                if ACPAuthFailure.message(from: fallbackError) != nil {
+                    throw fallbackError
+                }
+                let fallback = try await startTranscriptFallbackSession(
+                    targetSessionID: session.id,
+                    sourceRemoteSessionID: sourceRemoteSessionID,
+                    connection: connection,
+                    wireMCPServers: wireMCPServers
+                )
+                return (fallback, true)
+            }
+
+            do {
+                try await persistence.finalizeFork(
+                    targetSessionID: session.id,
+                    mechanism: .nativeACP,
+                    remoteSessionID: result.sessionId
+                )
+            } catch {
+                try? await connection.closeSession(sessionId: result.sessionId)
+                let transcriptFinalized: Bool
+                do {
+                    try await persistence.finalizeFork(
+                        targetSessionID: session.id,
+                        mechanism: .transcriptTransfer,
+                        remoteSessionID: nil
+                    )
+                    transcriptFinalized = true
+                } catch {
+                    persistenceError = error.localizedDescription
+                    transcriptFinalized = false
+                }
+                if transcriptFinalized {
+                    fork.phase = .ready
+                    fork.mechanism = .transcriptTransfer
+                    fork.contextDeliveryPending = true
+                    session.forkRecord = fork
+                    connection.acknowledgeDurableSessionResponses()
+                }
+                throw error
+            }
+            fork.phase = .ready
+            fork.mechanism = .nativeACP
+            fork.contextDeliveryPending = false
+            session.forkRecord = fork
+            session.markAsAgentForked()
+            if var row = persistedRows[session.id] {
+                row.remoteSessionId = result.sessionId
+                row.origin = .agentForked
+                persistedRows[session.id] = row
+                replaceRecentRow(row)
+            }
+            connection.acknowledgeDurableSessionResponses()
+            return (result, false)
+        }
+
+        try await persistence.finalizeFork(
+            targetSessionID: session.id,
+            mechanism: .transcriptTransfer,
+            remoteSessionID: nil
+        )
+        fork.phase = .ready
+        fork.mechanism = .transcriptTransfer
+        fork.contextDeliveryPending = true
+        session.forkRecord = fork
+        if let source = try await persistence.loadSession(id: fork.sourceSessionID),
+           let sourceRemoteSessionID = source.remoteSessionId,
+           !sourceRemoteSessionID.isEmpty {
+            let result = try await startTranscriptFallbackSession(
+                targetSessionID: session.id,
+                sourceRemoteSessionID: sourceRemoteSessionID,
+                connection: connection,
+                wireMCPServers: wireMCPServers
+            )
+            return (result, true)
+        }
+        let result = try await connection.newSession(
+            cwd: worktreePath,
+            mcpServers: wireMCPServers,
+            brokerOperationKey: Self.brokerStartupOperationKey(
+                sessionId: session.id,
+                method: "session/new"
+            )
+        )
+        return (result, true)
     }
 
     private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
@@ -2408,6 +2861,13 @@ extension ACPSessionManager {
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
+            do {
+                try await downgradeNegotiatingForkToTranscript(session: session)
+            } catch {
+                surfaceForkFallbackPersistenceFailure(error, on: session)
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             let reason = "No ACP launch spec for \(session.agentId)"
             session.setupState = .needsSetup(reason: reason)
             session.agentState = .failed(reason)
@@ -2416,6 +2876,13 @@ extension ACPSessionManager {
         }
         let setup = await evaluateSetup(for: spec)
         guard case .ready = setup else {
+            do {
+                try await downgradeNegotiatingForkToTranscript(session: session)
+            } catch {
+                surfaceForkFallbackPersistenceFailure(error, on: session)
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             session.setupState = setup.sessionSetupState
             session.agentState = .failed(setup.reasonText)
             await releaseWriterLease(sessionId: sessionId)
@@ -2480,7 +2947,20 @@ extension ACPSessionManager {
                 )
             }
         } catch {
-            let msg = "Failed to launch agent: \(error.localizedDescription)"
+            let durableForkRetry = (error as? ACPBrokerDurableCompletionReplayError).flatMap {
+                $0.outcome.error == nil ? $0 : nil
+            }
+            if durableForkRetry == nil {
+                do {
+                    try await downgradeNegotiatingForkToTranscript(session: session)
+                } catch {
+                    surfaceForkFallbackPersistenceFailure(error, on: session)
+                    await releaseWriterLease(sessionId: sessionId)
+                    return
+                }
+            }
+            let surfacedError = durableForkRetry?.underlying ?? error
+            let msg = "Failed to launch agent: \(surfacedError.localizedDescription)"
             session.lastError = msg
             session.agentState = .failed(msg)
             await releaseWriterLease(sessionId: sessionId)
@@ -2531,6 +3011,7 @@ extension ACPSessionManager {
                 )
             )
             session.promptCapabilities = initialized.promptCapabilities
+            session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
@@ -2646,6 +3127,17 @@ extension ACPSessionManager {
                     try await connection.authenticate(methodId: pendingAuthMethodId)
                     session.pendingAuthMethodId = nil
                 } catch {
+                    do {
+                        try await downgradeNegotiatingForkToTranscript(session: session)
+                    } catch {
+                        surfaceForkFallbackPersistenceFailure(error, on: session)
+                        if connection.client is ACPBrokerClient {
+                            await connection.detach()
+                        } else {
+                            await connection.shutdown()
+                        }
+                        return
+                    }
                     let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
                     session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
                     session.agentState = .failed(reason)
@@ -2723,16 +3215,33 @@ extension ACPSessionManager {
             if shouldSuppressLoadReplay {
                 startRunnerIfNeeded()
             }
-            let pendingRecovery = persistedRows[sessionId]?.contextRecoveryPending == true
+            let hasPendingForkContext = session.forkRecord?.phase == .ready
+                && session.forkRecord?.mechanism == .transcriptTransfer
+                && session.forkRecord?.contextDeliveryPending == true
+            let pendingRecovery = !hasPendingForkContext
+                && persistedRows[sessionId]?.contextRecoveryPending == true
             var createdFreshRemoteSession = false
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
-            let hasRestorableContext = pendingRecovery || session.hasConversationTranscript
-            var shouldHoldQueueForRecovery = pendingRecovery && session.hasConversationTranscript
+            let hasRestorableContext = pendingRecovery
+                || (!hasPendingForkContext && session.hasConversationTranscript)
+            var shouldHoldQueueForRecovery = pendingRecovery
+                && !hasPendingForkContext
+                && session.hasConversationTranscript
             if firstRunAttach {
                 session.firstRunConnectingPhase = .creatingSession
             }
-            if freshlyCreated {
+            if let fork = session.forkRecord, fork.phase == .negotiatingNative {
+                let started = try await startForkTarget(
+                    session: session,
+                    fork: fork,
+                    initialized: initialized,
+                    connection: connection,
+                    wireMCPServers: wireMCPServers
+                )
+                result = started.result
+                createdFreshRemoteSession = started.createdFreshRemoteSession
+            } else if freshlyCreated {
                 result = try await connection.newSession(
                     cwd: worktreePath,
                     mcpServers: wireMCPServers,
@@ -2743,7 +3252,7 @@ extension ACPSessionManager {
                 )
                 createdFreshRemoteSession = true
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
                 }
                 switch restoreOperation {
@@ -2787,7 +3296,7 @@ extension ACPSessionManager {
                             )
                         )
                         createdFreshRemoteSession = true
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             if isWriter(for: sessionId) {
                                 persistContextRecoveryPending(sessionId: sessionId, pending: true)
@@ -2799,7 +3308,7 @@ extension ACPSessionManager {
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             session.contextRecoveryStatus = .sendingTranscript
                         }
                     }
@@ -2861,7 +3370,7 @@ extension ACPSessionManager {
                             )
                         )
                         createdFreshRemoteSession = true
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             // Guard the store write: if another instance took over
                             // while we were awaiting loadSession/newSession, do not
@@ -2876,7 +3385,7 @@ extension ACPSessionManager {
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
-                        if session.hasConversationTranscript {
+                        if !hasPendingForkContext, session.hasConversationTranscript {
                             session.contextRecoveryStatus = .sendingTranscript
                         }
                     }
@@ -2893,7 +3402,7 @@ extension ACPSessionManager {
                     )
                 )
                 createdFreshRemoteSession = true
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
                     // Guard the store write: if another instance took over
                     // while we were awaiting newSession, do not persist
@@ -2908,7 +3417,7 @@ extension ACPSessionManager {
                         canSendTranscript: session.hasConversationTranscript
                     )
                 }
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
@@ -2917,7 +3426,7 @@ extension ACPSessionManager {
                     message: "Agent context could not be restored.",
                     canSendTranscript: session.hasConversationTranscript
                 )
-                if session.hasConversationTranscript {
+                if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
@@ -3067,17 +3576,46 @@ extension ACPSessionManager {
             }
             stderrTask.cancel()
         } catch {
+            let durableReplay = error as? ACPBrokerDurableCompletionReplayError
+            let durableRetry = durableReplay.flatMap {
+                $0.outcome.error == nil ? $0 : nil
+            }
+            let terminalReplayError: (any Error)? = durableReplay?.outcome.error.map {
+                ACPClientError.jsonrpc($0)
+            }
+            let wasNegotiatingFork = session.forkRecord?.phase == .negotiatingNative
+            var downgradePersistenceError: (any Error)?
+            if durableRetry == nil {
+                do {
+                    try await downgradeNegotiatingForkToTranscript(session: session)
+                    if wasNegotiatingFork, session.forkRecord?.phase == .ready {
+                        connection.acknowledgeDurableSessionResponses()
+                    }
+                } catch {
+                    downgradePersistenceError = error
+                }
+            }
             // Give stderr a moment to drain so the message is the real cause.
             try? await Task.sleep(nanoseconds: 200_000_000)
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
-            let authReason = ACPAuthFailure.message(from: error)
-            let baseMessage = authReason ?? (error as? JSONRPCError)?.message ?? error.localizedDescription
-            let base = "ACP session attach failed: \(baseMessage)"
+            let surfacedError = downgradePersistenceError
+                ?? terminalReplayError
+                ?? durableRetry?.underlying
+                ?? error
+            let authReason = ACPAuthFailure.message(from: surfacedError)
+            let baseMessage = authReason
+                ?? (surfacedError as? JSONRPCError)?.message
+                ?? surfacedError.localizedDescription
+            let base = downgradePersistenceError == nil
+                ? "ACP session attach failed: \(baseMessage)"
+                : baseMessage
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
             session.contextRecoveryStatus = nil
-            if let authReason {
+            if downgradePersistenceError != nil {
+                session.agentState = .failed(full)
+            } else if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
             } else {
@@ -3085,7 +3623,13 @@ extension ACPSessionManager {
             }
             startedRunner?.stop()
             await startedRunner?.flushPersistence()
-            await connection.shutdown()
+            let shouldPreserveBroker = connection.client is ACPBrokerClient
+                && session.forkRecord?.phase == .negotiatingNative
+            if durableRetry != nil || shouldPreserveBroker {
+                await connection.detach()
+            } else {
+                await connection.shutdown()
+            }
             await releaseWriterLease(sessionId: sessionId)
         }
     }
@@ -3166,8 +3710,7 @@ extension ACPSessionManager {
               let prompt = transcriptContextPrompt(for: session, agentName: agentName)
         else { return false }
 
-        session.contextRecoveryStatus = .sendingTranscript
-        runner.sendRecoveryContext(prompt) { delivered in
+        guard runner.sendRecoveryContext(prompt, onCompleted: { delivered in
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
@@ -3175,7 +3718,8 @@ extension ACPSessionManager {
             } else {
                 session.contextRecoveryStatus = .failed("Transcript recovery failed.")
             }
-        }
+        }) else { return false }
+        session.contextRecoveryStatus = .sendingTranscript
         return true
     }
 

@@ -399,6 +399,23 @@ private struct ACPSessionView: View {
             onLoadFullToolCallContent: { toolCallId in
                 await manager.reloadFullToolCallContent(
                     sessionId: sessionId, toolCallId: toolCallId)
+            },
+            forkTargets: state.acpForkTargets(sourceAgentID: session.agentId),
+            onFork: { boundary, targetAgentID in
+                state.forkACPSession(
+                    worktree: worktree,
+                    sourceSessionID: sessionId,
+                    boundary: boundary,
+                    targetAgentID: targetAgentID
+                )
+            },
+            onOpenForkSource: { sourceSessionID in
+                Task {
+                    await state.openExistingACPSession(sessionId: sourceSessionID)
+                }
+            },
+            agentDisplayName: { agentID in
+                state.agent(id: agentID)?.displayName ?? agentID
             }
         )
     }
