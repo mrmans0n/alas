@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.5] - 2026-07-27
+
+### ✨ Features
+
+- Add semantic icons to the right sidebar sections (#925).
+
+### 🐛 Fixes
+
+- Lazily render diff accessory segments to reduce unnecessary diff surface work (#922).
+
+### 🏗️ Internal
+
+- Design the right sidebar section icon system (#923).
+- Simplify active stack section titles (#924).
+
 ## [0.13.4] - 2026-07-27
 
 ### 🏗️ Internal
