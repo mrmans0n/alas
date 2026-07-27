@@ -570,6 +570,60 @@ struct DiffReviewSurfaceTests {
         #expect(settledIdentities == initialIdentities)
     }
 
+    @Test func accessoryHunkBoundsSegmentMaterializationToScrollViewport() {
+        let path = "A.swift"
+        let rowCount = 200
+        let displayModel = largeSingleGroupDisplayModel(rowCount: rowCount, filePath: path)
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: path, additions: rowCount),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let comments = (1...rowCount).map { line in
+            draftComment(
+                id: "draft-\(line)",
+                fileID: file.id,
+                path: path,
+                startLine: line
+            )
+        }
+        var layout = DiffLayoutMode.stacked
+        var wrap = false
+        var whitespace = false
+        let section = DiffReviewFileSection(
+            file: file,
+            draftComments: comments,
+            draftCommentScrollTargetID: comments.last?.id,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: ScrollView(.vertical) { section })
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        for _ in 0..<5 {
+            controller.view.layoutSubtreeIfNeeded()
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let materializedSegments = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-draft-comment-draft-\(rowCount)",
+            in: controller.view
+        ) != nil)
+        #expect(!materializedSegments.isEmpty)
+        #expect(materializedSegments.count < rowCount / 2)
+    }
+
     @Test func inlineFeedbackScrollRealizesTargetHunkWithoutEagerlyRenderingAllHunks() {
         let path = "Sources/App/LargeView.swift"
         let displayModel = largeDisplayModel(groupCount: 80, filePath: path)
@@ -3892,6 +3946,39 @@ struct DiffReviewSurfaceTests {
             )
         }
         return DiffDisplayModel(filePath: filePath, groups: groups)
+    }
+
+    private func largeSingleGroupDisplayModel(rowCount: Int, filePath: String) -> DiffDisplayModel {
+        let rows = (0..<rowCount).map { index in
+            let line = index + 1
+            return DiffDisplayRow(
+                id: "row-\(line)",
+                kind: .add,
+                old: nil,
+                new: diffLine(
+                    id: "line-\(line)",
+                    side: .new,
+                    newLine: line,
+                    text: "let value\(line) = \(line)",
+                    kind: .add,
+                    rowIndex: index
+                ),
+                collapsedLineCount: 0
+            )
+        }
+        let sourceHunk = ParsedDiff.Hunk(
+            header: "@@ -0,0 +1,\(rowCount) @@",
+            oldStart: 0,
+            newStart: 1,
+            lines: []
+        )
+        let group = DiffDisplayGroup(
+            id: "large-group",
+            header: sourceHunk.header,
+            sourceHunk: sourceHunk,
+            rows: rows
+        )
+        return DiffDisplayModel(filePath: filePath, groups: [group])
     }
 
     private func loadedSession(summaries: [DiffReviewFileSummary]) -> DiffReviewLoadedSession {
