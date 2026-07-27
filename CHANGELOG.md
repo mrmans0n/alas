@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.4] - 2026-07-27
+
+### 🏗️ Internal
+
+- Rename stacked diff mode UI text and simplify the stack icon design (#921).
+
 ## [0.13.3] - 2026-07-25
 
 ### ✨ Features
