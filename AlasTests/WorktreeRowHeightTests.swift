@@ -6,6 +6,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WorktreeRowHeightTests {
+    @Test func ggModeMenuUsesStackedDiffsName() {
+        #expect(WorktreeRowView.ggModeMenuTitle == "Stacked Diffs Mode")
+    }
+
     @Test func ggStackTooltipUsesCommitTerminology() {
         #expect(WorktreeRowView.stackSummaryTooltip(merged: 1, total: 1)
             == "gg stack · 1 of 1 commit merged")

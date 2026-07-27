@@ -6,6 +6,8 @@ enum GGStackIconVariant: Equatable {
 }
 
 struct GGStackIcon: View {
+    nonisolated static let systemName = "square.stack.3d.up"
+
     let variant: GGStackIconVariant
     let size: CGFloat
     let color: Color
@@ -22,8 +24,10 @@ struct GGStackIcon: View {
 
     var body: some View {
         ZStack {
-            GGStackShape()
-                .fill(color)
+            Image(systemName: Self.systemName)
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(color)
             if variant == .disabled {
                 Capsule()
                     .fill(color)
@@ -32,27 +36,5 @@ struct GGStackIcon: View {
             }
         }
         .frame(width: size, height: size)
-    }
-}
-
-private struct GGStackShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let strokeHeight = min(rect.height / 9, 1)
-        let strokeWidth = min(rect.width, 7)
-        let x = rect.midX - strokeWidth / 2
-        let yPositions = [
-            rect.minY + 1,
-            rect.midY - strokeHeight / 2,
-            rect.maxY - strokeHeight - 1,
-        ]
-
-        for y in yPositions {
-            path.addRoundedRect(
-                in: CGRect(x: x, y: y, width: strokeWidth, height: strokeHeight),
-                cornerSize: CGSize(width: strokeHeight / 2, height: strokeHeight / 2)
-            )
-        }
-        return path
     }
 }

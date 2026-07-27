@@ -2,7 +2,8 @@ import SwiftUI
 
 struct CommitRow: View {
     static let ggCheckoutTitle = "Checkout Commit"
-    static let ggContextMenuTitle = "GG"
+    static let ggContextMenuTitle = "Stacked Diffs (GG)"
+    static let ggContextMenuSystemImage = GGStackIcon.systemName
 
     enum ContextMenuAction: Hashable {
         case edit
@@ -76,7 +77,7 @@ struct CommitRow: View {
             }
             if let ggMenu {
                 Divider()
-                Menu(Self.ggContextMenuTitle, systemImage: "square.stack.3d.up") {
+                Menu(Self.ggContextMenuTitle, systemImage: Self.ggContextMenuSystemImage) {
                     ForEach(ggMenu.visibleItems) { item in
                         if item.isSeparator {
                             Divider()
