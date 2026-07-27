@@ -54,6 +54,7 @@ struct WorkingTreeSectionView: View {
             }
         } header: {
             SectionHeader(
+                role: .workingTree,
                 title: "Working tree",
                 count: changeGroups.count,
                 expanded: expanded,

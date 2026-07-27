@@ -77,7 +77,7 @@ struct RightPaneLoadingSkeletonView: View {
         switch activeTab {
         case .changes:
             VStack(alignment: .leading, spacing: 0) {
-                SkeletonSectionHeader(title: "Working tree")
+                SkeletonSectionHeader(role: .workingTree, title: "Working tree")
                 VStack(alignment: .leading, spacing: 6) {
                     SkeletonRow(widthFraction: 0.75)
                     SkeletonRow(widthFraction: 0.55)
@@ -87,7 +87,7 @@ struct RightPaneLoadingSkeletonView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
 
-                SkeletonSectionHeader(title: "Commits")
+                SkeletonSectionHeader(role: .commits, title: "Commits")
                 VStack(alignment: .leading, spacing: 6) {
                     SkeletonRow(widthFraction: 0.8)
                     SkeletonRow(widthFraction: 0.6)
@@ -154,14 +154,19 @@ private struct CompactStateLabel: View {
 // MARK: - Skeleton primitives
 
 private struct SkeletonSectionHeader: View {
+    let role: SectionHeaderRole
     let title: String
     @Environment(\.theme) private var theme
 
     var body: some View {
         HStack(spacing: 6) {
-            // Matches the chevron slot in SectionHeader so the column
-            // alignment is the same as the real header.
-            Color.clear.frame(width: 14, height: 14)
+            SectionHeaderIcon(
+                role: role,
+                size: 10,
+                color: theme.color("fg-faint")
+            )
+                .frame(width: 14, height: 14)
+                .accessibilityHidden(true)
             Text(title.uppercased())
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(0.5)
