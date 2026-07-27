@@ -44,6 +44,8 @@ struct GGWorktreeMenuModel: Equatable {
 }
 
 struct WorktreeRowView: View {
+    nonisolated static let ggModeMenuTitle = "Stacked Diffs Mode"
+
     struct GGModeMenuItem: Equatable, Identifiable {
         let mode: GGWorktreeMode
         let title: String
@@ -264,7 +266,7 @@ struct WorktreeRowView: View {
                 }
                 Divider()
                 if ggMenuModel.isVisible {
-                    Menu("GG Mode") {
+                    Menu(Self.ggModeMenuTitle) {
                         ForEach(Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)) { item in
                             Toggle(item.title, isOn: Binding(
                                 get: { item.isSelected },

@@ -67,8 +67,10 @@ struct CommitRowTests {
         #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: false) == [.edit])
     }
 
-    @Test func ggContextMenuUsesOneTypedActionSurface() {
-        #expect(CommitRow.ggContextMenuTitle == "GG")
+    @Test func ggContextMenuUsesStackedDiffsNameAndSharedIcon() {
+        #expect(CommitRow.ggContextMenuTitle == "Stacked Diffs (GG)")
+        #expect(CommitRow.ggContextMenuSystemImage == "square.stack.3d.up")
+        #expect(CommitRow.ggContextMenuSystemImage == GGStackIcon.systemName)
         #expect(GGCommitAction.checkout != .dropCommit)
     }
 

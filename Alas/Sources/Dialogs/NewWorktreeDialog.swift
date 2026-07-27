@@ -13,6 +13,8 @@ struct NewWorktreeGGModeSegment: Equatable {
 }
 
 struct NewWorktreeDialog: View {
+    nonisolated static let ggModeFieldLabel = "Stacked Diffs Mode"
+
     @Bindable var state: AppState
     @Binding var presented: Bool
     var presetProjectId: String?
@@ -99,7 +101,7 @@ struct NewWorktreeDialog: View {
                         .foregroundColor(theme.color("fg"))
                 }
                 if ggStackAvailability != .hidden {
-                    DialogField(label: "GG mode") {
+                    DialogField(label: Self.ggModeFieldLabel) {
                         ggModeSegmented
                     }
                     Text(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))

@@ -377,6 +377,10 @@ struct NewWorktreeDialogTests {
             "GG disabled for this worktree. Creates a regular Git branch.")
     }
 
+    @Test func ggModeFieldUsesStackedDiffsName() {
+        #expect(NewWorktreeDialog.ggModeFieldLabel == "Stacked Diffs Mode")
+    }
+
     @Test func ggBranchPreviewIncludesPinnedBase() {
         #expect(NewWorktreeDialog.ggBranchPreview(branch: "nacho/feature", base: "main") ==
             "Branch: nacho/feature, based on main")
