@@ -3,15 +3,14 @@ import SwiftUI
 import Testing
 @testable import Alas
 
-/// Verifies that the fixed-frame chevron approach keeps the title text
-/// anchored at the same horizontal position when toggling expand/collapse.
-/// Mirrors the pixel-scan strategy in ``RepoGroupViewLayoutTests``.
+/// Verifies that fixed leading-icon frames keep section titles anchored when
+/// expansion state changes. SubHeader still uses disclosure chevrons.
 @Suite(.serialized)
 @MainActor
 struct ChevronStabilityTests {
     // MARK: - SectionHeader
 
-    @Test func sectionHeaderTitleDoesNotShiftWhenToggled() throws {
+    @Test func sectionHeaderTitleDoesNotShiftBetweenExpansionStates() throws {
         let collapsedX = try titleMinX(sectionHeaderExpanded: false)
         let expandedX = try titleMinX(sectionHeaderExpanded: true)
 
@@ -31,6 +30,7 @@ struct ChevronStabilityTests {
 
     private func titleMinX(sectionHeaderExpanded expanded: Bool) throws -> Int {
         let view = SectionHeader(
+            role: .workingTree,
             title: "Working tree",
             count: 3,
             expanded: expanded,
@@ -38,8 +38,8 @@ struct ChevronStabilityTests {
         )
         .environment(\.theme, try ThemeStore().current)
 
-        // At @2x the chevron frame (14pt) + padding (12pt) + spacing (6pt) = 32pt → 64px.
-        // Chevron glyph can overflow up to ~48px. Scan from 50 to clear it.
+        // At @2x the semantic-icon frame (14pt) + padding (12pt) + spacing (6pt)
+        // places the title at 32pt. Scan from 50px to clear the icon.
         return try firstOpaqueX(view: view, width: 260, height: 40, scanFromPixel: 50)
     }
 

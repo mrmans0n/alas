@@ -112,6 +112,7 @@ struct CommitsSectionView: View {
             }
         } header: {
             SectionHeader(
+                role: ggStack == nil ? .commits : .stack,
                 title: Self.sectionTitle(ggStack: ggStack),
                 count: totalCount,
                 expanded: expanded,

@@ -35,6 +35,7 @@ struct WorkingTreeStageAllActionTests {
 
     @Test func sectionHeaderAcceptsStatsTuple() {
         let header = SectionHeader(
+            role: .commits,
             title: "Commits",
             count: 12,
             expanded: true,

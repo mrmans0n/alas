@@ -25,6 +25,7 @@ struct StashesSectionView: View {
                 }
             } header: {
                 SectionHeader(
+                    role: .stashes,
                     title: "Stashes",
                     count: stashes.count,
                     expanded: expanded,

@@ -1,8 +1,50 @@
 import SwiftUI
 
+enum SectionHeaderRole: Equatable {
+    enum IconKind: Equatable {
+        case standard(String)
+        case stack
+    }
+
+    case workingTree
+    case commits
+    case stack
+    case stashes
+
+    var iconKind: IconKind {
+        switch self {
+        case .workingTree: return .standard("diff")
+        case .commits: return .standard("commit")
+        case .stack: return .stack
+        case .stashes: return .standard("archivebox")
+        }
+    }
+
+    static func accessibilityValue(expanded: Bool) -> String {
+        expanded ? "Expanded" : "Collapsed"
+    }
+}
+
+struct SectionHeaderIcon: View {
+    let role: SectionHeaderRole
+    let size: CGFloat
+    let color: Color
+
+    @ViewBuilder
+    var body: some View {
+        switch role.iconKind {
+        case let .standard(name):
+            Icon(name: name, size: size, color: color)
+        case .stack:
+            GGStackIcon(size: size, color: color)
+        }
+    }
+}
+
 /// Top-level collapsible section header used inside the Changes tab
 /// ("Working tree", "Commits"). The whole row is the click target.
 struct SectionHeader<Trailing: View>: View {
+    let role: SectionHeaderRole
     let title: String
     let count: Int?
     let expanded: Bool
@@ -15,12 +57,22 @@ struct SectionHeader<Trailing: View>: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 6) {
-                Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+                // This is a stable section-identity icon, not an expansion
+                // indicator. Expansion state is conveyed by visible content
+                // and the button's accessibility value.
+                SectionHeaderIcon(
+                    role: role,
+                    size: 10,
+                    color: theme.color("fg-faint")
+                )
                     .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
                 Text(title.uppercased())
                     .font(.system(size: 10.5, weight: .semibold))
                     .tracking(0.5)
                     .foregroundColor(theme.color("fg-muted"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 9.5, weight: .semibold))
@@ -44,11 +96,14 @@ struct SectionHeader<Trailing: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(SectionHeaderRole.accessibilityValue(expanded: expanded))
     }
 }
 
 extension SectionHeader where Trailing == EmptyView {
     init(
+        role: SectionHeaderRole,
         title: String,
         count: Int?,
         expanded: Bool,
@@ -56,6 +111,7 @@ extension SectionHeader where Trailing == EmptyView {
         onToggle: @escaping () -> Void
     ) {
         self.init(
+            role: role,
             title: title,
             count: count,
             expanded: expanded,
