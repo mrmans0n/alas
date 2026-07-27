@@ -848,7 +848,7 @@ struct DiffReviewFileSection: View {
     ) -> some View {
         let displayGroup = group.displayGroup
         if group.containsLocalAccessories {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 segmentedHunkHeader(displayGroup)
                 ForEach(group.segments) { segment in
                     if !segment.rows.isEmpty {
