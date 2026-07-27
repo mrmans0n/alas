@@ -596,6 +596,7 @@ struct DiffReviewSurfaceTests {
         let section = DiffReviewFileSection(
             file: file,
             draftComments: comments,
+            draftCommentScrollTargetID: comments.last?.id,
             layoutMode: Binding(get: { layout }, set: { layout = $0 }),
             wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
             showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
@@ -615,6 +616,10 @@ struct DiffReviewSurfaceTests {
 
         let materializedSegments = allSubviews(of: controller.view)
             .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-draft-comment-draft-\(rowCount)",
+            in: controller.view
+        ) != nil)
         #expect(!materializedSegments.isEmpty)
         #expect(materializedSegments.count < rowCount / 2)
     }

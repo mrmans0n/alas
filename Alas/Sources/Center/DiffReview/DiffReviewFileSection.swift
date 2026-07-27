@@ -848,76 +848,27 @@ struct DiffReviewFileSection: View {
     ) -> some View {
         let displayGroup = group.displayGroup
         if group.containsLocalAccessories {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 segmentedHunkHeader(displayGroup)
-                ForEach(group.segments) { segment in
-                    if !segment.rows.isEmpty {
-                        ForEach(segment.blocks) { block in
-                            switch block {
-                            case .rows(let rowSeg):
-                                DiffPaneTextDocumentView(
-                                    group: DiffDisplayGroup(
-                                        id: "\(segment.id)-\(rowSeg.id)",
-                                        header: displayGroup.header,
-                                        sourceHunk: displayGroup.sourceHunk,
-                                        rows: rowSeg.rows,
-                                        rowsSignature: rowSeg.rowsSignature
-                                    ),
-                                    expandedCollapsedRowIDs: expandedCollapsedRowIDs,
-                                    layoutMode: layoutMode,
-                                    wrapLines: wrapLines,
-                                    showWhitespace: showWhitespace,
-                                    fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                                    codeFontFamily: codeFontFamily,
-                                    codeFontSize: codeFontSize,
-                                    theme: theme,
-                                    lspContext: lspContext,
-                                    activeCommentHighlight: activeHighlight(for: rowSeg.rows),
-                                    allowsReviewLineSelection: allowsDraftCommentCreation,
-                                    onReviewLineSelected: beginPendingDraft,
-                                    onContextExpansion: loadContextAndExpand
-                                )
-                                .fixedSize(horizontal: false, vertical: true)
-                            case .thread(let thread):
-                                DiffFeedbackLaneView(
-                                    lane: DiffFeedbackLaneResolver.lane(for: thread),
-                                    layoutMode: layoutMode,
-                                    rows: segment.rows
-                                ) {
-                                    DiffInlineCommentCard(
-                                        thread: thread,
-                                        onReply: { body in onReply(thread, body) },
-                                        onStageReply: { body in onStageReply(thread, body) },
-                                        onResolve: { onResolve(thread) },
-                                        onUnresolve: { onUnresolve(thread) },
-                                        onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
-                                        onDelete: { comment in onDelete(thread, comment) },
-                                        canReply: canReply && thread.viewerCanReply,
-                                        canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
-                                        canAddToReview: canAddToReview,
-                                        onActiveChange: { active in
-                                            activeThreadID = active ? thread.id : (activeThreadID == thread.id ? nil : activeThreadID)
-                                        }
-                                    )
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            case .annotation(let annotation):
-                                DiffFeedbackLaneView(
-                                    lane: DiffFeedbackLaneResolver.lane(for: annotation),
-                                    layoutMode: layoutMode,
-                                    rows: segment.rows
-                                ) {
-                                    DiffInlineAnnotationCard(annotation: annotation)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            }
+                if let requiredIndex = group.segments.firstIndex(where: { segment in
+                    segment.draftComments.contains { commandedDraftCommentIDs.contains($0.id) }
+                }) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(group.segments[..<requiredIndex]) { segment in
+                            accessorySegment(segment, displayGroup: displayGroup)
                         }
                     }
-                    if !segment.draftComments.isEmpty {
-                        draftCommentStack(segment.draftComments, rows: segment.rows)
+                    accessorySegment(group.segments[requiredIndex], displayGroup: displayGroup)
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(group.segments[(requiredIndex + 1)...]) { segment in
+                            accessorySegment(segment, displayGroup: displayGroup)
+                        }
                     }
-                    if segment.showsComposer {
-                        draftComposer(rows: segment.rows)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(group.segments) { segment in
+                            accessorySegment(segment, displayGroup: displayGroup)
+                        }
                     }
                 }
             }
@@ -963,6 +914,81 @@ struct DiffReviewFileSection: View {
                     )
                 }
             )
+        }
+    }
+
+    @ViewBuilder
+    private func accessorySegment(
+        _ segment: DiffReviewRenderContext.Segment,
+        displayGroup: DiffDisplayGroup
+    ) -> some View {
+        if !segment.rows.isEmpty {
+            ForEach(segment.blocks) { block in
+                switch block {
+                case .rows(let rowSeg):
+                    DiffPaneTextDocumentView(
+                        group: DiffDisplayGroup(
+                            id: "\(segment.id)-\(rowSeg.id)",
+                            header: displayGroup.header,
+                            sourceHunk: displayGroup.sourceHunk,
+                            rows: rowSeg.rows,
+                            rowsSignature: rowSeg.rowsSignature
+                        ),
+                        expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                        layoutMode: layoutMode,
+                        wrapLines: wrapLines,
+                        showWhitespace: showWhitespace,
+                        fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                        codeFontFamily: codeFontFamily,
+                        codeFontSize: codeFontSize,
+                        theme: theme,
+                        lspContext: lspContext,
+                        activeCommentHighlight: activeHighlight(for: rowSeg.rows),
+                        allowsReviewLineSelection: allowsDraftCommentCreation,
+                        onReviewLineSelected: beginPendingDraft,
+                        onContextExpansion: loadContextAndExpand
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                case .thread(let thread):
+                    DiffFeedbackLaneView(
+                        lane: DiffFeedbackLaneResolver.lane(for: thread),
+                        layoutMode: layoutMode,
+                        rows: segment.rows
+                    ) {
+                        DiffInlineCommentCard(
+                            thread: thread,
+                            onReply: { body in onReply(thread, body) },
+                            onStageReply: { body in onStageReply(thread, body) },
+                            onResolve: { onResolve(thread) },
+                            onUnresolve: { onUnresolve(thread) },
+                            onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
+                            onDelete: { comment in onDelete(thread, comment) },
+                            canReply: canReply && thread.viewerCanReply,
+                            canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+                            canAddToReview: canAddToReview,
+                            onActiveChange: { active in
+                                activeThreadID = active ? thread.id : (activeThreadID == thread.id ? nil : activeThreadID)
+                            }
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                case .annotation(let annotation):
+                    DiffFeedbackLaneView(
+                        lane: DiffFeedbackLaneResolver.lane(for: annotation),
+                        layoutMode: layoutMode,
+                        rows: segment.rows
+                    ) {
+                        DiffInlineAnnotationCard(annotation: annotation)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+        if !segment.draftComments.isEmpty {
+            draftCommentStack(segment.draftComments, rows: segment.rows)
+        }
+        if segment.showsComposer {
+            draftComposer(rows: segment.rows)
         }
     }
 
