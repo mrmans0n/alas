@@ -10,23 +10,18 @@ struct CommitsSectionTitleTests {
     }
 
     @Test func plainCommitsWhenNoStack() {
-        #expect(CommitsSectionView.sectionTitle(ggStack: nil, commitsEmpty: false) == "Commits")
-        #expect(CommitsSectionView.sectionTitle(ggStack: nil, commitsEmpty: true) == "Commits")
+        #expect(CommitsSectionView.sectionTitle(ggStack: nil) == "Commits")
     }
 
-    @Test func stackTitleWhenStackPresentAndCommitsNonEmpty() {
-        #expect(
-            CommitsSectionView.sectionTitle(ggStack: stack(), commitsEmpty: false)
-                == "Stack · nacho/stack"
-        )
+    @Test func activeStackUsesOnlyItsName() {
+        #expect(CommitsSectionView.sectionTitle(ggStack: stack()) == "nacho/stack")
     }
 
-    /// A synced stack under "Branch upstream" comparison mode loads
-    /// `ggStack` (feeding the sidebar badge) while the display `commits`
-    /// list is empty. The header must not promise "Stack · …" content that
-    /// the (empty) body can't render.
-    @Test func plainCommitsWhenStackPresentButCommitsEmpty() {
-        #expect(CommitsSectionView.sectionTitle(ggStack: stack(), commitsEmpty: true) == "Commits")
+    @Test func activeStackTitleDoesNotDependOnVisibleCommitRows() {
+        let visibleCommits: [CommitInfo] = []
+
+        #expect(visibleCommits.isEmpty)
+        #expect(CommitsSectionView.sectionTitle(ggStack: stack(name: "fully-synced")) == "fully-synced")
     }
 
     @Test func ggRowMutationsFollowDrawerBusyGate() {
