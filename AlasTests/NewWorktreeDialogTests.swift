@@ -52,6 +52,67 @@ struct NewWorktreeDialogTests {
         )?.id == "repo-b")
     }
 
+    @Test func initialSelectionEnablesStackedDiffsBeforeFirstRender() {
+        let selection = NewWorktreeDialog.initialSelection(
+            presetProjectId: nil,
+            projects: [Self.project(id: "repo-a", ggMode: .auto)],
+            repoHasGGConfig: { $0.id == "repo-a" }
+        )
+
+        #expect(selection.projectId == "repo-a")
+        #expect(selection.ggMode == .on)
+    }
+
+    @Test func initialSelectionDisablesStackedDiffsBeforeFirstRender() {
+        let selection = NewWorktreeDialog.initialSelection(
+            presetProjectId: nil,
+            projects: [Self.project(id: "repo-a", ggMode: .off)],
+            repoHasGGConfig: { _ in true }
+        )
+
+        #expect(selection.projectId == "repo-a")
+        #expect(selection.ggMode == .off)
+    }
+
+    @Test func initialSelectionUsesValidPresetProjectPolicy() {
+        let selection = NewWorktreeDialog.initialSelection(
+            presetProjectId: "repo-b",
+            projects: [
+                Self.project(id: "repo-a", ggMode: .off),
+                Self.project(id: "repo-b", ggMode: .on),
+            ],
+            repoHasGGConfig: { _ in false }
+        )
+
+        #expect(selection.projectId == "repo-b")
+        #expect(selection.ggMode == .on)
+    }
+
+    @Test func initialSelectionFallsBackToFirstProjectForStalePreset() {
+        let selection = NewWorktreeDialog.initialSelection(
+            presetProjectId: "missing",
+            projects: [
+                Self.project(id: "repo-a", ggMode: .off),
+                Self.project(id: "repo-b", ggMode: .on),
+            ],
+            repoHasGGConfig: { _ in true }
+        )
+
+        #expect(selection.projectId == "repo-a")
+        #expect(selection.ggMode == .off)
+    }
+
+    @Test func initialSelectionIsOffWithoutProjects() {
+        let selection = NewWorktreeDialog.initialSelection(
+            presetProjectId: nil,
+            projects: [],
+            repoHasGGConfig: { _ in true }
+        )
+
+        #expect(selection.projectId.isEmpty)
+        #expect(selection.ggMode == .off)
+    }
+
     @Test func initialProjectIdUsesValidPreset() {
         let projects = [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
 
@@ -188,13 +249,17 @@ struct NewWorktreeDialogTests {
         ))
     }
 
-    private static func project(id: String) -> ProjectConfig {
+    private static func project(
+        id: String,
+        ggMode: GGProjectMode = .auto
+    ) -> ProjectConfig {
         ProjectConfig(
             id: id,
             name: "nacho/\(id)",
             path: "/tmp/\(id)",
             color: "#5fb7c4",
-            addedAt: Date(timeIntervalSince1970: 0)
+            addedAt: Date(timeIntervalSince1970: 0),
+            ggMode: ggMode
         )
     }
 

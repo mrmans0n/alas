@@ -27,7 +27,7 @@ struct NewWorktreeDialog: View {
     @State private var branch: String = ""
     @State private var stackName: String = ""
     @State private var runStartup: Bool = true
-    @State private var ggMode: GGWorktreeMode = .off
+    @State private var ggMode: GGWorktreeMode
     @State private var openAfterCreate: Bool = true
     @State private var launchMode: AppConfig.LauncherMode = .terminal
     /// The launcher mode to persist — preserves the user's intent even when
@@ -49,10 +49,15 @@ struct NewWorktreeDialog: View {
         self.state = state
         self._presented = presented
         self.presetProjectId = presetProjectId
-        self._projectId = State(initialValue: Self.initialProjectId(
+        let initialSelection = Self.initialSelection(
             presetProjectId: presetProjectId,
-            projects: state.projects
-        ))
+            projects: state.projects,
+            repoHasGGConfig: { project in
+                GGStackGate.repoHasGGConfig(repoPath: project.path)
+            }
+        )
+        self._projectId = State(initialValue: initialSelection.projectId)
+        self._ggMode = State(initialValue: initialSelection.ggMode)
     }
 
     var body: some View {
@@ -515,6 +520,27 @@ struct NewWorktreeDialog: View {
         resolvedPresetProject(presetProjectId: presetProjectId, projects: projects)?.id
             ?? projects.first?.id
             ?? ""
+    }
+
+    nonisolated static func initialSelection(
+        presetProjectId: String?,
+        projects: [ProjectConfig],
+        repoHasGGConfig: (ProjectConfig) -> Bool
+    ) -> (projectId: String, ggMode: GGWorktreeMode) {
+        guard let project = resolvedPresetProject(
+            presetProjectId: presetProjectId,
+            projects: projects
+        ) ?? projects.first else {
+            return ("", .off)
+        }
+
+        return (
+            project.id,
+            initialGGMode(
+                projectMode: project.ggMode,
+                repoHasGGConfig: repoHasGGConfig(project)
+            )
+        )
     }
 
     nonisolated static func showsRepositorySelector(
