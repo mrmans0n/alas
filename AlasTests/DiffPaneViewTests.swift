@@ -536,7 +536,6 @@ struct DiffPaneViewTests {
 
         let state = AppState(store: MemoryStore())
         state.config.changes.diffLayoutMode = .split
-        state.config.changes.diffWrapLines = false
         var missCount = 0
         var view = DiffTabView(
             worktreePath: repo,
@@ -559,7 +558,6 @@ struct DiffPaneViewTests {
         #expect(visibleCodeTextViews(in: controller.view).count == 2)
 
         state.config.changes.diffLayoutMode = .stacked
-        state.config.changes.diffWrapLines = true
         try await waitForRenderPass(controller: controller) {
             visibleCodeTextViews(in: controller.view).count == 1
         }
@@ -574,7 +572,6 @@ struct DiffPaneViewTests {
 
         let state = AppState(store: MemoryStore())
         state.config.changes.diffLayoutMode = .stacked
-        state.config.changes.diffWrapLines = false
         let view = DiffTabView(
             worktreePath: repo,
             relativePath: "Sources/App.swift",
@@ -2440,7 +2437,6 @@ let second = true
     @Test func diffPreferenceBindingsPersistLayoutButKeepWrapAndWhitespacePaneLocal() {
         let appState = AppState(store: MemoryStore())
         appState.config.changes.diffLayoutMode = .split
-        appState.config.changes.diffWrapLines = false
         var firstWrapLines = false
         var secondWrapLines = false
         var firstWhitespace = false
@@ -2461,7 +2457,6 @@ let second = true
         )
 
         #expect(appState.config.changes.diffLayoutMode == .stacked)
-        #expect(appState.config.changes.diffWrapLines == false)
         #expect(first.wrapLines.wrappedValue == true)
         #expect(second.wrapLines.wrappedValue == false)
         #expect(first.showWhitespace.wrappedValue == true)

@@ -337,7 +337,6 @@ struct AppConfig: Codable, Equatable {
         }
         var comparisonMode: ChangesComparisonMode
         var diffLayoutMode: DiffLayoutMode
-        var diffWrapLines: Bool
         var diffShowWhitespace: Bool
         /// Master switch for the gg stacked-diffs integration. On by
         /// default — without gg installed the later gates hide all UI.
@@ -346,7 +345,7 @@ struct AppConfig: Codable, Equatable {
         enum CodingKeys: String, CodingKey {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
                  mergeSingleResolvePrompt, comparisonMode,
-                 diffLayoutMode, diffWrapLines, diffShowWhitespace, stackedDiffsEnabled
+                 diffLayoutMode, diffShowWhitespace, stackedDiffsEnabled
         }
     }
 
@@ -467,7 +466,6 @@ struct AppConfig: Codable, Equatable {
             mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
             comparisonMode: .auto,
             diffLayoutMode: .split,
-            diffWrapLines: false,
             diffShowWhitespace: false
         ),
         agents: Agents(
@@ -704,7 +702,6 @@ extension AppConfig {
                 return (legacyTrackUpstream == true) ? .branchUpstream : .auto
             }()
             let diffLayoutMode = (try? changesContainer.decode(DiffLayoutMode.self, forKey: .diffLayoutMode)) ?? .split
-            let diffWrapLines = (try? changesContainer.decode(Bool.self, forKey: .diffWrapLines)) ?? false
             let diffShowWhitespace = (try? changesContainer.decode(Bool.self, forKey: .diffShowWhitespace)) ?? false
             changes = Changes(
                 aiToolId: toolId,
@@ -714,7 +711,6 @@ extension AppConfig {
                 mergeSingleResolvePrompt: singleResolve,
                 comparisonMode: comparisonMode,
                 diffLayoutMode: diffLayoutMode,
-                diffWrapLines: diffWrapLines,
                 diffShowWhitespace: diffShowWhitespace
             )
             changes.stackedDiffsEnabled =
@@ -728,7 +724,6 @@ extension AppConfig {
                 mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
                 comparisonMode: .auto,
                 diffLayoutMode: .split,
-                diffWrapLines: false,
                 diffShowWhitespace: false
             )
         }
