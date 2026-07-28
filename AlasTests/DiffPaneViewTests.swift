@@ -164,8 +164,20 @@ struct DiffPaneViewTests {
         )
     }
 
+    private final class WriteRecorder {
+        var writeCount = 0
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
+        let recorder: WriteRecorder?
+
+        init(recorder: WriteRecorder? = nil) {
+            self.recorder = recorder
+        }
+
+        func write<T: Encodable>(_: T, to _: URL) throws {
+            recorder?.writeCount += 1
+        }
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
@@ -2435,7 +2447,8 @@ let second = true
     }
 
     @Test func diffPreferenceBindingsPersistLayoutButKeepWrapAndWhitespacePaneLocal() {
-        let appState = AppState(store: MemoryStore())
+        let recorder = WriteRecorder()
+        let appState = AppState(store: MemoryStore(recorder: recorder))
         appState.config.changes.diffLayoutMode = .split
         var firstWrapLines = false
         var secondWrapLines = false
@@ -2447,8 +2460,12 @@ let second = true
             wrapLines: Binding(get: { firstWrapLines }, set: { firstWrapLines = $0 }),
             showWhitespace: Binding(get: { firstWhitespace }, set: { firstWhitespace = $0 })
         )
-        first.layoutMode.wrappedValue = .stacked
         first.wrapLines.wrappedValue = true
+        #expect(recorder.writeCount == 0)
+
+        first.layoutMode.wrappedValue = .stacked
+        #expect(recorder.writeCount == 1)
+
         first.showWhitespace.wrappedValue = true
         let second = DiffPreferenceBindings(
             appState: appState,
@@ -2461,6 +2478,21 @@ let second = true
         #expect(second.wrapLines.wrappedValue == false)
         #expect(first.showWhitespace.wrappedValue == true)
         #expect(second.showWhitespace.wrappedValue == false)
+    }
+
+    @Test func diffTabsProvideDistinctPresentationIdentityForDirectSwitches() {
+        let first = DiffTabState(
+            id: "first-diff",
+            title: "First diff",
+            relativePath: "Sources/First.swift"
+        )
+        let second = DiffTabState(
+            id: "second-diff",
+            title: "Second diff",
+            relativePath: "Sources/Second.swift"
+        )
+
+        #expect(first.id != second.id)
     }
 
     @Test func collapsedContextControllerTogglesHiddenRows() throws {
