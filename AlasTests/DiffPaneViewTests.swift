@@ -870,6 +870,262 @@ struct DiffPaneViewTests {
         #expect(settledIdentities == initialIdentities)
     }
 
+    @Test func staticModeEstimatedHeightScalesWithRenderedRows() throws {
+        let baseGroup = try #require(model().groups.first)
+        let groups = (0..<12).map { index in
+            DiffDisplayGroup(
+                id: "group-\(index)",
+                header: "@@ -\(index + 1),2 +\(index + 1),2 @@",
+                sourceHunk: baseGroup.sourceHunk,
+                rows: baseGroup.rows
+            )
+        }
+        let smallModel = DiffDisplayModel(filePath: "small.swift", groups: [baseGroup])
+        let largeModel = DiffDisplayModel(filePath: "large.swift", groups: groups)
+        let unwrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: largeModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: []
+        )
+
+        #expect(unwrappedHeight > DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: smallModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: []
+        ))
+
+        let smallFontHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: largeModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            codeFont: .monospacedSystemFont(ofSize: 8, weight: .regular)
+        )
+        let largeFontHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: largeModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            codeFont: .monospacedSystemFont(ofSize: 16, weight: .regular)
+        )
+        #expect(smallFontHeight < largeFontHeight)
+
+        let fusedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: largeModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            fusionStates: groups.map { _ in DiffPaneHunkFusionState(fusedWithPrevious: true, fusedWithNext: true) },
+        )
+        #expect(fusedHeight < unwrappedHeight)
+
+        let longLine = String(repeating: "let wrappedValue = computeSomethingExpensive() ", count: 10)
+        let wrappedModel = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,1 +1,1 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .delete, text: longLine, oldNumber: 1, newNumber: nil),
+                        .init(kind: .add, text: longLine, oldNumber: nil, newNumber: 1),
+                    ]
+                )
+            ]),
+            filePath: "Wrapped.swift"
+        )
+        let narrowWrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: wrappedModel,
+            layoutMode: .split,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 320
+        )
+        let wideWrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: wrappedModel,
+            layoutMode: .split,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 1_200
+        )
+        let noWrapHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: wrappedModel,
+            layoutMode: .split,
+            expandedCollapsedRowIDs: [],
+            wrapLines: false,
+            availableWidth: 320
+        )
+        #expect(narrowWrappedHeight > wideWrappedHeight)
+        #expect(narrowWrappedHeight > noWrapHeight)
+
+        let tabbedModel = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,1 +1,1 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: String(repeating: "\tvalue", count: 16), oldNumber: 1, newNumber: 1),
+                    ]
+                ),
+            ]),
+            filePath: "Tabbed.swift"
+        )
+        let spacesModel = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,1 +1,1 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: String(repeating: " value", count: 16), oldNumber: 1, newNumber: 1),
+                    ]
+                ),
+            ]),
+            filePath: "Spaces.swift"
+        )
+        let tabbedWrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: tabbedModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 180
+        )
+        let spacesWrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: spacesModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 180
+        )
+        #expect(tabbedWrappedHeight > spacesWrappedHeight)
+        #expect(DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: tabbedModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 180,
+            showWhitespace: true
+        ) < tabbedWrappedHeight)
+
+        let smallLineNumberModel = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,1 +1,1 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: String(repeating: "value ", count: 20), oldNumber: 1, newNumber: 1),
+                    ]
+                ),
+            ]),
+            filePath: "SmallLineNumber.swift"
+        )
+        let largeLineNumberModel = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1000000000,1 +1000000000,1 @@",
+                    oldStart: 1_000_000_000,
+                    newStart: 1_000_000_000,
+                    lines: [
+                        .init(
+                            kind: .context,
+                            text: String(repeating: "value ", count: 20),
+                            oldNumber: 1_000_000_000,
+                            newNumber: 1_000_000_000
+                        ),
+                    ]
+                ),
+            ]),
+            filePath: "LargeLineNumber.swift"
+        )
+        let smallLineNumberHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: smallLineNumberModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 100
+        )
+        let largeLineNumberHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: largeLineNumberModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 100
+        )
+        #expect(largeLineNumberHeight > smallLineNumberHeight)
+
+        let collapsedModel = DiffDisplayModel(filePath: "Collapsed.swift", groups: [
+            DiffDisplayGroup(
+                id: "collapsed",
+                header: "@@ -1,1 +1,1 @@",
+                sourceHunk: baseGroup.sourceHunk,
+                rows: [
+                    DiffDisplayRow(
+                        id: "collapsed-row",
+                        kind: .collapsed,
+                        old: nil,
+                        new: nil,
+                        collapsedLineCount: 1_000_000_000
+                    ),
+                ]
+            ),
+        ])
+        let collapsedWrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: collapsedModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 120
+        )
+        let collapsedNoWrapHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: collapsedModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: false,
+            availableWidth: 120
+        )
+        #expect(collapsedWrappedHeight > collapsedNoWrapHeight)
+
+        let expandableContextModel = DiffDisplayModel(filePath: "ExpandableContext.swift", groups: [
+            expandableContextGroup(boundary: .above, collapsedLineCount: 1_000_000_000),
+        ])
+        let expandableContextWrappedHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: expandableContextModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: true,
+            availableWidth: 120
+        )
+        let expandableContextNoWrapHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: expandableContextModel,
+            layoutMode: .stacked,
+            expandedCollapsedRowIDs: [],
+            wrapLines: false,
+            availableWidth: 120
+        )
+        #expect(expandableContextWrappedHeight == expandableContextNoWrapHeight)
+
+        let emptyHunkModel = DiffDisplayModel(filePath: "empty.swift", groups: [
+            DiffDisplayGroup(
+                id: "empty",
+                header: "@@ -1,0 +1,0 @@",
+                sourceHunk: baseGroup.sourceHunk,
+                rows: []
+            ),
+        ])
+        let defaultHeaderHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: emptyHunkModel,
+            layoutMode: .split,
+            expandedCollapsedRowIDs: [],
+            headerFont: .monospacedSystemFont(ofSize: 12, weight: .regular)
+        )
+        let largeHeaderHeight = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: emptyHunkModel,
+            layoutMode: .split,
+            expandedCollapsedRowIDs: [],
+            headerFont: .monospacedSystemFont(ofSize: 64, weight: .regular)
+        )
+        #expect(largeHeaderHeight > defaultHeaderHeight)
+    }
+
     @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
         var layout = DiffLayoutMode.split
         var wrap = false

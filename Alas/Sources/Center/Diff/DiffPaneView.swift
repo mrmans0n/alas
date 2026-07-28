@@ -123,6 +123,243 @@ enum DiffPaneVerticalScrollMode {
     case staticHeight
 }
 
+enum DiffPaneStaticHeightEstimator {
+    private static let minimumHunkHeaderHeight: CGFloat = 38
+    private static let hunkHeaderVerticalPadding: CGFloat = 16
+    private static let textVerticalInset: CGFloat = 16
+    private static let minimumHunkBodyHeight: CGFloat = 36
+    private static let stackHorizontalPadding: CGFloat = 20
+    private static let textHorizontalInset: CGFloat = 20
+    private static let lineNumberGutterMinimumThickness: CGFloat = 42
+    private static let lineNumberGutterHorizontalPadding: CGFloat = 8
+
+    static func estimatedHeight(
+        for model: DiffDisplayModel,
+        layoutMode: DiffLayoutMode,
+        expandedCollapsedRowIDs: Set<String>,
+        codeFont: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular),
+        headerFont: NSFont? = nil,
+        wrapLines: Bool = false,
+        availableWidth: CGFloat? = nil,
+        showWhitespace: Bool = false
+    ) -> CGFloat {
+        estimatedHeight(
+            for: model,
+            layoutMode: layoutMode,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+            codeFont: codeFont,
+            headerFont: headerFont,
+            wrapLines: wrapLines,
+            availableWidth: availableWidth,
+            showWhitespace: showWhitespace,
+            fusionStates: nil,
+        )
+    }
+
+    static func estimatedHeight(
+        for model: DiffDisplayModel,
+        layoutMode: DiffLayoutMode,
+        expandedCollapsedRowIDs: Set<String>,
+        codeFont: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular),
+        headerFont: NSFont? = nil,
+        wrapLines: Bool = false,
+        availableWidth: CGFloat? = nil,
+        showWhitespace: Bool = false,
+        fusionStates suppliedFusionStates: [DiffPaneHunkFusionState]?
+    ) -> CGFloat {
+        let fusionStates: [DiffPaneHunkFusionState]
+        if let suppliedFusionStates, suppliedFusionStates.count == model.groups.count {
+            fusionStates = suppliedFusionStates
+        } else {
+            fusionStates = DiffPaneHunkFusionResolver.states(for: model.groups)
+        }
+        let topPadding = fusionStates.first?.outerTopPadding ?? 10
+        let bottomPadding = fusionStates.last?.outerBottomPadding ?? 10
+        let codeLineHeight = lineHeight(for: codeFont, multiplier: CenterTypography.lineHeightMultiple)
+        let hunkHeaderHeight = max(
+            minimumHunkHeaderHeight,
+            lineHeight(for: headerFont ?? codeFont, multiplier: 1) + hunkHeaderVerticalPadding
+        )
+        let contextControlRowHeight = DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: codeFont)
+        let hunkHeights = model.groups.enumerated().reduce(CGFloat(0)) { total, item in
+            let (index, group) = item
+            let fusion = index < fusionStates.count ? fusionStates[index] : .none
+            let visibleRows = DiffPaneRowProjection.visibleRows(
+                in: group,
+                expandedCollapsedRowIDs: expandedCollapsedRowIDs
+            )
+            let wrappingColumnWidth = wrappingColumnWidth(
+                layoutMode: layoutMode,
+                availableWidth: availableWidth,
+                rows: visibleRows
+            )
+            let rowsHeight = textRowsHeight(
+                for: visibleRows,
+                layoutMode: layoutMode,
+                codeLineHeight: codeLineHeight,
+                contextControlRowHeight: contextControlRowHeight,
+                wrapLines: wrapLines,
+                wrappingColumnWidth: wrappingColumnWidth,
+                codeFont: codeFont,
+                showWhitespace: showWhitespace
+            )
+
+            return total
+                + hunkHeaderHeight
+                + max(minimumHunkBodyHeight, rowsHeight + textVerticalInset)
+                + fusion.bottomPadding
+        }
+
+        return topPadding + hunkHeights + bottomPadding
+    }
+
+    private static func textRowsHeight(
+        for rows: [DiffDisplayRow],
+        layoutMode: DiffLayoutMode,
+        codeLineHeight: CGFloat,
+        contextControlRowHeight: CGFloat,
+        wrapLines: Bool,
+        wrappingColumnWidth: CGFloat?,
+        codeFont: NSFont,
+        showWhitespace: Bool
+    ) -> CGFloat {
+        let visibleRows = rows.isEmpty ? [nil] : rows.map(Optional.some)
+        return visibleRows.reduce(CGFloat(0)) { total, row in
+            let lineCount: Int
+            switch (layoutMode, row) {
+            case (_, let row?) where row.kind == .collapsed:
+                lineCount = wrappedLineCount(
+                    for: collapsedText(for: row),
+                    wrapLines: wrapLines,
+                    columnWidth: wrappingColumnWidth,
+                    codeFont: codeFont,
+                    showWhitespace: showWhitespace
+                )
+            case (_, let row?) where row.kind == .expandableContext:
+                lineCount = 1
+            case (.split, let row?):
+                lineCount = max(
+                    wrappedLineCount(for: row.old, wrapLines: wrapLines, columnWidth: wrappingColumnWidth, codeFont: codeFont, showWhitespace: showWhitespace),
+                    wrappedLineCount(for: row.new, wrapLines: wrapLines, columnWidth: wrappingColumnWidth, codeFont: codeFont, showWhitespace: showWhitespace),
+                    1
+                )
+            case (.split, nil):
+                lineCount = 1
+            case (.stacked, let row?):
+                lineCount = max(DiffPaneRowProjection.stackedLines(for: row).reduce(0) { total, line in
+                    total + wrappedLineCount(for: line, wrapLines: wrapLines, columnWidth: wrappingColumnWidth, codeFont: codeFont, showWhitespace: showWhitespace)
+                }, 1)
+            case (.stacked, nil):
+                lineCount = 1
+            }
+            return total + CGFloat(lineCount) * rowHeight(
+                for: row,
+                codeLineHeight: codeLineHeight,
+                contextControlRowHeight: contextControlRowHeight
+            )
+        }
+    }
+
+    private static func rowHeight(
+        for row: DiffDisplayRow?,
+        codeLineHeight: CGFloat,
+        contextControlRowHeight: CGFloat
+    ) -> CGFloat {
+        guard let row else { return codeLineHeight }
+        switch row.kind {
+        case .collapsed, .expandableContext:
+            return contextControlRowHeight
+        case .context, .expandedContext, .add, .delete, .replacement:
+            return codeLineHeight
+        }
+    }
+
+    private static func wrappingColumnWidth(
+        layoutMode: DiffLayoutMode,
+        availableWidth: CGFloat?,
+        rows: [DiffDisplayRow]
+    ) -> CGFloat? {
+        guard let availableWidth, availableWidth > 1 else { return nil }
+
+        let textPaneWidth = max(availableWidth - stackHorizontalPadding, 1)
+        let paneWidth: CGFloat
+        switch layoutMode {
+        case .split:
+            paneWidth = DiffPaneSplitGeometry.frames(containerWidth: textPaneWidth).oldPane.width
+        case .stacked:
+            paneWidth = textPaneWidth
+        }
+        return max(paneWidth - lineNumberGutterThickness(rows: rows) - textHorizontalInset, 1)
+    }
+
+    private static func wrappedLineCount(
+        for line: DiffDisplayLine?,
+        wrapLines: Bool,
+        columnWidth: CGFloat?,
+        codeFont: NSFont,
+        showWhitespace: Bool
+    ) -> Int {
+        guard let line else { return 1 }
+        return wrappedLineCount(
+            for: line.text,
+            wrapLines: wrapLines,
+            columnWidth: columnWidth,
+            codeFont: codeFont,
+            showWhitespace: showWhitespace
+        )
+    }
+
+    private static func wrappedLineCount(
+        for text: String,
+        wrapLines: Bool,
+        columnWidth: CGFloat?,
+        codeFont: NSFont,
+        showWhitespace: Bool
+    ) -> Int {
+        guard wrapLines, let columnWidth else { return 1 }
+        let characterWidth = max(ceil(("8" as NSString).size(withAttributes: [.font: codeFont]).width), 1)
+        let estimatedWidth = CGFloat(estimatedRenderedColumnUnits(in: text, showWhitespace: showWhitespace)) * characterWidth
+        return max(Int(ceil(estimatedWidth / columnWidth)), 1)
+    }
+
+    private static func estimatedRenderedColumnUnits(in text: String, showWhitespace: Bool) -> Int {
+        text.reduce(0) { total, character in
+            if character == "\t" {
+                return total + (showWhitespace ? 1 : 4)
+            }
+            return total + 1
+        }
+    }
+
+    private static func collapsedText(for row: DiffDisplayRow) -> String {
+        "... \(row.collapsedLineCount) unchanged lines"
+    }
+
+    private static func lineNumberGutterThickness(rows: [DiffDisplayRow]) -> CGFloat {
+        let maxDigits = rows
+            .flatMap { [$0.old?.lineNumber, $0.new?.lineNumber] }
+            .compactMap { $0.map(String.init) }
+            .map(\.count)
+            .max() ?? 1
+        let sample = String(repeating: "8", count: max(maxDigits, 1)) as NSString
+        let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        let width = ceil(sample.size(withAttributes: [.font: font]).width)
+        return max(lineNumberGutterMinimumThickness, width + lineNumberGutterHorizontalPadding * 2)
+    }
+
+    private static func lineHeight(for font: NSFont, multiplier: CGFloat) -> CGFloat {
+        ceil((font.ascender + abs(font.descender) + font.leading) * multiplier)
+    }
+}
+
+private struct DiffPaneStaticWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct DiffPaneHunkFusionState: Equatable {
     static let none = DiffPaneHunkFusionState(fusedWithPrevious: false, fusedWithNext: false)
 
@@ -228,6 +465,7 @@ struct DiffPaneView: View {
     @Environment(\.theme) private var theme
     @State private var expandedCollapsedRowIDs: Set<String> = []
     @State private var activeThreadID: String?
+    @State private var staticRowsWidth: CGFloat = 0
 
     init(
         model: DiffDisplayModel,
@@ -314,8 +552,39 @@ struct DiffPaneView: View {
             }
         } else {
             staticRowsStack
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: DiffPaneStaticWidthPreferenceKey.self,
+                            value: proxy.size.width
+                        )
+                    }
+                )
+                .onPreferenceChange(DiffPaneStaticWidthPreferenceKey.self) { width in
+                    if abs(staticRowsWidth - width) > 0.5 {
+                        staticRowsWidth = width
+                    }
+                }
+                .frame(
+                    maxWidth: .infinity,
+                    idealHeight: staticRowsEstimatedHeight,
+                    alignment: .topLeading
+                )
         }
+    }
+
+    private var staticRowsEstimatedHeight: CGFloat {
+        DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: model,
+            layoutMode: layoutMode,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+            codeFont: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
+            headerFont: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize - 1),
+            wrapLines: wrapLines,
+            availableWidth: staticRowsWidth > 1 ? staticRowsWidth : nil,
+            showWhitespace: showWhitespace,
+            fusionStates: resolvedHunkFusionStates,
+        )
     }
 
     private var lazyRowsStack: some View {
