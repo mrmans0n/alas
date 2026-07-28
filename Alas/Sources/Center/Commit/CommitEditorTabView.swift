@@ -25,6 +25,7 @@ struct CommitEditorTabView: View {
     @State private var error: String?
     @State private var pendingDropFile: PendingCommitFileDrop?
     @State private var pendingDropHunk: PendingCommitHunkDrop?
+    @State private var wrapLines = false
     @State private var showWhitespace = false
 
     // Files/diff divider drag: transient during the drag, committed to
@@ -37,7 +38,11 @@ struct CommitEditorTabView: View {
 
     private static let minPaneWidth: CGFloat = 140
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     private var dirty: Bool {

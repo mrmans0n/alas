@@ -2437,16 +2437,18 @@ let second = true
         #expect(DiffFeedbackLaneGeometry.containerWidth(for: .init(width: 900, height: nil)) == 900)
     }
 
-    @Test func diffPreferenceBindingsPersistLayoutAndWrapButKeepWhitespaceLocal() {
-        let appState = AppState()
+    @Test func diffPreferenceBindingsPersistLayoutButKeepWrapAndWhitespacePaneLocal() {
+        let appState = AppState(store: MemoryStore())
         appState.config.changes.diffLayoutMode = .split
         appState.config.changes.diffWrapLines = false
-        appState.config.changes.diffShowWhitespace = true
+        var firstWrapLines = false
+        var secondWrapLines = false
         var firstWhitespace = false
         var secondWhitespace = false
 
         let first = DiffPreferenceBindings(
             appState: appState,
+            wrapLines: Binding(get: { firstWrapLines }, set: { firstWrapLines = $0 }),
             showWhitespace: Binding(get: { firstWhitespace }, set: { firstWhitespace = $0 })
         )
         first.layoutMode.wrappedValue = .stacked
@@ -2454,12 +2456,14 @@ let second = true
         first.showWhitespace.wrappedValue = true
         let second = DiffPreferenceBindings(
             appState: appState,
+            wrapLines: Binding(get: { secondWrapLines }, set: { secondWrapLines = $0 }),
             showWhitespace: Binding(get: { secondWhitespace }, set: { secondWhitespace = $0 })
         )
 
         #expect(appState.config.changes.diffLayoutMode == .stacked)
-        #expect(appState.config.changes.diffWrapLines == true)
-        #expect(appState.config.changes.diffShowWhitespace == true)
+        #expect(appState.config.changes.diffWrapLines == false)
+        #expect(first.wrapLines.wrappedValue == true)
+        #expect(second.wrapLines.wrappedValue == false)
         #expect(first.showWhitespace.wrappedValue == true)
         #expect(second.showWhitespace.wrappedValue == false)
     }

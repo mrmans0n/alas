@@ -2,10 +2,16 @@ import SwiftUI
 
 struct DiffPreferenceBindings {
     let appState: AppState
+    private let wrapLinesStorage: Binding<Bool>
     private let showWhitespaceStorage: Binding<Bool>
 
-    init(appState: AppState, showWhitespace: Binding<Bool>) {
+    init(
+        appState: AppState,
+        wrapLines: Binding<Bool>,
+        showWhitespace: Binding<Bool>
+    ) {
         self.appState = appState
+        self.wrapLinesStorage = wrapLines
         self.showWhitespaceStorage = showWhitespace
     }
 
@@ -21,14 +27,7 @@ struct DiffPreferenceBindings {
     }
 
     var wrapLines: Binding<Bool> {
-        Binding(
-            get: { appState.config.changes.diffWrapLines },
-            set: { newValue in
-                guard appState.config.changes.diffWrapLines != newValue else { return }
-                appState.config.changes.diffWrapLines = newValue
-                appState.saveConfig()
-            }
-        )
+        wrapLinesStorage
     }
 
     var showWhitespace: Binding<Bool> {

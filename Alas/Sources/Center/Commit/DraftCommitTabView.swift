@@ -23,13 +23,18 @@ struct DraftCommitTabView: View {
     @State private var selectedFileID: DiffReviewFileID?
     @State private var loadingSession = false
     @State private var railCollapsed = false
+    @State private var wrapLines = false
     @State private var showWhitespace = false
 
     @Environment(\.theme) private var theme
     private let git = GitService()
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     private var trimmedSubject: String {

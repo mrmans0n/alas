@@ -28,6 +28,7 @@ struct DraftReviewRequestTabView: View {
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var generation: Task<Void, Never>? = nil
     @State private var reviewSessionLaunchError: String?
+    @State private var wrapLines = false
     @State private var showWhitespace = false
 
     @Environment(\.theme) private var theme
@@ -74,7 +75,11 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     var body: some View {

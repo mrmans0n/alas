@@ -44,6 +44,7 @@ struct ReviewTabView: View {
     @State private var pendingReview: PendingReview?
     @State private var pendingReviewRailCollapsed = false
     @State private var showVerdictSheet = false
+    @State private var wrapLines = false
     @State private var showWhitespace = false
 
     var body: some View {
@@ -655,7 +656,11 @@ struct ReviewTabView: View {
     }
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     // MARK: - Verdict submission
