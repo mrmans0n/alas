@@ -231,6 +231,7 @@ struct CenterPaneView: View {
                                 rps.requestDiscardFile(path: s.relativePath)
                             }
                         )
+                        .id(s.id)
                         .task(id: rightPaneActivationKey) {
                             activateRightPaneStateForCenterTab()
                         }

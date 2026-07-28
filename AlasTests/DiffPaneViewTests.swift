@@ -164,8 +164,20 @@ struct DiffPaneViewTests {
         )
     }
 
+    private final class WriteRecorder {
+        var writeCount = 0
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
+        let recorder: WriteRecorder?
+
+        init(recorder: WriteRecorder? = nil) {
+            self.recorder = recorder
+        }
+
+        func write<T: Encodable>(_: T, to _: URL) throws {
+            recorder?.writeCount += 1
+        }
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
@@ -536,7 +548,6 @@ struct DiffPaneViewTests {
 
         let state = AppState(store: MemoryStore())
         state.config.changes.diffLayoutMode = .split
-        state.config.changes.diffWrapLines = false
         var missCount = 0
         var view = DiffTabView(
             worktreePath: repo,
@@ -559,7 +570,6 @@ struct DiffPaneViewTests {
         #expect(visibleCodeTextViews(in: controller.view).count == 2)
 
         state.config.changes.diffLayoutMode = .stacked
-        state.config.changes.diffWrapLines = true
         try await waitForRenderPass(controller: controller) {
             visibleCodeTextViews(in: controller.view).count == 1
         }
@@ -574,7 +584,6 @@ struct DiffPaneViewTests {
 
         let state = AppState(store: MemoryStore())
         state.config.changes.diffLayoutMode = .stacked
-        state.config.changes.diffWrapLines = false
         let view = DiffTabView(
             worktreePath: repo,
             relativePath: "Sources/App.swift",
@@ -2437,31 +2446,53 @@ let second = true
         #expect(DiffFeedbackLaneGeometry.containerWidth(for: .init(width: 900, height: nil)) == 900)
     }
 
-    @Test func diffPreferenceBindingsPersistLayoutAndWrapButKeepWhitespaceLocal() {
-        let appState = AppState()
+    @Test func diffPreferenceBindingsPersistLayoutButKeepWrapAndWhitespacePaneLocal() {
+        let recorder = WriteRecorder()
+        let appState = AppState(store: MemoryStore(recorder: recorder))
         appState.config.changes.diffLayoutMode = .split
-        appState.config.changes.diffWrapLines = false
-        appState.config.changes.diffShowWhitespace = true
+        var firstWrapLines = false
+        var secondWrapLines = false
         var firstWhitespace = false
         var secondWhitespace = false
 
         let first = DiffPreferenceBindings(
             appState: appState,
+            wrapLines: Binding(get: { firstWrapLines }, set: { firstWrapLines = $0 }),
             showWhitespace: Binding(get: { firstWhitespace }, set: { firstWhitespace = $0 })
         )
-        first.layoutMode.wrappedValue = .stacked
         first.wrapLines.wrappedValue = true
+        #expect(recorder.writeCount == 0)
+
+        first.layoutMode.wrappedValue = .stacked
+        #expect(recorder.writeCount == 1)
+
         first.showWhitespace.wrappedValue = true
         let second = DiffPreferenceBindings(
             appState: appState,
+            wrapLines: Binding(get: { secondWrapLines }, set: { secondWrapLines = $0 }),
             showWhitespace: Binding(get: { secondWhitespace }, set: { secondWhitespace = $0 })
         )
 
         #expect(appState.config.changes.diffLayoutMode == .stacked)
-        #expect(appState.config.changes.diffWrapLines == true)
-        #expect(appState.config.changes.diffShowWhitespace == true)
+        #expect(first.wrapLines.wrappedValue == true)
+        #expect(second.wrapLines.wrappedValue == false)
         #expect(first.showWhitespace.wrappedValue == true)
         #expect(second.showWhitespace.wrappedValue == false)
+    }
+
+    @Test func diffTabsProvideDistinctPresentationIdentityForDirectSwitches() {
+        let first = DiffTabState(
+            id: "first-diff",
+            title: "First diff",
+            relativePath: "Sources/First.swift"
+        )
+        let second = DiffTabState(
+            id: "second-diff",
+            title: "Second diff",
+            relativePath: "Sources/Second.swift"
+        )
+
+        #expect(first.id != second.id)
     }
 
     @Test func collapsedContextControllerTogglesHiddenRows() throws {

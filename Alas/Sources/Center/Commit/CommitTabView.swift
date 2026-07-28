@@ -22,6 +22,7 @@ struct CommitTabView: View {
 
     @State private var headerExpanded: Bool = false
     @State private var reviewSessionLaunchError: String?
+    @State private var wrapLines = false
     @State private var showWhitespace = false
 
     @Environment(\.theme) private var theme
@@ -29,7 +30,11 @@ struct CommitTabView: View {
     private let reviewLoader = CommitReviewLoader()
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     static func reviewSessionTarget(

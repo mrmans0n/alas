@@ -47,6 +47,7 @@ struct DiffTabView: View {
     @State private var pendingDraftBody = ""
     @State private var draftComposerFocusRequestGeneration = 0
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
+    @State private var wrapLines = false
     @State private var showWhitespace = false
     @StateObject private var renderContextCache = DiffTabRenderContextCache()
     @FocusState private var draftComposerFocused: Bool
@@ -181,7 +182,11 @@ struct DiffTabView: View {
     }
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     private var lspContext: DiffPaneLSPContext? {

@@ -362,12 +362,20 @@ struct ReviewSessionTabView: View {
 
     private var layoutModeBinding: Binding<DiffLayoutMode> {
         guard let appState else { return $localLayoutMode }
-        return DiffPreferenceBindings(appState: appState, showWhitespace: $localShowWhitespace).layoutMode
+        return DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $localWrapLines,
+            showWhitespace: $localShowWhitespace
+        ).layoutMode
     }
 
     private var wrapLinesBinding: Binding<Bool> {
         guard let appState else { return $localWrapLines }
-        return DiffPreferenceBindings(appState: appState, showWhitespace: $localShowWhitespace).wrapLines
+        return DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $localWrapLines,
+            showWhitespace: $localShowWhitespace
+        ).wrapLines
     }
 
     private var showWhitespaceBinding: Binding<Bool> {

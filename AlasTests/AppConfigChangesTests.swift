@@ -197,7 +197,6 @@ struct AppConfigChangesTests {
 
     @Test func defaultsHaveDiffDisplayPreferences() {
         #expect(AppConfig.defaults.changes.diffLayoutMode == .split)
-        #expect(AppConfig.defaults.changes.diffWrapLines == false)
         #expect(AppConfig.defaults.changes.diffShowWhitespace == false)
     }
 
@@ -242,19 +241,37 @@ struct AppConfigChangesTests {
         """
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.changes.diffLayoutMode == .split)
-        #expect(cfg.changes.diffWrapLines == false)
         #expect(cfg.changes.diffShowWhitespace == false)
     }
 
     @Test func roundTripsDiffDisplayPreferences() throws {
         var cfg = AppConfig.defaults
         cfg.changes.diffLayoutMode = .stacked
-        cfg.changes.diffWrapLines = true
         cfg.changes.diffShowWhitespace = true
         let data = try JSONEncoder().encode(cfg)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.changes.diffLayoutMode == .stacked)
-        #expect(decoded.changes.diffWrapLines == true)
         #expect(decoded.changes.diffShowWhitespace == true)
+    }
+
+    @Test func ignoresAndDropsLegacyDiffWrapLines() throws {
+        let json = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.defaults))
+                as? [String: Any]
+        )
+        var legacy = json
+        var changes = try #require(legacy["changes"] as? [String: Any])
+        changes["diffWrapLines"] = true
+        legacy["changes"] = changes
+
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: legacyData)
+        let encodedData = try JSONEncoder().encode(decoded)
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: encodedData) as? [String: Any]
+        )
+        let encodedChanges = try #require(encoded["changes"] as? [String: Any])
+
+        #expect(encodedChanges["diffWrapLines"] == nil)
     }
 }

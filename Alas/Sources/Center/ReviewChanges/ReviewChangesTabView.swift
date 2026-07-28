@@ -91,6 +91,7 @@ struct ReviewChangesTabView: View {
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
     @State private var reviewSessionLaunchError: String?
+    @State private var wrapLines = false
     @State private var showWhitespace = false
 
     var body: some View {
@@ -458,7 +459,11 @@ struct ReviewChangesTabView: View {
     }
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
+        DiffPreferenceBindings(
+            appState: appState,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace
+        )
     }
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
