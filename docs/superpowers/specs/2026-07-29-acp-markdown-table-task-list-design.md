@@ -14,9 +14,9 @@ Supported task markers are top-level `- [ ]`, `- [x]`, and `- [X]` items. Ordina
 
 Keep the existing table block parser, visual styling, and horizontal scrolling. The table renderer measures its available width and derives an outer column width:
 
-`max(100, availableWidth / columnCount)`
+`max(100, (availableWidth - dividerWidth * (columnCount - 1)) / columnCount)`
 
-Every cell, including its existing horizontal padding, uses that minimum. The 100-point floor preserves the current effective 80-point text width plus padding. A table with a small number of columns therefore fills the transcript column, while a table with enough columns to exceed the available width retains horizontal scrolling. Cell text continues to wrap within its assigned column.
+The 0.5-point dividers are subtracted before the remainder is shared across columns, so the outer cell widths and dividers exactly fill the available width. Every cell, including its existing horizontal padding, uses that minimum. The 100-point floor preserves the current effective 80-point text width plus padding. A table with a small number of columns therefore fills the transcript column, while a table with enough columns to exceed the available width retains horizontal scrolling. Cell text continues to wrap within its assigned column.
 
 The width calculation will be isolated as a small testable helper. Empty or malformed tables continue to follow the parser's existing fallback behavior.
 
