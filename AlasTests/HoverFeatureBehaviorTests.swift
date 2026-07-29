@@ -219,6 +219,52 @@ struct HoverFeatureBehaviorTests {
         #expect(feature.isShowingPopover == false)
     }
 
+    @Test func mermaidExpansionAllowsSameSymbolToReopen() async throws {
+        let textView = makeTextView()
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = textView
+        let recorder = HoverRequestRecorder()
+        recorder.queueResponse(.mermaid("graph TD; A-->B"))
+        recorder.queueResponse(.plainText("reopened"))
+        let feature = makeFeature(textView: textView, recorder: recorder)
+        defer {
+            MermaidDiagramViewerController.shared.dismiss()
+            feature.tearDown()
+            window.close()
+        }
+        let symbolPoint = point(forCharacterAt: 12, in: textView)
+
+        feature.simulateMouseMoved(at: symbolPoint)
+        feature.simulateOptionPressed()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(await recorder.calls.count == 1)
+        #expect(feature.isShowingPopover)
+        let overlay = try #require(window.childWindows?.first)
+        overlay.contentViewController?.view.layoutSubtreeIfNeeded()
+        let hoverTextView = try #require(
+            firstTextView(in: overlay.contentViewController?.view)
+        )
+        let cell = try #require(firstMermaidCell(in: hoverTextView))
+
+        cell.delegate?.mermaidTextAttachmentCellDidRequestExpansion(cell)
+
+        #expect(!feature.isShowingPopover)
+        #expect(window.attachedSheet?.title == "Mermaid Diagram")
+        MermaidDiagramViewerController.shared.dismiss()
+
+        feature.simulateMouseMoved(at: symbolPoint)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(await recorder.calls.count == 2)
+        #expect(feature.isShowingPopover)
+    }
+
     @Test func mouseExitsEditorAfterGraceDismisses() async {
         let textView = makeTextView()
         let recorder = HoverRequestRecorder()
@@ -239,6 +285,37 @@ struct HoverFeatureBehaviorTests {
         // will dismiss regardless.)
         try? await Task.sleep(nanoseconds: 700_000_000)
         #expect(feature.isShowingPopover == false)
+    }
+
+    private func firstTextView(in view: NSView?) -> NSTextView? {
+        guard let view else { return nil }
+        if let textView = view as? NSTextView {
+            return textView
+        }
+        for subview in view.subviews {
+            if let textView = firstTextView(in: subview) {
+                return textView
+            }
+        }
+        return nil
+    }
+
+    private func firstMermaidCell(
+        in textView: NSTextView
+    ) -> MermaidTextAttachmentCell? {
+        guard let storage = textView.textStorage else { return nil }
+        var found: MermaidTextAttachmentCell?
+        storage.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: storage.length)
+        ) { value, _, stop in
+            guard let attachment = value as? MermaidTextAttachment else {
+                return
+            }
+            found = attachment.mermaidCell
+            stop.pointee = true
+        }
+        return found
     }
 }
 
@@ -269,5 +346,15 @@ final class HoverRequestRecorder {
 private extension LSPHoverResult {
     static func plainText(_ value: String) -> LSPHoverResult {
         LSPHoverResult(contents: .plain(value), range: nil)
+    }
+
+    static func mermaid(_ source: String) -> LSPHoverResult {
+        LSPHoverResult(
+            contents: .markupContent(
+                kind: "markdown",
+                value: "```mermaid\n\(source)\n```"
+            ),
+            range: nil
+        )
     }
 }

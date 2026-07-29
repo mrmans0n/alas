@@ -469,7 +469,10 @@ final class DiffPaneLSPController {
             size: size,
             theme: theme,
             anchor: anchor,
-            in: textView
+            in: textView,
+            onWillPresentMermaidViewer: { [weak self] in
+                self?.hideHover()
+            }
         )
     }
 

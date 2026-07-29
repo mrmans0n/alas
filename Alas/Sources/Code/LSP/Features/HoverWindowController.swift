@@ -15,14 +15,13 @@ final class HoverWindowController {
         size: NSSize,
         theme: Theme,
         anchor: NSRect,
-        in textView: NSTextView
+        in textView: NSTextView,
+        onWillPresentMermaidViewer: @escaping () -> Void
     ) {
         let root = HoverPopupView(
             result: result,
             theme: theme,
-            onWillPresentMermaidViewer: { [weak self] in
-                self?.hide()
-            }
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer
         )
         if let hostingController {
             hostingController.rootView = root

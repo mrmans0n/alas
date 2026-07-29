@@ -411,7 +411,10 @@ final class HoverFeature {
             size: preferredSize,
             theme: theme,
             anchor: anchor,
-            in: textView
+            in: textView,
+            onWillPresentMermaidViewer: { [weak self] in
+                self?.dismiss()
+            }
         )
         shownSymbolRange = symbolRange
         installMouseMonitor()

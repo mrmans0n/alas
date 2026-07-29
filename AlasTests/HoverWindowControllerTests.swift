@@ -68,7 +68,10 @@ struct HoverWindowControllerTests {
             size: HoverFeatureTesting.computePreferredSize(for: first),
             theme: theme,
             anchor: NSRect(x: 10, y: 10, width: 1, height: 14),
-            in: editor
+            in: editor,
+            onWillPresentMermaidViewer: { [weak controller] in
+                controller?.hide()
+            }
         )
 
         #expect(firstCell.delegate != nil)
@@ -78,7 +81,10 @@ struct HoverWindowControllerTests {
             size: HoverFeatureTesting.computePreferredSize(for: second),
             theme: theme,
             anchor: NSRect(x: 10, y: 10, width: 1, height: 14),
-            in: editor
+            in: editor,
+            onWillPresentMermaidViewer: { [weak controller] in
+                controller?.hide()
+            }
         )
         hostWindow.childWindows?.forEach {
             $0.contentViewController?.view.layoutSubtreeIfNeeded()
