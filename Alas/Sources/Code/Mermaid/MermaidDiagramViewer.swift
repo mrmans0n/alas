@@ -99,7 +99,7 @@ struct MermaidDiagramViewerView: View {
     var service: MermaidRenderService = .shared
 
     @Environment(\.theme) private var theme
-    @State private var outcome: MermaidRenderOutcome?
+    @State private var renderState = MermaidRenderRequestState()
     @State private var showsSource = false
     @State private var zoomState = MermaidZoomState()
     @GestureState private var dragTranslation: CGSize = .zero
@@ -130,9 +130,12 @@ struct MermaidDiagramViewerView: View {
         }
         .background(theme.color("bg-1"))
         .task(id: key) {
-            outcome = nil
+            let requestedKey = key
+            renderState.begin(requestedKey)
             zoomState.resetToFit()
-            outcome = await service.render(key: key)
+            let rendered = await service.render(key: requestedKey)
+            guard !Task.isCancelled else { return }
+            renderState.apply(rendered, for: requestedKey)
         }
     }
 
@@ -155,7 +158,7 @@ struct MermaidDiagramViewerView: View {
         GeometryReader { proxy in
             ZStack {
                 theme.color("bg-1")
-                switch outcome {
+                switch renderState.outcome {
                 case .rendered(let diagram):
                     let fittedSize = MermaidDiagramLayout.fittedSize(
                         intrinsic: diagram.image.size,

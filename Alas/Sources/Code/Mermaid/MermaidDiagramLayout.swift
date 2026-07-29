@@ -12,6 +12,21 @@ enum MermaidDiagramLayout {
     }
 }
 
+struct MermaidRenderRequestState {
+    private(set) var currentKey: MermaidRenderKey?
+    private(set) var outcome: MermaidRenderOutcome?
+
+    mutating func begin(_ key: MermaidRenderKey) {
+        currentKey = key
+        outcome = nil
+    }
+
+    mutating func apply(_ outcome: MermaidRenderOutcome, for key: MermaidRenderKey) {
+        guard key == currentKey else { return }
+        self.outcome = outcome
+    }
+}
+
 struct MermaidZoomState: Equatable {
     static let minimumScale: CGFloat = 0.25
     static let maximumScale: CGFloat = 8

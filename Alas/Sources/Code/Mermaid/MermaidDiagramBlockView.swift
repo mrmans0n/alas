@@ -8,7 +8,7 @@ struct MermaidDiagramBlockView: View {
 
     @Environment(\.displayScale) private var displayScale
     @Environment(\.theme) private var theme
-    @State private var outcome: MermaidRenderOutcome?
+    @State private var renderState = MermaidRenderRequestState()
     @State private var showsSource = false
 
     private var key: MermaidRenderKey {
@@ -31,7 +31,7 @@ struct MermaidDiagramBlockView: View {
             MermaidDiagramRenderContent(
                 source: source,
                 profile: profile,
-                outcome: outcome
+                outcome: renderState.outcome
             )
             if showsSource {
                 MermaidDiagramSourceView(source: source)
@@ -45,8 +45,11 @@ struct MermaidDiagramBlockView: View {
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
         .task(id: key) {
-            outcome = nil
-            outcome = await service.render(key: key)
+            let requestedKey = key
+            renderState.begin(requestedKey)
+            let rendered = await service.render(key: requestedKey)
+            guard !Task.isCancelled else { return }
+            renderState.apply(rendered, for: requestedKey)
         }
     }
 
