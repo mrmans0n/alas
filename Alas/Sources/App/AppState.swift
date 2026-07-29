@@ -291,7 +291,7 @@ final class AppState {
         }
     }
 
-    func openRunScriptPaletteOverlay() {
+    func openRunScriptPaletteOverlay(mode: RunScriptPaletteModel.Mode = .run) {
         guard !isRunScriptPaletteOpen else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
@@ -301,7 +301,7 @@ final class AppState {
         isRepoSelectorOpen = false
         agentLauncher.reset()
         isAgentLauncherOpen = false
-        runScriptPalette.reset()
+        runScriptPalette.prepareForOpen(mode: mode)
         isRunScriptPaletteOpen = true
     }
 

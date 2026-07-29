@@ -6,6 +6,11 @@ import Observation
 @Observable
 @MainActor
 final class RunScriptPaletteModel {
+    enum Mode {
+        case run
+        case edit
+    }
+
     enum Row: Equatable {
         case header(String)
         case script(RunScript)
@@ -18,6 +23,7 @@ final class RunScriptPaletteModel {
         }
     }
 
+    private(set) var mode: Mode = .run
     var query: String = "" {
         didSet {
             guard query != oldValue else { return }
@@ -29,13 +35,18 @@ final class RunScriptPaletteModel {
     private(set) var scrollToSelectionTick = 0
     private(set) var scripts: [RunScript] = []
 
-    func load(environment env: RunScriptPaletteEnvironment) {
+    func prepareForOpen(mode: Mode) {
         reset()
+        self.mode = mode
+    }
+
+    func load(environment env: RunScriptPaletteEnvironment) {
         scripts = env.scripts()
         snapSelectionToFirstSelectable()
     }
 
     func reset() {
+        mode = .run
         query = ""
         selectedIndex = 0
         scrollToSelectionTick = 0
@@ -104,7 +115,13 @@ final class RunScriptPaletteModel {
         let rows = rows()
         guard rows.indices.contains(selectedIndex) else { return }
         switch rows[selectedIndex] {
-        case .script(let script): env.run(script)
+        case .script(let script):
+            switch mode {
+            case .run:
+                env.run(script)
+            case .edit:
+                env.edit(script)
+            }
         case .newRepoScript:      env.newScript(.repo)
         case .newGlobalScript:    env.newScript(.global)
         case .header:             break

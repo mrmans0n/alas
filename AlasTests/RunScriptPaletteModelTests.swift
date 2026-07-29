@@ -61,6 +61,22 @@ struct RunScriptPaletteModelTests {
         #expect(ran == script("build"))
     }
 
+    @Test func enterEditsSelectedScriptInEditMode() {
+        var ran: RunScript?
+        var edited: RunScript?
+        let model = RunScriptPaletteModel()
+        let env = environment(
+            scripts: [script("build")],
+            onRun: { ran = $0 },
+            onEdit: { edited = $0 }
+        )
+        model.prepareForOpen(mode: .edit)
+        model.load(environment: env)
+        model.activateSelection(environment: env)
+        #expect(ran == nil)
+        #expect(edited == script("build"))
+    }
+
     @Test func newRowsInvokeNewScript() {
         var newScope: RunScriptScope?
         let model = RunScriptPaletteModel()
