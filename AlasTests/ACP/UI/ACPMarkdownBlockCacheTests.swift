@@ -59,6 +59,20 @@ struct ACPMarkdownBlockCacheTests {
         ])
     }
 
+    @Test("closed mermaid fence becomes diagram but open fence stays streaming code")
+    func mermaidFenceLifecycle() {
+        #expect(ACPMarkdownText.parse("""
+        ```mermaid
+        graph TD; A-->B
+        ```
+        """) == [.mermaid(source: "graph TD; A-->B")])
+
+        #expect(ACPMarkdownText.parse("""
+        ```mermaid
+        graph TD; A-->B
+        """) == [.streamingCode(language: "mermaid", body: "graph TD; A-->B")])
+    }
+
     @Test("blank line inside an unclosed tilde fence does NOT promote stable blocks")
     func tildeFenceKeepsUnstable() async {
         let cache = ACPMarkdownBlockCache()

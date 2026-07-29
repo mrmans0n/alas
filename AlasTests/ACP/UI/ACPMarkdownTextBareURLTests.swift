@@ -5,6 +5,26 @@ import Testing
 
 @Suite("ACPMarkdownText bare URL links")
 struct ACPMarkdownTextBareURLTests {
+    @Test("mermaid recognition uses the first case-insensitive fence token")
+    func mermaidFenceRecognition() {
+        #expect(ACPMarkdownText.parse("""
+        ```MERMAID title=Architecture
+        graph TD; A-->B
+        ```
+        """) == [.mermaid(source: "graph TD; A-->B")])
+
+        #expect(ACPMarkdownText.parse("""
+        ```swift mermaid
+        graph TD; A-->B
+        ```
+        """) == [.code(language: "swift mermaid", body: "graph TD; A-->B")])
+
+        #expect(ACPMarkdownText.parse("""
+        ```mermaid
+        ```
+        """) == [.code(language: "mermaid", body: "")])
+    }
+
     @Test("tilde fenced URL parses as code block")
     func tildeFencedURLParsesAsCodeBlock() {
         let blocks = ACPMarkdownText.parse("""

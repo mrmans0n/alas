@@ -2238,6 +2238,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return items.map { ACPMarkdownInlineRenderer.plainText($0.text) }.joined(separator: " ")
             case .code(_, let body), .streamingCode(_, let body):
                 return body
+            case .mermaid(let source):
+                return source
             case .table(let header, let rows):
                 return ([header] + rows).map { row in
                     row.map { ACPMarkdownInlineRenderer.plainText($0) }.joined(separator: " ")

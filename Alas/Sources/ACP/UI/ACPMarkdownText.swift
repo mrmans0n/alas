@@ -122,6 +122,8 @@ struct ACPMarkdownText: View {
                 showsCopyButton: showsCodeBlockCopyButton,
                 highlightsSyntax: false
             )
+        case .mermaid(let source):
+            MermaidDiagramBlockView(source: source, profile: .transcript)
         case .table(let header, let rows):
             tableView(
                 header: header,
@@ -278,6 +280,7 @@ struct ACPMarkdownText: View {
         case quote(String)
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
+        case mermaid(source: String)
         case table(header: [String], rows: [[String]])
     }
 
@@ -425,7 +428,11 @@ struct ACPMarkdownText: View {
                 if closesBeforeEnd { i += 1 } // skip closing fence
                 let codeBody = body.joined(separator: "\n")
                 if closesBeforeEnd {
-                    blocks.append(.code(language: fence.language, body: codeBody))
+                    if MermaidFence.isMermaid(language: fence.language), !codeBody.isEmpty {
+                        blocks.append(.mermaid(source: codeBody))
+                    } else {
+                        blocks.append(.code(language: fence.language, body: codeBody))
+                    }
                 } else {
                     blocks.append(.streamingCode(language: fence.language, body: codeBody))
                 }
