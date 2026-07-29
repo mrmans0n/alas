@@ -100,10 +100,9 @@ The service owns:
   an unbounded number of layout operations.
 
 The cache key includes the exact source, effective diagram-theme signature, backing
-scale, and presentation size class. The initial cache should be limited to 128
-entries and approximately 64 MiB of image cost. Native rendering should run at no
-more than two operations concurrently. These are internal safety bounds, not user
-settings.
+scale, and presentation size class. The initial cache uses a 128-entry count limit
+and a 64 MiB total-cost limit. Native rendering runs at no more than two operations
+concurrently. These are internal safety bounds, not user settings.
 
 Source larger than 256 KiB should not be passed to the package. Rendered rasters
 must be capped at an 8,192-pixel maximum dimension and 16 million total pixels.
@@ -200,6 +199,11 @@ Review cards and other narrow hosts use the same block with a smaller embedded
 height profile. Existing consumers of `ACPMarkdownText` inherit Mermaid support
 without duplicating parsing or rendering logic.
 
+Any exhaustive block consumers, including review-card plain-text flattening and
+height estimation, treat a Mermaid block as its original source. Search,
+accessibility summaries, drag payloads, and collapsed previews therefore remain
+readable even when they do not instantiate the diagram view.
+
 ### Attributed-Text Adapter
 
 Extend `MarkdownRenderResult` with Mermaid attachment references. When
@@ -229,7 +233,10 @@ controls. Compact LSP attachments omit the visible header to preserve popover
 space:
 
 - clicking the diagram opens the expanded viewer,
-- a context menu offers **Show source** and **Copy Mermaid source**,
+- a context menu offers **Show Mermaid source** and **Copy Mermaid source**,
+- **Show Mermaid source** replaces the compact image with selectable monospaced
+  source inside the existing outer scroller; while source is shown, the menu item
+  becomes **Show Mermaid diagram**,
 - a failed compact attachment shows the source directly.
 
 Extract only the attachment-loading and action-routing behavior needed to keep the
@@ -259,6 +266,10 @@ embedded presentation remains a fitted overview, and **Expand** opens the full
 viewer. Compact LSP popovers keep their existing outer scrolling bounds rather than
 adding nested diagram scrolling.
 
+The compact loading attachment reserves the 180-point diagram slot before native
+rendering starts. Completion invalidates text layout inside the existing popover
+but does not grow the popover past its current maximum dimensions.
+
 ### Expanded Viewer
 
 Present a transient Alas viewer sheet from the host window. If expansion starts in
@@ -287,17 +298,28 @@ The label changes to **Hide source** while expanded.
 **Copy** always copies the exact Mermaid source body, without the Markdown fence.
 Standalone files copy the complete file contents.
 
+### Accessibility
+
+Rendered images expose the label `Mermaid diagram` and an accessibility value
+containing the original source. Header and context-menu actions use explicit
+labels, help text, and keyboard focus. Source disclosure remains selectable and
+readable by assistive technologies. The expanded viewer exposes its zoom value and
+provides keyboard equivalents for zoom, reset, source disclosure, copying, and
+closing.
+
 ## Loading, Errors, and Security
 
 A new request displays stable Mermaid chrome with a subdued progress indicator.
-The layout reserves a reasonable minimum height so asynchronous completion does not
-collapse the surrounding transcript or preview.
+Full-surface loading presentations reserve 120 points of height; compact LSP
+presentations reserve the 180-point slot specified above. Completion replaces that
+reservation with the measured success or fallback presentation.
 
 Failure behavior is content-preserving:
 
 - invalid or unsupported diagrams render through the normal code-block style,
 - a subdued `Couldn't render Mermaid diagram` message appears in the header,
-- a concise package error may appear in help text or the expanded source view,
+- a concise sanitized package diagnostic appears in the header's help text and
+  beneath the source in the expanded viewer,
 - the original source remains selectable and copyable,
 - an error in one diagram does not affect the rest of the document.
 
@@ -353,6 +375,8 @@ Verify:
 - source disclosure preserves exact source,
 - Copy uses the exact source without fences,
 - ACP and review views use the shared block adapter,
+- review plain-text flattening and accessibility summaries retain Mermaid source,
+- rendered diagrams and actions expose the specified accessibility labels,
 - failures preserve code and diagnostic chrome.
 
 Keep sizing calculations and menu/action routing in pure helpers where possible so
