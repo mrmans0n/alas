@@ -478,6 +478,7 @@ private struct ACPMarkdownTaskCheckbox: NSViewRepresentable {
     }
 
     func updateNSView(_ button: NSButton, context: Context) {
+        button.isEnabled = false
         button.state = isChecked ? .on : .off
         button.setAccessibilityLabel(accessibilityLabel)
     }
