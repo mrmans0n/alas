@@ -76,7 +76,8 @@ struct MermaidZoomState: Equatable {
 
     func scale(adding factor: CGFloat) -> CGFloat {
         guard factor.isFinite, factor > 0 else { return scale }
-        return Self.clamped(scale * factor)
+        let maximum = max(Self.maximumScale, scale)
+        return min(maximum, max(Self.minimumScale, scale * factor))
     }
 
     private static func clamped(_ scale: CGFloat) -> CGFloat {

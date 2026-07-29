@@ -144,10 +144,13 @@ struct MermaidViewerInteractionState {
         zoomState.translation
     }
 
-    var zoomAccessibilityMetadata: MermaidViewerZoomAccessibilityMetadata {
-        MermaidViewerZoomAccessibilityMetadata(
+    func zoomAccessibilityMetadata(
+        actualSizeScale: CGFloat = 1
+    ) -> MermaidViewerZoomAccessibilityMetadata {
+        let intrinsicScale = actualSizeScale > 0 ? scale / actualSizeScale : scale
+        return MermaidViewerZoomAccessibilityMetadata(
             label: "Mermaid diagram zoom",
-            value: "\(Int((scale * 100).rounded()))%"
+            value: "\(Int((intrinsicScale * 100).rounded()))%"
         )
     }
 
@@ -221,7 +224,9 @@ struct MermaidDiagramViewerView: View {
         VStack(spacing: 0) {
             MermaidDiagramViewerToolbar(
                 showsSource: interactionState.showsSource,
-                zoomAccessibilityMetadata: interactionState.zoomAccessibilityMetadata,
+                zoomAccessibilityMetadata: interactionState.zoomAccessibilityMetadata(
+                    actualSizeScale: actualSizeScale
+                ),
                 perform: perform,
                 adjustZoom: { interactionState.adjustZoom($0) }
             )

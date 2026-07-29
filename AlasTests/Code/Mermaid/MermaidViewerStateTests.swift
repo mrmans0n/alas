@@ -66,10 +66,22 @@ struct MermaidViewerStateTests {
 
         #expect(actualSizeScale == 2)
         #expect(state.scale == actualSizeScale)
+        #expect(
+            state.zoomAccessibilityMetadata(actualSizeScale: actualSizeScale)
+                .value == "100%"
+        )
 
         _ = state.perform(.resetToFit)
 
         #expect(state.scale == 1)
+    }
+
+    @Test("actual size is not clamped by gesture display scaling")
+    func actualSizeScaleAboveGestureMaximumIsPreserved() {
+        var state = MermaidZoomState()
+        state.setActualSize(12)
+
+        #expect(state.scale(adding: 1) == 12)
     }
 
     @Test("latest render key wins when an obsolete render completes last")
@@ -157,12 +169,12 @@ struct MermaidViewerStateTests {
 
         state.adjustZoom(.increment)
 
-        #expect(state.zoomAccessibilityMetadata.label == "Mermaid diagram zoom")
-        #expect(state.zoomAccessibilityMetadata.value == "125%")
+        #expect(state.zoomAccessibilityMetadata().label == "Mermaid diagram zoom")
+        #expect(state.zoomAccessibilityMetadata().value == "125%")
 
         state.adjustZoom(.decrement)
 
         #expect(state.scale == 1)
-        #expect(state.zoomAccessibilityMetadata.value == "100%")
+        #expect(state.zoomAccessibilityMetadata().value == "100%")
     }
 }
