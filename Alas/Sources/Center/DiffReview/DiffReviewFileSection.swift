@@ -2234,6 +2234,8 @@ enum DiffReviewInlineFeedbackMarkdown {
             switch block {
             case .heading(_, let text), .paragraph(let text), .quote(let text):
                 return ACPMarkdownInlineRenderer.plainText(text)
+            case .taskList(let items):
+                return items.map { ACPMarkdownInlineRenderer.plainText($0.text) }.joined(separator: " ")
             case .code(_, let body), .streamingCode(_, let body):
                 return body
             case .table(let header, let rows):

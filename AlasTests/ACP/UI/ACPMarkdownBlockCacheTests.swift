@@ -76,6 +76,74 @@ struct ACPMarkdownBlockCacheTests {
         #expect(cached == direct)
     }
 
+    @Test("contiguous top-level task lines parse into one task list")
+    func parsesTaskListItems() {
+        #expect(ACPMarkdownText.parse("""
+        - [ ] **Write** `tests`
+        - [x] [Review](https://example.com)
+        - [X]
+        """) == [
+            .taskList([
+                .init(isChecked: false, text: "**Write** `tests`"),
+                .init(isChecked: true, text: "[Review](https://example.com)"),
+                .init(isChecked: true, text: ""),
+            ]),
+        ])
+    }
+
+    @Test("ordinary and indented task-looking bullets remain paragraph text")
+    func taskLookingBulletsFallBackToParagraphs() {
+        #expect(ACPMarkdownText.parse("""
+        * [ ] alternate marker
+          - [ ] nested item
+        - [ ]not a task
+        """) == [
+            .paragraph("""
+            * [ ] alternate marker
+              - [ ] nested item
+            - [ ]not a task
+            """),
+        ])
+    }
+
+    @Test("task list ends before following prose")
+    func taskListToProseBoundary() {
+        #expect(ACPMarkdownText.parse("""
+        Before tasks
+        - [ ] First task
+        - [x] Second task
+        After tasks
+        """) == [
+            .paragraph("Before tasks"),
+            .taskList([
+                .init(isChecked: false, text: "First task"),
+                .init(isChecked: true, text: "Second task"),
+            ]),
+            .paragraph("After tasks"),
+        ])
+    }
+
+    @Test("cached task list parsing matches direct parsing")
+    func taskListCacheParityWithDirectParse() {
+        let raw = """
+        Intro
+
+        - [ ] First task
+        - [X] **Second** task
+
+        Closing paragraph.
+        """
+        let cache = ACPMarkdownBlockCache()
+        cache.update(with: raw)
+        let cached = cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed)
+
+        #expect(cached == ACPMarkdownText.parse(raw))
+        #expect(cached.contains(where: { block in
+            if case .taskList = block { return true }
+            return false
+        }))
+    }
+
     @Test("streaming updates scan only the appended markdown tail")
     func streamingUpdatesScanOnlyAppendedTail() async {
         let cache = ACPMarkdownBlockCache()

@@ -402,6 +402,31 @@ struct ACPMarkdownInlineRendererTests {
         }
     }
 
+    @Test("task items render read-only checkboxes")
+    func taskItemsRenderReadOnlyCheckboxes() throws {
+        let host = NSHostingView(
+            rootView: ACPMarkdownText(raw: """
+            - [ ] **Open** task
+            - [x] `Done` task
+            """)
+            .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+            .frame(width: 620, height: 140)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 140)
+        host.layoutSubtreeIfNeeded()
+
+        let checkboxes = allSubviews(of: host).compactMap { $0 as? NSButton }
+        #expect(checkboxes.count == 2)
+        #expect(checkboxes.map(\.isEnabled) == [false, false])
+        #expect(checkboxes.map(\.state) == [.off, .on])
+
+        let labels = allSubviews(of: host).compactMap { $0 as? NSTextView }.map(\.string)
+        #expect(labels.contains("Open task"))
+        #expect(labels.contains("Done task"))
+        #expect(!labels.joined().contains("**"))
+        #expect(!labels.joined().contains("`"))
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
