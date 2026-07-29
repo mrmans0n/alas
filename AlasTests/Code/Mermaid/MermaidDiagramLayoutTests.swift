@@ -55,4 +55,20 @@ struct MermaidDiagramLayoutTests {
                 == nil
         )
     }
+
+    @Test("preflight rejects an oversized layout before rasterization")
+    func preflightRejectsOversizedLayout() {
+        #expect(
+            BeautifulMermaidBackend.preflightRaster(
+                layoutSize: CGSize(width: 4_097, height: 1),
+                scale: 2
+            ) == .rasterTooLarge(width: 8_194, height: 2)
+        )
+        #expect(
+            BeautifulMermaidBackend.preflightRaster(
+                layoutSize: CGSize(width: 4_000, height: 4_000),
+                scale: 1
+            ) == nil
+        )
+    }
 }

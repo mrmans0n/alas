@@ -28,4 +28,11 @@ struct MarkdownPreviewView: NSViewRepresentable {
         // disclosure across those duplicate updates.
         context.coordinator.apply(result: result)
     }
+
+    static func dismantleNSView(
+        _ nsView: NSScrollView,
+        coordinator: MarkdownPreviewController
+    ) {
+        coordinator.dismantle()
+    }
 }

@@ -76,12 +76,14 @@ struct MermaidViewerStateTests {
         #expect(state.scale == 1)
     }
 
-    @Test("actual size is not clamped by gesture display scaling")
+    @Test("actual size remains monotonic through gesture and toolbar zoom")
     func actualSizeScaleAboveGestureMaximumIsPreserved() {
         var state = MermaidZoomState()
         state.setActualSize(12)
 
-        #expect(state.scale(adding: 1) == 12)
+        #expect(state.scale(adding: 1.25) == 15)
+        state.zoom(by: 1.25)
+        #expect(state.scale == 15)
     }
 
     @Test("latest render key wins when an obsolete render completes last")

@@ -163,6 +163,36 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(oldAttachment.currentOutcome == nil)
     }
 
+    @Test("dismantling a Markdown preview cancels its Mermaid render")
+    func dismantlingPreviewCancelsMermaidRender() async throws {
+        let backend = ControlledMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let reference = try makeReference(attachment: attachment)
+        let controller = MarkdownPreviewController(
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            mermaidService: service
+        )
+        let result = MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachment: attachment),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [reference]
+        )
+
+        controller.apply(result: result)
+        #expect(await backend.waitForRequest(source: reference.source))
+
+        controller.dismantle()
+
+        #expect(await backend.waitForCancellation(source: reference.source))
+    }
+
     @Test("full attachment exposes exact accessibility and copy metadata")
     func fullCellAccessibility() {
         let source = "graph TD;\n  A-->B"
@@ -501,10 +531,15 @@ private actor ControlledMermaidBackend: MermaidRenderingBackend {
     private var continuations: [
         String: CheckedContinuation<MermaidRenderOutcome, Never>
     ] = [:]
+    private var cancelledSources: Set<String> = []
 
     func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
-        await withCheckedContinuation { continuation in
-            continuations[key.source] = continuation
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                continuations[key.source] = continuation
+            }
+        } onCancel: {
+            Task { await self.recordCancellation(source: key.source) }
         }
     }
 
@@ -520,5 +555,19 @@ private actor ControlledMermaidBackend: MermaidRenderingBackend {
 
     func resume(source: String, outcome: MermaidRenderOutcome) {
         continuations.removeValue(forKey: source)?.resume(returning: outcome)
+    }
+
+    func waitForCancellation(source: String) async -> Bool {
+        for _ in 0 ..< 1_000 {
+            if cancelledSources.contains(source) {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func recordCancellation(source: String) {
+        cancelledSources.insert(source)
     }
 }

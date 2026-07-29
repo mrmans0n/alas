@@ -24,13 +24,36 @@ struct BeautifulMermaidBackend: MermaidRenderingBackend {
         width: Int,
         height: Int
     ) -> MermaidRenderFailure? {
-        guard width <= maximumDimension,
+        guard width > 0,
+              height > 0,
+              width <= maximumDimension,
               height <= maximumDimension,
               width * height <= maximumPixels
         else {
             return .rasterTooLarge(width: width, height: height)
         }
         return nil
+    }
+
+    static func preflightRaster(
+        layoutSize: CGSize,
+        scale: Double
+    ) -> MermaidRenderFailure? {
+        let width = layoutSize.width * scale
+        let height = layoutSize.height * scale
+        guard width.isFinite,
+              height.isFinite,
+              width > 0,
+              height > 0,
+              width <= Double(Int.max),
+              height <= Double(Int.max)
+        else {
+            return .rasterTooLarge(
+                width: maximumDimension + 1,
+                height: maximumDimension + 1
+            )
+        }
+        return validateRaster(width: Int(width), height: Int(height))
     }
 
     func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
@@ -40,6 +63,15 @@ struct BeautifulMermaidBackend: MermaidRenderingBackend {
             return .failed(.sourceTooLarge(actualBytes: bytes))
         }
         do {
+            let layout = try await Task.detached {
+                try MermaidRenderer.layout(key.source)
+            }.value
+            if let failure = Self.preflightRaster(
+                layoutSize: CGSize(width: layout.width, height: layout.height),
+                scale: key.scale
+            ) {
+                return .failed(failure)
+            }
             guard let image = try await MermaidRenderer.renderImageAsync(
                 source: key.source,
                 theme: key.theme.nativeTheme,

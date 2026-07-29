@@ -20,8 +20,14 @@ final class MarkdownPreviewController: NSObject {
     private nonisolated(unsafe) var anchorObserver: NSObjectProtocol?
     private(set) var lastAppliedRevision: UUID?
 
-    init(theme: Theme) {
-        mermaidCoordinator = MermaidAttachmentCoordinator(theme: theme)
+    init(
+        theme: Theme,
+        mermaidService: MermaidRenderService = .shared
+    ) {
+        mermaidCoordinator = MermaidAttachmentCoordinator(
+            service: mermaidService,
+            theme: theme
+        )
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
@@ -125,6 +131,10 @@ final class MarkdownPreviewController: NSObject {
             .foregroundColor: NSColor(theme.color("accent")),
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
+    }
+
+    func dismantle() {
+        mermaidCoordinator.cancelAll()
     }
 
     func shiftAnchors(startingAt location: Int, by delta: Int) {
