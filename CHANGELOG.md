@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.6] - 2026-07-29
+
+### 🐛 Fixes
+
+- Preserve the first typed character when creating a new `git-gud` worktree (#926).
+- Bound static diff pane height to avoid overexpansion (#927).
+- Keep diff word wrap pane-local and off by default (#928).
+
 ## [0.13.5] - 2026-07-27
 
 ### ✨ Features
