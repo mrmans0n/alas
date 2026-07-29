@@ -189,6 +189,16 @@ struct MermaidViewerInteractionState {
         zoomState.zoom(by: factor)
     }
 
+    mutating func preserveIntrinsicZoom(
+        from oldActualSizeScale: CGFloat,
+        to newActualSizeScale: CGFloat
+    ) {
+        zoomState.preserveIntrinsicZoom(
+            from: oldActualSizeScale,
+            to: newActualSizeScale
+        )
+    }
+
     mutating func translate(by delta: CGSize) {
         zoomState.translate(by: delta)
     }
@@ -201,8 +211,7 @@ struct MermaidViewerInteractionState {
 struct MermaidDiagramViewerView: View {
     let source: String
     let diagramTheme: MermaidDiagramTheme
-    let backingScale: CGFloat
-    var service: MermaidRenderService = .shared
+    var service: MermaidRenderService
 
     @Environment(\.theme) private var theme
     @State private var renderState = MermaidRenderRequestState()
@@ -210,14 +219,27 @@ struct MermaidDiagramViewerView: View {
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var magnification: CGFloat = 1
     @State private var actualSizeScale: CGFloat = 1
+    @State private var liveBackingScale: CGFloat
 
     private var key: MermaidRenderKey {
         MermaidRenderKey(
             source: source,
             theme: diagramTheme,
-            scale: backingScale,
+            scale: liveBackingScale,
             profile: .full
         )
+    }
+
+    init(
+        source: String,
+        diagramTheme: MermaidDiagramTheme,
+        backingScale: CGFloat,
+        service: MermaidRenderService = .shared
+    ) {
+        self.source = source
+        self.diagramTheme = diagramTheme
+        self.service = service
+        _liveBackingScale = State(initialValue: backingScale)
     }
 
     var body: some View {
@@ -233,10 +255,16 @@ struct MermaidDiagramViewerView: View {
             viewerContent
         }
         .background(theme.color("bg-1"))
+        .background(
+            MermaidDiagramViewerBackingScaleReader(scale: $liveBackingScale)
+        )
         .task(id: key) {
             let requestedKey = key
+            let resetsViewport = renderState.resetsViewport(for: requestedKey)
             renderState.begin(requestedKey)
-            interactionState.perform(.resetToFit)
+            if resetsViewport {
+                interactionState.perform(.resetToFit)
+            }
             let rendered = await service.render(key: requestedKey)
             guard !Task.isCancelled else { return }
             renderState.apply(rendered, for: requestedKey)
@@ -351,9 +379,15 @@ struct MermaidDiagramViewerView: View {
         intrinsic: CGSize,
         fitted: CGSize
     ) {
-        actualSizeScale = MermaidDiagramLayout.actualSizeScale(
+        let oldActualSizeScale = actualSizeScale
+        let newActualSizeScale = MermaidDiagramLayout.actualSizeScale(
             intrinsic: intrinsic,
             fitted: fitted
+        )
+        actualSizeScale = newActualSizeScale
+        interactionState.preserveIntrinsicZoom(
+            from: oldActualSizeScale,
+            to: newActualSizeScale
         )
     }
 
@@ -365,6 +399,64 @@ struct MermaidDiagramViewerView: View {
             width: committed.width + gesture.width,
             height: committed.height + gesture.height
         )
+    }
+}
+
+private struct MermaidDiagramViewerBackingScaleReader: NSViewRepresentable {
+    @Binding var scale: CGFloat
+
+    func makeNSView(context: Context) -> MermaidDiagramViewerBackingScaleView {
+        let view = MermaidDiagramViewerBackingScaleView()
+        view.onScaleChange = { scale = $0 }
+        return view
+    }
+
+    func updateNSView(
+        _ nsView: MermaidDiagramViewerBackingScaleView,
+        context: Context
+    ) {
+        nsView.onScaleChange = { scale = $0 }
+        nsView.publishScale()
+    }
+}
+
+private final class MermaidDiagramViewerBackingScaleView: NSView {
+    var onScaleChange: ((CGFloat) -> Void)?
+    private var backingPropertiesObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeBackingProperties()
+        publishScale()
+    }
+
+    deinit {
+        if let backingPropertiesObserver {
+            NotificationCenter.default.removeObserver(backingPropertiesObserver)
+        }
+    }
+
+    func publishScale() {
+        guard let scale = window?.backingScaleFactor,
+              scale.isFinite,
+              scale > 0
+        else { return }
+        onScaleChange?(scale)
+    }
+
+    private func observeBackingProperties() {
+        if let backingPropertiesObserver {
+            NotificationCenter.default.removeObserver(backingPropertiesObserver)
+            self.backingPropertiesObserver = nil
+        }
+        guard let window else { return }
+        backingPropertiesObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeBackingPropertiesNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.publishScale()
+        }
     }
 }
 

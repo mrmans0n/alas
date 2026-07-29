@@ -30,6 +30,13 @@ struct MermaidRenderRequestState {
     private(set) var currentKey: MermaidRenderKey?
     private(set) var outcome: MermaidRenderOutcome?
 
+    func resetsViewport(for key: MermaidRenderKey) -> Bool {
+        guard let currentKey else { return true }
+        return currentKey.source != key.source
+            || currentKey.theme != key.theme
+            || currentKey.profile != key.profile
+    }
+
     mutating func begin(_ key: MermaidRenderKey) {
         currentKey = key
         outcome = nil
@@ -45,21 +52,47 @@ struct MermaidZoomState: Equatable {
     static let minimumScale: CGFloat = 0.25
     static let maximumScale: CGFloat = 8
 
+    private enum Mode: Equatable {
+        case fit
+        case explicit
+    }
+
     private(set) var scale: CGFloat = 1
     private(set) var translation: CGSize = .zero
+    private var mode: Mode = .fit
 
     mutating func zoom(by factor: CGFloat) {
         scale = scale(adding: factor)
+        mode = .explicit
     }
 
     mutating func setScale(_ scale: CGFloat) {
         guard scale.isFinite else { return }
         self.scale = Self.clamped(scale)
+        mode = .explicit
     }
 
     mutating func setActualSize(_ scale: CGFloat) {
         guard scale.isFinite, scale > 0 else { return }
         self.scale = max(Self.minimumScale, scale)
+        mode = .explicit
+    }
+
+    mutating func preserveIntrinsicZoom(
+        from oldActualSizeScale: CGFloat,
+        to newActualSizeScale: CGFloat
+    ) {
+        guard mode == .explicit,
+              oldActualSizeScale.isFinite,
+              oldActualSizeScale > 0,
+              newActualSizeScale.isFinite,
+              newActualSizeScale > 0
+        else { return }
+
+        let intrinsicScale = scale / oldActualSizeScale
+        let nextScale = intrinsicScale * newActualSizeScale
+        guard nextScale.isFinite else { return }
+        scale = max(Self.minimumScale, nextScale)
     }
 
     mutating func translate(by delta: CGSize) {
@@ -71,6 +104,7 @@ struct MermaidZoomState: Equatable {
     mutating func resetToFit() {
         scale = 1
         translation = .zero
+        mode = .fit
     }
 
     func scale(adding factor: CGFloat) -> CGFloat {

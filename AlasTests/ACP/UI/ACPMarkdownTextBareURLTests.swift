@@ -23,6 +23,10 @@ struct ACPMarkdownTextBareURLTests {
         ```mermaid
         ```
         """) == [.code(language: "mermaid", body: "")])
+
+        #expect(ACPMarkdownText.parse("```mermaid\n   \n\t\n```") == [
+            .code(language: "mermaid", body: "   \n\t"),
+        ])
     }
 
     @Test("tilde fenced URL parses as code block")

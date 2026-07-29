@@ -76,6 +76,53 @@ struct MermaidViewerStateTests {
         #expect(state.scale == 1)
     }
 
+    @Test("explicit viewer zoom preserves its intrinsic percentage after resize")
+    func explicitZoomPreservesIntrinsicPercentageAfterResize() {
+        var state = MermaidViewerInteractionState()
+        _ = state.perform(.actualSize, actualSizeScale: 2)
+
+        state.preserveIntrinsicZoom(from: 2, to: 1.5)
+
+        #expect(state.scale == 1.5)
+        #expect(state.zoomAccessibilityMetadata(actualSizeScale: 1.5).value == "100%")
+
+        state.adjustZoom(.increment)
+        state.preserveIntrinsicZoom(from: 1.5, to: 3)
+
+        #expect(state.scale == 3.75)
+        #expect(state.zoomAccessibilityMetadata(actualSizeScale: 3).value == "125%")
+    }
+
+    @Test("fit zoom follows resize without preserving intrinsic percentage")
+    func fitZoomFollowsResize() {
+        var state = MermaidViewerInteractionState()
+        _ = state.perform(.actualSize, actualSizeScale: 2)
+        _ = state.perform(.resetToFit)
+
+        state.preserveIntrinsicZoom(from: 2, to: 1.5)
+
+        #expect(state.scale == 1)
+        #expect(state.zoomAccessibilityMetadata(actualSizeScale: 1.5).value == "67%")
+    }
+
+    @Test("render scale changes do not reset the viewer viewport")
+    func renderScaleChangesDoNotResetViewport() {
+        let original = TestMermaid.key(source: "graph TD; A-->B", scale: 1)
+        let sameDiagramAtNewScale = TestMermaid.key(
+            source: "graph TD; A-->B",
+            scale: 2
+        )
+        let differentDiagram = TestMermaid.key(source: "graph TD; A-->C", scale: 2)
+        var state = MermaidRenderRequestState()
+
+        #expect(state.resetsViewport(for: original))
+
+        state.begin(original)
+
+        #expect(!state.resetsViewport(for: sameDiagramAtNewScale))
+        #expect(state.resetsViewport(for: differentDiagram))
+    }
+
     @Test("actual size remains monotonic through gesture and toolbar zoom")
     func actualSizeScaleAboveGestureMaximumIsPreserved() {
         var state = MermaidZoomState()

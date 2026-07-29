@@ -428,7 +428,10 @@ struct ACPMarkdownText: View {
                 if closesBeforeEnd { i += 1 } // skip closing fence
                 let codeBody = body.joined(separator: "\n")
                 if closesBeforeEnd {
-                    if MermaidFence.isMermaid(language: fence.language), !codeBody.isEmpty {
+                    let hasRenderableCode = !codeBody
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
+                    if MermaidFence.isMermaid(language: fence.language), hasRenderableCode {
                         blocks.append(.mermaid(source: codeBody))
                     } else {
                         blocks.append(.code(language: fence.language, body: codeBody))
