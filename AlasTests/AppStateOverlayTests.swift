@@ -144,4 +144,13 @@ struct AppStateOverlayTests {
         #expect(state.runScriptPalette.scripts == [script])
         #expect(state.runScriptPalette.query == "b")
     }
+
+    @Test func openingRunScriptPaletteCanPrepareEditMode() {
+        let state = AppState(store: MemoryStore())
+
+        state.openRunScriptPaletteOverlay(mode: .edit)
+
+        #expect(state.isRunScriptPaletteOpen)
+        #expect(state.runScriptPalette.mode == .edit)
+    }
 }

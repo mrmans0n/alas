@@ -54,8 +54,11 @@ struct RunScriptDialog: View {
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            Icon(name: "play", size: 12, color: theme.color("fg-faint"))
-            TextField("Run script…", text: Bindable(appState.runScriptPalette).query)
+            Icon(name: appState.runScriptPalette.mode == .edit ? "pencil" : "play", size: 12, color: theme.color("fg-faint"))
+            TextField(
+                appState.runScriptPalette.mode == .edit ? "Edit script…" : "Run script…",
+                text: Bindable(appState.runScriptPalette).query
+            )
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
                 .font(.system(size: 14))
@@ -169,7 +172,7 @@ struct RunScriptDialog: View {
 
     private func scriptRow(_ script: RunScript, isSelected: Bool) -> some View {
         HStack(spacing: 10) {
-            Icon(name: "play", size: 11, color: theme.color("fg-muted"))
+            Icon(name: appState.runScriptPalette.mode == .edit ? "pencil" : "play", size: 11, color: theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 1) {
                 Text(script.displayName)
                     .font(.system(size: 12.5, weight: .medium))
@@ -225,9 +228,13 @@ struct RunScriptDialog: View {
     private var footer: some View {
         HStack(spacing: 12) {
             label("↑↓ navigate")
-            label("↵ run / focus")
-            label("⌘↵ restart")
-            label("⌘E edit")
+            if appState.runScriptPalette.mode == .edit {
+                label("↵ edit")
+            } else {
+                label("↵ run / focus")
+                label("⌘↵ restart")
+                label("⌘E edit")
+            }
             label("esc close")
             Spacer()
         }
@@ -258,7 +265,9 @@ struct RunScriptDialog: View {
             appState.runScriptPalette.moveSelection(step: 1)
             return .handled
         case .return:
-            if press.modifiers.contains(.command) {
+            if appState.runScriptPalette.mode == .edit {
+                activate()
+            } else if press.modifiers.contains(.command) {
                 restart()
             } else {
                 activate()
