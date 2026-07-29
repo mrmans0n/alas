@@ -110,7 +110,7 @@ final class RunScriptPaletteModel {
         return script
     }
 
-    /// Enter: run/focus a script, or create a new one from the trailing rows.
+    /// Enter: run/focus or edit a script depending on mode, or create a new one from the trailing rows.
     func activateSelection(environment env: RunScriptPaletteEnvironment) {
         let rows = rows()
         guard rows.indices.contains(selectedIndex) else { return }
