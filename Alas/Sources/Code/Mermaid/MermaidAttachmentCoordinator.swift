@@ -17,6 +17,14 @@ final class MermaidRenderCancellation {
     }
 }
 
+struct MermaidSourceDisclosureSnapshot: Equatable {
+    fileprivate let sourcesByID: [String: String]
+
+    var isEmpty: Bool {
+        sourcesByID.isEmpty
+    }
+}
+
 @MainActor
 final class MermaidAttachmentCoordinator {
     private let mode: MermaidPresentationProfile
@@ -55,6 +63,37 @@ final class MermaidAttachmentCoordinator {
     func updateViewerTheme(_ theme: Theme) {
         viewerTheme = theme
         MermaidDiagramViewerController.shared.updateTheme(theme)
+    }
+
+    func explicitSourceDisclosureSnapshot(
+        in textView: NSTextView
+    ) -> MermaidSourceDisclosureSnapshot {
+        guard self.textView === textView,
+              let storage = textView.textStorage
+        else {
+            return MermaidSourceDisclosureSnapshot(sourcesByID: [:])
+        }
+        let sourcesByID = references.reduce(into: [String: String]()) { result, entry in
+            let id = entry.key
+            guard !failureDisclosedSourceIDs.contains(id),
+                  sourceRange(id: id, in: storage) != nil
+            else { return }
+            result[id] = entry.value.source
+        }
+        return MermaidSourceDisclosureSnapshot(sourcesByID: sourcesByID)
+    }
+
+    func restoreExplicitSourceDisclosures(
+        _ snapshot: MermaidSourceDisclosureSnapshot,
+        in textView: NSTextView
+    ) {
+        guard !snapshot.isEmpty else { return }
+        for id in snapshot.sourcesByID.keys.sorted() {
+            guard let source = snapshot.sourcesByID[id],
+                  references[id]?.source == source
+            else { continue }
+            showSource(id: id, in: textView)
+        }
     }
 
     func apply(

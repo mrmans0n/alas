@@ -89,6 +89,8 @@ final class MarkdownPreviewController: NSObject {
     /// Replace the rendered content. Must be called on the main thread.
     func apply(result: MarkdownRenderResult) {
         guard result.revision != lastAppliedRevision else { return }
+        let sourceDisclosureSnapshot = mermaidCoordinator
+            .explicitSourceDisclosureSnapshot(in: textView)
         mermaidCoordinator.cancelAll()
         lastAppliedRevision = result.revision
         anchorRanges = result.anchorRanges
@@ -111,6 +113,10 @@ final class MarkdownPreviewController: NSObject {
             onTextStorageDelta: { [weak self] location, delta in
                 self?.shiftAnchors(startingAt: location, by: delta)
             }
+        )
+        mermaidCoordinator.restoreExplicitSourceDisclosures(
+            sourceDisclosureSnapshot,
+            in: textView
         )
     }
 
@@ -135,6 +141,10 @@ final class MarkdownPreviewController: NSObject {
 
     func dismantle() {
         mermaidCoordinator.cancelAll()
+    }
+
+    func showMermaidSourceForTesting(id: String) {
+        mermaidCoordinator.showSource(id: id, in: textView)
     }
 
     func shiftAnchors(startingAt location: Int, by delta: Int) {
