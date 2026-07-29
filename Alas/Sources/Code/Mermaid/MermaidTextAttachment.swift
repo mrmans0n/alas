@@ -74,6 +74,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     nonisolated private static let horizontalPadding: CGFloat = 12
     nonisolated private static let headerHeight: CGFloat = 31
+    nonisolated private static let compactSourceToggleHeight: CGFloat = 30
     nonisolated private static let fallbackWidth: CGFloat = 600
 
     private enum SizingState: Sendable {
@@ -312,7 +313,11 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         guard event.type == .leftMouseDown, let controlView else { return false }
         let point = controlView.convert(event.locationInWindow, from: nil)
         if profile == .compact {
-            delegate?.mermaidTextAttachmentCellDidRequestExpansion(self)
+            if showsSource {
+                delegate?.mermaidTextAttachmentCellDidToggleSource(self)
+            } else {
+                delegate?.mermaidTextAttachmentCellDidRequestExpansion(self)
+            }
             return true
         }
 
@@ -331,7 +336,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     private nonisolated func size(for width: CGFloat) -> NSSize {
         if profile == .compact, showsSource {
-            return .zero
+            return NSSize(width: width, height: Self.compactSourceToggleHeight)
         }
         let bodyWidth = max(1, width - Self.horizontalPadding * 2)
         let bodyHeight: CGFloat
@@ -436,6 +441,10 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     }
 
     private func drawBody(in frame: NSRect, colors: DrawingColors) {
+        if profile == .compact, showsSource {
+            drawCompactSourceRestore(in: frame, colors: colors)
+            return
+        }
         switch outcome {
         case .rendered(let diagram):
             let available = frame.insetBy(
@@ -466,6 +475,25 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         case nil:
             drawLoading(in: frame, colors: colors)
         }
+    }
+
+    private func drawCompactSourceRestore(
+        in frame: NSRect,
+        colors: DrawingColors
+    ) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: colors.muted
+        ]
+        let text = "Show Mermaid diagram" as NSString
+        let size = text.size(withAttributes: attributes)
+        text.draw(
+            at: NSPoint(
+                x: frame.midX - size.width / 2,
+                y: frame.midY - size.height / 2
+            ),
+            withAttributes: attributes
+        )
     }
 
     private func drawLoading(in frame: NSRect, colors: DrawingColors) {

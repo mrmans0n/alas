@@ -209,7 +209,7 @@ struct MermaidAttachmentCoordinatorTests {
         ])
     }
 
-    @Test("compact source disclosure replaces the diagram card")
+    @Test("compact source disclosure replaces the diagram card with a restore target")
     func compactSourceDisclosureReplacesDiagramCard() throws {
         let attachment = MermaidTextAttachment(
             id: "mermaid-0",
@@ -232,8 +232,36 @@ struct MermaidAttachmentCoordinatorTests {
         coordinator.showSource(id: reference.id, in: textView)
 
         #expect(attachment.mermaidCell.showsSource)
-        #expect(attachment.mermaidCell.cellSize == .zero)
+        #expect(attachment.mermaidCell.cellSize.height > 0)
         #expect(textView.string.contains(reference.source))
+
+        let delegate = MermaidCellDelegateSpy()
+        attachment.mermaidCell.delegate = delegate
+        let window = NSWindow(
+            contentRect: textView.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(textView)
+        let cellFrame = NSRect(
+            x: 20,
+            y: 20,
+            width: 600,
+            height: attachment.mermaidCell.cellSize.height
+        )
+        let event = try mouseDown(
+            at: NSPoint(x: cellFrame.midX, y: cellFrame.midY),
+            in: textView,
+            window: window
+        )
+        #expect(attachment.mermaidCell.trackMouse(
+            with: event,
+            in: cellFrame,
+            of: textView,
+            untilMouseUp: false
+        ))
+        #expect(delegate.sourceToggleCount == 1)
 
         coordinator.hideSource(id: reference.id, in: textView)
 
@@ -451,11 +479,12 @@ struct MermaidAttachmentCoordinatorTests {
 
 @MainActor
 private final class MermaidCellDelegateSpy: MermaidTextAttachmentCellDelegate {
+    private(set) var sourceToggleCount = 0
     private(set) var expansionCount = 0
 
-    func mermaidTextAttachmentCellDidToggleSource(
-        _ cell: MermaidTextAttachmentCell
-    ) {}
+    func mermaidTextAttachmentCellDidToggleSource(_ cell: MermaidTextAttachmentCell) {
+        sourceToggleCount += 1
+    }
 
     func mermaidTextAttachmentCellDidRequestCopy(
         _ cell: MermaidTextAttachmentCell
