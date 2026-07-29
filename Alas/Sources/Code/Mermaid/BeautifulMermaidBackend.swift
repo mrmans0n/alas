@@ -63,6 +63,9 @@ struct BeautifulMermaidBackend: MermaidRenderingBackend {
                 byteCost: cg.width * cg.height * 4
             ))
         } catch {
+            // BeautifulMermaid 1.0.4 does not expose typed errors for its
+            // parser or layout internals. Keep this mapping aligned with its
+            // public diagnostic strings when upgrading the dependency.
             let message = String(describing: error)
             if message.localizedCaseInsensitiveContains("unsupported") {
                 return .failed(.unsupported(message))

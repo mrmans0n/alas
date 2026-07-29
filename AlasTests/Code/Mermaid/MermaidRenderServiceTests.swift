@@ -44,13 +44,24 @@ struct MermaidRenderServiceTests {
         #expect(await backend.maximumActiveCount == 2)
     }
 
-    @Test("render identity changes for source, theme, scale, and profile")
+    @Test("render identity changes for source, theme, and scale")
     func completeKeyIdentity() {
         let base = TestMermaid.key(source: "graph TD; A-->B")
         #expect(base != TestMermaid.key(source: "graph TD; A-->C"))
         #expect(base != TestMermaid.key(source: base.source, accent: "#445566"))
         #expect(base != TestMermaid.key(source: base.source, scale: 1))
-        #expect(base != TestMermaid.key(source: base.source, profile: .compact))
+    }
+
+    @Test("presentation profiles share a render cache identity")
+    func profilesShareRenderIdentity() {
+        let full = TestMermaid.key(source: "graph TD; A-->B", profile: .full)
+        let compact = TestMermaid.key(
+            source: full.source,
+            profile: .compact
+        )
+
+        #expect(full == compact)
+        #expect(Set([full, compact]).count == 1)
     }
 }
 

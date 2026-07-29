@@ -35,6 +35,18 @@ struct MermaidRenderKey: Hashable, Sendable {
     let theme: MermaidDiagramTheme
     let scale: Double
     let profile: MermaidPresentationProfile
+
+    static func == (lhs: MermaidRenderKey, rhs: MermaidRenderKey) -> Bool {
+        lhs.source == rhs.source
+            && lhs.theme == rhs.theme
+            && lhs.scale == rhs.scale
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(source)
+        hasher.combine(theme)
+        hasher.combine(scale)
+    }
 }
 
 struct MermaidRenderedDiagram: @unchecked Sendable {
