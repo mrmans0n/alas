@@ -7,6 +7,19 @@ import Testing
 @MainActor
 @Suite("ACP markdown inline renderer")
 struct ACPMarkdownInlineRendererTests {
+    @Test("non-memoized plain text does not populate inline cache")
+    func nonMemoizedPlainTextDoesNotPopulateInlineCache() {
+        ACPMarkdownText.removeAllInlineCacheObjectsForTesting()
+
+        #expect(
+            ACPMarkdownInlineRenderer.plainText(
+                "streamed **task**",
+                memoizeInlineMarkdown: false
+            ) == "streamed task"
+        )
+        #expect(ACPMarkdownText.inlineCacheInsertionCountForTesting == 0)
+    }
+
     @Test("badge image size is capped with aspect ratio")
     func badgeImageSizeIsCapped() {
         let size = ACPMarkdownInlineRenderer.displaySize(

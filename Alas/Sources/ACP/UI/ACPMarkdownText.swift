@@ -72,7 +72,10 @@ struct ACPMarkdownText: View {
                     HStack(alignment: .top, spacing: 6) {
                         ACPMarkdownTaskCheckbox(
                             isChecked: item.isChecked,
-                            accessibilityLabel: ACPMarkdownInlineRenderer.plainText(item.text)
+                            accessibilityLabel: ACPMarkdownInlineRenderer.plainText(
+                                item.text,
+                                memoizeInlineMarkdown: renderBlock.memoizesInlineMarkdown
+                            )
                         )
                             .frame(width: 16, height: 16)
                             .padding(.top, 1)
