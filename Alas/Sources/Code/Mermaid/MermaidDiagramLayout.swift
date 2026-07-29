@@ -10,6 +10,20 @@ enum MermaidDiagramLayout {
         let scale = min(1, availableWidth / intrinsic.width, maxHeight / intrinsic.height)
         return CGSize(width: intrinsic.width * scale, height: intrinsic.height * scale)
     }
+
+    static func actualSizeScale(intrinsic: CGSize, fitted: CGSize) -> CGFloat {
+        guard intrinsic.width > 0,
+              intrinsic.height > 0,
+              fitted.width > 0,
+              fitted.height > 0
+        else { return 1 }
+
+        let scale = max(
+            intrinsic.width / fitted.width,
+            intrinsic.height / fitted.height
+        )
+        return scale.isFinite && scale > 0 ? scale : 1
+    }
 }
 
 struct MermaidRenderRequestState {
@@ -42,6 +56,11 @@ struct MermaidZoomState: Equatable {
     mutating func setScale(_ scale: CGFloat) {
         guard scale.isFinite else { return }
         self.scale = Self.clamped(scale)
+    }
+
+    mutating func setActualSize(_ scale: CGFloat) {
+        guard scale.isFinite, scale > 0 else { return }
+        self.scale = max(Self.minimumScale, scale)
     }
 
     mutating func translate(by delta: CGSize) {

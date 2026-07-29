@@ -54,6 +54,24 @@ struct MermaidViewerStateTests {
         #expect(state.scale == MermaidZoomState.minimumScale)
     }
 
+    @Test("actual size restores the intrinsic diagram dimensions")
+    func actualSizeUsesIntrinsicToFittedScale() {
+        let actualSizeScale = MermaidDiagramLayout.actualSizeScale(
+            intrinsic: CGSize(width: 1_200, height: 600),
+            fitted: CGSize(width: 600, height: 300)
+        )
+        var state = MermaidViewerInteractionState()
+
+        _ = state.perform(.actualSize, actualSizeScale: actualSizeScale)
+
+        #expect(actualSizeScale == 2)
+        #expect(state.scale == actualSizeScale)
+
+        _ = state.perform(.resetToFit)
+
+        #expect(state.scale == 1)
+    }
+
     @Test("latest render key wins when an obsolete render completes last")
     func latestRenderKeyWins() {
         let obsoleteKey = TestMermaid.key(source: "graph TD; obsolete")

@@ -152,14 +152,17 @@ struct MermaidViewerInteractionState {
     }
 
     @discardableResult
-    mutating func perform(_ action: MermaidViewerAction) -> MermaidViewerEffect? {
+    mutating func perform(
+        _ action: MermaidViewerAction,
+        actualSizeScale: CGFloat = 1
+    ) -> MermaidViewerEffect? {
         switch action {
         case .zoomOut:
             zoomState.zoom(by: 0.8)
         case .zoomIn:
             zoomState.zoom(by: 1.25)
         case .actualSize:
-            zoomState.setScale(1)
+            zoomState.setActualSize(actualSizeScale)
         case .resetToFit:
             zoomState.resetToFit()
         case .toggleSource:
@@ -203,6 +206,7 @@ struct MermaidDiagramViewerView: View {
     @State private var interactionState = MermaidViewerInteractionState()
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var magnification: CGFloat = 1
+    @State private var actualSizeScale: CGFloat = 1
 
     private var key: MermaidRenderKey {
         MermaidRenderKey(
@@ -272,6 +276,18 @@ struct MermaidDiagramViewerView: View {
                         ))
                         .accessibilityLabel("Mermaid diagram")
                         .accessibilityValue(Text(verbatim: source))
+                        .onAppear {
+                            updateActualSizeScale(
+                                intrinsic: diagram.image.size,
+                                fitted: fittedSize
+                            )
+                        }
+                        .onChange(of: proxy.size) { _ in
+                            updateActualSizeScale(
+                                intrinsic: diagram.image.size,
+                                fitted: fittedSize
+                            )
+                        }
                 case .failed(let failure):
                     VStack(spacing: 8) {
                         Text("Couldn't render Mermaid diagram")
@@ -319,8 +335,21 @@ struct MermaidDiagramViewerView: View {
     }
 
     private func perform(_ action: MermaidViewerAction) {
-        guard interactionState.perform(action) == .copySource else { return }
+        guard interactionState.perform(
+            action,
+            actualSizeScale: actualSizeScale
+        ) == .copySource else { return }
         Clipboard.copy(source)
+    }
+
+    private func updateActualSizeScale(
+        intrinsic: CGSize,
+        fitted: CGSize
+    ) {
+        actualSizeScale = MermaidDiagramLayout.actualSizeScale(
+            intrinsic: intrinsic,
+            fitted: fitted
+        )
     }
 
     nonisolated static func displayTranslation(

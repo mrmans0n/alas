@@ -209,6 +209,38 @@ struct MermaidAttachmentCoordinatorTests {
         ])
     }
 
+    @Test("compact source disclosure replaces the diagram card")
+    func compactSourceDisclosureReplacesDiagramCard() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .compact
+        )
+        let reference = try makeReference(attachment: attachment)
+        let textView = makeTextView(attachment: attachment)
+        let coordinator = MermaidAttachmentCoordinator(mode: .compact)
+        defer { coordinator.cancelAll() }
+
+        coordinator.apply(
+            [reference],
+            revision: UUID(),
+            to: textView,
+            onTextStorageDelta: nil
+        )
+        #expect(attachment.mermaidCell.cellSize.height > 0)
+
+        coordinator.showSource(id: reference.id, in: textView)
+
+        #expect(attachment.mermaidCell.showsSource)
+        #expect(attachment.mermaidCell.cellSize == .zero)
+        #expect(textView.string.contains(reference.source))
+
+        coordinator.hideSource(id: reference.id, in: textView)
+
+        #expect(!attachment.mermaidCell.showsSource)
+        #expect(attachment.mermaidCell.cellSize.height > 0)
+    }
+
     @Test("full attachment header actions hit in the flipped top band")
     func fullAttachmentHeaderHitTargetsUseFlippedCoordinates() throws {
         let attachment = MermaidTextAttachment(

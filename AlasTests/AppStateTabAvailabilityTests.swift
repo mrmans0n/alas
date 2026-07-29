@@ -91,6 +91,29 @@ struct AppStateTabAvailabilityTests {
         #expect(!state.hasActiveCodeEditorTab)
     }
 
+    @Test func hasActiveCodeEditorTabFalseForStandaloneMermaidPreview() async throws {
+        let repo = try await makeRepo(name: "mermaid-preview")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        _ = state.tabs.appendEditor(
+            worktreeId: trees[0].id,
+            title: "architecture.mmd",
+            relativePath: "architecture.mmd"
+        )
+
+        #expect(state.hasActiveEditorTab)
+        #expect(!state.hasActiveCodeEditorTab)
+    }
+
     @Test func openStashDiffTabDoesNotReuseTabForDifferentStashSha() {
         let state = AppState()
         let worktree = Worktree(

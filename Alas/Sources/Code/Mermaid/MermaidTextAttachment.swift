@@ -330,6 +330,9 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     }
 
     private nonisolated func size(for width: CGFloat) -> NSSize {
+        if profile == .compact, showsSource {
+            return .zero
+        }
         let bodyWidth = max(1, width - Self.horizontalPadding * 2)
         let bodyHeight: CGFloat
         switch sizingState {
