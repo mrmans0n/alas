@@ -27,6 +27,7 @@ final class MermaidAttachmentCoordinator {
     private var tasks: [String: Task<Void, Never>] = [:]
     private var onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?
     private var backingPropertiesObserver: NSObjectProtocol?
+    private weak var observedBackingWindow: NSWindow?
     private var viewerTheme: Theme?
     private let onWillPresentViewer: (() -> Void)?
 
@@ -42,6 +43,14 @@ final class MermaidAttachmentCoordinator {
         self.onWillPresentViewer = onWillPresentViewer
     }
 
+    var hasBackingPropertiesObserverForTesting: Bool {
+        backingPropertiesObserver != nil
+    }
+
+    var observedBackingWindowForTesting: NSWindow? {
+        observedBackingWindow
+    }
+
     func updateViewerTheme(_ theme: Theme) {
         viewerTheme = theme
     }
@@ -55,11 +64,9 @@ final class MermaidAttachmentCoordinator {
         let scale = textView.window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor
             ?? 2
-        if backingPropertiesObserver == nil {
-            observeBackingProperties(of: textView.window)
-        }
         if self.revision == revision, self.textView === textView,
            self.backingScale == scale {
+            observeBackingPropertiesIfNeeded(of: textView.window)
             return
         }
         cancelAll()
@@ -68,6 +75,7 @@ final class MermaidAttachmentCoordinator {
         self.references = Dictionary(uniqueKeysWithValues: references.map { ($0.id, $0) })
         self.onTextStorageDelta = onTextStorageDelta
         self.backingScale = scale
+        observeBackingPropertiesIfNeeded(of: textView.window)
         for reference in references {
             let cell = reference.attachment.mermaidCell
             cell.delegate = self
@@ -113,12 +121,20 @@ final class MermaidAttachmentCoordinator {
             NotificationCenter.default.removeObserver(backingPropertiesObserver)
         }
         backingPropertiesObserver = nil
+        observedBackingWindow = nil
     }
 
     private var backingScale: CGFloat?
 
-    private func observeBackingProperties(of window: NSWindow?) {
+    private func observeBackingPropertiesIfNeeded(of window: NSWindow?) {
         guard let window else { return }
+        guard backingPropertiesObserver == nil || observedBackingWindow !== window else {
+            return
+        }
+        if let backingPropertiesObserver {
+            NotificationCenter.default.removeObserver(backingPropertiesObserver)
+        }
+        observedBackingWindow = window
         backingPropertiesObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeBackingPropertiesNotification,
             object: window,

@@ -319,6 +319,36 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(attachment.mermaidCell.cellSize.height > 0)
     }
 
+    @Test("backing observer remains installed after a substantive apply")
+    func backingObserverSurvivesSubstantiveApply() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let reference = try makeReference(attachment: attachment)
+        let textView = makeTextView(attachment: attachment)
+        let window = NSWindow(
+            contentRect: textView.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(textView)
+        let coordinator = MermaidAttachmentCoordinator()
+        defer { coordinator.cancelAll() }
+
+        coordinator.apply(
+            [reference],
+            revision: UUID(),
+            to: textView,
+            onTextStorageDelta: nil
+        )
+
+        #expect(coordinator.hasBackingPropertiesObserverForTesting)
+        #expect(coordinator.observedBackingWindowForTesting === window)
+    }
+
     @Test("full attachment header actions hit in the flipped top band")
     func fullAttachmentHeaderHitTargetsUseFlippedCoordinates() throws {
         let attachment = MermaidTextAttachment(
