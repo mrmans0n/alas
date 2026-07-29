@@ -1,0 +1,51 @@
+import CoreGraphics
+
+enum MermaidDiagramLayout {
+    static func fittedSize(
+        intrinsic: CGSize,
+        availableWidth: CGFloat,
+        maxHeight: CGFloat
+    ) -> CGSize {
+        guard intrinsic.width > 0, intrinsic.height > 0 else { return .zero }
+        let scale = min(1, availableWidth / intrinsic.width, maxHeight / intrinsic.height)
+        return CGSize(width: intrinsic.width * scale, height: intrinsic.height * scale)
+    }
+}
+
+struct MermaidZoomState: Equatable {
+    static let minimumScale: CGFloat = 0.25
+    static let maximumScale: CGFloat = 8
+
+    private(set) var scale: CGFloat = 1
+    private(set) var translation: CGSize = .zero
+
+    mutating func zoom(by factor: CGFloat) {
+        guard factor.isFinite, factor > 0 else { return }
+        scale = Self.clamped(scale * factor)
+    }
+
+    mutating func setScale(_ scale: CGFloat) {
+        guard scale.isFinite else { return }
+        self.scale = Self.clamped(scale)
+    }
+
+    mutating func translate(by delta: CGSize) {
+        guard delta.width.isFinite, delta.height.isFinite else { return }
+        translation.width += delta.width
+        translation.height += delta.height
+    }
+
+    mutating func resetToFit() {
+        scale = 1
+        translation = .zero
+    }
+
+    func scale(adding factor: CGFloat) -> CGFloat {
+        guard factor.isFinite, factor > 0 else { return scale }
+        return Self.clamped(scale * factor)
+    }
+
+    private static func clamped(_ scale: CGFloat) -> CGFloat {
+        min(maximumScale, max(minimumScale, scale))
+    }
+}
