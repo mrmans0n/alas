@@ -26,6 +26,7 @@ final class MermaidAttachmentCoordinator {
     private var references: [String: MermaidAttachmentReference] = [:]
     private var tasks: [String: Task<Void, Never>] = [:]
     private var onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?
+    private var backingPropertiesObserver: NSObjectProtocol?
     private var viewerTheme: Theme?
     private let onWillPresentViewer: (() -> Void)?
 
@@ -51,7 +52,11 @@ final class MermaidAttachmentCoordinator {
         to textView: NSTextView,
         onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?
     ) {
-        if self.revision == revision, self.textView === textView {
+        let scale = textView.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        if self.revision == revision, self.textView === textView,
+           self.backingScale == scale {
             return
         }
         cancelAll()
@@ -59,10 +64,8 @@ final class MermaidAttachmentCoordinator {
         self.textView = textView
         self.references = Dictionary(uniqueKeysWithValues: references.map { ($0.id, $0) })
         self.onTextStorageDelta = onTextStorageDelta
-
-        let scale = textView.window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 2
+        self.backingScale = scale
+        observeBackingProperties(of: textView.window)
         for reference in references {
             let cell = reference.attachment.mermaidCell
             cell.delegate = self
@@ -103,6 +106,35 @@ final class MermaidAttachmentCoordinator {
         revision = nil
         textView = nil
         onTextStorageDelta = nil
+        backingScale = nil
+        if let backingPropertiesObserver {
+            NotificationCenter.default.removeObserver(backingPropertiesObserver)
+        }
+        backingPropertiesObserver = nil
+    }
+
+    private var backingScale: CGFloat?
+
+    private func observeBackingProperties(of window: NSWindow?) {
+        guard let window else { return }
+        backingPropertiesObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeBackingPropertiesNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let revision = self.revision,
+                      let textView = self.textView
+                else { return }
+                self.apply(
+                    Array(self.references.values),
+                    revision: revision,
+                    to: textView,
+                    onTextStorageDelta: self.onTextStorageDelta
+                )
+            }
+        }
     }
 
     func showSource(id: String, in textView: NSTextView) {

@@ -3,14 +3,21 @@ import SwiftUI
 
 struct MermaidSourceDisclosureState {
     private(set) var showsSource = false
+    private var failureDisclosure = false
 
     mutating func toggle() {
         showsSource.toggle()
+        failureDisclosure = false
     }
 
     mutating func apply(_ outcome: MermaidRenderOutcome) {
-        guard outcome.failure != nil else { return }
-        showsSource = true
+        if outcome.failure != nil {
+            showsSource = true
+            failureDisclosure = true
+        } else if failureDisclosure {
+            showsSource = false
+            failureDisclosure = false
+        }
     }
 
     func visibleSource(_ source: String) -> String? {
