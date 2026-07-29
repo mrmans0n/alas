@@ -5,6 +5,22 @@ import Testing
 @MainActor
 @Suite("ACPMarkdownBlockCache")
 struct ACPMarkdownBlockCacheTests {
+    @Test("table columns distribute available width after dividers")
+    func tableColumnsDistributeAvailableWidth() {
+        let width = ACPMarkdownText.tableColumnWidth(availableWidth: 720, columnCount: 3)
+        #expect(abs(width - 719.0 / 3.0) < 0.001)
+    }
+
+    @Test("table columns retain their minimum width")
+    func tableColumnsRetainMinimumWidth() {
+        #expect(ACPMarkdownText.tableColumnWidth(availableWidth: 600, columnCount: 8) == 100)
+    }
+
+    @Test("table columns have no width without columns")
+    func tableColumnsHaveNoWidthWithoutColumns() {
+        #expect(ACPMarkdownText.tableColumnWidth(availableWidth: 720, columnCount: 0) == 0)
+    }
+
     @Test("two paragraphs separated by blank line both become stable once a third arrives")
     func paragraphsPromoteOnBoundary() async {
         let cache = ACPMarkdownBlockCache()

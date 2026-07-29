@@ -19,6 +19,7 @@ struct ACPMarkdownText: View {
     var typography: ACPChatTypography = .default
     var showsCodeBlockCopyButton: Bool = true
     @Environment(\.theme) private var theme
+    @State private var tableViewportWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -133,12 +134,17 @@ struct ACPMarkdownText: View {
         memoizesInlineMarkdown: Bool
     ) -> some View {
         let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
+        let columnWidth = Self.tableColumnWidth(
+            availableWidth: tableViewportWidth,
+            columnCount: columnCount
+        )
         return ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 tableRow(
                     cells: header,
                     isHeader: true,
                     columnCount: columnCount,
+                    columnWidth: columnWidth,
                     memoizesInlineMarkdown: memoizesInlineMarkdown
                 )
                 Rectangle().fill(theme.color("line")).frame(height: 0.5)
@@ -147,6 +153,7 @@ struct ACPMarkdownText: View {
                         cells: r,
                         isHeader: false,
                         columnCount: columnCount,
+                        columnWidth: columnWidth,
                         memoizesInlineMarkdown: memoizesInlineMarkdown
                     )
                     if r != rows.last {
@@ -154,6 +161,12 @@ struct ACPMarkdownText: View {
                     }
                 }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.size.width
+        } action: { width in
+            tableViewportWidth = width
         }
         .background(theme.color("bg-1").opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -164,6 +177,7 @@ struct ACPMarkdownText: View {
         cells: [String],
         isHeader: Bool,
         columnCount: Int,
+        columnWidth: CGFloat,
         memoizesInlineMarkdown: Bool
     ) -> some View {
         HStack(alignment: .top, spacing: 0) {
@@ -178,12 +192,22 @@ struct ACPMarkdownText: View {
                 )
                     .frame(minWidth: 80, alignment: .leading)
                     .padding(.horizontal, 10).padding(.vertical, 6)
+                    .frame(width: columnWidth, alignment: .leading)
                 if i < columnCount - 1 {
                     Rectangle().fill(theme.color("line-soft")).frame(width: 0.5)
                 }
             }
         }
         .background(isHeader ? theme.color("bg-2").opacity(0.5) : Color.clear)
+    }
+
+    static func tableColumnWidth(
+        availableWidth: CGFloat,
+        columnCount: Int,
+        dividerWidth: CGFloat = 0.5
+    ) -> CGFloat {
+        guard columnCount > 0 else { return 0 }
+        return max(100, (availableWidth - dividerWidth * CGFloat(columnCount - 1)) / CGFloat(columnCount))
     }
 
     // MARK: - Inline memoization
