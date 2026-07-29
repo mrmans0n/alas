@@ -63,6 +63,48 @@ struct MermaidRenderServiceTests {
         #expect(full == compact)
         #expect(Set([full, compact]).count == 1)
     }
+
+    @Test("cancelling the last consumer cancels its render task")
+    func cancellingLastConsumerCancelsRenderTask() async {
+        let backend = CancellationTrackingMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let task = Task {
+            await service.render(key: TestMermaid.key(source: "graph TD; A-->B"))
+        }
+
+        #expect(await backend.waitForStart())
+        task.cancel()
+        _ = await task.value
+
+        #expect(await backend.observedCancellation)
+    }
+
+    @Test("cancelling one consumer preserves a shared render")
+    func cancellingOneConsumerPreservesSharedRender() async {
+        let backend = CancellationTrackingMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let key = TestMermaid.key(source: "graph TD; A-->B")
+        let first = Task { await service.render(key: key) }
+
+        #expect(await backend.waitForStart())
+        let second = Task { await service.render(key: key) }
+        first.cancel()
+        _ = await (first.value, second.value)
+
+        #expect(!(await backend.observedCancellation))
+    }
+
+    @Test("cancelling a queued render removes its limiter waiter")
+    func cancellingQueuedRenderRemovesLimiterWaiter() async {
+        let limiter = MermaidRenderLimiter()
+        #expect(await limiter.acquire())
+        #expect(await limiter.acquire())
+
+        let waitingTask = Task { await limiter.acquire() }
+        waitingTask.cancel()
+
+        #expect(!(await waitingTask.value))
+    }
 }
 
 @MainActor
@@ -101,5 +143,27 @@ actor FakeMermaidBackend: MermaidRenderingBackend {
         try? await Task.sleep(nanoseconds: 20_000_000)
         activeCount -= 1
         return outcome
+    }
+}
+
+private actor CancellationTrackingMermaidBackend: MermaidRenderingBackend {
+    private(set) var started = false
+    private(set) var observedCancellation = false
+
+    func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
+        started = true
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        observedCancellation = Task.isCancelled
+        return .failed(.renderFailed("cancelled"))
+    }
+
+    func waitForStart() async -> Bool {
+        for _ in 0 ..< 1_000 {
+            if started {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
     }
 }
