@@ -1,6 +1,23 @@
 import AppKit
 import SwiftUI
 
+struct MermaidSourceDisclosureState {
+    private(set) var showsSource = false
+
+    mutating func toggle() {
+        showsSource.toggle()
+    }
+
+    mutating func apply(_ outcome: MermaidRenderOutcome) {
+        guard outcome.failure != nil else { return }
+        showsSource = true
+    }
+
+    func visibleSource(_ source: String) -> String? {
+        showsSource ? source : nil
+    }
+}
+
 struct MermaidDiagramBlockView: View {
     let source: String
     let profile: MermaidPresentationProfile
@@ -9,7 +26,7 @@ struct MermaidDiagramBlockView: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.theme) private var theme
     @State private var renderState = MermaidRenderRequestState()
-    @State private var showsSource = false
+    @State private var sourceDisclosure = MermaidSourceDisclosureState()
 
     private var key: MermaidRenderKey {
         MermaidRenderKey(
@@ -23,8 +40,8 @@ struct MermaidDiagramBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             MermaidDiagramBlockHeader(
-                showsSource: showsSource,
-                toggleSource: { showsSource.toggle() },
+                showsSource: sourceDisclosure.showsSource,
+                toggleSource: { sourceDisclosure.toggle() },
                 copySource: copySource,
                 expand: expand
             )
@@ -33,8 +50,8 @@ struct MermaidDiagramBlockView: View {
                 profile: profile,
                 outcome: renderState.outcome
             )
-            if showsSource {
-                MermaidDiagramSourceView(source: source)
+            if let visibleSource = sourceDisclosure.visibleSource(source) {
+                MermaidDiagramSourceView(source: visibleSource)
             }
         }
         .background(theme.color("bg-0").opacity(0.6))
@@ -49,7 +66,9 @@ struct MermaidDiagramBlockView: View {
             renderState.begin(requestedKey)
             let rendered = await service.render(key: requestedKey)
             guard !Task.isCancelled else { return }
+            guard renderState.currentKey == requestedKey else { return }
             renderState.apply(rendered, for: requestedKey)
+            sourceDisclosure.apply(rendered)
         }
     }
 

@@ -92,6 +92,106 @@ private final class MermaidDiagramSheetWindow: NSWindow {
     }
 }
 
+enum MermaidViewerAction: CaseIterable {
+    case zoomOut
+    case zoomIn
+    case actualSize
+    case resetToFit
+    case toggleSource
+    case copySource
+
+    var shortcut: ShortcutBinding {
+        switch self {
+        case .zoomOut:
+            ShortcutBinding(key: "-", modifiers: [.command])
+        case .zoomIn:
+            ShortcutBinding(key: "=", modifiers: [.command])
+        case .actualSize:
+            ShortcutBinding(key: "0", modifiers: [.command])
+        case .resetToFit:
+            ShortcutBinding(key: "9", modifiers: [.command])
+        case .toggleSource:
+            ShortcutBinding(key: "u", modifiers: [.option, .command])
+        case .copySource:
+            ShortcutBinding(key: "c", modifiers: [.option, .command])
+        }
+    }
+}
+
+enum MermaidViewerEffect: Equatable {
+    case copySource
+}
+
+enum MermaidViewerZoomAdjustment {
+    case increment
+    case decrement
+}
+
+struct MermaidViewerZoomAccessibilityMetadata: Equatable {
+    let label: String
+    let value: String
+}
+
+struct MermaidViewerInteractionState {
+    private var zoomState = MermaidZoomState()
+    private(set) var showsSource = false
+
+    var scale: CGFloat {
+        zoomState.scale
+    }
+
+    var translation: CGSize {
+        zoomState.translation
+    }
+
+    var zoomAccessibilityMetadata: MermaidViewerZoomAccessibilityMetadata {
+        MermaidViewerZoomAccessibilityMetadata(
+            label: "Mermaid diagram zoom",
+            value: "\(Int((scale * 100).rounded()))%"
+        )
+    }
+
+    @discardableResult
+    mutating func perform(_ action: MermaidViewerAction) -> MermaidViewerEffect? {
+        switch action {
+        case .zoomOut:
+            zoomState.zoom(by: 0.8)
+        case .zoomIn:
+            zoomState.zoom(by: 1.25)
+        case .actualSize:
+            zoomState.setScale(1)
+        case .resetToFit:
+            zoomState.resetToFit()
+        case .toggleSource:
+            showsSource.toggle()
+        case .copySource:
+            return .copySource
+        }
+        return nil
+    }
+
+    mutating func adjustZoom(_ adjustment: MermaidViewerZoomAdjustment) {
+        switch adjustment {
+        case .increment:
+            perform(.zoomIn)
+        case .decrement:
+            perform(.zoomOut)
+        }
+    }
+
+    mutating func zoom(by factor: CGFloat) {
+        zoomState.zoom(by: factor)
+    }
+
+    mutating func translate(by delta: CGSize) {
+        zoomState.translate(by: delta)
+    }
+
+    func scale(adding factor: CGFloat) -> CGFloat {
+        zoomState.scale(adding: factor)
+    }
+}
+
 struct MermaidDiagramViewerView: View {
     let source: String
     let diagramTheme: MermaidDiagramTheme
@@ -100,8 +200,7 @@ struct MermaidDiagramViewerView: View {
 
     @Environment(\.theme) private var theme
     @State private var renderState = MermaidRenderRequestState()
-    @State private var showsSource = false
-    @State private var zoomState = MermaidZoomState()
+    @State private var interactionState = MermaidViewerInteractionState()
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var magnification: CGFloat = 1
 
@@ -117,14 +216,10 @@ struct MermaidDiagramViewerView: View {
     var body: some View {
         VStack(spacing: 0) {
             MermaidDiagramViewerToolbar(
-                scale: zoomState.scale,
-                showsSource: showsSource,
-                zoomOut: { zoomState.zoom(by: 0.8) },
-                zoomIn: { zoomState.zoom(by: 1.25) },
-                resetScale: { zoomState.setScale(1) },
-                reset: { zoomState.resetToFit() },
-                toggleSource: { showsSource.toggle() },
-                copySource: { Clipboard.copy(source) }
+                showsSource: interactionState.showsSource,
+                zoomAccessibilityMetadata: interactionState.zoomAccessibilityMetadata,
+                perform: perform,
+                adjustZoom: { interactionState.adjustZoom($0) }
             )
             viewerContent
         }
@@ -132,7 +227,7 @@ struct MermaidDiagramViewerView: View {
         .task(id: key) {
             let requestedKey = key
             renderState.begin(requestedKey)
-            zoomState.resetToFit()
+            interactionState.perform(.resetToFit)
             let rendered = await service.render(key: requestedKey)
             guard !Task.isCancelled else { return }
             renderState.apply(rendered, for: requestedKey)
@@ -141,7 +236,7 @@ struct MermaidDiagramViewerView: View {
 
     @ViewBuilder
     private var viewerContent: some View {
-        if showsSource {
+        if interactionState.showsSource {
             HSplitView {
                 canvas
                     .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
@@ -170,9 +265,9 @@ struct MermaidDiagramViewerView: View {
                         .interpolation(.high)
                         .aspectRatio(contentMode: .fit)
                         .frame(width: fittedSize.width, height: fittedSize.height)
-                        .scaleEffect(zoomState.scale(adding: magnification))
+                        .scaleEffect(interactionState.scale(adding: magnification))
                         .offset(Self.displayTranslation(
-                            committed: zoomState.translation,
+                            committed: interactionState.translation,
                             gesture: dragTranslation
                         ))
                         .accessibilityLabel("Mermaid diagram")
@@ -209,7 +304,7 @@ struct MermaidDiagramViewerView: View {
                 translation = value.translation
             }
             .onEnded { value in
-                zoomState.translate(by: value.translation)
+                interactionState.translate(by: value.translation)
             }
     }
 
@@ -219,8 +314,13 @@ struct MermaidDiagramViewerView: View {
                 magnification = value.magnification
             }
             .onEnded { value in
-                zoomState.zoom(by: value.magnification)
+                interactionState.zoom(by: value.magnification)
             }
+    }
+
+    private func perform(_ action: MermaidViewerAction) {
+        guard interactionState.perform(action) == .copySource else { return }
+        Clipboard.copy(source)
     }
 
     nonisolated static func displayTranslation(
@@ -235,14 +335,10 @@ struct MermaidDiagramViewerView: View {
 }
 
 private struct MermaidDiagramViewerToolbar: View {
-    let scale: CGFloat
     let showsSource: Bool
-    let zoomOut: () -> Void
-    let zoomIn: () -> Void
-    let resetScale: () -> Void
-    let reset: () -> Void
-    let toggleSource: () -> Void
-    let copySource: () -> Void
+    let zoomAccessibilityMetadata: MermaidViewerZoomAccessibilityMetadata
+    let perform: (MermaidViewerAction) -> Void
+    let adjustZoom: (MermaidViewerZoomAdjustment) -> Void
 
     @Environment(\.theme) private var theme
 
@@ -253,27 +349,51 @@ private struct MermaidDiagramViewerToolbar: View {
                 .tracking(0.4)
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer(minLength: 0)
-            Button(action: zoomOut) {
+            Button(action: { perform(.zoomOut) }) {
                 Label("Zoom out", systemImage: "minus.magnifyingglass")
                     .labelStyle(.iconOnly)
             }
             .help("Zoom out")
-            Button(action: resetScale) {
-                Text("\(Int((scale * 100).rounded()))%")
+            .keyboardShortcut(MermaidViewerAction.zoomOut.shortcut.asKeyboardShortcut())
+            Button(action: { perform(.actualSize) }) {
+                Text(zoomAccessibilityMetadata.value)
                     .monospacedDigit()
                     .frame(minWidth: 38)
             }
             .help("Set zoom to 100%")
-            Button(action: zoomIn) {
+            .keyboardShortcut(MermaidViewerAction.actualSize.shortcut.asKeyboardShortcut())
+            .accessibilityLabel(zoomAccessibilityMetadata.label)
+            .accessibilityValue(zoomAccessibilityMetadata.value)
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    adjustZoom(.increment)
+                case .decrement:
+                    adjustZoom(.decrement)
+                @unknown default:
+                    break
+                }
+            }
+            Button(action: { perform(.zoomIn) }) {
                 Label("Zoom in", systemImage: "plus.magnifyingglass")
                     .labelStyle(.iconOnly)
             }
             .help("Zoom in")
-            Button("Reset", action: reset)
+            .keyboardShortcut(MermaidViewerAction.zoomIn.shortcut.asKeyboardShortcut())
+            Button("Reset") {
+                perform(.resetToFit)
+            }
+            .keyboardShortcut(MermaidViewerAction.resetToFit.shortcut.asKeyboardShortcut())
             Divider()
                 .frame(height: 16)
-            Button(showsSource ? "Hide source" : "Show source", action: toggleSource)
-            Button("Copy", action: copySource)
+            Button(showsSource ? "Hide source" : "Show source") {
+                perform(.toggleSource)
+            }
+            .keyboardShortcut(MermaidViewerAction.toggleSource.shortcut.asKeyboardShortcut())
+            Button("Copy") {
+                perform(.copySource)
+            }
+            .keyboardShortcut(MermaidViewerAction.copySource.shortcut.asKeyboardShortcut())
         }
         .font(.system(size: 11, weight: .medium))
         .buttonStyle(.plain)
