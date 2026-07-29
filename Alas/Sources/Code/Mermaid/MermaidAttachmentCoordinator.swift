@@ -28,6 +28,7 @@ final class MermaidAttachmentCoordinator {
     private var onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?
     private var backingPropertiesObserver: NSObjectProtocol?
     private weak var observedBackingWindow: NSWindow?
+    private var failureDisclosedSourceIDs: Set<String> = []
     private var viewerTheme: Theme?
     private let onWillPresentViewer: (() -> Void)?
 
@@ -69,7 +70,9 @@ final class MermaidAttachmentCoordinator {
             observeBackingPropertiesIfNeeded(of: textView.window)
             return
         }
-        cancelAll()
+        let preservesFailureDisclosures = self.revision == revision
+            && self.textView === textView
+        cancelAll(clearFailureDisclosures: !preservesFailureDisclosures)
         self.revision = revision
         self.textView = textView
         self.references = Dictionary(uniqueKeysWithValues: references.map { ($0.id, $0) })
@@ -105,6 +108,10 @@ final class MermaidAttachmentCoordinator {
     }
 
     func cancelAll() {
+        cancelAll(clearFailureDisclosures: true)
+    }
+
+    private func cancelAll(clearFailureDisclosures: Bool) {
         for task in tasks.values {
             task.cancel()
         }
@@ -122,6 +129,9 @@ final class MermaidAttachmentCoordinator {
         }
         backingPropertiesObserver = nil
         observedBackingWindow = nil
+        if clearFailureDisclosures {
+            failureDisclosedSourceIDs.removeAll()
+        }
     }
 
     private var backingScale: CGFloat?
@@ -189,6 +199,7 @@ final class MermaidAttachmentCoordinator {
     }
 
     func hideSource(id: String, in textView: NSTextView) {
+        failureDisclosedSourceIDs.remove(id)
         guard let reference = references[id],
               self.textView === textView,
               let storage = textView.textStorage
@@ -223,6 +234,15 @@ final class MermaidAttachmentCoordinator {
         Clipboard.copy(payload, to: pasteboard)
     }
 
+    func applyOutcomeForTesting(
+        _ outcome: MermaidRenderOutcome,
+        to id: String,
+        revision: UUID,
+        in textView: NSTextView
+    ) {
+        apply(outcome, to: id, revision: revision, in: textView)
+    }
+
     private func apply(
         _ outcome: MermaidRenderOutcome,
         to id: String,
@@ -232,16 +252,23 @@ final class MermaidAttachmentCoordinator {
         guard self.revision == revision,
               self.textView === textView,
               let reference = references[id],
+              let storage = textView.textStorage,
               attachmentRange(
                   for: reference.attachment,
-                  in: textView.textStorage
+                  in: storage
               ) != nil
         else { return }
 
         tasks.removeValue(forKey: id)
         reference.attachment.mermaidCell.apply(outcome)
         if case .failed = outcome {
+            let sourceWasVisible = sourceRange(id: id, in: storage) != nil
             showSource(id: id, in: textView)
+            if !sourceWasVisible {
+                failureDisclosedSourceIDs.insert(id)
+            }
+        } else if failureDisclosedSourceIDs.contains(id) {
+            hideSource(id: id, in: textView)
         }
         invalidate(reference.attachment, in: textView)
     }

@@ -193,6 +193,89 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(await backend.waitForCancellation(source: reference.source))
     }
 
+    @Test("failure-disclosed source clears after a successful rerender")
+    func failureDisclosedSourceClearsAfterSuccess() async throws {
+        let backend = ControlledMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let reference = try makeReference(attachment: attachment)
+        let textView = makeTextView(attachment: attachment)
+        let revision = UUID()
+        let coordinator = MermaidAttachmentCoordinator(service: service)
+        defer { coordinator.cancelAll() }
+
+        coordinator.apply(
+            [reference],
+            revision: revision,
+            to: textView,
+            onTextStorageDelta: nil
+        )
+        #expect(await backend.waitForRequest(source: reference.source))
+
+        await backend.resume(
+            source: reference.source,
+            outcome: .failed(.rasterTooLarge(width: 8_193, height: 1))
+        )
+        #expect(await waitForOutcome(in: attachment))
+        #expect(textView.string.contains(reference.source))
+        #expect(attachment.mermaidCell.showsSource)
+
+        coordinator.applyOutcomeForTesting(
+            renderedOutcome(),
+            to: reference.id,
+            revision: revision,
+            in: textView
+        )
+
+        #expect(!textView.string.contains(reference.source))
+        #expect(!attachment.mermaidCell.showsSource)
+    }
+
+    @Test("explicitly opened source remains after a successful rerender")
+    func explicitSourceRemainsAfterSuccess() async throws {
+        let backend = ControlledMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let reference = try makeReference(attachment: attachment)
+        let textView = makeTextView(attachment: attachment)
+        let revision = UUID()
+        let coordinator = MermaidAttachmentCoordinator(service: service)
+        defer { coordinator.cancelAll() }
+
+        coordinator.apply(
+            [reference],
+            revision: revision,
+            to: textView,
+            onTextStorageDelta: nil
+        )
+        #expect(await backend.waitForRequest(source: reference.source))
+        coordinator.showSource(id: reference.id, in: textView)
+
+        await backend.resume(
+            source: reference.source,
+            outcome: .failed(.rasterTooLarge(width: 8_193, height: 1))
+        )
+        #expect(await waitForOutcome(in: attachment))
+
+        coordinator.applyOutcomeForTesting(
+            renderedOutcome(),
+            to: reference.id,
+            revision: revision,
+            in: textView
+        )
+
+        #expect(textView.string.contains(reference.source))
+        #expect(attachment.mermaidCell.showsSource)
+    }
+
     @Test("full attachment exposes exact accessibility and copy metadata")
     func fullCellAccessibility() {
         let source = "graph TD;\n  A-->B"
