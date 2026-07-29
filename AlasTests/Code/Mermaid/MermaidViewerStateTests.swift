@@ -176,12 +176,17 @@ struct MermaidViewerStateTests {
         #expect(state.zoomAccessibilityMetadata(actualSizeScale: 1.5).value == "67%")
     }
 
-    @Test("render scale changes do not reset the viewer viewport")
-    func renderScaleChangesDoNotResetViewport() {
+    @Test("render scale and theme changes do not reset the viewer viewport")
+    func renderScaleAndThemeChangesDoNotResetViewport() {
         let original = TestMermaid.key(source: "graph TD; A-->B", scale: 1)
         let sameDiagramAtNewScale = TestMermaid.key(
             source: "graph TD; A-->B",
             scale: 2
+        )
+        let sameDiagramWithNewTheme = TestMermaid.key(
+            source: "graph TD; A-->B",
+            accent: "#D3A25C",
+            scale: 1
         )
         let differentDiagram = TestMermaid.key(source: "graph TD; A-->C", scale: 2)
         var state = MermaidRenderRequestState()
@@ -191,6 +196,7 @@ struct MermaidViewerStateTests {
         state.begin(original)
 
         #expect(!state.resetsViewport(for: sameDiagramAtNewScale))
+        #expect(!state.resetsViewport(for: sameDiagramWithNewTheme))
         #expect(state.resetsViewport(for: differentDiagram))
     }
 

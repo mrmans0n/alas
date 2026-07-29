@@ -33,7 +33,6 @@ struct MermaidRenderRequestState {
     func resetsViewport(for key: MermaidRenderKey) -> Bool {
         guard let currentKey else { return true }
         return currentKey.source != key.source
-            || currentKey.theme != key.theme
             || currentKey.profile != key.profile
     }
 
