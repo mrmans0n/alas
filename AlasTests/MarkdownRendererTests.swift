@@ -207,6 +207,33 @@ struct MarkdownRendererTests {
         #expect(font?.isFixedPitch == true)
     }
 
+    @Test func mermaidFenceEmitsAttachmentReference() throws {
+        let result = try Self.render("""
+        ```mermaid
+        graph TD; A-->B
+        ```
+        """)
+
+        #expect(result.mermaidAttachments.count == 1)
+        #expect(result.mermaidAttachments[0].id == "mermaid-0")
+        #expect(result.mermaidAttachments[0].source == "graph TD; A-->B")
+        #expect(result.mermaidAttachments[0].profile == .full)
+        #expect(result.attributedString.string.contains("graph TD") == false)
+    }
+
+    @Test func emptyMermaidFenceRemainsCode() throws {
+        let result = try Self.render("```mermaid\n```")
+
+        #expect(result.mermaidAttachments.isEmpty)
+    }
+
+    @Test func ordinaryFenceRemainsCode() throws {
+        let result = try Self.render("```swift\nlet value = 1\n```")
+
+        #expect(result.mermaidAttachments.isEmpty)
+        #expect(result.attributedString.string.contains("let value = 1"))
+    }
+
     private func tableBlock(at substring: String, in attributed: NSAttributedString) -> NSTextTableBlock? {
         let range = (attributed.string as NSString).range(of: substring)
         guard range.location != NSNotFound else { return nil }

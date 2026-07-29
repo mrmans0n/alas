@@ -7,9 +7,19 @@ import SwiftUI
 /// link-click handler and the async remote-image loader (filled in by
 /// later tasks).
 struct MarkdownRenderResult {
+    let revision: UUID
     let attributedString: NSAttributedString
     let anchorRanges: [String: NSRange]
     let remoteImages: [RemoteImageReference]
+    let mermaidAttachments: [MermaidAttachmentReference]
+}
+
+struct MermaidAttachmentReference {
+    let id: String
+    let source: String
+    let profile: MermaidPresentationProfile
+    let theme: MermaidDiagramTheme
+    let attachment: MermaidTextAttachment
 }
 
 /// Captures one `https://`-image attachment in the result. The
@@ -25,6 +35,9 @@ final class MarkdownRenderer {
     private var output: NSMutableAttributedString = .init()
     private var anchorRanges: [String: NSRange] = [:]
     private var remoteImages: [RemoteImageReference] = []
+    private var mermaidAttachments: [MermaidAttachmentReference] = []
+    private var mermaidIndex = 0
+    private var mermaidProfile: MermaidPresentationProfile = .full
     private var theme: Theme!
     private var monoFamily: String = "JetBrainsMono Nerd Font"
     private var monoSize: CGFloat = 13
@@ -69,11 +82,15 @@ final class MarkdownRenderer {
         monospacedFontFamily: String,
         monospacedFontSize: Int,
         baseDirectory: URL,
-        worktreeRoot: URL? = nil
+        worktreeRoot: URL? = nil,
+        mermaidProfile: MermaidPresentationProfile = .full
     ) -> MarkdownRenderResult {
         self.output = NSMutableAttributedString()
         self.anchorRanges = [:]
         self.remoteImages = []
+        self.mermaidAttachments = []
+        self.mermaidIndex = 0
+        self.mermaidProfile = mermaidProfile
         self.theme = theme
         self.monoFamily = monospacedFontFamily
         self.monoSize = CGFloat(monospacedFontSize)
@@ -93,9 +110,11 @@ final class MarkdownRenderer {
             visit(child)
         }
         return MarkdownRenderResult(
+            revision: UUID(),
             attributedString: output.copy() as! NSAttributedString,
             anchorRanges: anchorRanges,
-            remoteImages: remoteImages
+            remoteImages: remoteImages,
+            mermaidAttachments: mermaidAttachments
         )
     }
 
@@ -313,6 +332,30 @@ final class MarkdownRenderer {
     }
 
     private func visitCodeBlock(_ block: CodeBlock) {
+        if MermaidFence.isMermaid(language: block.language),
+           !block.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let source = block.code.hasSuffix("\n")
+                ? String(block.code.dropLast())
+                : block.code
+            let id = "mermaid-\(mermaidIndex)"
+            mermaidIndex += 1
+            let attachment = MermaidTextAttachment(
+                id: id,
+                source: source,
+                profile: mermaidProfile
+            )
+            output.append(NSAttributedString(attachment: attachment))
+            output.append(NSAttributedString(string: "\n"))
+            mermaidAttachments.append(MermaidAttachmentReference(
+                id: id,
+                source: source,
+                profile: mermaidProfile,
+                theme: MermaidDiagramTheme(theme: theme),
+                attachment: attachment
+            ))
+            return
+        }
+
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: monospaceFont(size: monoSize),
             .foregroundColor: NSColor(theme.color("fg")),
