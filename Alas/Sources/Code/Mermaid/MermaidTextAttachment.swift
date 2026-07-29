@@ -80,7 +80,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     private enum SizingState: Sendable {
         case loading
         case rendered(CGSize)
-        case failed
+        case failed(String)
     }
 
     init(id: String, source: String, profile: MermaidPresentationProfile) {
@@ -114,8 +114,8 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         switch outcome {
         case .rendered(let diagram):
             sizingState = .rendered(diagram.image.size)
-        case .failed:
-            sizingState = .failed
+        case .failed(let failure):
+            sizingState = .failed(failure.mermaidDisplayDiagnostic)
         }
     }
 
@@ -356,8 +356,12 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
                 )
                 bodyHeight = max(44, fitted.height + Self.horizontalPadding * 2)
             }
-        case .failed:
-            bodyHeight = profile == .compact ? profile.maxEmbeddedHeight : 76
+        case .failed(let diagnostic):
+            bodyHeight = Self.failureBodyHeight(
+                diagnostic: diagnostic,
+                width: bodyWidth,
+                profile: profile
+            )
         case .loading:
             bodyHeight = profile == .compact ? profile.maxEmbeddedHeight : 120
         }
@@ -555,10 +559,23 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         let title = "Couldn't render Mermaid diagram" as NSString
         let diagnostic = failure.mermaidDisplayDiagnostic as NSString
         let titleSize = title.size(withAttributes: titleAttributes)
-        let diagnosticSize = diagnostic.size(withAttributes: diagnosticAttributes)
-        let contentHeight = titleSize.height + 4 + diagnosticSize.height
-        let startY = frame.midY - contentHeight / 2
         let width = max(0, frame.width - Self.horizontalPadding * 2)
+        let availableContentHeight = max(0, frame.height - Self.horizontalPadding * 2)
+        let availableDiagnosticHeight = max(0, availableContentHeight - titleSize.height - 4)
+        let diagnosticSize = Self.wrappedTextSize(
+            diagnostic,
+            attributes: diagnosticAttributes,
+            width: width,
+            maxHeight: availableDiagnosticHeight
+        )
+        let contentHeight = min(
+            availableContentHeight,
+            titleSize.height + 4 + diagnosticSize.height
+        )
+        let startY = max(
+            frame.minY + Self.horizontalPadding,
+            frame.midY - contentHeight / 2
+        )
         let titleFrame = NSRect(
             x: frame.minX + Self.horizontalPadding,
             y: startY,
@@ -574,6 +591,51 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         return FailureTextFrames(
             title: titleFrame,
             diagnostic: diagnosticFrame
+        )
+    }
+
+    private nonisolated static func failureBodyHeight(
+        diagnostic: String,
+        width: CGFloat,
+        profile: MermaidPresentationProfile
+    ) -> CGFloat {
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
+        ]
+        let diagnosticAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10)
+        ]
+        let titleSize = ("Couldn't render Mermaid diagram" as NSString)
+            .size(withAttributes: titleAttributes)
+        let diagnosticSize = wrappedTextSize(
+            diagnostic as NSString,
+            attributes: diagnosticAttributes,
+            width: width,
+            maxHeight: .greatestFiniteMagnitude
+        )
+        let measuredHeight = titleSize.height
+            + 4
+            + diagnosticSize.height
+            + horizontalPadding * 2
+        let minimumHeight = profile == .compact ? profile.maxEmbeddedHeight : 76
+        return min(profile.maxEmbeddedHeight, max(minimumHeight, measuredHeight))
+    }
+
+    private nonisolated static func wrappedTextSize(
+        _ text: NSString,
+        attributes: [NSAttributedString.Key: Any],
+        width: CGFloat,
+        maxHeight: CGFloat
+    ) -> CGSize {
+        guard width > 0, maxHeight > 0 else { return .zero }
+        let rect = text.boundingRect(
+            with: NSSize(width: width, height: maxHeight),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes
+        )
+        return NSSize(
+            width: min(width, ceil(rect.width)),
+            height: min(maxHeight, ceil(rect.height))
         )
     }
 

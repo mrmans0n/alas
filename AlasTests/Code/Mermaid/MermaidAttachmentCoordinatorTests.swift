@@ -633,6 +633,32 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(text.diagnostic.maxY <= body.maxY)
     }
 
+    @Test("failure diagnostics measure wrapped text before drawing")
+    func failureDiagnosticsMeasureWrappedText() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let cell = attachment.mermaidCell
+        let failure = MermaidRenderFailure.parseFailed(
+            String(repeating: "unexpected token in Mermaid diagram ", count: 12)
+        )
+        cell.apply(.failed(failure))
+        let frame = cell.cellFrame(
+            for: NSTextContainer(size: NSSize(width: 180, height: 1_000)),
+            proposedLineFragment: NSRect(x: 0, y: 0, width: 180, height: 1_000),
+            glyphPosition: .zero,
+            characterIndex: 0
+        )
+        let body = cell.layoutFrames(in: frame).body
+        let text = cell.failureTextFrames(for: failure, in: body)
+
+        #expect(frame.height > 31 + 76 + 2)
+        #expect(text.diagnostic.height > 24)
+        #expect(text.diagnostic.maxY <= body.maxY)
+    }
+
     private func makeReference(
         attachment: MermaidTextAttachment
     ) throws -> MermaidAttachmentReference {
