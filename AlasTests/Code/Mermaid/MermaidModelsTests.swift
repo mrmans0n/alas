@@ -18,4 +18,14 @@ struct MermaidModelsTests {
         #expect(MermaidPresentationProfile.transcript.maxEmbeddedHeight == 420)
         #expect(MermaidPresentationProfile.compact.maxEmbeddedHeight == 180)
     }
+
+    @Test("copy payload is the exact source without a fence")
+    func copyPayloadHasNoFence() {
+        let source = "graph TD;\n  A-->B\n"
+
+        let payload = MermaidSource.copyPayload(for: source)
+
+        #expect(payload == source)
+        #expect(!payload.contains("```"))
+    }
 }

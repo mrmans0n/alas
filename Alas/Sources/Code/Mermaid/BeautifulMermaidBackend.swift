@@ -20,6 +20,19 @@ struct BeautifulMermaidBackend: MermaidRenderingBackend {
     static let maximumDimension = 8_192
     static let maximumPixels = 16_000_000
 
+    static func validateRaster(
+        width: Int,
+        height: Int
+    ) -> MermaidRenderFailure? {
+        guard width <= maximumDimension,
+              height <= maximumDimension,
+              width * height <= maximumPixels
+        else {
+            return .rasterTooLarge(width: width, height: height)
+        }
+        return nil
+    }
+
     func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
         let bytes = key.source.utf8.count
         guard bytes > 0 else { return .failed(.empty) }
@@ -38,10 +51,11 @@ struct BeautifulMermaidBackend: MermaidRenderingBackend {
             guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
                 return .failed(.renderFailed("Renderer returned an image without pixels"))
             }
-            guard cg.width <= Self.maximumDimension,
-                  cg.height <= Self.maximumDimension,
-                  cg.width * cg.height <= Self.maximumPixels else {
-                return .failed(.rasterTooLarge(width: cg.width, height: cg.height))
+            if let failure = Self.validateRaster(
+                width: cg.width,
+                height: cg.height
+            ) {
+                return .failed(failure)
             }
             return .rendered(MermaidRenderedDiagram(
                 image: image,

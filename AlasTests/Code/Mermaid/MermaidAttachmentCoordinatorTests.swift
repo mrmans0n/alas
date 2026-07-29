@@ -106,8 +106,8 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(controller.lastAppliedRevision == nextRevision)
     }
 
-    @Test("a completed render cannot update a replaced revision")
-    func staleRenderCannotUpdateCurrentAttachment() async throws {
+    @Test("an old revision cannot update a replacement attachment")
+    func rejectsStaleAttachmentOutcome() async throws {
         let backend = ControlledMermaidBackend()
         let service = MermaidRenderService(backend: backend)
         let coordinator = MermaidAttachmentCoordinator(service: service)
@@ -152,15 +152,61 @@ struct MermaidAttachmentCoordinatorTests {
         for _ in 0 ..< 20 {
             await Task.yield()
         }
-        #expect(oldAttachment.mermaidCell.outcome == nil)
-        #expect(currentAttachment.mermaidCell.outcome == nil)
+        #expect(oldAttachment.currentOutcome == nil)
+        #expect(currentAttachment.currentOutcome == nil)
 
         await backend.resume(
             source: currentAttachment.source,
             outcome: renderedOutcome()
         )
         #expect(await waitForOutcome(in: currentAttachment))
-        #expect(oldAttachment.mermaidCell.outcome == nil)
+        #expect(oldAttachment.currentOutcome == nil)
+    }
+
+    @Test("full attachment exposes exact accessibility and copy metadata")
+    func fullCellAccessibility() {
+        let source = "graph TD;\n  A-->B"
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: source,
+            profile: .full
+        )
+        let cell = attachment.mermaidCell
+
+        #expect(cell.accessibilityMetadata.label == "Mermaid diagram")
+        #expect(cell.accessibilityMetadata.value == source)
+        #expect(cell.accessibilityActionLabels == [
+            "Show source",
+            "Copy",
+            "Expand",
+        ])
+        #expect(cell.visibleActionLabels == [
+            "Show source",
+            "Copy",
+            "Expand",
+        ])
+        #expect(attachment.copyPayload == source)
+        #expect(!attachment.copyPayload.contains("```"))
+    }
+
+    @Test("compact attachment uses only its source context menu")
+    func compactCellActions() {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .compact
+        )
+        let cell = attachment.mermaidCell
+
+        #expect(cell.visibleActionLabels.isEmpty)
+        #expect(cell.contextMenuActionLabels == [
+            "Show Mermaid source",
+            "Copy Mermaid source",
+        ])
+        #expect(cell.accessibilityActionLabels == [
+            "Show Mermaid source",
+            "Copy Mermaid source",
+        ])
     }
 
     @Test("full attachment header actions hit in the flipped top band")
@@ -334,7 +380,7 @@ struct MermaidAttachmentCoordinatorTests {
         in attachment: MermaidTextAttachment
     ) async -> Bool {
         for _ in 0 ..< 1_000 {
-            if attachment.mermaidCell.outcome != nil {
+            if attachment.currentOutcome != nil {
                 return true
             }
             await Task.yield()

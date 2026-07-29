@@ -14,6 +14,14 @@ final class MermaidTextAttachment: NSTextAttachment {
     let profile: MermaidPresentationProfile
     let mermaidCell: MermaidTextAttachmentCell
 
+    var currentOutcome: MermaidRenderOutcome? {
+        mermaidCell.outcome
+    }
+
+    var copyPayload: String {
+        MermaidSource.copyPayload(for: source)
+    }
+
     init(id: String, source: String, profile: MermaidPresentationProfile) {
         self.id = id
         self.source = source
@@ -34,6 +42,11 @@ final class MermaidTextAttachment: NSTextAttachment {
 }
 
 final class MermaidTextAttachmentCell: NSTextAttachmentCell {
+    struct AccessibilityMetadata: Equatable {
+        let label: String?
+        let value: String?
+    }
+
     struct LayoutFrames {
         let header: NSRect?
         let body: NSRect
@@ -55,6 +68,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     private(set) var outcome: MermaidRenderOutcome?
     private(set) var showsSource = false
     private var theme: MermaidDiagramTheme?
+    private var customAccessibilityActions: [NSAccessibilityCustomAction] = []
     nonisolated(unsafe) private var measuredWidth: CGFloat = 600
     nonisolated(unsafe) private var sizingState: SizingState = .loading
 
@@ -78,6 +92,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         }
         setAccessibilityLabel("Mermaid diagram")
         setAccessibilityValue(source)
+        updateAccessibilityActions()
     }
 
     required init(coder: NSCoder) {
@@ -106,6 +121,31 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     func setSourceVisible(_ visible: Bool) {
         showsSource = visible
         updateCompactMenu()
+        updateAccessibilityActions()
+    }
+
+    var accessibilityMetadata: AccessibilityMetadata {
+        AccessibilityMetadata(
+            label: accessibilityLabel(),
+            value: accessibilityValue() as? String
+        )
+    }
+
+    var visibleActionLabels: [String] {
+        guard profile != .compact else { return [] }
+        return [
+            showsSource ? "Hide source" : "Show source",
+            "Copy",
+            "Expand",
+        ]
+    }
+
+    var contextMenuActionLabels: [String] {
+        menu?.items.map(\.title) ?? []
+    }
+
+    var accessibilityActionLabels: [String] {
+        customAccessibilityActions.map(\.name)
     }
 
     private func configureCompactMenu() {
@@ -135,6 +175,56 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         toggleSource.title = showsSource
             ? "Show Mermaid diagram"
             : "Show Mermaid source"
+    }
+
+    private func updateAccessibilityActions() {
+        let actions: [NSAccessibilityCustomAction]
+        if profile == .compact {
+            actions = [
+                accessibilityAction(
+                    named: showsSource
+                        ? "Show Mermaid diagram"
+                        : "Show Mermaid source"
+                ) { cell in
+                    cell.delegate?
+                        .mermaidTextAttachmentCellDidToggleSource(cell)
+                },
+                accessibilityAction(named: "Copy Mermaid source") { cell in
+                    cell.delegate?
+                        .mermaidTextAttachmentCellDidRequestCopy(cell)
+                },
+            ]
+        } else {
+            actions = [
+                accessibilityAction(
+                    named: showsSource ? "Hide source" : "Show source"
+                ) { cell in
+                    cell.delegate?
+                        .mermaidTextAttachmentCellDidToggleSource(cell)
+                },
+                accessibilityAction(named: "Copy") { cell in
+                    cell.delegate?
+                        .mermaidTextAttachmentCellDidRequestCopy(cell)
+                },
+                accessibilityAction(named: "Expand") { cell in
+                    cell.delegate?
+                        .mermaidTextAttachmentCellDidRequestExpansion(cell)
+                },
+            ]
+        }
+        customAccessibilityActions = actions
+        setAccessibilityCustomActions(actions)
+    }
+
+    private func accessibilityAction(
+        named name: String,
+        perform: @escaping (MermaidTextAttachmentCell) -> Void
+    ) -> NSAccessibilityCustomAction {
+        NSAccessibilityCustomAction(name: name) { [weak self] in
+            guard let self, delegate != nil else { return false }
+            perform(self)
+            return true
+        }
     }
 
     @objc private func toggleSourceFromMenu(_ sender: NSMenuItem) {

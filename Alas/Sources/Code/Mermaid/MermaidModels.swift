@@ -24,6 +24,12 @@ enum MermaidFence {
     }
 }
 
+enum MermaidSource {
+    static func copyPayload(for source: String) -> String {
+        source
+    }
+}
+
 struct MermaidRenderKey: Hashable, Sendable {
     let source: String
     let theme: MermaidDiagramTheme
@@ -50,6 +56,11 @@ enum MermaidRenderFailure: Error, Equatable, Sendable {
 enum MermaidRenderOutcome: @unchecked Sendable {
     case rendered(MermaidRenderedDiagram)
     case failed(MermaidRenderFailure)
+
+    var failure: MermaidRenderFailure? {
+        guard case .failed(let failure) = self else { return nil }
+        return failure
+    }
 
     var cacheCost: Int {
         switch self {

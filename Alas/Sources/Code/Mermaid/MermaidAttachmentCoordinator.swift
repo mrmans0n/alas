@@ -154,8 +154,10 @@ final class MermaidAttachmentCoordinator {
         id: String,
         to pasteboard: NSPasteboard = .general
     ) {
-        guard let source = references[id]?.source else { return }
-        Clipboard.copy(source, to: pasteboard)
+        guard let payload = references[id]?.attachment.copyPayload else {
+            return
+        }
+        Clipboard.copy(payload, to: pasteboard)
     }
 
     private func apply(

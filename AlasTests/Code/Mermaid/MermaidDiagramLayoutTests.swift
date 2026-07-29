@@ -35,4 +35,24 @@ struct MermaidDiagramLayoutTests {
             maxHeight: 420
         ) == .zero)
     }
+
+    @Test("rejects either raster safety bound")
+    func rejectsOversizedRaster() {
+        #expect(
+            BeautifulMermaidBackend.validateRaster(width: 8_193, height: 1)
+                == .rasterTooLarge(width: 8_193, height: 1)
+        )
+        #expect(
+            BeautifulMermaidBackend.validateRaster(width: 4_001, height: 4_000)
+                == .rasterTooLarge(width: 4_001, height: 4_000)
+        )
+        #expect(
+            BeautifulMermaidBackend.validateRaster(width: 8_192, height: 1)
+                == nil
+        )
+        #expect(
+            BeautifulMermaidBackend.validateRaster(width: 4_000, height: 4_000)
+                == nil
+        )
+    }
 }
