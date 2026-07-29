@@ -135,6 +135,7 @@ struct MermaidViewerZoomAccessibilityMetadata: Equatable {
 struct MermaidViewerInteractionState {
     private var zoomState = MermaidZoomState()
     private(set) var showsSource = false
+    private var failureDisclosure = false
 
     var scale: CGFloat {
         zoomState.scale
@@ -170,10 +171,23 @@ struct MermaidViewerInteractionState {
             zoomState.resetToFit()
         case .toggleSource:
             showsSource.toggle()
+            failureDisclosure = false
         case .copySource:
             return .copySource
         }
         return nil
+    }
+
+    mutating func apply(_ outcome: MermaidRenderOutcome) {
+        if outcome.failure != nil {
+            if !showsSource {
+                showsSource = true
+                failureDisclosure = true
+            }
+        } else if failureDisclosure {
+            showsSource = false
+            failureDisclosure = false
+        }
     }
 
     mutating func adjustZoom(_ adjustment: MermaidViewerZoomAdjustment) {
@@ -268,6 +282,7 @@ struct MermaidDiagramViewerView: View {
             let rendered = await service.render(key: requestedKey)
             guard !Task.isCancelled else { return }
             renderState.apply(rendered, for: requestedKey)
+            interactionState.apply(rendered)
         }
     }
 

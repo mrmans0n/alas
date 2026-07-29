@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Testing
 @testable import Alas
@@ -28,6 +29,42 @@ struct MermaidViewerStateTests {
         state.toggle()
 
         #expect(state.visibleSource(source) == nil)
+    }
+
+    @Test("user-opened block source stays open across failed and successful renders")
+    func userOpenedBlockSourceStaysOpenAcrossFailureRecovery() {
+        let source = "graph TD;\n  A-->B\n"
+        var state = MermaidSourceDisclosureState()
+
+        state.toggle()
+        state.apply(.failed(.rasterTooLarge(width: 8_193, height: 1)))
+        state.apply(Self.renderedOutcome())
+
+        #expect(state.visibleSource(source) == source)
+    }
+
+    @Test("viewer failure disclosure opens source and closes only failure-driven source")
+    func viewerFailureDisclosureLifecycle() {
+        var state = MermaidViewerInteractionState()
+
+        state.apply(.failed(.parseFailed("unexpected token")))
+
+        #expect(state.showsSource)
+
+        state.apply(Self.renderedOutcome())
+
+        #expect(!state.showsSource)
+    }
+
+    @Test("viewer preserves source explicitly opened before a failure")
+    func viewerPreservesExplicitSourceAcrossFailureRecovery() {
+        var state = MermaidViewerInteractionState()
+
+        _ = state.perform(.toggleSource)
+        state.apply(.failed(.parseFailed("unexpected token")))
+        state.apply(Self.renderedOutcome())
+
+        #expect(state.showsSource)
     }
 
     @Test("zoom clamps and resets")
@@ -225,5 +262,15 @@ struct MermaidViewerStateTests {
 
         #expect(state.scale == 1)
         #expect(state.zoomAccessibilityMetadata().value == "100%")
+    }
+
+    private static func renderedOutcome() -> MermaidRenderOutcome {
+        .rendered(
+            MermaidRenderedDiagram(
+                image: NSImage(size: NSSize(width: 80, height: 40)),
+                pixelSize: CGSize(width: 160, height: 80),
+                byteCost: 160 * 80 * 4
+            )
+        )
     }
 }

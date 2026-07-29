@@ -12,8 +12,10 @@ struct MermaidSourceDisclosureState {
 
     mutating func apply(_ outcome: MermaidRenderOutcome) {
         if outcome.failure != nil {
-            showsSource = true
-            failureDisclosure = true
+            if !showsSource {
+                showsSource = true
+                failureDisclosure = true
+            }
         } else if failureDisclosure {
             showsSource = false
             failureDisclosure = false
