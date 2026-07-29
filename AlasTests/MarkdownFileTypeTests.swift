@@ -31,4 +31,11 @@ struct MarkdownFileTypeTests {
         #expect(!MarkdownFileType.isMarkdown(relativePath: "README.txt"))
         #expect(!MarkdownFileType.isMarkdown(relativePath: ""))
     }
+
+    @Test func recognizesStandaloneMermaidFiles() {
+        #expect(MarkdownFileType.isStandaloneMermaid(relativePath: "docs/flow.mmd"))
+        #expect(MarkdownFileType.isStandaloneMermaid(relativePath: "ARCH.MERMAID"))
+        #expect(!MarkdownFileType.isStandaloneMermaid(relativePath: "README.md"))
+        #expect(MarkdownFileType.supportsRichPreview(relativePath: "flow.mmd"))
+    }
 }

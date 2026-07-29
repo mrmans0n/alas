@@ -19,6 +19,7 @@ struct MarkdownTabView: View {
 
     @State private var renderCache = MarkdownPreviewCache<MarkdownRenderResult>()
     @State private var debounceTask: Task<Void, Never>?
+    @State private var mermaidPreviewSource = ""
 
     // Editor/preview divider drag: transient during the drag, committed to
     // the tab store (and disk) once on drag end.
@@ -41,6 +42,12 @@ struct MarkdownTabView: View {
 
     private var splitFraction: Double {
         appState.tabs.editorTabState(worktreeId: worktreeId, tabId: tabId)?.markdownSplitFraction ?? 0.5
+    }
+
+    private var isStandaloneMermaid: Bool {
+        MarkdownFileType.isStandaloneMermaid(
+            relativePath: externalAbsolutePath ?? relativePath
+        )
     }
 
     private var buffer: EditorBuffer {
@@ -187,7 +194,9 @@ struct MarkdownTabView: View {
 
     @ViewBuilder
     private var preview: some View {
-        if let renderResult = renderCache.value(for: renderIdentity) {
+        if isStandaloneMermaid {
+            MermaidDiagramBlockView(source: mermaidPreviewSource, profile: .full)
+        } else if let renderResult = renderCache.value(for: renderIdentity) {
             MarkdownPreviewView(result: renderResult, onLinkClick: handleLinkClick)
         } else {
             Color.clear.onAppear { scheduleRender(immediate: true) }
@@ -249,7 +258,10 @@ struct MarkdownTabView: View {
         }
         debounceTask?.cancel()
         let renderIdentity = self.renderIdentity
-        renderCache.beginRender(for: renderIdentity)
+        let isStandaloneMermaid = self.isStandaloneMermaid
+        if !isStandaloneMermaid {
+            renderCache.beginRender(for: renderIdentity)
+        }
         let buffer = self.buffer
         let theme = self.theme
         let fontFamily = appState.config.code.fontFamily
@@ -264,6 +276,10 @@ struct MarkdownTabView: View {
                 if Task.isCancelled { return }
             }
             let source = buffer.storage.string
+            if isStandaloneMermaid {
+                mermaidPreviewSource = source
+                return
+            }
             let parsed = MarkdownParser.parse(source)
             let result = MarkdownRenderer().render(
                 document: parsed.document,

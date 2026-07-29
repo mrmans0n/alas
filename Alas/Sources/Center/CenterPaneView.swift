@@ -176,9 +176,9 @@ struct CenterPaneView: View {
                                         tabId: tab.id,
                                         allowsPaneFocus: allowsPaneFocus)
                     case .editor(let s):
-                        if MarkdownFileType.isMarkdown(relativePath: s.isExternal
-                                                        ? (s.externalAbsolutePath ?? "")
-                                                        : s.relativePath) {
+                        if MarkdownFileType.supportsRichPreview(relativePath: s.isExternal
+                                                                 ? (s.externalAbsolutePath ?? "")
+                                                                 : s.relativePath) {
                             MarkdownTabView(worktreePath: worktree.path,
                                             worktreeId: worktree.id,
                                             tabId: s.id,

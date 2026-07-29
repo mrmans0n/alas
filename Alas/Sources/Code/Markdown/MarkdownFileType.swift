@@ -1,8 +1,6 @@
 import Foundation
 
-/// File-type detection for markdown documents. Matches by extension
-/// (`.md`, `.markdown`, `.mdx`, case-insensitive) and a small set of
-/// extension-less conventional filenames found in source repos.
+/// File-type detection for markdown documents and standalone Mermaid files.
 enum MarkdownFileType {
     private static let extensions: Set<String> = ["md", "markdown", "mdx"]
     private static let extensionlessNames: Set<String> = [
@@ -17,5 +15,14 @@ enum MarkdownFileType {
             return extensions.contains(ext)
         }
         return extensionlessNames.contains(filename.lowercased())
+    }
+
+    static func isStandaloneMermaid(relativePath: String) -> Bool {
+        let ext = ((relativePath as NSString).pathExtension).lowercased()
+        return ext == "mmd" || ext == "mermaid"
+    }
+
+    static func supportsRichPreview(relativePath: String) -> Bool {
+        isMarkdown(relativePath: relativePath) || isStandaloneMermaid(relativePath: relativePath)
     }
 }

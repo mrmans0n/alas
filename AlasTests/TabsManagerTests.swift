@@ -390,6 +390,33 @@ struct TabsManagerTests {
         }
     }
 
+    @Test func standaloneMermaidRevealForcesEditorMode() {
+        let manager = TabsManager()
+        let worktreeID = "standalone-mermaid-reveal"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeID)) }
+
+        let first = manager.openEditor(
+            worktreeId: worktreeID,
+            relativePath: "docs/flow.mmd",
+            revealLine: nil,
+            revealCharacter: nil
+        )
+        manager.setMarkdownViewMode(worktreeId: worktreeID, tabId: first.id, mode: .preview)
+
+        let revealed = manager.openEditor(
+            worktreeId: worktreeID,
+            relativePath: "docs/flow.mmd",
+            revealLine: 2,
+            revealCharacter: 0
+        )
+
+        guard case .editor(let state) = revealed else {
+            Issue.record("expected editor tab")
+            return
+        }
+        #expect(state.markdownViewMode == .editor)
+    }
+
     @Test func openExternalEditorAppendsAndActivates() {
         let worktreeId = "tabs-manager-open-external"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
