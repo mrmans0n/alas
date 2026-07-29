@@ -195,7 +195,7 @@ struct MarkdownTabView: View {
     @ViewBuilder
     private var preview: some View {
         if isStandaloneMermaid {
-            MermaidDiagramBlockView(source: mermaidPreviewSource, profile: .full)
+            StandaloneMermaidPreviewView(source: mermaidPreviewSource)
         } else if let renderResult = renderCache.value(for: renderIdentity) {
             MarkdownPreviewView(result: renderResult, onLinkClick: handleLinkClick)
         } else {
@@ -357,6 +357,21 @@ struct MarkdownTabView: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+}
+
+private struct StandaloneMermaidPreviewView: View {
+    let source: String
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        ScrollView(.vertical) {
+            MermaidDiagramBlockView(source: source, profile: .full)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .background(theme.color("bg-1"))
     }
 }
 
