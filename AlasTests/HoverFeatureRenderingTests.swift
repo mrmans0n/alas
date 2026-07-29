@@ -118,4 +118,41 @@ struct HoverFeatureRenderingTests {
         #expect(hugeSize.width <= 520)
         #expect(hugeSize.height <= 400)
     }
+
+    @Test func hoverMermaidUsesCompactAttachment() throws {
+        let result = MarkdownRenderer().render(
+            document: Document(parsing: "```mermaid\ngraph TD; A-->B\n```"),
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13,
+            baseDirectory: URL(fileURLWithPath: "/"),
+            mermaidProfile: .compact
+        )
+        let attachment = try #require(result.mermaidAttachments.first?.attachment)
+        let cell = attachment.mermaidCell
+        let frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: 500, height: cell.cellSize.height)
+        )
+        let loadingSize = HoverFeatureTesting.computePreferredSize(for: result)
+
+        #expect(attachment.profile == .compact)
+        #expect(cell.layoutFrames(in: frame).body.height == 180)
+        #expect(loadingSize.height <= 400)
+
+        cell.apply(.rendered(
+            MermaidRenderedDiagram(
+                image: NSImage(size: NSSize(width: 80, height: 40)),
+                pixelSize: CGSize(width: 160, height: 80),
+                byteCost: 160 * 80 * 4
+            )
+        ))
+        let renderedFrame = NSRect(
+            origin: .zero,
+            size: NSSize(width: 500, height: cell.cellSize.height)
+        )
+
+        #expect(cell.layoutFrames(in: renderedFrame).body.height == 180)
+        #expect(HoverFeatureTesting.computePreferredSize(for: result) == loadingSize)
+    }
 }

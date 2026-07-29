@@ -17,7 +17,13 @@ final class HoverWindowController {
         anchor: NSRect,
         in textView: NSTextView
     ) {
-        let root = HoverPopupView(result: result, theme: theme)
+        let root = HoverPopupView(
+            result: result,
+            theme: theme,
+            onWillPresentMermaidViewer: { [weak self] in
+                self?.hide()
+            }
+        )
         if let hostingController {
             hostingController.rootView = root
         } else {
@@ -40,9 +46,14 @@ final class HoverWindowController {
 struct HoverPopupView: View {
     let result: MarkdownRenderResult
     let theme: Theme
+    let onWillPresentMermaidViewer: () -> Void
 
     var body: some View {
-        HoverPopupContent(result: result, theme: theme)
+        HoverPopupContent(
+            result: result,
+            theme: theme,
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+        )
             .background(Color(nsColor: NSColor(theme.color("bg-1"))))
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
@@ -55,6 +66,7 @@ struct HoverPopupView: View {
 private struct HoverPopupContent: NSViewRepresentable {
     let result: MarkdownRenderResult
     let theme: Theme
+    let onWillPresentMermaidViewer: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -75,25 +87,70 @@ private struct HoverPopupContent: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         context.coordinator.textView = textView
-        textView.textStorage?.setAttributedString(result.attributedString)
+        context.coordinator.apply(result: result, theme: theme, to: textView)
         scrollView.backgroundColor = NSColor(theme.color("bg-1"))
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
-        textView.textStorage?.setAttributedString(result.attributedString)
+        context.coordinator.apply(result: result, theme: theme, to: textView)
         nsView.backgroundColor = NSColor(theme.color("bg-1"))
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+        )
+    }
+
+    static func dismantleNSView(
+        _ nsView: NSScrollView,
+        coordinator: Coordinator
+    ) {
+        coordinator.cancel()
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+        let mermaidCoordinator: MermaidAttachmentCoordinator
+        var appliedRevision: UUID?
+
         weak var textView: NSTextView? {
             didSet { textView?.delegate = self }
+        }
+
+        init(onWillPresentMermaidViewer: @escaping () -> Void) {
+            self.mermaidCoordinator = MermaidAttachmentCoordinator(
+                mode: .compact,
+                onWillPresentViewer: onWillPresentMermaidViewer
+            )
+        }
+
+        func apply(
+            result: MarkdownRenderResult,
+            theme: Theme,
+            to textView: NSTextView
+        ) {
+            mermaidCoordinator.updateViewerTheme(theme)
+            guard appliedRevision != result.revision else { return }
+
+            mermaidCoordinator.cancelAll()
+            textView.textStorage?.setAttributedString(result.attributedString)
+            mermaidCoordinator.apply(
+                result.mermaidAttachments,
+                revision: result.revision,
+                to: textView,
+                onTextStorageDelta: nil
+            )
+            appliedRevision = result.revision
+        }
+
+        func cancel() {
+            mermaidCoordinator.cancelAll()
+            appliedRevision = nil
+            textView?.delegate = nil
+            textView = nil
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

@@ -18,4 +18,15 @@ struct CompletionDocumentationRendererTests {
 
         #expect(color != NSColor(theme.color("fg")))
     }
+
+    @Test func completionMermaidUsesCompactAttachment() throws {
+        let result = CompletionDocumentationRenderer.render(
+            "```mermaid\ngraph TD; A-->B\n```",
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13
+        )
+
+        #expect(result.mermaidAttachments.first?.profile == .compact)
+    }
 }

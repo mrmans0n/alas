@@ -11,6 +11,8 @@ final class CompletionWindowController {
 
     var isVisible: Bool { overlay.isVisible }
 
+    var screenFrame: NSRect? { overlay.screenFrame }
+
     func show(
         rows: [CompletionPopupRow],
         selection: Int,
@@ -27,7 +29,10 @@ final class CompletionWindowController {
             selection: selection,
             documentation: documentation,
             theme: theme,
-            onChoose: onChoose
+            onChoose: onChoose,
+            onWillPresentMermaidViewer: { [weak self] in
+                self?.hide()
+            }
         )
         if let hostingController {
             hostingController.rootView = root

@@ -14,15 +14,18 @@ final class MermaidAttachmentCoordinator {
     private var tasks: [String: Task<Void, Never>] = [:]
     private var onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?
     private var viewerTheme: Theme?
+    private let onWillPresentViewer: (() -> Void)?
 
     init(
         mode: MermaidPresentationProfile = .full,
         service: MermaidRenderService = .shared,
-        theme: Theme? = nil
+        theme: Theme? = nil,
+        onWillPresentViewer: (() -> Void)? = nil
     ) {
         self.mode = mode
         self.service = service
         self.viewerTheme = theme
+        self.onWillPresentViewer = onWillPresentViewer
     }
 
     func updateViewerTheme(_ theme: Theme) {
@@ -272,8 +275,14 @@ extension MermaidAttachmentCoordinator: MermaidTextAttachmentCellDelegate {
     ) {
         guard let source = references[cell.id]?.source,
               let viewerTheme,
-              let hostWindow = textView?.window
+              let sourceWindow = textView?.window
         else { return }
+        let hostWindow = mode == .compact
+            ? sourceWindow.parent ?? sourceWindow
+            : sourceWindow
+        if mode == .compact {
+            onWillPresentViewer?()
+        }
         MermaidDiagramViewerController.shared.show(
             source: source,
             theme: viewerTheme,

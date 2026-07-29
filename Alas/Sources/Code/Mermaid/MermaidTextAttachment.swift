@@ -73,6 +73,9 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         self.source = source
         self.profile = profile
         super.init(textCell: "")
+        if profile == .compact {
+            configureCompactMenu()
+        }
         setAccessibilityLabel("Mermaid diagram")
         setAccessibilityValue(source)
     }
@@ -102,6 +105,44 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     func setSourceVisible(_ visible: Bool) {
         showsSource = visible
+        updateCompactMenu()
+    }
+
+    private func configureCompactMenu() {
+        let menu = NSMenu()
+        let toggleSource = NSMenuItem(
+            title: "Show Mermaid source",
+            action: #selector(toggleSourceFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        toggleSource.target = self
+        menu.addItem(toggleSource)
+
+        let copySource = NSMenuItem(
+            title: "Copy Mermaid source",
+            action: #selector(copySourceFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        copySource.target = self
+        menu.addItem(copySource)
+        self.menu = menu
+    }
+
+    private func updateCompactMenu() {
+        guard profile == .compact, let toggleSource = menu?.items.first else {
+            return
+        }
+        toggleSource.title = showsSource
+            ? "Show Mermaid diagram"
+            : "Show Mermaid source"
+    }
+
+    @objc private func toggleSourceFromMenu(_ sender: NSMenuItem) {
+        delegate?.mermaidTextAttachmentCellDidToggleSource(self)
+    }
+
+    @objc private func copySourceFromMenu(_ sender: NSMenuItem) {
+        delegate?.mermaidTextAttachmentCellDidRequestCopy(self)
     }
 
     override var cellSize: NSSize {
@@ -203,12 +244,16 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         let bodyHeight: CGFloat
         switch sizingState {
         case .rendered(let imageSize):
-            let fitted = MermaidDiagramLayout.fittedSize(
-                intrinsic: imageSize,
-                availableWidth: bodyWidth,
-                maxHeight: profile.maxEmbeddedHeight
-            )
-            bodyHeight = max(44, fitted.height + Self.horizontalPadding * 2)
+            if profile == .compact {
+                bodyHeight = profile.maxEmbeddedHeight
+            } else {
+                let fitted = MermaidDiagramLayout.fittedSize(
+                    intrinsic: imageSize,
+                    availableWidth: bodyWidth,
+                    maxHeight: profile.maxEmbeddedHeight
+                )
+                bodyHeight = max(44, fitted.height + Self.horizontalPadding * 2)
+            }
         case .failed:
             bodyHeight = profile == .compact ? profile.maxEmbeddedHeight : 76
         case .loading:

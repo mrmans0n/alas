@@ -400,7 +400,8 @@ final class HoverFeature {
             theme: theme,
             monospacedFontFamily: family,
             monospacedFontSize: size,
-            baseDirectory: URL(fileURLWithPath: "/")
+            baseDirectory: URL(fileURLWithPath: "/"),
+            mermaidProfile: .compact
         )
         let preferredSize = HoverFeatureTesting.computePreferredSize(for: renderResult)
         let anchor = textView.symbolAnchorRect(for: symbolRange)

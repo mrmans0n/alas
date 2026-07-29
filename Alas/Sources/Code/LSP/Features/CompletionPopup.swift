@@ -17,6 +17,7 @@ struct CompletionPopup: View {
     let documentation: MarkdownRenderResult?
     let theme: Theme
     let onChoose: (Int) -> Void
+    let onWillPresentMermaidViewer: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -47,7 +48,11 @@ struct CompletionPopup: View {
             if let documentation, documentation.attributedString.length > 0 {
                 Divider()
 
-                CompletionDocumentationView(result: documentation, theme: theme)
+                CompletionDocumentationView(
+                    result: documentation,
+                    theme: theme,
+                    onWillPresentMermaidViewer: onWillPresentMermaidViewer
+                )
                 .frame(width: 320, height: popupMaxHeight, alignment: .topLeading)
             }
         }
@@ -101,6 +106,7 @@ struct CompletionPopup: View {
 private struct CompletionDocumentationView: NSViewRepresentable {
     let result: MarkdownRenderResult
     let theme: Theme
+    let onWillPresentMermaidViewer: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -122,20 +128,29 @@ private struct CompletionDocumentationView: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         context.coordinator.textView = textView
-        textView.textStorage?.setAttributedString(result.attributedString)
+        context.coordinator.apply(result: result, theme: theme, to: textView)
         scrollView.backgroundColor = NSColor(theme.color("bg-1"))
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
-        textView.textStorage?.setAttributedString(result.attributedString)
+        context.coordinator.apply(result: result, theme: theme, to: textView)
         textView.linkTextAttributes = linkAttributes(theme: theme)
         nsView.backgroundColor = NSColor(theme.color("bg-1"))
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+        )
+    }
+
+    static func dismantleNSView(
+        _ nsView: NSScrollView,
+        coordinator: Coordinator
+    ) {
+        coordinator.cancel()
     }
 
     private func linkAttributes(theme: Theme) -> [NSAttributedString.Key: Any] {
@@ -147,8 +162,44 @@ private struct CompletionDocumentationView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+        let mermaidCoordinator: MermaidAttachmentCoordinator
+        var appliedRevision: UUID?
+
         weak var textView: NSTextView? {
             didSet { textView?.delegate = self }
+        }
+
+        init(onWillPresentMermaidViewer: @escaping () -> Void) {
+            self.mermaidCoordinator = MermaidAttachmentCoordinator(
+                mode: .compact,
+                onWillPresentViewer: onWillPresentMermaidViewer
+            )
+        }
+
+        func apply(
+            result: MarkdownRenderResult,
+            theme: Theme,
+            to textView: NSTextView
+        ) {
+            mermaidCoordinator.updateViewerTheme(theme)
+            guard appliedRevision != result.revision else { return }
+
+            mermaidCoordinator.cancelAll()
+            textView.textStorage?.setAttributedString(result.attributedString)
+            mermaidCoordinator.apply(
+                result.mermaidAttachments,
+                revision: result.revision,
+                to: textView,
+                onTextStorageDelta: nil
+            )
+            appliedRevision = result.revision
+        }
+
+        func cancel() {
+            mermaidCoordinator.cancelAll()
+            appliedRevision = nil
+            textView?.delegate = nil
+            textView = nil
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
