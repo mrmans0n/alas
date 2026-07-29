@@ -63,14 +63,15 @@ struct BeautifulMermaidBackend: MermaidRenderingBackend {
             return .failed(.sourceTooLarge(actualBytes: bytes))
         }
         do {
-            let layout = try await Task.detached {
-                try MermaidRenderer.layout(key.source)
-            }.value
+            let layout = try MermaidRenderer.layout(key.source)
             if let failure = Self.preflightRaster(
                 layoutSize: CGSize(width: layout.width, height: layout.height),
                 scale: key.scale
             ) {
                 return .failed(failure)
+            }
+            guard !Task.isCancelled else {
+                return .failed(.renderFailed("Mermaid rendering cancelled"))
             }
             guard let image = try await MermaidRenderer.renderImageAsync(
                 source: key.source,

@@ -7,6 +7,7 @@ final class CompletionWindowController {
     private let listWidth: CGFloat = 320
 
     private let overlay = EditorOverlayPanel()
+    private let mermaidCancellation = MermaidRenderCancellation()
     private var hostingController: NSHostingController<CompletionPopup>?
 
     var isVisible: Bool { overlay.isVisible }
@@ -29,6 +30,7 @@ final class CompletionWindowController {
             selection: selection,
             documentation: documentation,
             theme: theme,
+            mermaidCancellation: mermaidCancellation,
             onChoose: onChoose,
             onWillPresentMermaidViewer: { [weak self] in
                 self?.hide()
@@ -49,6 +51,7 @@ final class CompletionWindowController {
     }
 
     func hide() {
+        mermaidCancellation.cancel()
         overlay.hide()
     }
 }

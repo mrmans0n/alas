@@ -144,7 +144,7 @@ actor MermaidRenderService {
               render.consumerIDs.remove(consumerID) != nil
         else { return }
         inFlight.removeValue(forKey: key)
-        if let outcome {
+        if let outcome, outcome.isCacheable {
             cache.insert(outcome, for: key)
         }
     }

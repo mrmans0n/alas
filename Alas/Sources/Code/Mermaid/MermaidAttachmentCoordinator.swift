@@ -5,6 +5,19 @@ extension NSAttributedString.Key {
 }
 
 @MainActor
+final class MermaidRenderCancellation {
+    private var action: (() -> Void)?
+
+    func register(_ action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    func cancel() {
+        action?()
+    }
+}
+
+@MainActor
 final class MermaidAttachmentCoordinator {
     private let mode: MermaidPresentationProfile
     private let service: MermaidRenderService

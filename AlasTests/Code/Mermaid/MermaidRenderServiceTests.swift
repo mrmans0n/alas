@@ -29,6 +29,20 @@ struct MermaidRenderServiceTests {
         #expect(await backend.renderCount == 1)
     }
 
+    @Test("oversized-source failures are not cached")
+    func doesNotCacheOversizedSourceFailures() async {
+        let backend = FakeMermaidBackend(
+            outcome: .failed(.sourceTooLarge(actualBytes: 262_145))
+        )
+        let service = MermaidRenderService(backend: backend)
+        let key = TestMermaid.key(source: String(repeating: "a", count: 262_145))
+
+        _ = await service.render(key: key)
+        _ = await service.render(key: key)
+
+        #expect(await backend.renderCount == 2)
+    }
+
     @Test("at most two distinct renders use the backend concurrently")
     func limitsConcurrentRenders() async {
         let backend = FakeMermaidBackend(outcome: .failed(.unsupported("test")))

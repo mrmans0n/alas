@@ -80,6 +80,13 @@ enum MermaidRenderOutcome: @unchecked Sendable {
         case .failed: 1
         }
     }
+
+    var isCacheable: Bool {
+        if case .failed(.sourceTooLarge) = self {
+            return false
+        }
+        return true
+    }
 }
 
 protocol MermaidRenderingBackend: Sendable {

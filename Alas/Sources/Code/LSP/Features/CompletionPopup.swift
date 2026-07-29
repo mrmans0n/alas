@@ -16,6 +16,7 @@ struct CompletionPopup: View {
     let selection: Int
     let documentation: MarkdownRenderResult?
     let theme: Theme
+    let mermaidCancellation: MermaidRenderCancellation
     let onChoose: (Int) -> Void
     let onWillPresentMermaidViewer: () -> Void
 
@@ -51,6 +52,7 @@ struct CompletionPopup: View {
                 CompletionDocumentationView(
                     result: documentation,
                     theme: theme,
+                    mermaidCancellation: mermaidCancellation,
                     onWillPresentMermaidViewer: onWillPresentMermaidViewer
                 )
                 .frame(width: 320, height: popupMaxHeight, alignment: .topLeading)
@@ -106,6 +108,7 @@ struct CompletionPopup: View {
 private struct CompletionDocumentationView: NSViewRepresentable {
     let result: MarkdownRenderResult
     let theme: Theme
+    let mermaidCancellation: MermaidRenderCancellation
     let onWillPresentMermaidViewer: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -142,7 +145,8 @@ private struct CompletionDocumentationView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
-            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer,
+            mermaidCancellation: mermaidCancellation
         )
     }
 
@@ -169,11 +173,18 @@ private struct CompletionDocumentationView: NSViewRepresentable {
             didSet { textView?.delegate = self }
         }
 
-        init(onWillPresentMermaidViewer: @escaping () -> Void) {
+        init(
+            onWillPresentMermaidViewer: @escaping () -> Void,
+            mermaidCancellation: MermaidRenderCancellation
+        ) {
             self.mermaidCoordinator = MermaidAttachmentCoordinator(
                 mode: .compact,
                 onWillPresentViewer: onWillPresentMermaidViewer
             )
+            super.init()
+            mermaidCancellation.register { [weak self] in
+                self?.cancelRenders()
+            }
         }
 
         func apply(
@@ -196,10 +207,14 @@ private struct CompletionDocumentationView: NSViewRepresentable {
         }
 
         func cancel() {
-            mermaidCoordinator.cancelAll()
-            appliedRevision = nil
+            cancelRenders()
             textView?.delegate = nil
             textView = nil
+        }
+
+        func cancelRenders() {
+            mermaidCoordinator.cancelAll()
+            appliedRevision = nil
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

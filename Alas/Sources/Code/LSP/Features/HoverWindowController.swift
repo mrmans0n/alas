@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class HoverWindowController {
     private let overlay = EditorOverlayPanel()
+    private let mermaidCancellation = MermaidRenderCancellation()
     private var hostingController: NSHostingController<HoverPopupView>?
 
     var isVisible: Bool { overlay.isVisible }
@@ -21,6 +22,7 @@ final class HoverWindowController {
         let root = HoverPopupView(
             result: result,
             theme: theme,
+            mermaidCancellation: mermaidCancellation,
             onWillPresentMermaidViewer: onWillPresentMermaidViewer
         )
         if let hostingController {
@@ -38,6 +40,7 @@ final class HoverWindowController {
     }
 
     func hide() {
+        mermaidCancellation.cancel()
         overlay.hide()
     }
 }
@@ -45,12 +48,14 @@ final class HoverWindowController {
 struct HoverPopupView: View {
     let result: MarkdownRenderResult
     let theme: Theme
+    let mermaidCancellation: MermaidRenderCancellation
     let onWillPresentMermaidViewer: () -> Void
 
     var body: some View {
         HoverPopupContent(
             result: result,
             theme: theme,
+            mermaidCancellation: mermaidCancellation,
             onWillPresentMermaidViewer: onWillPresentMermaidViewer
         )
             .background(Color(nsColor: NSColor(theme.color("bg-1"))))
@@ -65,6 +70,7 @@ struct HoverPopupView: View {
 private struct HoverPopupContent: NSViewRepresentable {
     let result: MarkdownRenderResult
     let theme: Theme
+    let mermaidCancellation: MermaidRenderCancellation
     let onWillPresentMermaidViewer: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -99,7 +105,8 @@ private struct HoverPopupContent: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
-            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer,
+            mermaidCancellation: mermaidCancellation
         )
     }
 
@@ -119,11 +126,18 @@ private struct HoverPopupContent: NSViewRepresentable {
             didSet { textView?.delegate = self }
         }
 
-        init(onWillPresentMermaidViewer: @escaping () -> Void) {
+        init(
+            onWillPresentMermaidViewer: @escaping () -> Void,
+            mermaidCancellation: MermaidRenderCancellation
+        ) {
             self.mermaidCoordinator = MermaidAttachmentCoordinator(
                 mode: .compact,
                 onWillPresentViewer: onWillPresentMermaidViewer
             )
+            super.init()
+            mermaidCancellation.register { [weak self] in
+                self?.cancelRenders()
+            }
         }
 
         func apply(
@@ -146,10 +160,14 @@ private struct HoverPopupContent: NSViewRepresentable {
         }
 
         func cancel() {
-            mermaidCoordinator.cancelAll()
-            appliedRevision = nil
+            cancelRenders()
             textView?.delegate = nil
             textView = nil
+        }
+
+        func cancelRenders() {
+            mermaidCoordinator.cancelAll()
+            appliedRevision = nil
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
