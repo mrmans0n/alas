@@ -83,7 +83,11 @@ actor MermaidRenderService {
 
         let renderID = UUID()
         let task: Task<MermaidRenderOutcome?, Never> = Task { [backend, limiter] in
-            guard await limiter.acquire(), !Task.isCancelled else {
+            guard await limiter.acquire() else {
+                return nil
+            }
+            if Task.isCancelled {
+                await limiter.release()
                 return nil
             }
             let outcome = await backend.render(key: key)
