@@ -236,7 +236,27 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(cell.accessibilityActionLabels == [
             "Show Mermaid source",
             "Copy Mermaid source",
+            "Expand",
         ])
+    }
+
+    @Test("compact expand accessibility action opens the expanded viewer")
+    func compactExpandAccessibilityAction() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .compact
+        )
+        let cell = attachment.mermaidCell
+        let delegate = MermaidCellDelegateSpy()
+        cell.delegate = delegate
+
+        let action = try #require(
+            cell.accessibilityCustomActions()?.first { $0.name == "Expand" }
+        )
+
+        #expect(action.handler?() == true)
+        #expect(delegate.expansionCount == 1)
     }
 
     @Test("compact source disclosure replaces the diagram card with a restore target")

@@ -194,6 +194,10 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
                     cell.delegate?
                         .mermaidTextAttachmentCellDidRequestCopy(cell)
                 },
+                accessibilityAction(named: "Expand") { cell in
+                    cell.delegate?
+                        .mermaidTextAttachmentCellDidRequestExpansion(cell)
+                },
             ]
         } else {
             actions = [
