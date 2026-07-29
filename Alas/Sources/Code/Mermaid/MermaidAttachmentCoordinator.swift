@@ -88,11 +88,21 @@ final class MermaidAttachmentCoordinator {
         in textView: NSTextView
     ) {
         guard !snapshot.isEmpty else { return }
+        var restoredIDs: Set<String> = []
         for id in snapshot.sourcesByID.keys.sorted() {
             guard let source = snapshot.sourcesByID[id],
                   references[id]?.source == source
             else { continue }
             showSource(id: id, in: textView)
+            restoredIDs.insert(id)
+        }
+        for source in snapshot.sourcesByID.values {
+            guard let id = references.keys.sorted().first(where: { id in
+                !restoredIDs.contains(id)
+                    && references[id]?.source == source
+            }) else { continue }
+            showSource(id: id, in: textView)
+            restoredIDs.insert(id)
         }
     }
 

@@ -31,6 +31,9 @@ struct RootView: View {
                 // launches render half-dark until the user toggles the theme.
                 WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
             }
+            .onChange(of: state.themeStore.current, initial: true) { _, theme in
+                MermaidDiagramViewerController.shared.updateTheme(theme)
+            }
             .background(WindowConfigurator(disablesSystemDrag: true))
             .frame(minWidth: 700, minHeight: 600)
             .ignoresSafeArea()

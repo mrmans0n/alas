@@ -145,6 +145,43 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(replacementAttachment.mermaidCell.showsSource)
     }
 
+    @Test("preview replacement can restore disclosure by unchanged source")
+    func previewReplacementRestoresDisclosureBySource() throws {
+        let source = "graph TD; A-->B"
+        let firstAttachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: source,
+            profile: .full
+        )
+        let replacementAttachment = MermaidTextAttachment(
+            id: "mermaid-source-stable",
+            source: source,
+            profile: .full
+        )
+        let controller = MarkdownPreviewController(theme: try Theme.loadBundled(id: "cool-slate"))
+        defer { controller.dismantle() }
+
+        controller.apply(result: MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachment: firstAttachment),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [try makeReference(attachment: firstAttachment)]
+        ))
+        controller.showMermaidSourceForTesting(id: firstAttachment.id)
+
+        controller.apply(result: MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachment: replacementAttachment),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [try makeReference(attachment: replacementAttachment)]
+        ))
+
+        #expect(controller.textView.string.contains(source))
+        #expect(replacementAttachment.mermaidCell.showsSource)
+    }
+
     @Test("preview replacement does not preserve source for changed diagram body")
     func previewReplacementSkipsDisclosureForChangedSource() throws {
         let oldSource = "graph TD; A-->B"

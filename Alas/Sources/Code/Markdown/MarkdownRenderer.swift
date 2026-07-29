@@ -36,7 +36,7 @@ final class MarkdownRenderer {
     private var anchorRanges: [String: NSRange] = [:]
     private var remoteImages: [RemoteImageReference] = []
     private var mermaidAttachments: [MermaidAttachmentReference] = []
-    private var mermaidIndex = 0
+    private var mermaidSourceOccurrences: [String: Int] = [:]
     private var mermaidProfile: MermaidPresentationProfile = .full
     private var theme: Theme!
     private var monoFamily: String = "JetBrainsMono Nerd Font"
@@ -89,7 +89,7 @@ final class MarkdownRenderer {
         self.anchorRanges = [:]
         self.remoteImages = []
         self.mermaidAttachments = []
-        self.mermaidIndex = 0
+        self.mermaidSourceOccurrences = [:]
         self.mermaidProfile = mermaidProfile
         self.theme = theme
         self.monoFamily = monospacedFontFamily
@@ -337,8 +337,7 @@ final class MarkdownRenderer {
             let source = block.code.hasSuffix("\n")
                 ? String(block.code.dropLast())
                 : block.code
-            let id = "mermaid-\(mermaidIndex)"
-            mermaidIndex += 1
+            let id = mermaidID(for: source)
             let attachment = MermaidTextAttachment(
                 id: id,
                 source: source,
@@ -382,6 +381,25 @@ final class MarkdownRenderer {
             }
         }
         appendPlain("\n")
+    }
+
+    private func mermaidID(for source: String) -> String {
+        let key = Self.stableMermaidSourceKey(source)
+        let occurrence = mermaidSourceOccurrences[key, default: 0]
+        mermaidSourceOccurrences[key] = occurrence + 1
+        if occurrence == 0 {
+            return "mermaid-\(key)"
+        }
+        return "mermaid-\(key)-\(occurrence)"
+    }
+
+    static func stableMermaidSourceKey(_ source: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in source.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
     }
 
     private struct RenderedTableCell {
