@@ -19,6 +19,7 @@ final class MermaidRenderCancellation {
 
 struct MermaidSourceDisclosureSnapshot: Equatable {
     fileprivate let sourcesByID: [String: String]
+    fileprivate let referenceIDsBySource: [String: Set<String>]
 
     var isEmpty: Bool {
         sourcesByID.isEmpty
@@ -71,7 +72,16 @@ final class MermaidAttachmentCoordinator {
         guard self.textView === textView,
               let storage = textView.textStorage
         else {
-            return MermaidSourceDisclosureSnapshot(sourcesByID: [:])
+            return MermaidSourceDisclosureSnapshot(
+                sourcesByID: [:],
+                referenceIDsBySource: [:]
+            )
+        }
+        let referenceIDsBySource = Dictionary(
+            grouping: references.values,
+            by: \.source
+        ).mapValues { references in
+            Set(references.map(\.id))
         }
         let sourcesByID = references.reduce(into: [String: String]()) { result, entry in
             let id = entry.key
@@ -80,7 +90,10 @@ final class MermaidAttachmentCoordinator {
             else { return }
             result[id] = entry.value.source
         }
-        return MermaidSourceDisclosureSnapshot(sourcesByID: sourcesByID)
+        return MermaidSourceDisclosureSnapshot(
+            sourcesByID: sourcesByID,
+            referenceIDsBySource: referenceIDsBySource
+        )
     }
 
     func restoreExplicitSourceDisclosures(
@@ -88,15 +101,28 @@ final class MermaidAttachmentCoordinator {
         in textView: NSTextView
     ) {
         guard !snapshot.isEmpty else { return }
+        let currentIDsBySource = Dictionary(
+            grouping: references.values,
+            by: \.source
+        ).mapValues { references in
+            Set(references.map(\.id))
+        }
         var restoredIDs: Set<String> = []
         for id in snapshot.sourcesByID.keys.sorted() {
             guard let source = snapshot.sourcesByID[id],
-                  references[id]?.source == source
+                  references[id]?.source == source,
+                  canTrustExactDisclosureID(
+                      id,
+                      source: source,
+                      snapshot: snapshot,
+                      currentIDsBySource: currentIDsBySource
+                  )
             else { continue }
             showSource(id: id, in: textView)
             restoredIDs.insert(id)
         }
         for source in snapshot.sourcesByID.values {
+            guard currentIDsBySource[source]?.count == 1 else { continue }
             guard let id = references.keys.sorted().first(where: { id in
                 !restoredIDs.contains(id)
                     && references[id]?.source == source
@@ -104,6 +130,20 @@ final class MermaidAttachmentCoordinator {
             showSource(id: id, in: textView)
             restoredIDs.insert(id)
         }
+    }
+
+    private func canTrustExactDisclosureID(
+        _ id: String,
+        source: String,
+        snapshot: MermaidSourceDisclosureSnapshot,
+        currentIDsBySource: [String: Set<String>]
+    ) -> Bool {
+        let previousIDs = snapshot.referenceIDsBySource[source] ?? []
+        let currentIDs = currentIDsBySource[source] ?? []
+        guard previousIDs.count > 1 || currentIDs.count > 1 else {
+            return true
+        }
+        return previousIDs == currentIDs && currentIDs.contains(id)
     }
 
     func apply(

@@ -182,6 +182,74 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(replacementAttachment.mermaidCell.showsSource)
     }
 
+    @Test("preview replacement does not restore onto wrong duplicate source")
+    func previewReplacementSkipsAmbiguousDuplicateSourceDisclosure() throws {
+        let source = "graph TD; Same-->Diagram"
+        let firstOldAttachment = MermaidTextAttachment(
+            id: "mermaid-same-1",
+            source: source,
+            profile: .full
+        )
+        let secondOldAttachment = MermaidTextAttachment(
+            id: "mermaid-same-2",
+            source: source,
+            profile: .full
+        )
+        let insertedAttachment = MermaidTextAttachment(
+            id: "mermaid-same-inserted",
+            source: source,
+            profile: .full
+        )
+        let shiftedFirstAttachment = MermaidTextAttachment(
+            id: "mermaid-same-2",
+            source: source,
+            profile: .full
+        )
+        let shiftedSecondAttachment = MermaidTextAttachment(
+            id: "mermaid-same-3",
+            source: source,
+            profile: .full
+        )
+        let controller = MarkdownPreviewController(theme: try Theme.loadBundled(id: "cool-slate"))
+        defer { controller.dismantle() }
+
+        controller.apply(result: MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachments: [
+                firstOldAttachment,
+                secondOldAttachment,
+            ]),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [
+                try makeReference(attachment: firstOldAttachment),
+                try makeReference(attachment: secondOldAttachment),
+            ]
+        ))
+        controller.showMermaidSourceForTesting(id: secondOldAttachment.id)
+
+        controller.apply(result: MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachments: [
+                insertedAttachment,
+                shiftedFirstAttachment,
+                shiftedSecondAttachment,
+            ]),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [
+                try makeReference(attachment: insertedAttachment),
+                try makeReference(attachment: shiftedFirstAttachment),
+                try makeReference(attachment: shiftedSecondAttachment),
+            ]
+        ))
+
+        #expect(!insertedAttachment.mermaidCell.showsSource)
+        #expect(!shiftedFirstAttachment.mermaidCell.showsSource)
+        #expect(!shiftedSecondAttachment.mermaidCell.showsSource)
+        #expect(!controller.textView.string.contains(source))
+    }
+
     @Test("preview replacement does not preserve source for changed diagram body")
     func previewReplacementSkipsDisclosureForChangedSource() throws {
         let oldSource = "graph TD; A-->B"
@@ -725,8 +793,21 @@ struct MermaidAttachmentCoordinatorTests {
         attachment: MermaidTextAttachment,
         suffix: String = ""
     ) -> NSAttributedString {
-        let contents = NSMutableAttributedString(attachment: attachment)
-        contents.append(NSAttributedString(string: "\n\(suffix)"))
+        makeContents(attachments: [attachment], suffix: suffix)
+    }
+
+    private func makeContents(
+        attachments: [MermaidTextAttachment],
+        suffix: String = ""
+    ) -> NSAttributedString {
+        let contents = NSMutableAttributedString()
+        for attachment in attachments {
+            contents.append(NSAttributedString(attachment: attachment))
+            contents.append(NSAttributedString(string: "\n"))
+        }
+        if !suffix.isEmpty {
+            contents.append(NSAttributedString(string: suffix))
+        }
         return contents
     }
 

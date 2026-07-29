@@ -37,6 +37,7 @@ final class MarkdownRenderer {
     private var remoteImages: [RemoteImageReference] = []
     private var mermaidAttachments: [MermaidAttachmentReference] = []
     private var mermaidSourceOccurrences: [String: Int] = [:]
+    private var mermaidSourceTotals: [String: Int] = [:]
     private var mermaidProfile: MermaidPresentationProfile = .full
     private var theme: Theme!
     private var monoFamily: String = "JetBrainsMono Nerd Font"
@@ -90,6 +91,7 @@ final class MarkdownRenderer {
         self.remoteImages = []
         self.mermaidAttachments = []
         self.mermaidSourceOccurrences = [:]
+        self.mermaidSourceTotals = Self.mermaidSourceTotals(in: document)
         self.mermaidProfile = mermaidProfile
         self.theme = theme
         self.monoFamily = monospacedFontFamily
@@ -332,12 +334,8 @@ final class MarkdownRenderer {
     }
 
     private func visitCodeBlock(_ block: CodeBlock) {
-        if MermaidFence.isMermaid(language: block.language),
-           !block.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let source = block.code.hasSuffix("\n")
-                ? String(block.code.dropLast())
-                : block.code
-            let id = mermaidID(for: source)
+        if let source = Self.mermaidSource(from: block) {
+            let id = mermaidID(for: source, block: block)
             let attachment = MermaidTextAttachment(
                 id: id,
                 source: source,
@@ -383,8 +381,14 @@ final class MarkdownRenderer {
         appendPlain("\n")
     }
 
-    private func mermaidID(for source: String) -> String {
+    private func mermaidID(for source: String, block: CodeBlock) -> String {
         let key = Self.stableMermaidSourceKey(source)
+        if mermaidSourceTotals[key, default: 0] <= 1 {
+            return "mermaid-\(key)"
+        }
+        if let locationKey = Self.stableMermaidLocationKey(block.range) {
+            return "mermaid-\(key)-\(locationKey)"
+        }
         let occurrence = mermaidSourceOccurrences[key, default: 0]
         mermaidSourceOccurrences[key] = occurrence + 1
         if occurrence == 0 {
@@ -400,6 +404,46 @@ final class MarkdownRenderer {
             hash &*= 0x100000001b3
         }
         return String(format: "%016llx", hash)
+    }
+
+    private static func mermaidSource(from block: CodeBlock) -> String? {
+        guard MermaidFence.isMermaid(language: block.language),
+              !block.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return block.code.hasSuffix("\n")
+            ? String(block.code.dropLast())
+            : block.code
+    }
+
+    private static func mermaidSourceTotals(in markup: Markup) -> [String: Int] {
+        var totals: [String: Int] = [:]
+        collectMermaidSourceTotals(in: markup, into: &totals)
+        return totals
+    }
+
+    private static func collectMermaidSourceTotals(
+        in markup: Markup,
+        into totals: inout [String: Int]
+    ) {
+        if let block = markup as? CodeBlock,
+           let source = mermaidSource(from: block) {
+            totals[stableMermaidSourceKey(source), default: 0] += 1
+        }
+        for child in markup.children {
+            collectMermaidSourceTotals(in: child, into: &totals)
+        }
+    }
+
+    private static func stableMermaidLocationKey(_ range: SourceRange?) -> String? {
+        guard let range else { return nil }
+        return [
+            range.lowerBound.line,
+            range.lowerBound.column,
+            range.upperBound.line,
+            range.upperBound.column
+        ]
+        .map(String.init)
+        .joined(separator: "-")
     }
 
     private struct RenderedTableCell {

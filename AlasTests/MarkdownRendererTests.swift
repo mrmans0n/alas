@@ -249,6 +249,26 @@ struct MarkdownRendererTests {
         #expect(targetID == shiftedTargetID)
     }
 
+    @Test func duplicateMermaidAttachmentIDsUseSourceLocation() throws {
+        let source = "graph TD; Same-->Diagram"
+        let result = try Self.render("""
+        ```mermaid
+        \(source)
+        ```
+
+        ```mermaid
+        \(source)
+        ```
+        """)
+
+        #expect(result.mermaidAttachments.count == 2)
+        #expect(result.mermaidAttachments[0].source == source)
+        #expect(result.mermaidAttachments[1].source == source)
+        #expect(result.mermaidAttachments[0].id != result.mermaidAttachments[1].id)
+        #expect(result.mermaidAttachments[0].id.contains(MarkdownRenderer.stableMermaidSourceKey(source)))
+        #expect(result.mermaidAttachments[1].id.contains(MarkdownRenderer.stableMermaidSourceKey(source)))
+    }
+
     @Test func emptyMermaidFenceRemainsCode() throws {
         let result = try Self.render("```mermaid\n```")
 
