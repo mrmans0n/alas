@@ -70,6 +70,9 @@ struct MermaidDiagramBlockView: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
+        .onChange(of: theme) { _, newTheme in
+            MermaidDiagramViewerController.shared.updateTheme(newTheme)
+        }
         .task(id: key) {
             let requestedKey = key
             renderState.begin(requestedKey)

@@ -54,6 +54,7 @@ final class MermaidAttachmentCoordinator {
 
     func updateViewerTheme(_ theme: Theme) {
         viewerTheme = theme
+        MermaidDiagramViewerController.shared.updateTheme(theme)
     }
 
     func apply(

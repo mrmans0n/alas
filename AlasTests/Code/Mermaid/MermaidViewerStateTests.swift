@@ -67,6 +67,40 @@ struct MermaidViewerStateTests {
         #expect(state.showsSource)
     }
 
+    @Test("viewer theme model applies live theme changes")
+    func viewerThemeModelAppliesLiveThemeChanges() throws {
+        let initial = try Theme.loadBundled(id: "cool-slate")
+        let updated = try Theme.loadBundled(id: "light")
+        let model = MermaidDiagramViewerThemeModel(theme: initial)
+
+        model.theme = updated
+
+        #expect(model.theme == updated)
+    }
+
+    @Test("viewer render key follows effective theme")
+    func viewerRenderKeyFollowsEffectiveTheme() throws {
+        let source = "graph TD; A-->B"
+        let dark = try Theme.loadBundled(id: "cool-slate")
+        let light = try Theme.loadBundled(id: "light")
+
+        let darkKey = MermaidDiagramViewerView.renderKey(
+            source: source,
+            theme: dark,
+            backingScale: 2
+        )
+        let lightKey = MermaidDiagramViewerView.renderKey(
+            source: source,
+            theme: light,
+            backingScale: 2
+        )
+
+        #expect(darkKey != lightKey)
+        #expect(darkKey.source == lightKey.source)
+        #expect(darkKey.scale == lightKey.scale)
+        #expect(darkKey.profile == lightKey.profile)
+    }
+
     @Test("zoom clamps and resets")
     func zoomState() {
         var state = MermaidZoomState()

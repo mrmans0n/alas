@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 @MainActor
@@ -7,6 +8,7 @@ final class MermaidDiagramViewerController: NSObject, NSWindowDelegate {
 
     private weak var hostWindow: NSWindow?
     private var sheetWindow: MermaidDiagramSheetWindow?
+    private var themeModel: MermaidDiagramViewerThemeModel?
 
     func show(source: String, theme: Theme, from hostWindow: NSWindow) {
         endCurrentViewer()
@@ -20,12 +22,12 @@ final class MermaidDiagramViewerController: NSObject, NSWindowDelegate {
         )
         let backingScale = hostWindow.screen?.backingScaleFactor
             ?? hostWindow.backingScaleFactor
-        let rootView = MermaidDiagramViewerView(
+        let themeModel = MermaidDiagramViewerThemeModel(theme: theme)
+        let rootView = MermaidDiagramViewerRootView(
             source: source,
-            diagramTheme: MermaidDiagramTheme(theme: theme),
-            backingScale: backingScale
+            backingScale: backingScale,
+            themeModel: themeModel
         )
-        .environment(\.theme, theme)
 
         let sheet = MermaidDiagramSheetWindow(
             contentRect: NSRect(origin: .zero, size: size),
@@ -46,8 +48,13 @@ final class MermaidDiagramViewerController: NSObject, NSWindowDelegate {
         }
 
         self.hostWindow = hostWindow
+        self.themeModel = themeModel
         sheetWindow = sheet
         hostWindow.beginSheet(sheet)
+    }
+
+    func updateTheme(_ theme: Theme) {
+        themeModel?.theme = theme
     }
 
     func dismiss() {
@@ -65,6 +72,7 @@ final class MermaidDiagramViewerController: NSObject, NSWindowDelegate {
               closingWindow === sheetWindow else { return }
         hostWindow = nil
         sheetWindow = nil
+        themeModel = nil
     }
 
     private func endCurrentViewer() {
@@ -74,12 +82,23 @@ final class MermaidDiagramViewerController: NSObject, NSWindowDelegate {
         sheet.onCancel = nil
         sheetWindow = nil
         hostWindow = nil
+        themeModel = nil
         if let parent {
             parent.endSheet(sheet)
             sheet.orderOut(nil)
         } else {
             sheet.close()
         }
+    }
+}
+
+@MainActor
+@Observable
+final class MermaidDiagramViewerThemeModel {
+    var theme: Theme
+
+    init(theme: Theme) {
+        self.theme = theme
     }
 }
 
@@ -222,9 +241,36 @@ struct MermaidViewerInteractionState {
     }
 }
 
+private struct MermaidDiagramViewerRootView: View {
+    let source: String
+    let backingScale: CGFloat
+    let service: MermaidRenderService
+    let themeModel: MermaidDiagramViewerThemeModel
+
+    init(
+        source: String,
+        backingScale: CGFloat,
+        service: MermaidRenderService = .shared,
+        themeModel: MermaidDiagramViewerThemeModel
+    ) {
+        self.source = source
+        self.backingScale = backingScale
+        self.service = service
+        self.themeModel = themeModel
+    }
+
+    var body: some View {
+        MermaidDiagramViewerView(
+            source: source,
+            backingScale: backingScale,
+            service: service
+        )
+        .environment(\.theme, themeModel.theme)
+    }
+}
+
 struct MermaidDiagramViewerView: View {
     let source: String
-    let diagramTheme: MermaidDiagramTheme
     var service: MermaidRenderService
 
     @Environment(\.theme) private var theme
@@ -236,22 +282,19 @@ struct MermaidDiagramViewerView: View {
     @State private var liveBackingScale: CGFloat
 
     private var key: MermaidRenderKey {
-        MermaidRenderKey(
+        Self.renderKey(
             source: source,
-            theme: diagramTheme,
-            scale: liveBackingScale,
-            profile: .full
+            theme: theme,
+            backingScale: liveBackingScale
         )
     }
 
     init(
         source: String,
-        diagramTheme: MermaidDiagramTheme,
         backingScale: CGFloat,
         service: MermaidRenderService = .shared
     ) {
         self.source = source
-        self.diagramTheme = diagramTheme
         self.service = service
         _liveBackingScale = State(initialValue: backingScale)
     }
@@ -413,6 +456,20 @@ struct MermaidDiagramViewerView: View {
         CGSize(
             width: committed.width + gesture.width,
             height: committed.height + gesture.height
+        )
+    }
+
+    @MainActor
+    static func renderKey(
+        source: String,
+        theme: Theme,
+        backingScale: CGFloat
+    ) -> MermaidRenderKey {
+        MermaidRenderKey(
+            source: source,
+            theme: MermaidDiagramTheme(theme: theme),
+            scale: backingScale,
+            profile: .full
         )
     }
 }
