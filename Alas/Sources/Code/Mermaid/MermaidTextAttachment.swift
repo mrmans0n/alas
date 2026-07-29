@@ -34,6 +34,19 @@ final class MermaidTextAttachment: NSTextAttachment {
 }
 
 final class MermaidTextAttachmentCell: NSTextAttachmentCell {
+    struct LayoutFrames {
+        let header: NSRect?
+        let body: NSRect
+        let sourceButton: NSRect
+        let copyButton: NSRect
+        let expandButton: NSRect
+    }
+
+    struct FailureTextFrames {
+        let title: NSRect
+        let diagnostic: NSRect
+    }
+
     let id: String
     let source: String
     nonisolated let profile: MermaidPresentationProfile
@@ -114,6 +127,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
         let colors = DrawingColors(theme: theme)
+        let layout = layoutFrames(in: frame)
         let cardPath = NSBezierPath(
             roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
             xRadius: 6,
@@ -125,29 +139,25 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         cardPath.lineWidth = 0.75
         cardPath.stroke()
 
-        let bodyFrame: NSRect
-        if profile == .compact {
-            bodyFrame = frame.insetBy(dx: 1, dy: 1)
-        } else {
-            let header = NSRect(
-                x: frame.minX + 1,
-                y: frame.maxY - Self.headerHeight - 1,
-                width: max(0, frame.width - 2),
-                height: Self.headerHeight
-            )
+        if let header = layout.header {
             colors.surface.setFill()
             header.fill()
             colors.border.setFill()
-            NSRect(x: header.minX, y: header.minY, width: header.width, height: 0.5).fill()
-            drawHeader(in: header, colors: colors)
-            bodyFrame = NSRect(
-                x: frame.minX + 1,
-                y: frame.minY + 1,
-                width: max(0, frame.width - 2),
-                height: max(0, frame.height - Self.headerHeight - 2)
+            NSRect(
+                x: header.minX,
+                y: header.maxY - 0.5,
+                width: header.width,
+                height: 0.5
+            ).fill()
+            drawHeader(
+                in: header,
+                sourceButton: layout.sourceButton,
+                copyButton: layout.copyButton,
+                expandButton: layout.expandButton,
+                colors: colors
             )
         }
-        drawBody(in: bodyFrame, colors: colors)
+        drawBody(in: layout.body, colors: colors)
     }
 
     override func highlight(
@@ -175,12 +185,12 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
             return true
         }
 
-        let buttons = buttonFrames(in: cellFrame)
-        if buttons.source.contains(point) {
+        let layout = layoutFrames(in: cellFrame)
+        if layout.sourceButton.contains(point) {
             delegate?.mermaidTextAttachmentCellDidToggleSource(self)
-        } else if buttons.copy.contains(point) {
+        } else if layout.copyButton.contains(point) {
             delegate?.mermaidTextAttachmentCellDidRequestCopy(self)
-        } else if buttons.expand.contains(point) {
+        } else if layout.expandButton.contains(point) {
             delegate?.mermaidTextAttachmentCellDidRequestExpansion(self)
         } else {
             return false
@@ -208,7 +218,46 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         return NSSize(width: width, height: headerHeight + bodyHeight + 2)
     }
 
-    private func drawHeader(in frame: NSRect, colors: DrawingColors) {
+    func layoutFrames(in frame: NSRect) -> LayoutFrames {
+        guard profile != .compact else {
+            return LayoutFrames(
+                header: nil,
+                body: frame.insetBy(dx: 1, dy: 1),
+                sourceButton: .zero,
+                copyButton: .zero,
+                expandButton: .zero
+            )
+        }
+
+        let header = NSRect(
+            x: frame.minX + 1,
+            y: frame.minY + 1,
+            width: max(0, frame.width - 2),
+            height: min(Self.headerHeight, max(0, frame.height - 2))
+        )
+        let body = NSRect(
+            x: frame.minX + 1,
+            y: header.maxY,
+            width: max(0, frame.width - 2),
+            height: max(0, frame.maxY - header.maxY - 1)
+        )
+        let buttons = buttonFrames(in: frame)
+        return LayoutFrames(
+            header: header,
+            body: body,
+            sourceButton: buttons.source,
+            copyButton: buttons.copy,
+            expandButton: buttons.expand
+        )
+    }
+
+    private func drawHeader(
+        in frame: NSRect,
+        sourceButton: NSRect,
+        copyButton: NSRect,
+        expandButton: NSRect,
+        colors: DrawingColors
+    ) {
         let labelAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: colors.muted
@@ -223,19 +272,13 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
             withAttributes: labelAttributes
         )
 
-        let buttons = buttonFrames(in: NSRect(
-            x: frame.minX - 1,
-            y: frame.minY,
-            width: frame.width + 2,
-            height: frame.height
-        ))
         drawButton(
             showsSource ? "Hide source" : "Show source",
-            in: buttons.source,
+            in: sourceButton,
             color: colors.muted
         )
-        drawButton("Copy", in: buttons.copy, color: colors.muted)
-        drawButton("Expand", in: buttons.expand, color: colors.muted)
+        drawButton("Copy", in: copyButton, color: colors.muted)
+        drawButton("Expand", in: expandButton, color: colors.muted)
     }
 
     private func drawButton(_ title: String, in frame: NSRect, color: NSColor) {
@@ -318,29 +361,56 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         ]
         let title = "Couldn't render Mermaid diagram" as NSString
         let diagnostic = failure.mermaidDisplayDiagnostic as NSString
-        let titleSize = title.size(withAttributes: titleAttributes)
-        let diagnosticSize = diagnostic.size(withAttributes: diagnosticAttributes)
-        let contentHeight = titleSize.height + 4 + diagnosticSize.height
-        let startY = frame.midY + contentHeight / 2 - titleSize.height
+        let frames = failureTextFrames(for: failure, in: frame)
         title.draw(
-            at: NSPoint(x: frame.minX + Self.horizontalPadding, y: startY),
+            at: frames.title.origin,
             withAttributes: titleAttributes
         )
         diagnostic.draw(
-            in: NSRect(
-                x: frame.minX + Self.horizontalPadding,
-                y: startY - diagnosticSize.height - 4,
-                width: max(0, frame.width - Self.horizontalPadding * 2),
-                height: diagnosticSize.height
-            ),
+            in: frames.diagnostic,
             withAttributes: diagnosticAttributes
+        )
+    }
+
+    func failureTextFrames(
+        for failure: MermaidRenderFailure,
+        in frame: NSRect
+    ) -> FailureTextFrames {
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
+        ]
+        let diagnosticAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10)
+        ]
+        let title = "Couldn't render Mermaid diagram" as NSString
+        let diagnostic = failure.mermaidDisplayDiagnostic as NSString
+        let titleSize = title.size(withAttributes: titleAttributes)
+        let diagnosticSize = diagnostic.size(withAttributes: diagnosticAttributes)
+        let contentHeight = titleSize.height + 4 + diagnosticSize.height
+        let startY = frame.midY - contentHeight / 2
+        let width = max(0, frame.width - Self.horizontalPadding * 2)
+        let titleFrame = NSRect(
+            x: frame.minX + Self.horizontalPadding,
+            y: startY,
+            width: width,
+            height: titleSize.height
+        )
+        let diagnosticFrame = NSRect(
+            x: frame.minX + Self.horizontalPadding,
+            y: titleFrame.maxY + 4,
+            width: width,
+            height: diagnosticSize.height
+        )
+        return FailureTextFrames(
+            title: titleFrame,
+            diagnostic: diagnosticFrame
         )
     }
 
     private func buttonFrames(
         in frame: NSRect
     ) -> (source: NSRect, copy: NSRect, expand: NSRect) {
-        let y = frame.maxY - Self.headerHeight
+        let y = frame.minY + 1
         let height = Self.headerHeight
         let expandWidth = buttonWidth(for: "Expand")
         let copyWidth = buttonWidth(for: "Copy")

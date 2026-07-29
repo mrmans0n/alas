@@ -163,6 +163,129 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(oldAttachment.mermaidCell.outcome == nil)
     }
 
+    @Test("full attachment header actions hit in the flipped top band")
+    func fullAttachmentHeaderHitTargetsUseFlippedCoordinates() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let cell = attachment.mermaidCell
+        let delegate = MermaidCellDelegateSpy()
+        cell.delegate = delegate
+        let textView = NSTextView(
+            frame: NSRect(x: 0, y: 0, width: 640, height: 480)
+        )
+        let window = NSWindow(
+            contentRect: textView.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(textView)
+        let cellFrame = NSRect(
+            x: 20,
+            y: 20,
+            width: 600,
+            height: cell.cellSize.height
+        )
+
+        let topEvent = try mouseDown(
+            at: NSPoint(x: cellFrame.maxX - 18, y: cellFrame.minY + 15),
+            in: textView,
+            window: window
+        )
+        #expect(
+            cell.trackMouse(
+                with: topEvent,
+                in: cellFrame,
+                of: textView,
+                untilMouseUp: false
+            )
+        )
+        #expect(delegate.expansionCount == 1)
+
+        let bottomEvent = try mouseDown(
+            at: NSPoint(x: cellFrame.maxX - 18, y: cellFrame.maxY - 15),
+            in: textView,
+            window: window
+        )
+        #expect(
+            !cell.trackMouse(
+                with: bottomEvent,
+                in: cellFrame,
+                of: textView,
+                untilMouseUp: false
+            )
+        )
+        #expect(delegate.expansionCount == 1)
+    }
+
+    @Test("full attachment geometry is top-to-bottom for every render state")
+    func fullAttachmentGeometryUsesFlippedCoordinates() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let cell = attachment.mermaidCell
+        let states: [MermaidRenderOutcome?] = [
+            nil,
+            renderedOutcome(),
+            .failed(.parseFailed("unexpected token"))
+        ]
+
+        for state in states {
+            if let state {
+                cell.apply(state)
+            } else {
+                cell.beginLoading()
+            }
+            let frame = NSRect(
+                x: 20,
+                y: 40,
+                width: 600,
+                height: cell.cellSize.height
+            )
+            let layout = cell.layoutFrames(in: frame)
+            let header = try #require(layout.header)
+
+            #expect(header.minY == frame.minY + 1)
+            #expect(layout.sourceButton.minY >= frame.minY)
+            #expect(layout.copyButton.minY >= frame.minY)
+            #expect(layout.expandButton.minY >= frame.minY)
+            #expect(layout.sourceButton.maxY <= layout.body.minY)
+            #expect(layout.copyButton.maxY <= layout.body.minY)
+            #expect(layout.expandButton.maxY <= layout.body.minY)
+            #expect(layout.body.minY == header.maxY)
+            #expect(layout.body.maxY == frame.maxY - 1)
+        }
+    }
+
+    @Test("failure title precedes its diagnostic in flipped coordinates")
+    func failureTextGeometryUsesFlippedCoordinates() throws {
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let cell = attachment.mermaidCell
+        let failure = MermaidRenderFailure.parseFailed("unexpected token")
+        cell.apply(.failed(failure))
+        let frame = NSRect(
+            x: 20,
+            y: 40,
+            width: 600,
+            height: cell.cellSize.height
+        )
+        let body = cell.layoutFrames(in: frame).body
+        let text = cell.failureTextFrames(for: failure, in: body)
+
+        #expect(text.title.minY >= body.minY)
+        #expect(text.title.maxY < text.diagnostic.minY)
+        #expect(text.diagnostic.maxY <= body.maxY)
+    }
+
     private func makeReference(
         attachment: MermaidTextAttachment
     ) throws -> MermaidAttachmentReference {
@@ -219,6 +342,24 @@ struct MermaidAttachmentCoordinatorTests {
         return false
     }
 
+    private func mouseDown(
+        at point: NSPoint,
+        in view: NSView,
+        window: NSWindow
+    ) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: view.convert(point, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+    }
+
     private func makeResult(revision: UUID, string: String) -> MarkdownRenderResult {
         MarkdownRenderResult(
             revision: revision,
@@ -227,6 +368,25 @@ struct MermaidAttachmentCoordinatorTests {
             remoteImages: [],
             mermaidAttachments: []
         )
+    }
+}
+
+@MainActor
+private final class MermaidCellDelegateSpy: MermaidTextAttachmentCellDelegate {
+    private(set) var expansionCount = 0
+
+    func mermaidTextAttachmentCellDidToggleSource(
+        _ cell: MermaidTextAttachmentCell
+    ) {}
+
+    func mermaidTextAttachmentCellDidRequestCopy(
+        _ cell: MermaidTextAttachmentCell
+    ) {}
+
+    func mermaidTextAttachmentCellDidRequestExpansion(
+        _ cell: MermaidTextAttachmentCell
+    ) {
+        expansionCount += 1
     }
 }
 
