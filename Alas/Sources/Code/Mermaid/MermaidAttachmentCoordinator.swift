@@ -55,6 +55,9 @@ final class MermaidAttachmentCoordinator {
         let scale = textView.window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor
             ?? 2
+        if backingPropertiesObserver == nil {
+            observeBackingProperties(of: textView.window)
+        }
         if self.revision == revision, self.textView === textView,
            self.backingScale == scale {
             return
@@ -65,7 +68,6 @@ final class MermaidAttachmentCoordinator {
         self.references = Dictionary(uniqueKeysWithValues: references.map { ($0.id, $0) })
         self.onTextStorageDelta = onTextStorageDelta
         self.backingScale = scale
-        observeBackingProperties(of: textView.window)
         for reference in references {
             let cell = reference.attachment.mermaidCell
             cell.delegate = self
