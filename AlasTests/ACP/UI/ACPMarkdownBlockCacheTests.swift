@@ -5,6 +5,22 @@ import Testing
 @MainActor
 @Suite("ACPMarkdownBlockCache")
 struct ACPMarkdownBlockCacheTests {
+    @Test("table columns distribute available width after dividers")
+    func tableColumnsDistributeAvailableWidth() {
+        let width = ACPMarkdownText.tableColumnWidth(availableWidth: 720, columnCount: 3)
+        #expect(abs(width - 719.0 / 3.0) < 0.001)
+    }
+
+    @Test("table columns retain their minimum width")
+    func tableColumnsRetainMinimumWidth() {
+        #expect(ACPMarkdownText.tableColumnWidth(availableWidth: 600, columnCount: 8) == 100)
+    }
+
+    @Test("table columns have no width without columns")
+    func tableColumnsHaveNoWidthWithoutColumns() {
+        #expect(ACPMarkdownText.tableColumnWidth(availableWidth: 720, columnCount: 0) == 0)
+    }
+
     @Test("two paragraphs separated by blank line both become stable once a third arrives")
     func paragraphsPromoteOnBoundary() async {
         let cache = ACPMarkdownBlockCache()
@@ -74,6 +90,74 @@ struct ACPMarkdownBlockCacheTests {
         // Block-by-block comparison: Block must conform to Equatable
         // (synthesized; its associated values are String / [String] / Int).
         #expect(cached == direct)
+    }
+
+    @Test("contiguous top-level task lines parse into one task list")
+    func parsesTaskListItems() {
+        #expect(ACPMarkdownText.parse("""
+        - [ ] **Write** `tests`
+        - [x] [Review](https://example.com)
+        - [X]
+        """) == [
+            .taskList([
+                .init(isChecked: false, text: "**Write** `tests`"),
+                .init(isChecked: true, text: "[Review](https://example.com)"),
+                .init(isChecked: true, text: ""),
+            ]),
+        ])
+    }
+
+    @Test("ordinary and indented task-looking bullets remain paragraph text")
+    func taskLookingBulletsFallBackToParagraphs() {
+        #expect(ACPMarkdownText.parse("""
+        * [ ] alternate marker
+          - [ ] nested item
+        - [ ]not a task
+        """) == [
+            .paragraph("""
+            * [ ] alternate marker
+              - [ ] nested item
+            - [ ]not a task
+            """),
+        ])
+    }
+
+    @Test("task list ends before following prose")
+    func taskListToProseBoundary() {
+        #expect(ACPMarkdownText.parse("""
+        Before tasks
+        - [ ] First task
+        - [x] Second task
+        After tasks
+        """) == [
+            .paragraph("Before tasks"),
+            .taskList([
+                .init(isChecked: false, text: "First task"),
+                .init(isChecked: true, text: "Second task"),
+            ]),
+            .paragraph("After tasks"),
+        ])
+    }
+
+    @Test("cached task list parsing matches direct parsing")
+    func taskListCacheParityWithDirectParse() {
+        let raw = """
+        Intro
+
+        - [ ] First task
+        - [X] **Second** task
+
+        Closing paragraph.
+        """
+        let cache = ACPMarkdownBlockCache()
+        cache.update(with: raw)
+        let cached = cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed)
+
+        #expect(cached == ACPMarkdownText.parse(raw))
+        #expect(cached.contains(where: { block in
+            if case .taskList = block { return true }
+            return false
+        }))
     }
 
     @Test("streaming updates scan only the appended markdown tail")

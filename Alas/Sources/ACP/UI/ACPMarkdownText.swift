@@ -19,6 +19,7 @@ struct ACPMarkdownText: View {
     var typography: ACPChatTypography = .default
     var showsCodeBlockCopyButton: Bool = true
     @Environment(\.theme) private var theme
+    @State private var tableViewportWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -65,6 +66,31 @@ struct ACPMarkdownText: View {
                 memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
             )
                 .frame(maxWidth: .infinity, alignment: .leading)
+        case .taskList(let items):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 6) {
+                        ACPMarkdownTaskCheckbox(
+                            isChecked: item.isChecked,
+                            accessibilityLabel: ACPMarkdownInlineRenderer.plainText(
+                                item.text,
+                                memoizeInlineMarkdown: renderBlock.memoizesInlineMarkdown
+                            )
+                        )
+                            .frame(width: 16, height: 16)
+                            .padding(.top, 1)
+                        ACPMarkdownInlineTextView(
+                            source: item.text,
+                            typography: typography,
+                            role: .body,
+                            theme: theme,
+                            memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
+                        )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .quote(let text):
             HStack(alignment: .top, spacing: 10) {
                 Rectangle()
@@ -111,12 +137,17 @@ struct ACPMarkdownText: View {
         memoizesInlineMarkdown: Bool
     ) -> some View {
         let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
+        let columnWidth = Self.tableColumnWidth(
+            availableWidth: tableViewportWidth,
+            columnCount: columnCount
+        )
         return ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 tableRow(
                     cells: header,
                     isHeader: true,
                     columnCount: columnCount,
+                    columnWidth: columnWidth,
                     memoizesInlineMarkdown: memoizesInlineMarkdown
                 )
                 Rectangle().fill(theme.color("line")).frame(height: 0.5)
@@ -125,6 +156,7 @@ struct ACPMarkdownText: View {
                         cells: r,
                         isHeader: false,
                         columnCount: columnCount,
+                        columnWidth: columnWidth,
                         memoizesInlineMarkdown: memoizesInlineMarkdown
                     )
                     if r != rows.last {
@@ -132,6 +164,12 @@ struct ACPMarkdownText: View {
                     }
                 }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.size.width
+        } action: { width in
+            tableViewportWidth = width
         }
         .background(theme.color("bg-1").opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -142,6 +180,7 @@ struct ACPMarkdownText: View {
         cells: [String],
         isHeader: Bool,
         columnCount: Int,
+        columnWidth: CGFloat,
         memoizesInlineMarkdown: Bool
     ) -> some View {
         HStack(alignment: .top, spacing: 0) {
@@ -156,12 +195,22 @@ struct ACPMarkdownText: View {
                 )
                     .frame(minWidth: 80, alignment: .leading)
                     .padding(.horizontal, 10).padding(.vertical, 6)
+                    .frame(width: columnWidth, alignment: .leading)
                 if i < columnCount - 1 {
                     Rectangle().fill(theme.color("line-soft")).frame(width: 0.5)
                 }
             }
         }
         .background(isHeader ? theme.color("bg-2").opacity(0.5) : Color.clear)
+    }
+
+    static func tableColumnWidth(
+        availableWidth: CGFloat,
+        columnCount: Int,
+        dividerWidth: CGFloat = 0.5
+    ) -> CGFloat {
+        guard columnCount > 0 else { return 0 }
+        return max(100, (availableWidth - dividerWidth * CGFloat(columnCount - 1)) / CGFloat(columnCount))
     }
 
     // MARK: - Inline memoization
@@ -225,10 +274,16 @@ struct ACPMarkdownText: View {
     enum Block: Equatable {
         case heading(level: Int, text: String)
         case paragraph(String)
+        case taskList([TaskItem])
         case quote(String)
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
         case table(header: [String], rows: [[String]])
+    }
+
+    struct TaskItem: Equatable {
+        let isChecked: Bool
+        let text: String
     }
 
     private struct RenderBlock {
@@ -331,6 +386,24 @@ struct ACPMarkdownText: View {
         return line[afterMarker...].allSatisfy(\.isWhitespace)
     }
 
+    private static func matchTaskItem(_ line: String) -> TaskItem? {
+        guard line.count >= 5 else { return nil }
+        let marker = String(line.prefix(5))
+        let isChecked: Bool
+        switch marker {
+        case "- [ ]": isChecked = false
+        case "- [x]", "- [X]": isChecked = true
+        default: return nil
+        }
+
+        let remainder = line.dropFirst(5)
+        guard remainder.isEmpty || remainder.first?.isWhitespace == true else { return nil }
+        return TaskItem(
+            isChecked: isChecked,
+            text: String(remainder.drop(while: \.isWhitespace))
+        )
+    }
+
     static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0
@@ -393,19 +466,48 @@ struct ACPMarkdownText: View {
                 continue
             }
 
+            // Task list: collect contiguous top-level GitHub-style items.
+            if let task = matchTaskItem(line) {
+                var items = [task]
+                i += 1
+                while i < lines.count, let task = matchTaskItem(lines[i]) {
+                    items.append(task)
+                    i += 1
+                }
+                blocks.append(.taskList(items))
+                continue
+            }
+
             // Paragraph: collect until blank or block-start.
             var para: [String] = [line]
             i += 1
             while i < lines.count {
                 let next = lines[i].trimmingCharacters(in: .whitespaces)
                 if next.isEmpty { break }
-                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil { break }
+                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil || matchTaskItem(lines[i]) != nil { break }
                 para.append(lines[i])
                 i += 1
             }
             blocks.append(.paragraph(para.joined(separator: "\n")))
         }
         return blocks
+    }
+}
+
+private struct ACPMarkdownTaskCheckbox: NSViewRepresentable {
+    let isChecked: Bool
+    let accessibilityLabel: String
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+        button.isEnabled = false
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        button.isEnabled = false
+        button.state = isChecked ? .on : .off
+        button.setAccessibilityLabel(accessibilityLabel)
     }
 }
 

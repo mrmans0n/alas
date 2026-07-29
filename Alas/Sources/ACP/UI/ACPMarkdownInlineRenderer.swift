@@ -77,14 +77,19 @@ enum ACPMarkdownInlineRenderer {
         )
     }
 
-    static func plainText(_ source: String) -> String {
+    static func plainText(
+        _ source: String,
+        memoizeInlineMarkdown: Bool = true
+    ) -> String {
         let plan = makePlan(source)
         var text = plan.markdownSource
         for image in plan.images {
             text = text.replacingOccurrences(of: image.placeholder, with: image.alt)
         }
         text = removingSubscriptMarkers(from: text, markers: plan.subscriptMarkers)
-        return NSAttributedString(ACPMarkdownText.inlineMarkdown(text)).string
+        return NSAttributedString(
+            ACPMarkdownText.inlineMarkdown(text, memoize: memoizeInlineMarkdown)
+        ).string
     }
 
     static func makeAttributedString(
