@@ -101,6 +101,7 @@ struct DiffReviewFileSection: View {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let showsSourceBadge: Bool
+    var automaticallyRendersDiff: Bool = true
     var lspContext: DiffPaneLSPContext? = nil
     var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
     var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
@@ -152,8 +153,12 @@ struct DiffReviewFileSection: View {
         return DiffReviewRenderBudget.isOverBudget(displayModel)
     }
 
+    private var isDeferredByAggregateBudget: Bool {
+        file.displayModel != nil && !automaticallyRendersDiff
+    }
+
     private var shouldDeferRender: Bool {
-        isOverRenderBudget && !showFullDiffOverride
+        (isOverRenderBudget || isDeferredByAggregateBudget) && !showFullDiffOverride
     }
 
     var body: some View {
@@ -621,8 +626,11 @@ struct DiffReviewFileSection: View {
     private var renderBudgetPlaceholder: some View {
         let changedLines = file.summary.additions + file.summary.deletions
         let hiddenItems = hiddenReviewItemCount
+        let title = isDeferredByAggregateBudget
+            ? "Large review diff deferred for performance"
+            : "Large diff hidden for performance"
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Large diff hidden for performance")
+            Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Text("\(changedLines.formatted()) changed lines. Rendering may be slow.")
@@ -656,9 +664,17 @@ struct DiffReviewFileSection: View {
         .background(
             DiffReviewAccessibilityMarker(
                 identifier: "diff-review-render-budget-\(file.id.rawValue)",
-                label: "Large diff hidden for performance"
+                label: title
             )
         )
+        .background {
+            if isDeferredByAggregateBudget {
+                DiffReviewAccessibilityMarker(
+                    identifier: "diff-review-aggregate-budget-\(file.id.rawValue)",
+                    label: "Large review diff deferred for performance"
+                )
+            }
+        }
     }
 
     /// Zero-size anchors carrying the same target IDs the rendered comment views
@@ -1489,6 +1505,7 @@ struct EquatableDiffReviewFileSection: View, Equatable {
             && lhs.section.codeFontFamily == rhs.section.codeFontFamily
             && lhs.section.codeFontSize == rhs.section.codeFontSize
             && lhs.section.showsSourceBadge == rhs.section.showsSourceBadge
+            && lhs.section.automaticallyRendersDiff == rhs.section.automaticallyRendersDiff
             && DiffPaneLSPContext.rendersEqual(lhs.section.lspContext, rhs.section.lspContext)
             && lhs.section.allowsDraftCommentCreation == rhs.section.allowsDraftCommentCreation
             && lhs.section.reviewFeedbackTarget == rhs.section.reviewFeedbackTarget

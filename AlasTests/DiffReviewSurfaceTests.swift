@@ -2914,6 +2914,48 @@ struct DiffReviewSurfaceTests {
         #expect(!allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
     }
 
+    @Test func aggregateBudgetDeferralHidesTextDiffUntilReviewerRequestsIt() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/Deferred.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: true,
+            automaticallyRendersDiff: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 260)
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-aggregate-budget-\(file.id.rawValue)",
+            in: controller.view
+        ) != nil)
+        #expect(!allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-show-full-diff-\(file.id.rawValue)",
+            in: controller.view
+        ))
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+    }
+
     @Test func surfaceRepairsInvalidSelectedIDToFirstSessionFile() {
         let first = summary(path: "Sources/App/AlphaView.swift")
         let second = summary(path: "Tests/BetaTests.swift")
