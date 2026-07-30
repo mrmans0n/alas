@@ -446,8 +446,8 @@ struct ACPComposerDraftBridgeTests {
 
     @Test("slash panel closes when filtering has no command matches")
     func slashPanelClosesWhenFilteringHasNoMatches() {
-        let (textView, coordinator) = makeSlashTextView()
-        _ = coordinator
+        let (textView, coordinator, window) = makeSlashTextView()
+        _ = (coordinator, window)
         textView.string = "/"
         textView.setSelectedRange(NSRange(location: 1, length: 0))
 
@@ -463,8 +463,8 @@ struct ACPComposerDraftBridgeTests {
 
     @Test("slash panel closes when input is cleared outside keyDown")
     func slashPanelClosesWhenInputIsClearedOutsideKeyDown() {
-        let (textView, coordinator) = makeSlashTextView()
-        _ = coordinator
+        let (textView, coordinator, window) = makeSlashTextView()
+        _ = (coordinator, window)
         textView.string = "/"
         textView.setSelectedRange(NSRange(location: 1, length: 0))
         textView.reconcileSlashPanel()
@@ -479,7 +479,8 @@ struct ACPComposerDraftBridgeTests {
 
     @Test("slash panel closes when composer editing ends")
     func slashPanelClosesOnEditingEnd() {
-        let (textView, coordinator) = makeSlashTextView()
+        let (textView, coordinator, window) = makeSlashTextView()
+        _ = window
         textView.string = "/"
         textView.setSelectedRange(NSRange(location: 1, length: 0))
         textView.reconcileSlashPanel()
@@ -875,9 +876,11 @@ struct ACPComposerDraftBridgeTests {
         )
     }
 
-    private func makeSlashTextView() -> (ACPNSTextView, ACPInputField.Coordinator) {
+    private func makeSlashTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
         // presentSlashPanel() needs a window to position the panel against.
+        // `textView.window` is unowned, so the caller must keep the returned
+        // window alive for as long as the text view is used.
         let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
         window.contentView?.addSubview(textView)
         let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
@@ -896,7 +899,7 @@ struct ACPComposerDraftBridgeTests {
         )
         coordinator.textView = textView
         textView.coordinator = coordinator
-        return (textView, coordinator)
+        return (textView, coordinator, window)
     }
 
     @Test("⌥⏎ (insertNewlineIgnoringFieldEditor:) submits with .steer")
