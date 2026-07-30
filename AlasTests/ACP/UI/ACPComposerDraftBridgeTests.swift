@@ -877,6 +877,9 @@ struct ACPComposerDraftBridgeTests {
 
     private func makeSlashTextView() -> (ACPNSTextView, ACPInputField.Coordinator) {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        // presentSlashPanel() needs a window to position the panel against.
+        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(textView)
         let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
         coordinator.promptSuggestions = [
             ACPPromptSuggestion(command: "/init", description: "Initialize"),
