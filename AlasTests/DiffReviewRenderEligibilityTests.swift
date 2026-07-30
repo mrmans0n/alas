@@ -31,5 +31,50 @@ struct DiffReviewRenderEligibilityTests {
 
         #expect(rows.map(\.index) == [0, 1, 2])
         #expect(rows.map(\.id) == files)
+        #expect(rows.map(\.showsBottomSpacing) == [true, true, false])
+    }
+
+    @Test func legacyRenderRowsKeepEveryFileAutomaticallyEligible() {
+        let files = [id("A.swift"), id("B.swift")]
+
+        let rows = DiffReviewRenderEligibility.renderRows(ordered: files)
+
+        #expect(rows.map(\.automaticallyRendersDiff) == [true, true])
+    }
+
+    @Test func aggregateEligibilityIncludesRowsThatExactlyFillTheCap() {
+        let files = [id("A.swift"), id("B.swift"), id("C.swift")]
+
+        let rows = DiffReviewRenderEligibility.renderRows(
+            ordered: files,
+            renderedRowCounts: [2, 3, 1],
+            maxAutomaticallyRenderedRows: 5
+        )
+
+        #expect(rows.map(\.automaticallyRendersDiff) == [true, true, false])
+    }
+
+    @Test func aggregateEligibilityDefersTheFirstNormalRowBeyondTheRemainingCapAndLaterNormalRows() {
+        let files = [id("A.swift"), id("B.swift"), id("C.swift")]
+
+        let rows = DiffReviewRenderEligibility.renderRows(
+            ordered: files,
+            renderedRowCounts: [3, 3, 1],
+            maxAutomaticallyRenderedRows: 5
+        )
+
+        #expect(rows.map(\.automaticallyRendersDiff) == [true, false, false])
+    }
+
+    @Test func aggregateEligibilityDoesNotChargeMissingOrOversizedRowsToTheCap() {
+        let files = [id("A.swift"), id("B.swift"), id("C.swift"), id("D.swift"), id("E.swift")]
+
+        let rows = DiffReviewRenderEligibility.renderRows(
+            ordered: files,
+            renderedRowCounts: [2, nil, DiffReviewRenderBudget.maxRenderedRows + 1, 3, 1],
+            maxAutomaticallyRenderedRows: 5
+        )
+
+        #expect(rows.map(\.automaticallyRendersDiff) == [true, true, true, true, false])
     }
 }

@@ -4162,6 +4162,77 @@ let second = true
         #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
     }
 
+    @Test func unchangedGroupContainerUpdateDoesNotInvalidateCommentHighlightViews() throws {
+        let group = try #require(model().groups.first)
+        let container = DiffPaneTextDocumentContainerView(
+            frame: NSRect(x: 0, y: 0, width: 700, height: 300)
+        )
+        let highlight = DiffReviewCommentHighlight(path: "a.swift", side: .new, line: 2)
+
+        func update() {
+            container.update(
+                group: group,
+                expandedCollapsedRowIDs: [],
+                layoutMode: .split,
+                wrapLines: false,
+                showWhitespace: false,
+                fileExtension: "swift",
+                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                theme: theme(),
+                lspContext: nil,
+                activeCommentHighlight: highlight
+            )
+        }
+
+        update()
+        let codeViews = allSubviews(of: container).compactMap { $0 as? DiffPaneCodeTextView }
+        let rulers = allSubviews(of: container).compactMap { $0 as? DiffPaneLineNumberRulerView }
+        #expect(!codeViews.isEmpty)
+        #expect(!rulers.isEmpty)
+        codeViews.forEach { $0.needsDisplay = false }
+        rulers.forEach { $0.needsDisplay = false }
+
+        update()
+
+        #expect(codeViews.allSatisfy { !$0.needsDisplay })
+        #expect(rulers.allSatisfy { !$0.needsDisplay })
+    }
+
+    @Test func unchangedRowsContainerUpdateDoesNotInvalidateCommentHighlightViews() throws {
+        let rows = Array(try #require(model().groups.first).rows)
+        let container = DiffPaneTextDocumentContainerView(
+            frame: NSRect(x: 0, y: 0, width: 700, height: 300)
+        )
+        let highlight = DiffReviewCommentHighlight(path: "a.swift", side: .new, line: 2)
+
+        func update() {
+            container.update(
+                rows: rows,
+                layoutMode: .split,
+                wrapLines: false,
+                showWhitespace: false,
+                fileExtension: "swift",
+                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                theme: theme(),
+                lspContext: nil,
+                activeCommentHighlight: highlight
+            )
+        }
+
+        update()
+        let codeViews = allSubviews(of: container).compactMap { $0 as? DiffPaneCodeTextView }
+        let rulers = allSubviews(of: container).compactMap { $0 as? DiffPaneLineNumberRulerView }
+        #expect(!codeViews.isEmpty)
+        #expect(!rulers.isEmpty)
+        codeViews.forEach { $0.needsDisplay = false }
+        rulers.forEach { $0.needsDisplay = false }
+
+        update()
+
+        #expect(codeViews.allSatisfy { !$0.needsDisplay })
+        #expect(rulers.allSatisfy { !$0.needsDisplay })
+    }
+
     @Test func stableWidthLayoutAppliesTextLayoutConfigurationOnce() throws {
         let scrollView = makeLongTextScrollView(width: 220, wraps: true)
 

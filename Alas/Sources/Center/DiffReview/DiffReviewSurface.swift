@@ -284,14 +284,20 @@ struct DiffReviewSurface: View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    let renderRows = DiffReviewRenderEligibility.renderRows(ordered: session.files.map(\.id))
+                    let renderRows = DiffReviewRenderEligibility.renderRows(
+                        ordered: session.files.map(\.id),
+                        renderedRowCounts: session.files.map { file in
+                            file.displayModel.map(DiffReviewRenderBudget.renderedRowCount)
+                        },
+                        maxAutomaticallyRenderedRows: DiffReviewRenderBudget.maxRenderedRows
+                    )
                     ForEach(renderRows) { row in
                         let file = session.files[row.index]
                         Color.clear
                             .frame(height: 1)
                             .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: row.id))
                             .accessibilityHidden(true)
-                        fileSection(file)
+                        fileSection(file, automaticallyRendersDiff: row.automaticallyRendersDiff)
                             .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: row.id))
                         Color.clear
                             .frame(height: row.showsBottomSpacing ? 14 : 0)
@@ -345,7 +351,10 @@ struct DiffReviewSurface: View {
     }
 
     @ViewBuilder
-    private func fileSection(_ file: DiffReviewFileSectionModel) -> some View {
+    private func fileSection(
+        _ file: DiffReviewFileSectionModel,
+        automaticallyRendersDiff: Bool
+    ) -> some View {
         let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
         let draftComments = draftCommentsByFileID[file.id] ?? []
         EquatableDiffReviewFileSection(
@@ -363,6 +372,7 @@ struct DiffReviewSurface: View {
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 showsSourceBadge: showsSourceBadges,
+                automaticallyRendersDiff: automaticallyRendersDiff,
                 lspContext: lspContextForFile(file),
                 inlineFeedbackActions: inlineFeedbackActions,
                 onSelectInlineFeedback: onSelectInlineFeedback,

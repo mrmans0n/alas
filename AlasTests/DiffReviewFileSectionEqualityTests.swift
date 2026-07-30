@@ -39,6 +39,7 @@ struct DiffReviewFileSectionEqualityTests {
         #expect(base != section(file: file, codeFontFamily: "Menlo"))
         #expect(base != section(file: file, codeFontSize: 14))
         #expect(base != section(file: file, showsSourceBadge: true))
+        #expect(base != section(file: file, automaticallyRendersDiff: false))
         #expect(base != section(file: file, allowsDraftCommentCreation: true))
         #expect(base != section(file: file, canReply: true))
         #expect(base != section(file: file, canResolve: true))
@@ -244,6 +245,7 @@ private func section(
     codeFontFamily: String = "SF Mono",
     codeFontSize: CGFloat = 12,
     showsSourceBadge: Bool = false,
+    automaticallyRendersDiff: Bool = true,
     onSelectInlineFeedback: @escaping (DiffReviewInlineFeedback) -> Void = { _ in },
     allowsDraftCommentCreation: Bool = false,
     reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
@@ -270,6 +272,7 @@ private func section(
             codeFontFamily: codeFontFamily,
             codeFontSize: codeFontSize,
             showsSourceBadge: showsSourceBadge,
+            automaticallyRendersDiff: automaticallyRendersDiff,
             onSelectInlineFeedback: onSelectInlineFeedback,
             allowsDraftCommentCreation: allowsDraftCommentCreation,
             reviewFeedbackTarget: reviewFeedbackTarget,
