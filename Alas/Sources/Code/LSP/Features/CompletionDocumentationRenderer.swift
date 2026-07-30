@@ -14,7 +14,8 @@ enum CompletionDocumentationRenderer {
             theme: theme,
             monospacedFontFamily: monospacedFontFamily,
             monospacedFontSize: monospacedFontSize,
-            baseDirectory: URL(fileURLWithPath: "/")
+            baseDirectory: URL(fileURLWithPath: "/"),
+            mermaidProfile: .compact
         )
     }
 }

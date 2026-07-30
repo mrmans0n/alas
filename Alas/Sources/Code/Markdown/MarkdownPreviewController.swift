@@ -16,9 +16,18 @@ final class MarkdownPreviewController: NSObject {
     let scrollView: NSScrollView
 
     private let imageLoader = MarkdownImageLoader()
+    private let mermaidCoordinator: MermaidAttachmentCoordinator
     private nonisolated(unsafe) var anchorObserver: NSObjectProtocol?
+    private(set) var lastAppliedRevision: UUID?
 
-    init(theme: Theme) {
+    init(
+        theme: Theme,
+        mermaidService: MermaidRenderService = .shared
+    ) {
+        mermaidCoordinator = MermaidAttachmentCoordinator(
+            service: mermaidService,
+            theme: theme
+        )
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
@@ -79,6 +88,11 @@ final class MarkdownPreviewController: NSObject {
 
     /// Replace the rendered content. Must be called on the main thread.
     func apply(result: MarkdownRenderResult) {
+        guard result.revision != lastAppliedRevision else { return }
+        let sourceDisclosureSnapshot = mermaidCoordinator
+            .explicitSourceDisclosureSnapshot(in: textView)
+        mermaidCoordinator.cancelAll()
+        lastAppliedRevision = result.revision
         anchorRanges = result.anchorRanges
         textView.textStorage?.setAttributedString(result.attributedString)
         for ref in result.remoteImages {
@@ -92,6 +106,18 @@ final class MarkdownPreviewController: NSObject {
                 applyRemoteImage(cached, to: ref.attachment)
             }
         }
+        mermaidCoordinator.apply(
+            result.mermaidAttachments,
+            revision: result.revision,
+            to: textView,
+            onTextStorageDelta: { [weak self] location, delta in
+                self?.shiftAnchors(startingAt: location, by: delta)
+            }
+        )
+        mermaidCoordinator.restoreExplicitSourceDisclosures(
+            sourceDisclosureSnapshot,
+            in: textView
+        )
     }
 
     /// Scroll the preview so the anchor at `slug` is at the top.
@@ -103,6 +129,7 @@ final class MarkdownPreviewController: NSObject {
     /// Refresh the chrome colors that depend on the current theme. Safe to
     /// call repeatedly; idempotent if the theme hasn't actually changed.
     func reapplyTheme(_ theme: Theme) {
+        mermaidCoordinator.updateViewerTheme(theme)
         let bg = NSColor(theme.color("bg-1"))
         scrollView.backgroundColor = bg
         textView.backgroundColor = bg
@@ -110,6 +137,31 @@ final class MarkdownPreviewController: NSObject {
             .foregroundColor: NSColor(theme.color("accent")),
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
+    }
+
+    func dismantle() {
+        mermaidCoordinator.cancelAll()
+    }
+
+    func showMermaidSourceForTesting(id: String) {
+        mermaidCoordinator.showSource(id: id, in: textView)
+    }
+
+    func shiftAnchors(startingAt location: Int, by delta: Int) {
+        guard delta != 0 else { return }
+        for (slug, range) in anchorRanges {
+            if range.location >= location {
+                anchorRanges[slug] = NSRange(
+                    location: max(0, range.location + delta),
+                    length: range.length
+                )
+            } else if NSMaxRange(range) > location {
+                anchorRanges[slug] = NSRange(
+                    location: range.location,
+                    length: max(0, range.length + delta)
+                )
+            }
+        }
     }
 
     /// Install a loaded `NSImage` into the placeholder attachment, resize it
@@ -124,10 +176,34 @@ final class MarkdownPreviewController: NSObject {
         } else {
             attachment.bounds = NSRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
         }
-        if let storage = textView.textStorage {
-            let len = storage.length
-            storage.edited([.editedAttributes], range: NSRange(location: 0, length: len), changeInLength: 0)
+        guard let storage = textView.textStorage,
+              let range = attachmentRange(for: attachment, in: storage)
+        else { return }
+        storage.edited([.editedAttributes], range: range, changeInLength: 0)
+        for layoutManager in storage.layoutManagers {
+            layoutManager.invalidateLayout(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            layoutManager.invalidateDisplay(forCharacterRange: range)
         }
+    }
+
+    private func attachmentRange(
+        for attachment: NSTextAttachment,
+        in storage: NSTextStorage
+    ) -> NSRange? {
+        var found: NSRange?
+        storage.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: storage.length)
+        ) { value, range, stop in
+            guard let candidate = value as? NSTextAttachment,
+                  candidate === attachment else { return }
+            found = range
+            stop.pointee = true
+        }
+        return found
     }
 
     deinit {

@@ -458,7 +458,8 @@ final class DiffPaneLSPController {
             monospacedFontFamily: textView.font?.familyName ?? "JetBrainsMono Nerd Font",
             monospacedFontSize: max(1, Int((textView.font?.pointSize ?? 13).rounded())),
             baseDirectory: context.fileURL.deletingLastPathComponent(),
-            worktreeRoot: context.worktreeRoot
+            worktreeRoot: context.worktreeRoot,
+            mermaidProfile: .compact
         )
         let size = HoverFeatureTesting.computePreferredSize(for: renderResult)
         let anchor = textView.symbolAnchorRect(for: symbolRange)
@@ -468,7 +469,10 @@ final class DiffPaneLSPController {
             size: size,
             theme: theme,
             anchor: anchor,
-            in: textView
+            in: textView,
+            onWillPresentMermaidViewer: { [weak self] in
+                self?.hideHover()
+            }
         )
     }
 

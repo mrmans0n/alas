@@ -1,0 +1,122 @@
+import CoreGraphics
+
+enum MermaidDiagramLayout {
+    static func fittedSize(
+        intrinsic: CGSize,
+        availableWidth: CGFloat,
+        maxHeight: CGFloat
+    ) -> CGSize {
+        guard intrinsic.width > 0, intrinsic.height > 0 else { return .zero }
+        let scale = min(1, availableWidth / intrinsic.width, maxHeight / intrinsic.height)
+        return CGSize(width: intrinsic.width * scale, height: intrinsic.height * scale)
+    }
+
+    static func actualSizeScale(intrinsic: CGSize, fitted: CGSize) -> CGFloat {
+        guard intrinsic.width > 0,
+              intrinsic.height > 0,
+              fitted.width > 0,
+              fitted.height > 0
+        else { return 1 }
+
+        let scale = max(
+            intrinsic.width / fitted.width,
+            intrinsic.height / fitted.height
+        )
+        return scale.isFinite && scale > 0 ? scale : 1
+    }
+}
+
+struct MermaidRenderRequestState {
+    private(set) var currentKey: MermaidRenderKey?
+    private(set) var outcome: MermaidRenderOutcome?
+
+    func resetsViewport(for key: MermaidRenderKey) -> Bool {
+        guard let currentKey else { return true }
+        return currentKey.source != key.source
+            || currentKey.profile != key.profile
+    }
+
+    mutating func begin(_ key: MermaidRenderKey) {
+        currentKey = key
+        outcome = nil
+    }
+
+    mutating func apply(_ outcome: MermaidRenderOutcome, for key: MermaidRenderKey) {
+        guard key == currentKey else { return }
+        self.outcome = outcome
+    }
+}
+
+struct MermaidZoomState: Equatable {
+    static let minimumScale: CGFloat = 0.25
+    static let maximumScale: CGFloat = 8
+
+    private enum Mode: Equatable {
+        case fit
+        case explicit
+    }
+
+    private(set) var scale: CGFloat = 1
+    private(set) var translation: CGSize = .zero
+    private var mode: Mode = .fit
+
+    mutating func zoom(by factor: CGFloat) {
+        scale = scale(adding: factor)
+        mode = .explicit
+    }
+
+    mutating func setScale(_ scale: CGFloat) {
+        guard scale.isFinite else { return }
+        self.scale = Self.clamped(scale)
+        mode = .explicit
+    }
+
+    mutating func setActualSize(_ scale: CGFloat) {
+        guard scale.isFinite, scale > 0 else { return }
+        self.scale = max(Self.minimumScale, scale)
+        mode = .explicit
+    }
+
+    mutating func preserveIntrinsicZoom(
+        from oldActualSizeScale: CGFloat,
+        to newActualSizeScale: CGFloat
+    ) {
+        guard mode == .explicit,
+              oldActualSizeScale.isFinite,
+              oldActualSizeScale > 0,
+              newActualSizeScale.isFinite,
+              newActualSizeScale > 0
+        else { return }
+
+        let intrinsicScale = scale / oldActualSizeScale
+        let nextScale = intrinsicScale * newActualSizeScale
+        guard nextScale.isFinite else { return }
+        scale = max(Self.minimumScale, nextScale)
+    }
+
+    mutating func translate(by delta: CGSize) {
+        guard delta.width.isFinite, delta.height.isFinite else { return }
+        translation.width += delta.width
+        translation.height += delta.height
+    }
+
+    mutating func resetToFit() {
+        scale = 1
+        translation = .zero
+        mode = .fit
+    }
+
+    func scale(adding factor: CGFloat) -> CGFloat {
+        guard factor.isFinite, factor > 0 else { return scale }
+        let nextScale = scale * factor
+        guard nextScale.isFinite else { return scale }
+        if scale > Self.maximumScale {
+            return max(Self.minimumScale, nextScale)
+        }
+        return Self.clamped(nextScale)
+    }
+
+    private static func clamped(_ scale: CGFloat) -> CGFloat {
+        min(maximumScale, max(minimumScale, scale))
+    }
+}

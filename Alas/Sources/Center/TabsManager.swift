@@ -489,7 +489,7 @@ final class TabsManager {
         revealEndLine: Int? = nil
     ) -> Tab {
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
-            && MarkdownFileType.isMarkdown(relativePath: relativePath)
+            && MarkdownFileType.supportsRichPreview(relativePath: relativePath)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
                if case .editor(let s) = $0 { return s.relativePath == relativePath }
@@ -556,7 +556,7 @@ final class TabsManager {
     ) -> Tab {
         let absPath = absoluteURL.path
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
-            && MarkdownFileType.isMarkdown(relativePath: absPath)
+            && MarkdownFileType.supportsRichPreview(relativePath: absPath)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
                if case .editor(let s) = $0 { return s.externalAbsolutePath == absPath }

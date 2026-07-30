@@ -105,6 +105,9 @@ packages:
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.8.0
+  BeautifulMermaidSwift:
+    url: https://github.com/lukilabs/beautiful-mermaid-swift
+    from: 1.0.0
 
 targets:
   Alas:
@@ -195,6 +198,8 @@ targets:
         product: TreeSitterDockerfile
       - package: Markdown
         product: Markdown
+      - package: BeautifulMermaidSwift
+        product: BeautifulMermaid
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas

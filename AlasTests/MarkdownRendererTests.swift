@@ -207,6 +207,81 @@ struct MarkdownRendererTests {
         #expect(font?.isFixedPitch == true)
     }
 
+    @Test func mermaidFenceEmitsAttachmentReference() throws {
+        let result = try Self.render("""
+        ```mermaid
+        graph TD; A-->B
+        ```
+        """)
+
+        #expect(result.mermaidAttachments.count == 1)
+        #expect(
+            result.mermaidAttachments[0].id
+                == "mermaid-\(MarkdownRenderer.stableMermaidSourceKey("graph TD; A-->B"))"
+        )
+        #expect(result.mermaidAttachments[0].source == "graph TD; A-->B")
+        #expect(result.mermaidAttachments[0].profile == .full)
+        #expect(result.attributedString.string.contains("graph TD") == false)
+    }
+
+    @Test func mermaidAttachmentIDSurvivesEarlierDifferentDiagram() throws {
+        let target = "graph TD; Target-->Done"
+        let base = try Self.render("""
+        ```mermaid
+        \(target)
+        ```
+        """)
+        let withEarlierDiagram = try Self.render("""
+        ```mermaid
+        graph TD; Earlier-->Diagram
+        ```
+
+        ```mermaid
+        \(target)
+        ```
+        """)
+
+        let targetID = try #require(base.mermaidAttachments.first?.id)
+        let shiftedTargetID = try #require(
+            withEarlierDiagram.mermaidAttachments.first { $0.source == target }?.id
+        )
+
+        #expect(targetID == shiftedTargetID)
+    }
+
+    @Test func duplicateMermaidAttachmentIDsUseSourceLocation() throws {
+        let source = "graph TD; Same-->Diagram"
+        let result = try Self.render("""
+        ```mermaid
+        \(source)
+        ```
+
+        ```mermaid
+        \(source)
+        ```
+        """)
+
+        #expect(result.mermaidAttachments.count == 2)
+        #expect(result.mermaidAttachments[0].source == source)
+        #expect(result.mermaidAttachments[1].source == source)
+        #expect(result.mermaidAttachments[0].id != result.mermaidAttachments[1].id)
+        #expect(result.mermaidAttachments[0].id.contains(MarkdownRenderer.stableMermaidSourceKey(source)))
+        #expect(result.mermaidAttachments[1].id.contains(MarkdownRenderer.stableMermaidSourceKey(source)))
+    }
+
+    @Test func emptyMermaidFenceRemainsCode() throws {
+        let result = try Self.render("```mermaid\n```")
+
+        #expect(result.mermaidAttachments.isEmpty)
+    }
+
+    @Test func ordinaryFenceRemainsCode() throws {
+        let result = try Self.render("```swift\nlet value = 1\n```")
+
+        #expect(result.mermaidAttachments.isEmpty)
+        #expect(result.attributedString.string.contains("let value = 1"))
+    }
+
     private func tableBlock(at substring: String, in attributed: NSAttributedString) -> NSTextTableBlock? {
         let range = (attributed.string as NSString).range(of: substring)
         guard range.location != NSNotFound else { return nil }

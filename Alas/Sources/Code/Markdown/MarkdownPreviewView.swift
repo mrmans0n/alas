@@ -23,6 +23,16 @@ struct MarkdownPreviewView: NSViewRepresentable {
         // value without recreating the coordinator, so we must push the new
         // chrome colors into the existing NSScrollView/NSTextView here.
         context.coordinator.reapplyTheme(theme)
+        // SwiftUI may call this repeatedly with the same value. The result's
+        // revision lets the controller preserve attachment tasks and source
+        // disclosure across those duplicate updates.
         context.coordinator.apply(result: result)
+    }
+
+    static func dismantleNSView(
+        _ nsView: NSScrollView,
+        coordinator: MarkdownPreviewController
+    ) {
+        coordinator.dismantle()
     }
 }
