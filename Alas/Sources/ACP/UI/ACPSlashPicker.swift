@@ -148,7 +148,8 @@ struct ACPSlashPickerView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
             }
             if let d = s.description, !d.isEmpty {
                 MarqueeText(

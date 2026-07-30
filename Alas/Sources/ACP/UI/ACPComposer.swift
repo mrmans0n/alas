@@ -84,6 +84,12 @@ struct ACPInputField: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.isFocused = $isFocused
+        // The agent can send `available_commands_update` after the user has
+        // already typed a "/" token (e.g. right after a takeover re-attaches
+        // via session/load) — reconcileSlashPanel only runs on keystrokes, so
+        // without this the panel never appears for that still-active token.
+        let suggestionsArrived = context.coordinator.promptSuggestions.isEmpty
+            && !session.promptSuggestions.isEmpty
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
@@ -100,6 +106,9 @@ struct ACPInputField: NSViewRepresentable {
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
+            if suggestionsArrived {
+                tv.reconcileSlashPanel()
+            }
         }
     }
 
