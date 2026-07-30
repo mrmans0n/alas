@@ -113,6 +113,26 @@ struct NewWorktreeDialogTests {
         #expect(selection.ggMode == .off)
     }
 
+    @Test func completedGGProbeCarriesImmediateBranchInputIntoEmptyStackDraft() {
+        let stackName = NewWorktreeDialog.stackNameAfterGGAvailabilityProbe(
+            branch: "nacho/feature",
+            branchPrefix: "nacho/",
+            currentStackName: ""
+        )
+
+        #expect(stackName == "feature")
+    }
+
+    @Test func completedGGProbePreservesExistingStackDraft() {
+        let stackName = NewWorktreeDialog.stackNameAfterGGAvailabilityProbe(
+            branch: "nacho/regular-draft",
+            branchPrefix: "nacho/",
+            currentStackName: "stack-draft"
+        )
+
+        #expect(stackName == "stack-draft")
+    }
+
     @Test func initialProjectIdUsesValidPreset() {
         let projects = [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
 
