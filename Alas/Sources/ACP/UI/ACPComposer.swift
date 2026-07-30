@@ -613,6 +613,17 @@ final class ACPNSTextView: NSTextView {
         needsDisplay = true
     }
 
+    /// A restored draft can already contain an active "/" token before
+    /// this view is attached to a window — `positionAndShow` needs the
+    /// window to place the panel, so `reconcileSlashPanel` is a no-op
+    /// until attachment. Retry once a window exists.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            reconcileSlashPanel()
+        }
+    }
+
     /// Dismiss any floating picker panel owned by this text view. The
     /// panels are attached as child windows of the host window (not of
     /// this view), so without an explicit close on teardown they outlive
@@ -754,7 +765,11 @@ final class ACPNSTextView: NSTextView {
     }
 
     private func presentSlashPanel() {
-        guard let coord = coordinator, !coord.promptSuggestions.isEmpty,
+        // `positionAndShow` needs `window` to place the panel; bail out
+        // rather than recording a `slashPanel` that was never actually
+        // shown — reconcileSlashPanel would then skip re-presenting it
+        // on later calls, leaving it permanently invisible.
+        guard window != nil, let coord = coordinator, !coord.promptSuggestions.isEmpty,
               let theme = coord.theme else { return }
         let panel = ACPSlashPickerPanel(
             suggestions: coord.promptSuggestions,
