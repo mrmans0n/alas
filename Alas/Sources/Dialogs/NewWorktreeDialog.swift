@@ -192,6 +192,16 @@ struct NewWorktreeDialog: View {
                 if let pinned = stackPinnedBase { base = pinned }
             }
         }
+        .onChange(of: GGAvailability.shared.isInstalled) { wasInstalled, isInstalled in
+            guard !wasInstalled, isInstalled, stackedDiffsRequested else { return }
+            // The startup probe can resolve after this field has accepted input.
+            // Carry that input forward without coupling later manual mode toggles.
+            stackName = Self.stackNameAfterGGAvailabilityProbe(
+                branch: branch,
+                branchPrefix: state.config.worktrees.branchPrefix,
+                currentStackName: stackName
+            )
+        }
     }
 
     private var presetProject: ProjectConfig? {
@@ -246,6 +256,18 @@ struct NewWorktreeDialog: View {
         return GGStackCreateMode.createsStack(
             masterEnabled: state.config.changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            worktreeMode: ggMode,
+            repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path)
+        )
+    }
+
+    private var stackedDiffsRequested: Bool {
+        guard let project = state.projects.first(where: { $0.id == projectId }) else { return false }
+        return GGStackCreateMode.createsStack(
+            masterEnabled: state.config.changes.stackedDiffsEnabled,
+            ggInstalled: true,
             isRemoteProject: project.host != nil,
             projectMode: project.ggMode,
             worktreeMode: ggMode,
@@ -503,6 +525,16 @@ struct NewWorktreeDialog: View {
         stackName: String
     ) -> String {
         createsGGStack ? stackName : branch
+    }
+
+    nonisolated static func stackNameAfterGGAvailabilityProbe(
+        branch: String,
+        branchPrefix: String,
+        currentStackName: String
+    ) -> String {
+        guard currentStackName.isEmpty else { return currentStackName }
+        guard branch.hasPrefix(branchPrefix) else { return branch }
+        return String(branch.dropFirst(branchPrefix.count))
     }
 
     nonisolated static func resolvedPresetProject(
