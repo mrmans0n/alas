@@ -318,9 +318,11 @@ final class DiffPaneTextDocumentContainerView: NSView {
         oldPane.onContextExpansion = onContextExpansion
         newPane.onContextExpansion = onContextExpansion
         stackedPane.onContextExpansion = onContextExpansion
-        oldPane.activeCommentHighlight = activeCommentHighlight
-        newPane.activeCommentHighlight = activeCommentHighlight
-        stackedPane.activeCommentHighlight = activeCommentHighlight
+        if oldPane.activeCommentHighlight != activeCommentHighlight {
+            oldPane.activeCommentHighlight = activeCommentHighlight
+            newPane.activeCommentHighlight = activeCommentHighlight
+            stackedPane.activeCommentHighlight = activeCommentHighlight
+        }
 
         let signature = UpdateSignature(
             groupID: group.id,
@@ -518,9 +520,11 @@ final class DiffPaneTextDocumentContainerView: NSView {
         oldPane.onContextExpansion = onContextExpansion
         newPane.onContextExpansion = onContextExpansion
         stackedPane.onContextExpansion = onContextExpansion
-        oldPane.activeCommentHighlight = activeCommentHighlight
-        newPane.activeCommentHighlight = activeCommentHighlight
-        stackedPane.activeCommentHighlight = activeCommentHighlight
+        if oldPane.activeCommentHighlight != activeCommentHighlight {
+            oldPane.activeCommentHighlight = activeCommentHighlight
+            newPane.activeCommentHighlight = activeCommentHighlight
+            stackedPane.activeCommentHighlight = activeCommentHighlight
+        }
 
         let signature = RowsUpdateSignature(
             rowsSignature: rowsSignature ?? DiffDisplayRowsSignature(rows),
@@ -666,6 +670,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var theme: Theme?
     var activeCommentHighlight: DiffReviewCommentHighlight? {
         didSet {
+            guard activeCommentHighlight != oldValue else { return }
             textView.activeCommentHighlight = activeCommentHighlight
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.activeCommentHighlight = activeCommentHighlight
         }
