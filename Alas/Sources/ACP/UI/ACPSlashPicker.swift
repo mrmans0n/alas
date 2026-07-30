@@ -10,17 +10,29 @@ import SwiftUI
 final class ACPSlashPickerModel: ObservableObject {
     @Published var query: String = ""
     @Published private(set) var selectedIndex: Int = 0
-    let allSuggestions: [ACPPromptSuggestion]
+    @Published private(set) var allSuggestions: [ACPPromptSuggestion]
 
     init(suggestions: [ACPPromptSuggestion]) {
-        // De-duplicate by `command` (case-sensitive) keeping the first
-        // occurrence in original order. Some agents emit the same slash
-        // command more than once (e.g. across re-sent
-        // `available_commands_update` payloads); duplicates would otherwise
-        // render as repeated rows and, with element-based ForEach identity,
-        // as blank phantom rows.
+        self.allSuggestions = Self.deduplicated(suggestions)
+    }
+
+    /// Replaces the suggestion list in place (e.g. a live
+    /// `available_commands_update` while the panel is already open)
+    /// instead of requiring the panel to be closed and reopened.
+    func updateSuggestions(_ suggestions: [ACPPromptSuggestion]) {
+        allSuggestions = Self.deduplicated(suggestions)
+        selectedIndex = 0
+    }
+
+    /// De-duplicates by `command` (case-sensitive) keeping the first
+    /// occurrence in original order. Some agents emit the same slash
+    /// command more than once (e.g. across re-sent
+    /// `available_commands_update` payloads); duplicates would otherwise
+    /// render as repeated rows and, with element-based ForEach identity,
+    /// as blank phantom rows.
+    private static func deduplicated(_ suggestions: [ACPPromptSuggestion]) -> [ACPPromptSuggestion] {
         var seen = Set<String>()
-        self.allSuggestions = suggestions.filter { seen.insert($0.command).inserted }
+        return suggestions.filter { seen.insert($0.command).inserted }
     }
 
     /// Score each suggestion by how well it matches the (lowercased)
@@ -148,7 +160,8 @@ struct ACPSlashPickerView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
             }
             if let d = s.description, !d.isEmpty {
                 MarqueeText(

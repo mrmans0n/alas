@@ -84,6 +84,12 @@ struct ACPInputField: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.isFocused = $isFocused
+        // The agent can send `available_commands_update` at any time — after
+        // the user has already typed a "/" token (e.g. right after a
+        // takeover re-attaches via session/load), or to replace/clear an
+        // already-open panel's list. reconcileSlashPanel only runs on
+        // keystrokes, so without this the panel would miss all of that.
+        let suggestionsChanged = context.coordinator.promptSuggestions != session.promptSuggestions
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
@@ -100,6 +106,9 @@ struct ACPInputField: NSViewRepresentable {
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
+            if suggestionsChanged {
+                tv.reconcileSlashPanel()
+            }
         }
     }
 
@@ -604,6 +613,17 @@ final class ACPNSTextView: NSTextView {
         needsDisplay = true
     }
 
+    /// A restored draft can already contain an active "/" token before
+    /// this view is attached to a window — `positionAndShow` needs the
+    /// window to place the panel, so `reconcileSlashPanel` is a no-op
+    /// until attachment. Retry once a window exists.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            reconcileSlashPanel()
+        }
+    }
+
     /// Dismiss any floating picker panel owned by this text view. The
     /// panels are attached as child windows of the host window (not of
     /// this view), so without an explicit close on teardown they outlive
@@ -732,7 +752,11 @@ final class ACPNSTextView: NSTextView {
             closeSlashPanel()
             return
         }
-        if slashPanel == nil { presentSlashPanel() }
+        if slashPanel == nil {
+            presentSlashPanel()
+        } else {
+            slashPanel?.model.updateSuggestions(coord.promptSuggestions)
+        }
         slashStart = tok.start
         slashPanel?.model.setQuery(tok.query)
         if slashPanel?.model.filtered.isEmpty == true {
@@ -741,7 +765,11 @@ final class ACPNSTextView: NSTextView {
     }
 
     private func presentSlashPanel() {
-        guard let coord = coordinator, !coord.promptSuggestions.isEmpty,
+        // `positionAndShow` needs `window` to place the panel; bail out
+        // rather than recording a `slashPanel` that was never actually
+        // shown — reconcileSlashPanel would then skip re-presenting it
+        // on later calls, leaving it permanently invisible.
+        guard window != nil, let coord = coordinator, !coord.promptSuggestions.isEmpty,
               let theme = coord.theme else { return }
         let panel = ACPSlashPickerPanel(
             suggestions: coord.promptSuggestions,
