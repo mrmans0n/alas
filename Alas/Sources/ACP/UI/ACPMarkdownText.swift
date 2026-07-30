@@ -18,6 +18,7 @@ struct ACPMarkdownText: View {
     var updateSourceID: ObjectIdentifier? = nil
     var typography: ACPChatTypography = .default
     var showsCodeBlockCopyButton: Bool = true
+    var noninteractiveTapAction: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var tableViewportWidth: CGFloat = 0
 
@@ -25,6 +26,9 @@ struct ACPMarkdownText: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(currentRenderBlocks().enumerated()), id: \.offset) { _, renderBlock in
                 view(for: renderBlock)
+                    .modifier(ACPMarkdownNoninteractiveTapModifier(
+                        action: renderBlock.block.allowsNoninteractiveTapAction ? noninteractiveTapAction : nil
+                    ))
             }
         }
     }
@@ -294,6 +298,21 @@ struct ACPMarkdownText: View {
         let memoizesInlineMarkdown: Bool
     }
 
+    private struct ACPMarkdownNoninteractiveTapModifier: ViewModifier {
+        let action: (() -> Void)?
+
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if let action {
+                content
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: action)
+            } else {
+                content
+            }
+        }
+    }
+
     /// Detect a GitHub-flavoured markdown table starting at `start`:
     ///   | h1 | h2 |
     ///   |----|----|
@@ -501,6 +520,17 @@ struct ACPMarkdownText: View {
             blocks.append(.paragraph(para.joined(separator: "\n")))
         }
         return blocks
+    }
+}
+
+private extension ACPMarkdownText.Block {
+    var allowsNoninteractiveTapAction: Bool {
+        switch self {
+        case .mermaid:
+            false
+        case .heading, .paragraph, .taskList, .quote, .code, .streamingCode, .table:
+            true
+        }
     }
 }
 

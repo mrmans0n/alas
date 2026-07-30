@@ -2224,8 +2224,13 @@ enum DiffReviewInlineFeedbackDisplayPolicy {
 enum DiffReviewInlineFeedbackMarkdown {
     private static let typography = ACPChatTypography(fontFamily: "", fontSize: 11)
 
-    static func view(_ source: String) -> some View {
-        ACPMarkdownText(raw: source, typography: typography, showsCodeBlockCopyButton: false)
+    static func view(_ source: String, noninteractiveTapAction: (() -> Void)? = nil) -> some View {
+        ACPMarkdownText(
+            raw: source,
+            typography: typography,
+            showsCodeBlockCopyButton: false,
+            noninteractiveTapAction: noninteractiveTapAction
+        )
     }
 
     @MainActor
@@ -2265,18 +2270,8 @@ struct ReviewDraftCommentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if isEditing {
-                cardContent
-            } else {
-                Button {
-                    onSelect(comment)
-                } label: {
-                    cardContent
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("diff-review-draft-comment-select-\(comment.id)")
-            }
+            cardContent
+                .background(selectionPressMarker)
 
             actionRow
         }
@@ -2309,6 +2304,8 @@ struct ReviewDraftCommentCard: View {
             RoundedRectangle(cornerRadius: 2)
                 .fill(statusColor)
                 .frame(width: 3)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: selectWhenNotEditing)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -2327,6 +2324,8 @@ struct ReviewDraftCommentCard: View {
                     }
                 }
                 .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: selectWhenNotEditing)
 
                 ForEach(providerStateLabels.indices, id: \.self) { index in
                     let label = providerStateLabels[index]
@@ -2354,14 +2353,20 @@ struct ReviewDraftCommentCard: View {
                     .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
+                        DiffReviewInlineFeedbackMarkdown.view(
+                            comment.bodyMarkdown,
+                            noninteractiveTapAction: selectWhenNotEditing
+                        )
 
                         ForEach(comment.allReplies) { reply in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(reply.author.displayName)
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundColor(theme.color("fg-faint"))
-                                DiffReviewInlineFeedbackMarkdown.view(reply.bodyMarkdown)
+                                DiffReviewInlineFeedbackMarkdown.view(
+                                    reply.bodyMarkdown,
+                                    noninteractiveTapAction: selectWhenNotEditing
+                                )
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .padding(.leading, 8)
@@ -2378,6 +2383,22 @@ struct ReviewDraftCommentCard: View {
 
             Spacer(minLength: 0)
         }
+    }
+
+    @ViewBuilder
+    private var selectionPressMarker: some View {
+        if !isEditing {
+            ReviewDraftCommentActionPressMarker(
+                identifier: "diff-review-draft-comment-select-\(comment.id)",
+                label: "Select draft comment",
+                action: { onSelect(comment) }
+            )
+        }
+    }
+
+    private func selectWhenNotEditing() {
+        guard !isEditing else { return }
+        onSelect(comment)
     }
 
     @ViewBuilder
@@ -2726,44 +2747,14 @@ struct DiffReviewInlineFeedbackCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                DiffReviewInlineFeedbackCardInteraction.select(item, onSelect: onSelect)
-            } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(statusColor)
-                        .frame(width: 3)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Text(item.providerName)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(statusColor)
-
-                            if let author = item.author, !author.isEmpty {
-                                Text(author)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(theme.color("fg-muted"))
-                            }
-
-                            if let line = item.anchor.line {
-                                Text("line \(line)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(theme.color("fg-faint"))
-                            }
-                        }
-                        .lineLimit(1)
-
-                        DiffReviewInlineFeedbackMarkdown.view(item.bodyPreview)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("diff-review-inline-feedback-select-\(item.id)")
+            cardContent
+                .background(
+                    ReviewDraftCommentActionPressMarker(
+                        identifier: "diff-review-inline-feedback-select-\(item.id)",
+                        label: "Select inline feedback",
+                        action: select
+                    )
+                )
 
             actionRow
         }
@@ -2785,6 +2776,48 @@ struct DiffReviewInlineFeedbackCard: View {
         .onHover { hovering in
             onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
         }
+    }
+
+    private var cardContent: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(statusColor)
+                .frame(width: 3)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: select)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(item.providerName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(statusColor)
+
+                    if let author = item.author, !author.isEmpty {
+                        Text(author)
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-muted"))
+                    }
+
+                    if let line = item.anchor.line {
+                        Text("line \(line)")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-faint"))
+                    }
+                }
+                .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: select)
+
+                DiffReviewInlineFeedbackMarkdown.view(item.bodyPreview, noninteractiveTapAction: select)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func select() {
+        DiffReviewInlineFeedbackCardInteraction.select(item, onSelect: onSelect)
     }
 
     static func reportsHover(isHovered: Bool, isFocused: Bool) -> Bool {
