@@ -7324,7 +7324,7 @@
 			repositoryURL = "https://github.com/lukilabs/beautiful-mermaid-swift";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
+				minimumVersion = 1.0.4;
 			};
 		};
 		FAF805B9CC533A5991566C9A /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */ = {

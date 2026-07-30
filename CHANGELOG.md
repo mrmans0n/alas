@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.7] - 2026-07-30
+
+### ✨ Features
+
+- Improve ACP transcript markdown rendering (#929).
+- Add edit mode to the run script palette (#930).
+- Render native Mermaid diagrams in Markdown previews (#932).
+
+### 🏗️ Internal
+
+- Clarify run script activation comments (#931).
+- Update BeautifulMermaidSwift to 1.0.4 (#933).
+
 ## [0.13.6] - 2026-07-29
 
 ### 🐛 Fixes
