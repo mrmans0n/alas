@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.8] - 2026-07-30
+
+### 🐛 Fixes
+
+- Fix ACP slash-command autocomplete rendering and missed suggestions (#934).
+- Preserve `git-gud` new-worktree input across availability probes (#935).
+
+### 🏗️ Internal
+
+- Bound the diff review render tree to avoid excessive review surface work (#936).
+
 ## [0.13.7] - 2026-07-30
 
 ### ✨ Features
