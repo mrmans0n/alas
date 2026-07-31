@@ -51,9 +51,12 @@ struct GGInboxModelsTests {
     }
 
     @Test func bucketMetadataPriorityOrderAndAccessors() throws {
-        #expect(GGInboxBucket.allCases == [.refreshFailed, .readyToLand, .changesRequested, .blockedOnCi, .awaitingReview, .behindBase, .draft])
-        #expect(GGInboxBucket.readyToLand.title == "Ready to land")
-        #expect(GGInboxBucket.readyToLand.themeToken == "add")
+        #expect(GGInboxBucket.allCases == [
+            .refreshFailed, .readyToLand, .changesRequested, .blockedOnCi,
+            .awaitingReview, .behindBase, .draft,
+        ])
+        #expect(GGInboxBucket.refreshFailed.title == "Refresh failed")
+        #expect(GGInboxBucket.refreshFailed.themeToken == "warn")
         #expect(GGInboxBucket.changesRequested.themeToken == "warn")
         #expect(GGInboxBucket.blockedOnCi.themeToken == "warn")
         #expect(GGInboxBucket.draft.themeToken == "fg-dim")

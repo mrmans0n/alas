@@ -115,6 +115,13 @@ struct GGInboxHelpersTests {
         #expect(GGInboxTabView.refreshLabel(.init(completed: 2, total: 5)) == "Refreshing 2/5")
     }
 
+    @Test func clearInboxRequiresCompletedNonErrorState() {
+        let empty = GGInboxSnapshot(totalItems: 0, buckets: GGInboxBuckets(), stackErrors: [])
+        #expect(GGInboxTabView.shouldShowClearInbox(snapshot: empty, isRefreshing: false, lastError: nil))
+        #expect(!GGInboxTabView.shouldShowClearInbox(snapshot: empty, isRefreshing: true, lastError: nil))
+        #expect(!GGInboxTabView.shouldShowClearInbox(snapshot: empty, isRefreshing: false, lastError: "failed"))
+    }
+
     @Test func validPRURLRequiresHTTPOrHTTPS() {
         #expect(GGInboxTabView.validPRURL("https://example.test/42") != nil)
         #expect(GGInboxTabView.validPRURL("") == nil)
