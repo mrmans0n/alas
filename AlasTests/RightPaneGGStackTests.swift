@@ -1700,7 +1700,7 @@ struct RightPaneGGStackTests {
         // core (e.g. `func runGGSyncBody() async`), call that instead —
         // implementer's choice; the assertion is what matters:
         _ = state.ggActionState.beginAction(.sync)
-        for try await event in state.ggService.sync(worktreePath: wt.path.path) {
+        for try await event in state.ggService.sync(worktreePath: wt.path.path, supportsJSONL: true) {
             state.ggActionState.appendSyncEvent(event)
         }
         if let summary = GGStackActionState.syncSummaryLine(from: state.ggActionState.syncProgress) {

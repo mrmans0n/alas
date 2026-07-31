@@ -22,6 +22,7 @@ private func waitUntil(
 private final class RecordingGGMutationExecutor: GGMutationExecuting {
     var requests: [GGMutationRequest] = []
     var clientOperationIDs: [String?] = []
+    var syncJSONLCapabilities: [Bool] = []
     var result: GGMutationExecutionResult = .none
     var error: Error?
     var newestOperation: GGOperationSummary?
@@ -44,10 +45,12 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
         _ request: GGMutationRequest,
         worktreePath: String,
         clientOperationID: String?,
+        supportsSyncJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
         requests.append(request)
         clientOperationIDs.append(clientOperationID)
+        syncJSONLCapabilities.append(supportsSyncJSONL)
         if request == .sync {
             for event in syncEvents { onSyncEvent(event) }
         }
@@ -80,6 +83,12 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
 
 @MainActor
 private final class GGClientOperationCapabilityBox {
+    var isSupported: Bool
+    init(_ isSupported: Bool) { self.isSupported = isSupported }
+}
+
+@MainActor
+private final class GGSyncJSONLCapabilityBox {
     var isSupported: Bool
     init(_ isSupported: Bool) { self.isSupported = isSupported }
 }
@@ -131,6 +140,7 @@ private final class GGMutationHarness {
     let markers = RecordingUndoMarkerStore()
     let actionState = GGStackActionState()
     let clientOperationCapability: GGClientOperationCapabilityBox
+    let syncJSONLCapability: GGSyncJSONLCapabilityBox
     let tokenGenerator: GGClientOperationTokenGenerator
     var stacks: [GGStackSnapshot]
     var loadError: Error?
@@ -142,10 +152,16 @@ private final class GGMutationHarness {
     var onRefreshStack: (() async -> Void)?
     private(set) var coordinator: GGMutationCoordinator!
 
-    init(stacks: [GGStackSnapshot], supportsClientOperationID: Bool = false) {
+    init(
+        stacks: [GGStackSnapshot],
+        supportsClientOperationID: Bool = false,
+        supportsSyncJSONL: Bool = false
+    ) {
         self.stacks = stacks
         let capability = GGClientOperationCapabilityBox(supportsClientOperationID)
         clientOperationCapability = capability
+        let syncCapability = GGSyncJSONLCapabilityBox(supportsSyncJSONL)
+        syncJSONLCapability = syncCapability
         let generator = GGClientOperationTokenGenerator()
         tokenGenerator = generator
         coordinator = GGMutationCoordinator(
@@ -155,6 +171,7 @@ private final class GGMutationHarness {
             actionState: actionState,
             undoMarkerStore: markers,
             clientOperationIDCapability: { capability.isSupported },
+            syncJSONLCapability: { syncCapability.isSupported },
             clientOperationIDGenerator: { generator.next() },
             context: GGMutationContext(
                 loadFreshStack: { [unowned self] in
@@ -553,6 +570,22 @@ struct GGMutationCoordinatorTests {
         #expect(harness.refreshes == [.stack, .gitChanges, .providerReviews, .inbox])
         #expect(harness.actionState.lastActionSummary == "Synced")
         #expect(harness.actionState.syncProgress.isEmpty)
+    }
+
+    @Test func syncForwardsCachedJSONLCapability() async throws {
+        let current = GGMutationHarness(
+            stacks: [stack(head: "a")],
+            supportsSyncJSONL: true
+        )
+        try await current.coordinator.apply(.sync, confirmedAgainst: nil)
+        #expect(current.service.syncJSONLCapabilities == [true])
+
+        let old = GGMutationHarness(
+            stacks: [stack(head: "a")],
+            supportsSyncJSONL: false
+        )
+        try await old.coordinator.apply(.sync, confirmedAgainst: nil)
+        #expect(old.service.syncJSONLCapabilities == [false])
     }
 
     @Test func localMutationRefreshesStackGitAndInboxAfterError() async {

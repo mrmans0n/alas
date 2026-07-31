@@ -19,19 +19,22 @@ private struct HelpGGRunner: GGCommandRunning {
     let split: String?
     let unstack: String?
     let sc: String?
+    let sync: String?
 
     init(
         version: String? = "1.0.0",
         root: String? = nil,
         split: String?,
         unstack: String?,
-        sc: String? = nil
+        sc: String? = nil,
+        sync: String? = nil
     ) {
         self.version = version
         self.root = root
         self.split = split
         self.unstack = unstack
         self.sc = sc
+        self.sync = sync
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
@@ -51,6 +54,9 @@ private struct HelpGGRunner: GGCommandRunning {
         case ["sc", "--help"]:
             guard let sc else { break }
             return ProcessResult(exitCode: 0, stdout: sc, stderr: "")
+        case ["sync", "--help"]:
+            guard let sync else { break }
+            return ProcessResult(exitCode: 0, stdout: sync, stderr: "")
         default:
             break
         }
@@ -120,6 +126,18 @@ struct GGAvailabilityTests {
 
         let old = GGService(runner: HelpGGRunner(split: "", unstack: "", sc: "--message"))
         #expect(!(await old.probeCapabilities()).stagedOnlyAmend)
+    }
+
+    @Test func syncJSONLCapabilityUsesSyncHelpAndDefaultsOff() async {
+        let current = GGService(runner: HelpGGRunner(
+            split: "", unstack: "", sync: "--json --jsonl"
+        ))
+        #expect((await current.probeCapabilities()).syncJSONL)
+
+        let old = GGService(runner: HelpGGRunner(
+            split: "", unstack: "", sync: "--json"
+        ))
+        #expect(!(await old.probeCapabilities()).syncJSONL)
     }
 
     @Test func probePopulatesVersionAndMCPPath() async {

@@ -29,6 +29,7 @@ protocol GGMutationExecuting {
         _ request: GGMutationRequest,
         worktreePath: String,
         clientOperationID: String?,
+        supportsSyncJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary]
@@ -44,6 +45,7 @@ final class GGMutationCoordinator {
     private let actionState: GGStackActionState
     private let undoMarkerStore: any GGUndoMarkerStoring
     private let clientOperationIDCapability: () -> Bool
+    private let syncJSONLCapability: () -> Bool
     private let clientOperationIDGenerator: () -> String
     private let context: GGMutationContext
 
@@ -63,6 +65,9 @@ final class GGMutationCoordinator {
         clientOperationIDCapability: @escaping () -> Bool = {
             GGAvailability.shared.capabilities.clientOperationID
         },
+        syncJSONLCapability: @escaping () -> Bool = {
+            GGAvailability.shared.capabilities.syncJSONL
+        },
         clientOperationIDGenerator: @escaping () -> String = {
             "alas:\(UUID().uuidString)"
         },
@@ -74,6 +79,7 @@ final class GGMutationCoordinator {
         self.actionState = actionState
         self.undoMarkerStore = undoMarkerStore
         self.clientOperationIDCapability = clientOperationIDCapability
+        self.syncJSONLCapability = syncJSONLCapability
         self.clientOperationIDGenerator = clientOperationIDGenerator
         self.context = context
     }
@@ -262,6 +268,7 @@ final class GGMutationCoordinator {
                 request,
                 worktreePath: worktreePath,
                 clientOperationID: clientOperationID,
+                supportsSyncJSONL: syncJSONLCapability(),
                 onSyncEvent: { [actionState] event in
                     actionState.appendSyncEvent(event)
                     if case .error(_, _, let message) = event { actionState.setError(message) }
@@ -667,6 +674,7 @@ extension GGService: GGMutationExecuting {
         _ request: GGMutationRequest,
         worktreePath: String,
         clientOperationID: String?,
+        supportsSyncJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
         let service = clientOperationID.map {
@@ -695,7 +703,12 @@ extension GGService: GGMutationExecuting {
         case .rebase(let target):
             try await service.rebase(worktreePath: worktreePath, target: target)
         case .sync:
-            for try await event in service.sync(worktreePath: worktreePath) { onSyncEvent(event) }
+            for try await event in service.sync(
+                worktreePath: worktreePath,
+                supportsJSONL: supportsSyncJSONL
+            ) {
+                onSyncEvent(event)
+            }
         case .land(let target):
             return .land(try await service.land(worktreePath: worktreePath, until: target))
         case .clean:
