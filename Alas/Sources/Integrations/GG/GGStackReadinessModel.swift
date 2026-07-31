@@ -95,12 +95,6 @@ struct GGStackReadinessModel: Equatable {
     /// Compatibility for callers that need to reason about every action.
     var actions: [Action] { primaryActions + overflowActions }
 
-    /// Compatibility projection until the drawer consumes `syncProgress` directly.
-    var progressRows: [String] {
-        guard let syncProgress else { return [] }
-        return [syncProgress.liveStatus].compactMap { $0 } + syncProgress.rows.map(\.text)
-    }
-
     @MainActor
     static func make(
         stack: GGStack,
