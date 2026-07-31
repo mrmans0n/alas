@@ -1218,6 +1218,21 @@ struct TabsManagerBufferTests {
 
         #expect(invalidations.count == 0)
     }
+
+    @Test func externalBufferCacheHitRearmsStoppedWatcher() throws {
+        let (manager, _, _) = makeManager()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ext-watcher-\(UUID().uuidString).md")
+        try "# Markdown\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let buffer = manager.externalBuffer(worktreeId: "wt", tabId: "tab", absoluteURL: url)
+        buffer.stopWatching()
+
+        _ = manager.externalBuffer(worktreeId: "wt", tabId: "tab", absoluteURL: url)
+
+        #expect(buffer.isWatchingForTesting)
+    }
 }
 
 private final class TabsManagerInvalidationCounter: @unchecked Sendable {

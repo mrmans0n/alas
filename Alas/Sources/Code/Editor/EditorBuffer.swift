@@ -694,6 +694,15 @@ final class EditorBuffer {
         watcherFD = fd
     }
 
+    func startWatchingIfNeeded() {
+        if remoteHost != nil {
+            guard remoteHelperSession == nil else { return }
+        } else {
+            guard watcherSource == nil else { return }
+        }
+        startWatching()
+    }
+
     func stopWatching() {
         remotePollTask?.cancel()
         remotePollTask = nil
@@ -780,6 +789,9 @@ final class EditorBuffer {
     private func handleWatcherEvent() {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if !FileManager.default.fileExists(atPath: url.path) {
+            watcherSource?.cancel()
+            watcherSource = nil
+            watcherFD = -1
             startMoveLookupForMissingFile(at: url)
             return
         }
@@ -2217,6 +2229,10 @@ final class EditorBuffer {
 
     func handleWatcherEventForTesting() {
         handleWatcherEvent()
+    }
+
+    var isWatchingForTesting: Bool {
+        watcherSource != nil
     }
     #endif
 }

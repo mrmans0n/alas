@@ -1451,16 +1451,13 @@ final class TabsManager {
         if existingEntry?.worktreeId != worktreeId || existingEntry?.url != absoluteURL {
             externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
         }
-        let existingBuffer = bufferStore.peekExternalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
         let buffer = bufferStore.externalBuffer(
             worktreeId: worktreeId,
             absoluteURL: absoluteURL,
             editable: editable,
             tabId: editable ? tabId : nil
         )
-        if buffer !== existingBuffer {
-            buffer.startWatching()
-        }
+        buffer.startWatchingIfNeeded()
 
         if let root = worktreeRoot {
             let existing = externalLSPInfo[tabId]
