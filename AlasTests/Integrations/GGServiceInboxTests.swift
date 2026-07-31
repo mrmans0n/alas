@@ -18,7 +18,7 @@ private final class InboxRecordingGGRunner: GGCommandRunning, @unchecked Sendabl
     }
 }
 
-private struct InboxSequenceFailure: Sendable {
+struct InboxSequenceFailure: Sendable {
     let name: String
     let lines: [String]
 }
