@@ -29,6 +29,7 @@ protocol GGMutationExecuting {
         _ request: GGMutationRequest,
         worktreePath: String,
         clientOperationID: String?,
+        supportsSyncJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary]
@@ -44,6 +45,7 @@ final class GGMutationCoordinator {
     private let actionState: GGStackActionState
     private let undoMarkerStore: any GGUndoMarkerStoring
     private let clientOperationIDCapability: () -> Bool
+    private let syncJSONLCapability: () -> Bool
     private let clientOperationIDGenerator: () -> String
     private let context: GGMutationContext
 
@@ -63,6 +65,9 @@ final class GGMutationCoordinator {
         clientOperationIDCapability: @escaping () -> Bool = {
             GGAvailability.shared.capabilities.clientOperationID
         },
+        syncJSONLCapability: @escaping () -> Bool = {
+            GGAvailability.shared.capabilities.syncJSONL
+        },
         clientOperationIDGenerator: @escaping () -> String = {
             "alas:\(UUID().uuidString)"
         },
@@ -74,6 +79,7 @@ final class GGMutationCoordinator {
         self.actionState = actionState
         self.undoMarkerStore = undoMarkerStore
         self.clientOperationIDCapability = clientOperationIDCapability
+        self.syncJSONLCapability = syncJSONLCapability
         self.clientOperationIDGenerator = clientOperationIDGenerator
         self.context = context
     }
@@ -210,10 +216,12 @@ final class GGMutationCoordinator {
         defer {
             activeRequest = nil
             actionState.endAction(request.actionKind)
+            if request == .sync,
+               actionState.lastError == nil,
+               GGStackActionState.syncSummaryLine(from: actionState.syncProgress) != nil {
+                actionState.clearSyncProgress()
+            }
         }
-
-        actionState.clearError()
-        if request == .sync { actionState.clearSyncProgress() }
 
         let isRecoveryRequest = request == .continueOperation || request == .abortOperation
         let snapshot: GGStackSnapshot?
@@ -262,9 +270,10 @@ final class GGMutationCoordinator {
                 request,
                 worktreePath: worktreePath,
                 clientOperationID: clientOperationID,
+                supportsSyncJSONL: syncJSONLCapability(),
                 onSyncEvent: { [actionState] event in
                     actionState.appendSyncEvent(event)
-                    if case .error(let message) = event { actionState.setError(message) }
+                    if case .error(_, _, let message) = event { actionState.setError(message) }
                 }
             )
             await recordUndoMarker(
@@ -282,16 +291,27 @@ final class GGMutationCoordinator {
             }
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
-            await refresh(after: request, result: .none)
-            if request.touchesRemote, case .malformedOutput = error {
-                return
+            let toleratesMalformedRemoteOutput: Bool
+            if request != .sync, request.touchesRemote, case .malformedOutput = error {
+                toleratesMalformedRemoteOutput = true
+            } else {
+                toleratesMalformedRemoteOutput = false
             }
-            if actionState.lastError == nil { actionState.setError(error.userMessage) }
+            if !toleratesMalformedRemoteOutput {
+                if request == .sync {
+                    actionState.markSyncTerminalFailure()
+                    if case .malformedOutput = error { actionState.setError(error.userMessage) }
+                }
+                if actionState.lastError == nil { actionState.setError(error.userMessage) }
+            }
+            await refresh(after: request, result: .none)
+            if toleratesMalformedRemoteOutput { return }
             throw error
         } catch {
             reconcilePausedState(after: request, error: error)
-            await refresh(after: request, result: .none)
+            if request == .sync { actionState.markSyncTerminalFailure() }
             actionState.setError(error.localizedDescription)
+            await refresh(after: request, result: .none)
             throw error
         }
     }
@@ -546,7 +566,6 @@ final class GGMutationCoordinator {
                actionState.lastError == nil,
                let summary = GGStackActionState.syncSummaryLine(from: actionState.syncProgress) {
                 actionState.setActionSummary(summary)
-                actionState.clearSyncProgress()
             }
         }
     }
@@ -667,6 +686,7 @@ extension GGService: GGMutationExecuting {
         _ request: GGMutationRequest,
         worktreePath: String,
         clientOperationID: String?,
+        supportsSyncJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
         let service = clientOperationID.map {
@@ -695,7 +715,12 @@ extension GGService: GGMutationExecuting {
         case .rebase(let target):
             try await service.rebase(worktreePath: worktreePath, target: target)
         case .sync:
-            for try await event in service.sync(worktreePath: worktreePath) { onSyncEvent(event) }
+            for try await event in service.sync(
+                worktreePath: worktreePath,
+                supportsJSONL: supportsSyncJSONL
+            ) {
+                onSyncEvent(event)
+            }
         case .land(let target):
             return .land(try await service.land(worktreePath: worktreePath, until: target))
         case .clean:

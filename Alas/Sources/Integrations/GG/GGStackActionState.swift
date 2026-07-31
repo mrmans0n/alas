@@ -27,6 +27,7 @@ struct GGPausedOperation: Equatable {
 final class GGStackActionState {
     private(set) var inFlightAction: GGStackActionKind?
     private(set) var syncProgress: [GGSyncEvent] = []
+    private(set) var syncHasTerminalFailure = false
     private(set) var lastError: String?
     private(set) var pausedOperation: GGPausedOperation?
     private(set) var lastActionSummary: String?
@@ -34,8 +35,11 @@ final class GGStackActionState {
     /// Returns false when another action is already running (one at a time).
     func beginAction(_ action: GGStackActionKind) -> Bool {
         guard inFlightAction == nil else { return false }
-        inFlightAction = action
+        if !syncProgress.isEmpty { syncProgress = [] }
+        if syncHasTerminalFailure { syncHasTerminalFailure = false }
+        if lastError != nil { lastError = nil }
         if lastActionSummary != nil { lastActionSummary = nil }
+        inFlightAction = action
         return true
     }
 
@@ -46,6 +50,9 @@ final class GGStackActionState {
 
     func appendSyncEvent(_ event: GGSyncEvent) { syncProgress.append(event) }
     func clearSyncProgress() { if !syncProgress.isEmpty { syncProgress = [] } }
+    func markSyncTerminalFailure() {
+        if inFlightAction == .sync, !syncHasTerminalFailure { syncHasTerminalFailure = true }
+    }
     func setError(_ message: String) { lastError = message }
     func clearError() { if lastError != nil { lastError = nil } }
     func setPaused(_ paused: GGPausedOperation) { if pausedOperation != paused { pausedOperation = paused } }

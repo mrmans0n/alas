@@ -12,6 +12,7 @@ struct GGCapabilities: Equatable, Sendable {
     var keepCurrentUnstack: Bool
     var clientOperationID: Bool = false
     var stagedOnlyAmend: Bool = false
+    var syncJSONL: Bool = false
 }
 
 struct GGLocalChangeStatistics: Equatable, Sendable {

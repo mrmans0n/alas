@@ -83,7 +83,8 @@ struct GGStackDrawer: View {
                     emphasis: .primary
                 )],
                 overflowActions: [],
-                progressRows: [],
+                syncProgress: nil,
+                isRetainedSyncFailure: false,
                 isPaused: false,
                 actionSummary: rps.ggActionState.lastActionSummary,
                 localChangesNote: nil
@@ -266,7 +267,7 @@ struct GGStackDrawer: View {
     private func expandedBody(_ model: GGStackReadinessModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if model.isPaused {
-                if !model.progressRows.isEmpty { progressList(model) }
+                if let progress = model.syncProgress { syncProgressView(progress) }
                 Text("A gg operation is paused on conflicts. Resolve them in the Conflicts section, then Continue — or Abort to roll back.")
                     .font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
@@ -276,8 +277,19 @@ struct GGStackDrawer: View {
                 actionRow(model)
                 actionDetails(model)
                 factsView(model)
-            } else if !model.progressRows.isEmpty {
-                progressList(model)
+            } else if let progress = model.syncProgress {
+                syncProgressView(progress)
+                if let error = rps.ggActionState.lastError {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("warn"))
+                        .lineLimit(3)
+                }
+                if model.isRetainedSyncFailure {
+                    actionRow(model)
+                    actionDetails(model)
+                    factsView(model)
+                }
             } else {
                 if let summary = model.actionSummary {
                     Text(summary).font(.system(size: 11)).foregroundColor(theme.color("add"))
@@ -293,10 +305,23 @@ struct GGStackDrawer: View {
         .padding(.horizontal, 10).padding(.bottom, 10)
     }
 
-    private func progressList(_ model: GGStackReadinessModel) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(model.progressRows.enumerated()), id: \.offset) { _, row in
-                Text(row).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+    private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let status = progress.liveStatus {
+                HStack(spacing: 6) {
+                    if progress.showsSpinner {
+                        Spinner(lineWidth: 1.4, duration: 0.8)
+                            .frame(width: 10, height: 10)
+                    }
+                    Text(status)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
+            }
+            ForEach(progress.rows) { row in
+                Text(row.text)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
             }
         }
     }

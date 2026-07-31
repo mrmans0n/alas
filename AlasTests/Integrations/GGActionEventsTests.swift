@@ -39,16 +39,20 @@ struct GGActionEventsTests {
             == .pushDone(position: 1, forced: false))
         #expect(GGSyncEvent.parse(line: #"{"event":"pr_created","position":1,"pr_number":42,"pr_url":"https://x/pull/42","draft":false}"#)
             == .prCreated(position: 1, prNumber: 42, prURL: "https://x/pull/42", draft: false))
+        #expect(GGSyncEvent.parse(line: #"{"event":"pr_updated","position":1,"pr_number":42,"action":"updated"}"#)
+            == .prUpdated(position: 1, prNumber: 42, action: "updated"))
+        #expect(GGSyncEvent.parse(line: #"{"event":"pr_skipped_closed","position":2,"pr_number":43}"#)
+            == .prSkippedClosed(position: 2, prNumber: 43))
         #expect(GGSyncEvent.parse(line: #"{"event":"summary","stack":"s","base":"main","entries":[]}"#)
             == .summary)
         #expect(GGSyncEvent.parse(line: #"{"event":"error","message":"boom"}"#)
-            == .error(message: "boom"))
+            == .error(position: nil, operation: nil, message: "boom"))
         #expect(GGSyncEvent.parse(line: #"{"event":"push_error","position":1,"message":"push failed"}"#)
-            == .error(message: "push failed"))
+            == .error(position: 1, operation: "push", message: "push failed"))
         #expect(GGSyncEvent.parse(line: #"{"event":"summary","entries":[{"position":2,"error":"PR failed"}]}"#)
-            == .error(message: "[2] PR failed"))
+            == .error(position: 2, operation: nil, message: "PR failed"))
         #expect(GGSyncEvent.parse(line: #"{"version":1,"sync":{"entries":[{"position":3,"error":"push failed"}]}}"#)
-            == .error(message: "[3] push failed"))
+            == .error(position: 3, operation: nil, message: "push failed"))
     }
 
     @Test func skipsBlankUnknownAndMalformedLines() {
@@ -57,6 +61,16 @@ struct GGActionEventsTests {
         #expect(GGSyncEvent.parse(line: #"{"event":"future_thing","position":9}"#) == nil)
         #expect(GGSyncEvent.parse(line: "not json at all") == nil)
         #expect(GGSyncEvent.parse(line: #"{"no_event_field":true}"#) == nil)
+    }
+
+    @Test func summaryEnvelopePreservesEveryEntryErrorAndTerminalIdentity() {
+        let line = #"{"event":"summary","entries":[{"position":1,"error":"push failed"},{"position":2,"error":{"message":"PR failed"}}]}"#
+
+        #expect(GGSyncEvent.parseEvents(line: line) == [
+            .error(position: 1, operation: nil, message: "push failed"),
+            .error(position: 2, operation: nil, message: "PR failed"),
+            .summary,
+        ])
     }
 
     @Test func decodesLandResult() throws {

@@ -294,6 +294,7 @@ struct GGService {
         let split = try? await runner.run(args: ["split", "--help"], cwd: nil)
         let unstack = try? await runner.run(args: ["unstack", "--help"], cwd: nil)
         let sc = try? await runner.run(args: ["sc", "--help"], cwd: nil)
+        let sync = try? await runner.run(args: ["sync", "--help"], cwd: nil)
         return GGCapabilities(
             structuredSplit: split?.exitCode == 0
                 && split?.stdout.contains("--describe") == true
@@ -303,7 +304,8 @@ struct GGService {
             clientOperationID: root?.exitCode == 0
                 && root?.stdout.contains("--client-operation-id") == true,
             stagedOnlyAmend: sc?.exitCode == 0
-                && sc?.stdout.contains("--staged-only") == true
+                && sc?.stdout.contains("--staged-only") == true,
+            syncJSONL: sync?.exitCode == 0 && sync?.stdout.contains("--jsonl") == true
         )
     }
 
@@ -423,26 +425,49 @@ struct GGService {
         }
     }
 
-    /// Streams sync events when `gg sync --jsonl` is supported; older gg
-    /// builds fall back to `--json` and yield a summary event on success.
-    func sync(worktreePath: String) -> AsyncThrowingStream<GGSyncEvent, Error> {
+    /// Streams sync events when the cached `--jsonl` capability is supported;
+    /// older gg builds fall back to `--json` and yield a summary event on success.
+    func sync(
+        worktreePath: String,
+        supportsJSONL: Bool
+    ) -> AsyncThrowingStream<GGSyncEvent, Error> {
         return AsyncThrowingStream { continuation in
             Task {
                 do {
-                    if await syncSupportsJSONL() {
+                    if supportsJSONL {
                         let lines = runner.runStreaming(
                             args: ["sync", "--jsonl"],
                             cwd: URL(fileURLWithPath: worktreePath)
                         )
+                        var sawSummary = false
                         for try await line in lines {
-                            if let event = GGSyncEvent.parse(line: line) { continuation.yield(event) }
+                            guard !sawSummary else {
+                                throw GGServiceError.malformedOutput(
+                                    "gg sync emitted data after a terminal event."
+                                )
+                            }
+                            let events = GGSyncEvent.parseEvents(line: line)
+                            for event in events {
+                                continuation.yield(event)
+                            }
+                            if events.contains(.summary) { sawSummary = true }
+                        }
+                        guard sawSummary else {
+                            throw GGServiceError.malformedOutput(
+                                "gg sync ended without a summary event."
+                            )
                         }
                     } else {
                         let result = try await runChecked(
                             args: ["sync", "--json"],
                             worktreePath: worktreePath
                         )
-                        continuation.yield(GGSyncEvent.parse(line: result.stdout) ?? .summary)
+                        let events = GGSyncEvent.parseEvents(line: result.stdout)
+                        if events.isEmpty {
+                            continuation.yield(.summary)
+                        } else {
+                            for event in events { continuation.yield(event) }
+                        }
                     }
                     continuation.finish()
                 } catch {
@@ -609,13 +634,6 @@ struct GGService {
             cwd: URL(fileURLWithPath: worktreePath)
         )
         return try decodeVersioned(GGSplitApplyResult.self, from: result)
-    }
-
-    private func syncSupportsJSONL() async -> Bool {
-        guard let result = try? await runner.run(args: ["sync", "--help"], cwd: nil),
-              result.exitCode == 0
-        else { return false }
-        return result.stdout.contains("--jsonl")
     }
 
     func continueOp(worktreePath: String) async throws {

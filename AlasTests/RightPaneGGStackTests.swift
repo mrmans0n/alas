@@ -761,32 +761,28 @@ struct RightPaneGGStackTests {
         #expect(state.ggUndoCandidate == nil)
     }
 
-    @Test func ggOwnedPresentationUsesCommitTerminology() {
+    @Test func ggOwnedPresentationUsesCommitTerminology() throws {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)
         action.appendSyncEvent(.start(totalEntries: 2))
+        action.appendSyncEvent(.entryStarted(position: 1, title: "First"))
+        action.appendSyncEvent(.pushDone(position: 1, forced: false))
+        action.appendSyncEvent(.prCreated(position: 1, prNumber: 7, prURL: nil, draft: false))
         let stack = GGStack(
-            name: "feature",
-            base: "main",
-            totalCommits: 2,
-            syncedCommits: 0,
-            currentPosition: 2,
-            behindBase: 0,
-            entries: []
+            name: "feature", base: "main", totalCommits: 2, syncedCommits: 0,
+            currentPosition: 2, behindBase: 0, entries: []
         )
-        let drawer = GGStackReadinessModel.make(stack: stack, action: action)
 
-        #expect(drawer.facts.first?.label == "Commits")
-        #expect(drawer.progressRows.first == "Syncing 2 commits…")
-        #expect(GGInboxTabView.commitCountLabel(1) == "1 commit")
-        #expect(GGInboxTabView.commitCountLabel(2) == "2 commits")
-        #expect(CommitRow.ggCheckoutTitle == "Checkout Commit")
-        #expect(GGMutationConfirmation.clean(mergedCommits: 2).message.contains("2 merged commits"))
+        let drawer = GGStackReadinessModel.make(stack: stack, action: action)
+        let progress = try #require(drawer.syncProgress)
+
+        #expect(progress.liveStatus == "Syncing 1 of 2 commits…")
+        #expect(progress.rows.map(\.text) == ["[1] Pushed · PR #7 created"])
 
         let typedStrings = drawer.facts.map(\.label)
-            + drawer.progressRows
-            + [GGInboxTabView.commitCountLabel(2), CommitRow.ggCheckoutTitle]
-            + [GGMutationConfirmation.clean(mergedCommits: 2).message]
+            + progress.rows.map(\.text)
+            + [progress.liveStatus ?? "", GGInboxTabView.commitCountLabel(2)]
+            + [CommitRow.ggCheckoutTitle, GGMutationConfirmation.clean(mergedCommits: 2).message]
         #expect(typedStrings.allSatisfy {
             !$0.lowercased().contains("entry") && !$0.lowercased().contains("entries")
         })
@@ -1700,7 +1696,7 @@ struct RightPaneGGStackTests {
         // core (e.g. `func runGGSyncBody() async`), call that instead —
         // implementer's choice; the assertion is what matters:
         _ = state.ggActionState.beginAction(.sync)
-        for try await event in state.ggService.sync(worktreePath: wt.path.path) {
+        for try await event in state.ggService.sync(worktreePath: wt.path.path, supportsJSONL: true) {
             state.ggActionState.appendSyncEvent(event)
         }
         if let summary = GGStackActionState.syncSummaryLine(from: state.ggActionState.syncProgress) {
