@@ -83,7 +83,7 @@ struct GGStackDrawer: View {
                     emphasis: .primary
                 )],
                 overflowActions: [],
-                progressRows: [],
+                syncProgress: nil,
                 isPaused: false,
                 actionSummary: rps.ggActionState.lastActionSummary,
                 localChangesNote: nil

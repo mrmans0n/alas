@@ -216,10 +216,12 @@ final class GGMutationCoordinator {
         defer {
             activeRequest = nil
             actionState.endAction(request.actionKind)
+            if request == .sync,
+               actionState.lastError == nil,
+               GGStackActionState.syncSummaryLine(from: actionState.syncProgress) != nil {
+                actionState.clearSyncProgress()
+            }
         }
-
-        actionState.clearError()
-        if request == .sync { actionState.clearSyncProgress() }
 
         let isRecoveryRequest = request == .continueOperation || request == .abortOperation
         let snapshot: GGStackSnapshot?
@@ -553,7 +555,6 @@ final class GGMutationCoordinator {
                actionState.lastError == nil,
                let summary = GGStackActionState.syncSummaryLine(from: actionState.syncProgress) {
                 actionState.setActionSummary(summary)
-                actionState.clearSyncProgress()
             }
         }
     }

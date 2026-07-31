@@ -34,8 +34,10 @@ final class GGStackActionState {
     /// Returns false when another action is already running (one at a time).
     func beginAction(_ action: GGStackActionKind) -> Bool {
         guard inFlightAction == nil else { return false }
-        inFlightAction = action
+        if !syncProgress.isEmpty { syncProgress = [] }
+        if lastError != nil { lastError = nil }
         if lastActionSummary != nil { lastActionSummary = nil }
+        inFlightAction = action
         return true
     }
 

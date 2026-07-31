@@ -572,6 +572,48 @@ struct GGMutationCoordinatorTests {
         #expect(harness.actionState.syncProgress.isEmpty)
     }
 
+    @Test func terminalSyncSummaryDoesNotRegressToPreparingDuringRefresh() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        var refreshStarted = false
+        var resumeRefresh: CheckedContinuation<Void, Never>?
+        harness.onRefreshStack = {
+            await withCheckedContinuation { continuation in
+                resumeRefresh = continuation
+                refreshStarted = true
+            }
+        }
+
+        let task = try #require(harness.coordinator.startApplying(.sync, confirmedAgainst: nil))
+        try await waitUntil { refreshStarted }
+
+        let model = GGStackReadinessModel.make(
+            stack: try #require(harness.stacks[0].stack),
+            action: harness.actionState
+        )
+        #expect(model.syncProgress?.liveStatus == nil)
+        #expect(model.syncProgress?.showsSpinner == false)
+
+        resumeRefresh?.resume()
+        try await task.value
+        #expect(harness.actionState.syncProgress.isEmpty)
+    }
+
+    @Test func reservingSyncImmediatelyPublishesPreparingFeedback() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.service.blockExecution = true
+        let task = try #require(harness.coordinator.startApplying(.sync, confirmedAgainst: nil))
+
+        let model = GGStackReadinessModel.make(
+            stack: try #require(harness.stacks[0].stack),
+            action: harness.actionState
+        )
+        #expect(model.syncProgress?.liveStatus == "Preparing sync…")
+
+        try await waitUntil { !harness.service.requests.isEmpty }
+        harness.service.resumeExecution()
+        try await task.value
+    }
+
     @Test func syncForwardsCachedJSONLCapability() async throws {
         let current = GGMutationHarness(
             stacks: [stack(head: "a")],
@@ -1215,7 +1257,11 @@ struct GGMutationCoordinatorTests {
 
     @Test func streamedSyncErrorIsNotOverwrittenByGenericProcessFailure() async {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
-        harness.service.syncEvents = [.error(position: nil, operation: nil, message: "push rejected by protected branch")]
+        harness.service.syncEvents = [
+            .pushDone(position: 1, forced: false),
+            .prCreated(position: 1, prNumber: 7, prURL: nil, draft: false),
+            .error(position: 2, operation: "push", message: "push rejected by protected branch"),
+        ]
         harness.service.error = GGServiceError.commandFailed(stderr: "")
 
         await #expect(throws: GGServiceError.commandFailed(stderr: "")) {
@@ -1223,6 +1269,16 @@ struct GGMutationCoordinatorTests {
         }
 
         #expect(harness.actionState.lastError == "push rejected by protected branch")
+        let progress = GGStackReadinessModel.make(
+            stack: stack(head: "a").stack!,
+            action: harness.actionState
+        ).syncProgress
+        #expect(progress?.rows == [
+            .init(position: 1, text: "[1] Pushed · PR #7 created"),
+            .init(position: 2, text: "[2] Failed to push"),
+        ])
+        #expect(progress?.liveStatus == nil)
+        #expect(progress?.showsSpinner == false)
     }
 
     @Test func undoRechecksNewestOperationImmediatelyBeforeLaunch() async {

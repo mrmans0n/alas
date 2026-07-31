@@ -33,6 +33,27 @@ struct GGStackActionStateTests {
         #expect(state.syncProgress.isEmpty)
     }
 
+    @Test func beginningAnyLaterActionClearsRetainedSyncProgress() {
+        let state = GGStackActionState()
+        _ = state.beginAction(.sync)
+        state.appendSyncEvent(.start(totalEntries: 1))
+        state.appendSyncEvent(.error(position: 1, operation: "push", message: "push failed"))
+        state.endAction(.sync)
+        #expect(!state.syncProgress.isEmpty)
+
+        _ = state.beginAction(.land)
+        #expect(state.syncProgress.isEmpty)
+    }
+
+    @Test func beginningAnyLaterActionClearsRetainedError() {
+        let state = GGStackActionState()
+        state.setError("push failed")
+
+        _ = state.beginAction(.land)
+
+        #expect(state.lastError == nil)
+    }
+
     @Test func errorAndPausedRoundTrip() {
         let state = GGStackActionState()
         state.setError("boom")

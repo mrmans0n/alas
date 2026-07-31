@@ -777,7 +777,7 @@ struct RightPaneGGStackTests {
         let drawer = GGStackReadinessModel.make(stack: stack, action: action)
 
         #expect(drawer.facts.first?.label == "Commits")
-        #expect(drawer.progressRows.first == "Syncing 2 commits…")
+        #expect(drawer.progressRows.first == "Syncing 0 of 2 commits…")
         #expect(GGInboxTabView.commitCountLabel(1) == "1 commit")
         #expect(GGInboxTabView.commitCountLabel(2) == "2 commits")
         #expect(CommitRow.ggCheckoutTitle == "Checkout Commit")

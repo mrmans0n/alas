@@ -1,5 +1,17 @@
 import Foundation
 
+struct GGSyncProgressPresentation: Equatable {
+    struct Row: Equatable, Identifiable {
+        let position: Int
+        let text: String
+        var id: Int { position }
+    }
+
+    let liveStatus: String?
+    let showsSpinner: Bool
+    let rows: [Row]
+}
+
 struct GGStackReadinessProjection {
     @MainActor
     static func make(
@@ -75,13 +87,19 @@ struct GGStackReadinessModel: Equatable {
     let facts: [Fact]
     let primaryActions: [Action]
     let overflowActions: [Action]
-    let progressRows: [String]
+    let syncProgress: GGSyncProgressPresentation?
     let isPaused: Bool
     let actionSummary: String?
     let localChangesNote: String?
 
     /// Compatibility for callers that need to reason about every action.
     var actions: [Action] { primaryActions + overflowActions }
+
+    /// Compatibility projection until the drawer consumes `syncProgress` directly.
+    var progressRows: [String] {
+        guard let syncProgress else { return [] }
+        return [syncProgress.liveStatus].compactMap { $0 } + syncProgress.rows.map(\.text)
+    }
 
     @MainActor
     static func make(
@@ -182,14 +200,18 @@ struct GGStackReadinessModel: Equatable {
             ),
         ]
 
-        let syncIsRelevant = inFlight == .sync || action.pausedOperation?.pausedBy == .sync
+        let syncIsRelevant = inFlight == .sync
+            || action.pausedOperation?.pausedBy == .sync
+            || (inFlight == nil && action.lastError != nil && !action.syncProgress.isEmpty)
         return GGStackReadinessModel(
             title: "Stack · \(stack.name)",
             summaryChip: summaryChip,
             facts: facts,
             primaryActions: primaryActions,
             overflowActions: overflowActions,
-            progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
+            syncProgress: syncIsRelevant
+                ? makeSyncProgress(events: action.syncProgress, isInFlight: inFlight == .sync)
+                : nil,
             isPaused: isPaused,
             actionSummary: inFlight == .sync ? nil : action.lastActionSummary,
             localChangesNote: primaryActions.contains(where: { $0.kind == .sync }) && localChanges.hasChanges
@@ -203,7 +225,9 @@ struct GGStackReadinessModel: Equatable {
         guard action.pausedOperation != nil else { return nil }
         let inFlight = action.inFlightAction
         let busy = inFlight != nil
-        let syncIsRelevant = inFlight == .sync || action.pausedOperation?.pausedBy == .sync
+        let syncIsRelevant = inFlight == .sync
+            || action.pausedOperation?.pausedBy == .sync
+            || (inFlight == nil && action.lastError != nil && !action.syncProgress.isEmpty)
         return GGStackReadinessModel(
             title: "Stack operation",
             summaryChip: "paused",
@@ -213,7 +237,9 @@ struct GGStackReadinessModel: Equatable {
                 makeAction(.abortOp, title: "Abort", enabled: !busy, inFlight: inFlight),
             ],
             overflowActions: [],
-            progressRows: syncIsRelevant ? progressRows(from: action.syncProgress) : [],
+            syncProgress: syncIsRelevant
+                ? makeSyncProgress(events: action.syncProgress, isInFlight: inFlight == .sync)
+                : nil,
             isPaused: true,
             actionSummary: nil,
             localChangesNote: nil
@@ -248,19 +274,81 @@ struct GGStackReadinessModel: Equatable {
         return false
     }
 
-    private static func progressRows(from events: [GGSyncEvent]) -> [String] {
-        events.compactMap { event in
+    private struct SyncEntryProgress {
+        var title: String?
+        var didPush = false
+        var row: String?
+    }
+
+    private static func makeSyncProgress(
+        events: [GGSyncEvent],
+        isInFlight: Bool
+    ) -> GGSyncProgressPresentation {
+        var entries: [Int: SyncEntryProgress] = [:]
+        var completed: Set<Int> = []
+        var totalEntries: Int?
+        var liveStatus: String? = events.isEmpty && isInFlight ? "Preparing sync…" : nil
+        var sawSummary = false
+        var hasTerminalError = false
+
+        func titledStatus(_ verb: String, position: Int) -> String {
+            guard let title = entries[position]?.title else { return "\(verb) [\(position)]…" }
+            return "\(verb) [\(position)] \(title)…"
+        }
+
+        func countStatus() -> String {
+            guard let totalEntries else { return "Finishing sync…" }
+            return "Syncing \(completed.count) of \(totalEntries) commit\(totalEntries == 1 ? "" : "s")…"
+        }
+
+        for event in events {
             switch event {
-            case .start(let total): return "Syncing \(total) commit\(total == 1 ? "" : "s")…"
-            case .entryStarted(let pos, let title): return "[\(pos)] \(title)"
-            case .pushStarted(let pos): return "[\(pos)] pushing…"
-            case .pushDone(let pos, _): return "[\(pos)] pushed"
-            case .prCreated(let pos, let number, _, _): return "[\(pos)] PR #\(number)"
-            case .prUpdated(let position, let number, _): return "[\(position)] PR #\(number)"
-            case .prSkippedClosed(let position, let number): return "[\(position)] PR #\(number) already closed"
-            case .summary: return nil
-            case .error(_, _, let message): return "Error: \(message)"
+            case .start(let total):
+                totalEntries = total
+                liveStatus = "Syncing 0 of \(total) commit\(total == 1 ? "" : "s")…"
+            case .entryStarted(let position, let title):
+                entries[position, default: .init()].title = title
+                liveStatus = "Syncing [\(position)] \(title)…"
+            case .pushStarted(let position):
+                liveStatus = titledStatus("Pushing", position: position)
+            case .pushDone(let position, _):
+                entries[position, default: .init()].didPush = true
+                entries[position, default: .init()].row = "[\(position)] Pushed"
+                liveStatus = titledStatus("Finishing", position: position)
+            case .prCreated(let position, let number, _, _):
+                entries[position, default: .init()].row = "[\(position)] Pushed · PR #\(number) created"
+                completed.insert(position)
+                liveStatus = countStatus()
+            case .prUpdated(let position, let number, let action):
+                let result = action == "updated" ? "updated" : "up to date"
+                let pushed = entries[position]?.didPush == true ? "Pushed · " : ""
+                entries[position, default: .init()].row = "[\(position)] \(pushed)PR #\(number) \(result)"
+                completed.insert(position)
+                liveStatus = countStatus()
+            case .prSkippedClosed(let position, let number):
+                entries[position, default: .init()].row = "[\(position)] PR #\(number) already closed"
+                completed.insert(position)
+                liveStatus = countStatus()
+            case .error(let position, let operation, _):
+                if let position {
+                    let failure = operation == "push" ? "Failed to push" : "Failed"
+                    entries[position, default: .init()].row = "[\(position)] \(failure)"
+                }
+                liveStatus = nil
+                hasTerminalError = true
+            case .summary:
+                liveStatus = nil
+                sawSummary = true
             }
         }
+
+        if !isInFlight { liveStatus = nil }
+        return GGSyncProgressPresentation(
+            liveStatus: liveStatus,
+            showsSpinner: isInFlight && !sawSummary && !hasTerminalError,
+            rows: entries.compactMap { position, entry in
+                entry.row.map { .init(position: position, text: $0) }
+            }.sorted { $0.position < $1.position }
+        )
     }
 }
