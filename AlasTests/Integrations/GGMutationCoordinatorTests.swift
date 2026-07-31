@@ -1182,7 +1182,7 @@ struct GGMutationCoordinatorTests {
 
     @Test func streamedSyncErrorIsNotOverwrittenByGenericProcessFailure() async {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
-        harness.service.syncEvents = [.error(message: "push rejected by protected branch")]
+        harness.service.syncEvents = [.error(position: nil, operation: nil, message: "push rejected by protected branch")]
         harness.service.error = GGServiceError.commandFailed(stderr: "")
 
         await #expect(throws: GGServiceError.commandFailed(stderr: "")) {

@@ -81,7 +81,7 @@ struct GGServiceActionsTests {
             events.append(event)
         }
 
-        #expect(events == [.error(message: "[1] push failed")])
+        #expect(events == [.error(position: 1, operation: nil, message: "push failed")])
     }
 
     @Test func landAllSendsAllFlagAndDecodes() async throws {

@@ -256,8 +256,10 @@ struct GGStackReadinessModel: Equatable {
             case .pushStarted(let pos): return "[\(pos)] pushing…"
             case .pushDone(let pos, _): return "[\(pos)] pushed"
             case .prCreated(let pos, let number, _, _): return "[\(pos)] PR #\(number)"
+            case .prUpdated(let position, let number, _): return "[\(position)] PR #\(number)"
+            case .prSkippedClosed(let position, let number): return "[\(position)] PR #\(number) already closed"
             case .summary: return nil
-            case .error(let message): return "Error: \(message)"
+            case .error(_, _, let message): return "Error: \(message)"
             }
         }
     }

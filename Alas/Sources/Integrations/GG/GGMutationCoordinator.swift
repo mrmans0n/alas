@@ -264,7 +264,7 @@ final class GGMutationCoordinator {
                 clientOperationID: clientOperationID,
                 onSyncEvent: { [actionState] event in
                     actionState.appendSyncEvent(event)
-                    if case .error(let message) = event { actionState.setError(message) }
+                    if case .error(_, _, let message) = event { actionState.setError(message) }
                 }
             )
             await recordUndoMarker(
