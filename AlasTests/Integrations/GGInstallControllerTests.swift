@@ -34,4 +34,41 @@ struct GGInstallControllerTests {
         await controller.installAndWait()
         #expect(controller.phase == .failed("gg is still not on PATH after install."))
     }
+
+    @Test func successfulUpgradeReachesSucceededAndReprobes() async {
+        var upgraded = false
+        var probed = false
+        let controller = GGInstallController(
+            runInstall: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+            runUpgrade: {
+                upgraded = true
+                return ProcessResult(exitCode: 0, stdout: "upgraded", stderr: "")
+            },
+            reprobe: {
+                probed = true
+                return true
+            }
+        )
+
+        await controller.upgradeAndWait()
+        #expect(controller.phase == .succeeded)
+        #expect(upgraded)
+        #expect(probed)
+    }
+
+    @Test func upgradeFailureSurfacesStderrWithoutReprobe() async {
+        var probed = false
+        let controller = GGInstallController(
+            runInstall: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+            runUpgrade: { ProcessResult(exitCode: 1, stdout: "", stderr: "formula unavailable") },
+            reprobe: {
+                probed = true
+                return true
+            }
+        )
+
+        await controller.upgradeAndWait()
+        #expect(controller.phase == .failed("formula unavailable"))
+        #expect(!probed)
+    }
 }

@@ -100,6 +100,28 @@ struct GGInboxHelpersTests {
         #expect(GGInboxTabView.ciIconColorToken(nil) == "fg-dim")
     }
 
+    @Test(arguments: ["0.9.12", "0.9.13", "0.10.0", "1.0.0"])
+    func supportedInboxVersions(_ version: String) {
+        #expect(GGInboxSupport.isSupported(version: version))
+    }
+
+    @Test(arguments: [nil, "", "abc", "0.9.11", "0.8.99"] as [String?])
+    func unsupportedInboxVersions(_ version: String?) {
+        #expect(!GGInboxSupport.isSupported(version: version))
+    }
+
+    @Test func refreshProgressLabel() {
+        #expect(GGInboxTabView.refreshLabel(nil) == nil)
+        #expect(GGInboxTabView.refreshLabel(.init(completed: 2, total: 5)) == "Refreshing 2/5")
+    }
+
+    @Test func validPRURLRequiresHTTPOrHTTPS() {
+        #expect(GGInboxTabView.validPRURL("https://example.test/42") != nil)
+        #expect(GGInboxTabView.validPRURL("") == nil)
+        #expect(GGInboxTabView.validPRURL(nil) == nil)
+        #expect(GGInboxTabView.validPRURL("file:///tmp/secret") == nil)
+    }
+
     @Test func tabStateIdentityAndCodableRoundTrip() throws {
         let state = GGInboxTabState(projectId: "p1", projectName: "alas")
         #expect(state.id == "gg-inbox:p1")

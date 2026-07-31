@@ -81,6 +81,17 @@ struct GGInboxTabView: View {
         return "Updated \(Int(seconds / 3_600))h ago"
     }
 
+    static func refreshLabel(_ progress: GGInboxRefreshProgress?) -> String? {
+        guard let progress else { return nil }
+        return "Refreshing \(progress.completed)/\(progress.total)"
+    }
+
+    static func validPRURL(_ rawValue: String?) -> URL? {
+        guard let rawValue, let url = URL(string: rawValue),
+              url.scheme == "https" || url.scheme == "http" else { return nil }
+        return url
+    }
+
     static func ciIconName(_ status: String?) -> String? {
         switch GGCIStatus(rawValue: status ?? "") {
         case .success:            return "checkmark.circle"
