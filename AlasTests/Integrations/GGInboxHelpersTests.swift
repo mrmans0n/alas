@@ -118,8 +118,43 @@ struct GGInboxHelpersTests {
     @Test func clearInboxRequiresCompletedNonErrorState() {
         let empty = GGInboxSnapshot(totalItems: 0, buckets: GGInboxBuckets(), stackErrors: [])
         #expect(GGInboxTabView.shouldShowClearInbox(snapshot: empty, isRefreshing: false, lastError: nil))
+        #expect(!GGInboxTabView.shouldShowClearInbox(snapshot: nil, isRefreshing: false, lastError: nil))
         #expect(!GGInboxTabView.shouldShowClearInbox(snapshot: empty, isRefreshing: true, lastError: nil))
         #expect(!GGInboxTabView.shouldShowClearInbox(snapshot: empty, isRefreshing: false, lastError: "failed"))
+    }
+
+    @Test func becomingSupportedRefreshesMissingOrStaleSnapshot() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let snapshot = GGInboxSnapshot(totalItems: 1, buckets: GGInboxBuckets(), stackErrors: [])
+
+        #expect(GGInboxTabView.shouldRefreshAfterSupportTransition(
+            wasSupported: false,
+            isSupported: true,
+            snapshot: nil,
+            fetchedAt: nil,
+            now: now
+        ))
+        #expect(GGInboxTabView.shouldRefreshAfterSupportTransition(
+            wasSupported: false,
+            isSupported: true,
+            snapshot: snapshot,
+            fetchedAt: now.addingTimeInterval(-120),
+            now: now
+        ))
+        #expect(!GGInboxTabView.shouldRefreshAfterSupportTransition(
+            wasSupported: false,
+            isSupported: true,
+            snapshot: snapshot,
+            fetchedAt: now,
+            now: now
+        ))
+        #expect(!GGInboxTabView.shouldRefreshAfterSupportTransition(
+            wasSupported: true,
+            isSupported: true,
+            snapshot: nil,
+            fetchedAt: nil,
+            now: now
+        ))
     }
 
     @Test func validPRURLRequiresHTTPOrHTTPS() {

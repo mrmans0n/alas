@@ -363,9 +363,6 @@ struct GGService {
                             let event = try GGInboxEvent.decode(line: line)
                             switch event {
                             case .error(let message):
-                                guard !sawStart else {
-                                    throw GGServiceError.malformedOutput("gg inbox emitted error after discovery.")
-                                }
                                 fatalMessage = message
                             case .start(let count, _):
                                 guard !sawStart else {

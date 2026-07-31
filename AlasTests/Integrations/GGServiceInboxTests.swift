@@ -123,14 +123,14 @@ struct GGServiceInboxTests {
         }
     }
 
-    @Test func inboxRejectsFatalEventAfterDiscovery() async {
+    @Test func inboxAcceptsFatalEventAfterDiscoveryAndSurfacesItsMessage() async {
         let runner = InboxRecordingGGRunner(result: ProcessResult(
             exitCode: 1,
             stdout: [Self.startLine, Self.fatalLine].joined(separator: "\n"),
             stderr: "fallback stderr"
         ))
 
-        await #expect(throws: GGServiceError.malformedOutput("gg inbox emitted error after discovery.")) {
+        await #expect(throws: GGServiceError.commandFailed(stderr: "Not in a git repository")) {
             for try await _ in GGService(runner: runner).inboxStream(repoPath: "/repo/root") {}
         }
     }
@@ -138,7 +138,7 @@ struct GGServiceInboxTests {
     @Test func inboxRejectsDataAfterFatalEvent() async {
         let runner = InboxRecordingGGRunner(result: ProcessResult(
             exitCode: 1,
-            stdout: [Self.fatalLine, Self.startLine].joined(separator: "\n"),
+            stdout: [Self.startLine, Self.fatalLine, Self.entryLine].joined(separator: "\n"),
             stderr: "fallback stderr"
         ))
 

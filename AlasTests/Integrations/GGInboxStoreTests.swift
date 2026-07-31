@@ -17,34 +17,30 @@ private final class FakeGGRunner: GGCommandRunning, @unchecked Sendable {
 private final class ControlledInboxRunner: GGCommandRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncThrowingStream<String, Error>.Continuation?
-    private(set) var lastArgs: [String] = []
+    private var _lastArgs: [String] = []
+
+    var lastArgs: [String] {
+        lock.withLock { _lastArgs }
+    }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         ProcessResult(exitCode: 0, stdout: "", stderr: "")
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
-        lock.lock()
-        lastArgs = args
-        lock.unlock()
+        lock.withLock { _lastArgs = args }
         return AsyncThrowingStream { continuation in
-            self.lock.lock()
-            self.continuation = continuation
-            self.lock.unlock()
+            self.lock.withLock { self.continuation = continuation }
         }
     }
 
     func yield(_ line: String) {
-        lock.lock()
-        let continuation = continuation
-        lock.unlock()
+        let continuation = lock.withLock { self.continuation }
         continuation?.yield(line)
     }
 
     func finish(throwing error: Error? = nil) {
-        lock.lock()
-        let continuation = continuation
-        lock.unlock()
+        let continuation = lock.withLock { self.continuation }
         if let error { continuation?.finish(throwing: error) } else { continuation?.finish() }
     }
 }

@@ -91,12 +91,24 @@ struct GGInboxTabView: View {
     }
 
     static func shouldShowClearInbox(
-        snapshot: GGInboxSnapshot,
+        snapshot: GGInboxSnapshot?,
         isRefreshing: Bool,
         lastError: String?
     ) -> Bool {
-        snapshot.totalItems == 0 && snapshot.stackErrors.isEmpty
+        guard let snapshot else { return false }
+        return snapshot.totalItems == 0 && snapshot.stackErrors.isEmpty
             && !isRefreshing && lastError == nil
+    }
+
+    static func shouldRefreshAfterSupportTransition(
+        wasSupported: Bool,
+        isSupported: Bool,
+        snapshot: GGInboxSnapshot?,
+        fetchedAt: Date?,
+        now: Date
+    ) -> Bool {
+        guard !wasSupported, isSupported else { return false }
+        return snapshot == nil || GGInboxStore.isStale(fetchedAt: fetchedAt, now: now)
     }
 
     static func validPRURL(_ rawValue: String?) -> URL? {
@@ -137,6 +149,16 @@ struct GGInboxTabView: View {
         .onAppear { refreshIfStale() }
         .onChange(of: ggUpgrade.phase) { _, phase in
             guard phase == .succeeded, supportsStreamingInbox else { return }
+            refresh()
+        }
+        .onChange(of: supportsStreamingInbox) { wasSupported, isSupported in
+            guard Self.shouldRefreshAfterSupportTransition(
+                wasSupported: wasSupported,
+                isSupported: isSupported,
+                snapshot: inboxState.snapshot,
+                fetchedAt: inboxState.fetchedAt,
+                now: Date()
+            ) else { return }
             refresh()
         }
     }
@@ -190,8 +212,6 @@ struct GGInboxTabView: View {
                 } else {
                     bucketList(snapshot)
                 }
-            } else if !inboxState.isRefreshing && inboxState.lastError == nil {
-                emptyState
             } else {
                 Spacer()
             }
