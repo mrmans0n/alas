@@ -237,7 +237,7 @@ struct GGInboxTabView: View {
                 Icon(name: icon, size: 11, color: theme.color(Self.ciIconColorToken(entry.ciStatus)))
             }
             Button {
-                if let url = URL(string: entry.prUrl) { NSWorkspace.shared.open(url) }
+                if let prUrl = entry.prUrl, let url = URL(string: prUrl) { NSWorkspace.shared.open(url) }
             } label: {
                 Text("#\(entry.prNumber)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
