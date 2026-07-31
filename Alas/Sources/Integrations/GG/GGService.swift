@@ -353,12 +353,19 @@ struct GGService {
                             args: ["inbox", "--jsonl"],
                             cwd: URL(fileURLWithPath: repoPath)
                         ) {
-                            guard !sawSummary, fatalMessage == nil else {
+                            guard !sawSummary else {
+                                throw GGServiceError.malformedOutput("gg inbox emitted data after a terminal event.")
+                            }
+                            guard fatalMessage == nil else {
+                                fatalMessage = nil
                                 throw GGServiceError.malformedOutput("gg inbox emitted data after a terminal event.")
                             }
                             let event = try GGInboxEvent.decode(line: line)
                             switch event {
                             case .error(let message):
+                                guard !sawStart else {
+                                    throw GGServiceError.malformedOutput("gg inbox emitted error after discovery.")
+                                }
                                 fatalMessage = message
                             case .start(let count, _):
                                 guard !sawStart else {

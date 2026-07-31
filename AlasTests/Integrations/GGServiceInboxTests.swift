@@ -39,6 +39,17 @@ struct GGServiceInboxTests {
         #expect(runner.lastArgs == ["inbox", "--jsonl"])
         #expect(runner.lastCwd?.path == "/repo/root")
         #expect(events.count == 2)
+        guard case .start(let totalCandidates, let totalStackErrors) = events[0] else {
+            Issue.record("Expected start event")
+            return
+        }
+        #expect(totalCandidates == 0)
+        #expect(totalStackErrors == 0)
+        guard case .summary(let snapshot) = events[1] else {
+            Issue.record("Expected summary event")
+            return
+        }
+        #expect(snapshot.totalItems == 0)
     }
 
     @Test(arguments: [
@@ -70,6 +81,26 @@ struct GGServiceInboxTests {
             name: "entry total differs from start",
             lines: [startLine, entryWithDifferentTotalLine]
         ),
+        InboxSequenceFailure(
+            name: "entry before start",
+            lines: [entryLine]
+        ),
+        InboxSequenceFailure(
+            name: "repeated entry completion",
+            lines: [startTotalTwoLine, entryTotalTwoCompletedOneLine, entryTotalTwoCompletedOneLine]
+        ),
+        InboxSequenceFailure(
+            name: "decreasing entry completion",
+            lines: [startTotalTwoLine, entryTotalTwoCompletedTwoLine, entryTotalTwoCompletedOneLine]
+        ),
+        InboxSequenceFailure(
+            name: "entry completion above total",
+            lines: [startLine, entryAboveTotalLine]
+        ),
+        InboxSequenceFailure(
+            name: "entry error progress validation",
+            lines: [startLine, entryErrorAboveTotalLine]
+        ),
     ])
     func inboxRejectsInvalidSequence(_ fixture: InboxSequenceFailure) async {
         let runner = InboxRecordingGGRunner(result: ProcessResult(
@@ -92,8 +123,38 @@ struct GGServiceInboxTests {
         }
     }
 
+    @Test func inboxRejectsFatalEventAfterDiscovery() async {
+        let runner = InboxRecordingGGRunner(result: ProcessResult(
+            exitCode: 1,
+            stdout: [startLine, fatalLine].joined(separator: "\n"),
+            stderr: "fallback stderr"
+        ))
+
+        await #expect(throws: GGServiceError.malformedOutput("gg inbox emitted error after discovery.")) {
+            for try await _ in GGService(runner: runner).inboxStream(repoPath: "/repo/root") {}
+        }
+    }
+
+    @Test func inboxRejectsDataAfterFatalEvent() async {
+        let runner = InboxRecordingGGRunner(result: ProcessResult(
+            exitCode: 1,
+            stdout: [fatalLine, startLine].joined(separator: "\n"),
+            stderr: "fallback stderr"
+        ))
+
+        await #expect(throws: GGServiceError.malformedOutput("gg inbox emitted data after a terminal event.")) {
+            for try await _ in GGService(runner: runner).inboxStream(repoPath: "/repo/root") {}
+        }
+    }
+
     private static let startLine = #"{"event":"start","total_candidates":1,"total_stack_errors":0,"version":1,"command":"inbox"}"#
+    private static let startTotalTwoLine = #"{"event":"start","total_candidates":2,"total_stack_errors":0,"version":1,"command":"inbox"}"#
     private static let summaryLine = #"{"event":"summary","total_items":0,"buckets":{"refresh_failed":[],"ready_to_land":[],"changes_requested":[],"blocked_on_ci":[],"awaiting_review":[],"behind_base":[],"draft":[]},"stack_errors":[],"version":1,"command":"inbox"}"#
     private static let entryLine = #"{"event":"entry","completed":1,"total_candidates":1,"included":true,"bucket":"ready_to_land","remote_state":"open","entry":{"stack_name":"auth","position":1,"sha":"abc123","title":"Add login","pr_number":42,"pr_url":"https://example.test/42","ci_status":"success","behind_base":null},"version":1,"command":"inbox"}"#
     private static let entryWithDifferentTotalLine = #"{"event":"entry","completed":1,"total_candidates":2,"included":true,"bucket":"ready_to_land","remote_state":"open","entry":{"stack_name":"auth","position":1,"sha":"abc123","title":"Add login","pr_number":42,"pr_url":"https://example.test/42","ci_status":"success","behind_base":null},"version":1,"command":"inbox"}"#
+    private static let entryTotalTwoCompletedOneLine = #"{"event":"entry","completed":1,"total_candidates":2,"included":true,"bucket":"ready_to_land","remote_state":"open","entry":{"stack_name":"auth","position":1,"sha":"abc123","title":"Add login","pr_number":42,"pr_url":"https://example.test/42","ci_status":"success","behind_base":null},"version":1,"command":"inbox"}"#
+    private static let entryTotalTwoCompletedTwoLine = #"{"event":"entry","completed":2,"total_candidates":2,"included":true,"bucket":"ready_to_land","remote_state":"open","entry":{"stack_name":"auth","position":1,"sha":"abc123","title":"Add login","pr_number":42,"pr_url":"https://example.test/42","ci_status":"success","behind_base":null},"version":1,"command":"inbox"}"#
+    private static let entryAboveTotalLine = #"{"event":"entry","completed":2,"total_candidates":1,"included":true,"bucket":"ready_to_land","remote_state":"open","entry":{"stack_name":"auth","position":1,"sha":"abc123","title":"Add login","pr_number":42,"pr_url":"https://example.test/42","ci_status":"success","behind_base":null},"version":1,"command":"inbox"}"#
+    private static let entryErrorAboveTotalLine = #"{"event":"entry_error","completed":2,"total_candidates":1,"included":true,"bucket":"refresh_failed","entry":{"stack_name":"auth","position":1,"sha":"abc123","title":"Add login","pr_number":42,"pr_url":"https://example.test/42","ci_status":"success","behind_base":null},"error":"provider unavailable","version":1,"command":"inbox"}"#
+    private static let fatalLine = #"{"version":1,"command":"inbox","status":"error","event":"error","message":"Not in a git repository"}"#
 }
