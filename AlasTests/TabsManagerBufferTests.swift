@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Darwin
+import Observation
 @testable import Alas
 
 private actor TabsManagerBufferAsyncGate {
@@ -1195,5 +1196,43 @@ struct TabsManagerBufferTests {
         )
         await b.awaitLoadForTesting()
         #expect(a === b)
+    }
+
+    @Test func externalBufferCacheHitDoesNotInvalidateObservers() throws {
+        let (manager, _, _) = makeManager()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ext-observation-\(UUID().uuidString).md")
+        try "# Markdown\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let tabId = "ext-observation-tab"
+        _ = manager.externalBuffer(worktreeId: "wt", tabId: tabId, absoluteURL: url)
+        let invalidations = TabsManagerInvalidationCounter()
+        withObservationTracking {
+            _ = manager.peekExternalBuffer(tabId: tabId)
+        } onChange: {
+            invalidations.increment()
+        }
+
+        _ = manager.externalBuffer(worktreeId: "wt", tabId: tabId, absoluteURL: url)
+
+        #expect(invalidations.count == 0)
+    }
+}
+
+private final class TabsManagerInvalidationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }

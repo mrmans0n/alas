@@ -1447,23 +1447,32 @@ final class TabsManager {
         language: String? = nil,
         editable: Bool = false
     ) -> EditorBuffer {
-        externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
+        let existingEntry = externalTabURLs[tabId]
+        if existingEntry?.worktreeId != worktreeId || existingEntry?.url != absoluteURL {
+            externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
+        }
+        let existingBuffer = bufferStore.peekExternalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
         let buffer = bufferStore.externalBuffer(
             worktreeId: worktreeId,
             absoluteURL: absoluteURL,
             editable: editable,
             tabId: editable ? tabId : nil
         )
-        buffer.startWatching()
+        if buffer !== existingBuffer {
+            buffer.startWatching()
+        }
 
         if let root = worktreeRoot {
             let existing = externalLSPInfo[tabId]
             let shouldRefreshOrigin = language != nil || existing?.language == nil
-            externalLSPInfo[tabId] = ExternalLSPInfo(
+            let info = ExternalLSPInfo(
                 worktreeRoot: shouldRefreshOrigin ? root : existing?.worktreeRoot ?? root,
                 originatingFileURL: shouldRefreshOrigin ? originatingFileURL : existing?.originatingFileURL,
                 language: language ?? existing?.language
             )
+            if info != existing {
+                externalLSPInfo[tabId] = info
+            }
         }
 
         ensureExternalLSPOpen(tabId: tabId)
