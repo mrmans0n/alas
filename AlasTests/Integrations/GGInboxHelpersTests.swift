@@ -172,6 +172,12 @@ struct GGInboxHelpersTests {
         ))
     }
 
+    @Test func missingGGUsesInstallFlow() {
+        #expect(GGInboxTabView.shouldInstallGG(version: nil))
+        #expect(!GGInboxTabView.shouldInstallGG(version: "0.9.11"))
+        #expect(!GGInboxTabView.shouldInstallGG(version: "0.9.12"))
+    }
+
     @Test func validPRURLRequiresHTTPOrHTTPS() {
         #expect(GGInboxTabView.validPRURL("https://example.test/42") != nil)
         #expect(GGInboxTabView.validPRURL("") == nil)

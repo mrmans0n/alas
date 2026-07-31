@@ -115,6 +115,10 @@ struct GGInboxTabView: View {
         hasProbed && !supportsStreamingInbox
     }
 
+    static func shouldInstallGG(version: String?) -> Bool {
+        version == nil
+    }
+
     static func validPRURL(_ rawValue: String?) -> URL? {
         guard let rawValue, let url = URL(string: rawValue),
               url.scheme == "https" || url.scheme == "http" else { return nil }
@@ -240,9 +244,10 @@ struct GGInboxTabView: View {
     }
 
     private var upgradeRequiredState: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let needsInstall = Self.shouldInstallGG(version: GGAvailability.shared.version)
+        return VStack(alignment: .leading, spacing: 8) {
             Spacer()
-            Text("Inbox needs a newer gg version.")
+            Text(needsInstall ? "Inbox needs gg installed." : "Inbox needs a newer gg version.")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             if let version = GGAvailability.shared.version {
@@ -250,11 +255,17 @@ struct GGInboxTabView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(theme.color("fg-muted"))
             }
-            Text("gg Inbox requires gg 0.9.12 or newer.")
+            Text(needsInstall ? "Install gg to use Inbox." : "gg Inbox requires gg 0.9.12 or newer.")
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-dim"))
             upgradeStatus
-            AlasButton(title: "Upgrade gg…", style: .normal) { ggUpgrade.upgrade() }
+            AlasButton(title: needsInstall ? "Install gg…" : "Upgrade gg…", style: .normal) {
+                if needsInstall {
+                    ggUpgrade.install()
+                } else {
+                    ggUpgrade.upgrade()
+                }
+            }
                 .disabled(ggUpgrade.phase == .running)
             Spacer()
         }
@@ -264,13 +275,14 @@ struct GGInboxTabView: View {
 
     @ViewBuilder
     private var upgradeStatus: some View {
+        let needsInstall = Self.shouldInstallGG(version: GGAvailability.shared.version)
         switch ggUpgrade.phase {
         case .idle, .succeeded:
             EmptyView()
         case .running:
             HStack(spacing: 6) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
-                Text("Upgrading…")
+                Text(needsInstall ? "Installing…" : "Upgrading…")
                     .font(.system(size: 11))
                     .foregroundColor(theme.color("fg-dim"))
             }
