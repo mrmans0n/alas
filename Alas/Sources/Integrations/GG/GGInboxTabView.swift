@@ -65,11 +65,15 @@ struct GGInboxTabView: View {
     let tabState: GGInboxTabState
 
     @Environment(\.theme) private var theme
+    @State private var ggUpgrade = GGInstallController()
     private let store = GGInboxStore.shared
     private let service = GGService()
 
     private var inboxState: GGInboxStore.State { store.states[tabState.projectId] ?? .init() }
     private var project: ProjectConfig? { state.projects.first { $0.id == tabState.projectId } }
+    private var supportsStreamingInbox: Bool {
+        GGInboxSupport.isSupported(version: GGAvailability.shared.version)
+    }
 
     // MARK: pure helpers (tested)
 
@@ -79,6 +83,46 @@ struct GGInboxTabView: View {
         if seconds < 60 { return "Updated just now" }
         if seconds < 3_600 { return "Updated \(Int(seconds / 60))m ago" }
         return "Updated \(Int(seconds / 3_600))h ago"
+    }
+
+    static func refreshLabel(_ progress: GGInboxRefreshProgress?) -> String? {
+        guard let progress else { return nil }
+        return "Refreshing \(progress.completed)/\(progress.total)"
+    }
+
+    static func shouldShowClearInbox(
+        snapshot: GGInboxSnapshot?,
+        isRefreshing: Bool,
+        lastError: String?
+    ) -> Bool {
+        guard let snapshot else { return false }
+        return snapshot.totalItems == 0 && snapshot.stackErrors.isEmpty
+            && !isRefreshing && lastError == nil
+    }
+
+    static func shouldRefreshAfterSupportTransition(
+        wasSupported: Bool,
+        isSupported: Bool,
+        snapshot: GGInboxSnapshot?,
+        fetchedAt: Date?,
+        now: Date
+    ) -> Bool {
+        guard !wasSupported, isSupported else { return false }
+        return snapshot == nil || GGInboxStore.isStale(fetchedAt: fetchedAt, now: now)
+    }
+
+    static func shouldShowUpgradeRequired(hasProbed: Bool, supportsStreamingInbox: Bool) -> Bool {
+        hasProbed && !supportsStreamingInbox
+    }
+
+    static func shouldInstallGG(version: String?) -> Bool {
+        version == nil
+    }
+
+    static func validPRURL(_ rawValue: String?) -> URL? {
+        guard let rawValue, let url = URL(string: rawValue),
+              url.scheme == "https" || url.scheme == "http" else { return nil }
+        return url
     }
 
     static func ciIconName(_ status: String?) -> String? {
@@ -111,6 +155,20 @@ struct GGInboxTabView: View {
         }
         .background(theme.color("bg-1"))
         .onAppear { refreshIfStale() }
+        .onChange(of: ggUpgrade.phase) { _, phase in
+            guard phase == .succeeded, supportsStreamingInbox else { return }
+            refresh()
+        }
+        .onChange(of: supportsStreamingInbox) { wasSupported, isSupported in
+            guard Self.shouldRefreshAfterSupportTransition(
+                wasSupported: wasSupported,
+                isSupported: isSupported,
+                snapshot: inboxState.snapshot,
+                fetchedAt: inboxState.fetchedAt,
+                now: Date()
+            ) else { return }
+            refresh()
+        }
     }
 
     private var header: some View {
@@ -124,12 +182,15 @@ struct GGInboxTabView: View {
                     .foregroundColor(theme.color("fg-dim"))
             }
             Spacer()
-            if let label = Self.updatedLabel(fetchedAt: inboxState.fetchedAt, now: Date()) {
-                Text(label).font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
-            }
             if inboxState.isRefreshing {
                 Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 11, height: 11)
+                if let label = Self.refreshLabel(inboxState.refreshProgress) {
+                    Text(label).font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
+                }
             } else {
+                if let label = Self.updatedLabel(fetchedAt: inboxState.fetchedAt, now: Date()) {
+                    Text(label).font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
+                }
                 Button { refresh() } label: {
                     Icon(name: "arrow.clockwise", size: 11, color: theme.color("fg-faint"))
                 }
@@ -143,19 +204,93 @@ struct GGInboxTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let error = inboxState.lastError {
-            errorBanner(error)
-        }
-        if let snapshot = inboxState.snapshot {
-            if snapshot.totalItems == 0 && snapshot.stackErrors.isEmpty && inboxState.lastError == nil {
-                emptyState
-            } else {
-                bucketList(snapshot)
-            }
-        } else if !inboxState.isRefreshing && inboxState.lastError == nil {
-            emptyState
+        if !GGAvailability.shared.hasProbed {
+            probingState
+        } else if Self.shouldShowUpgradeRequired(
+            hasProbed: GGAvailability.shared.hasProbed,
+            supportsStreamingInbox: supportsStreamingInbox
+        ) {
+            upgradeRequiredState
         } else {
+            if let error = inboxState.lastError {
+                errorBanner(error)
+            }
+            if let snapshot = inboxState.snapshot {
+                if Self.shouldShowClearInbox(
+                    snapshot: snapshot,
+                    isRefreshing: inboxState.isRefreshing,
+                    lastError: inboxState.lastError
+                ) {
+                    emptyState
+                } else {
+                    bucketList(snapshot)
+                }
+            } else {
+                Spacer()
+            }
+        }
+    }
+
+    private var probingState: some View {
+        VStack(spacing: 8) {
             Spacer()
+            Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 12, height: 12)
+            Text("Checking gg version…")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var upgradeRequiredState: some View {
+        let needsInstall = Self.shouldInstallGG(version: GGAvailability.shared.version)
+        return VStack(alignment: .leading, spacing: 8) {
+            Spacer()
+            Text(needsInstall ? "Inbox needs gg installed." : "Inbox needs a newer gg version.")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            if let version = GGAvailability.shared.version {
+                Text("gg \(version)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-muted"))
+            }
+            Text(needsInstall ? "Install gg to use Inbox." : "gg Inbox requires gg 0.9.12 or newer.")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            upgradeStatus
+            AlasButton(title: needsInstall ? "Install gg…" : "Upgrade gg…", style: .normal) {
+                if needsInstall {
+                    ggUpgrade.install()
+                } else {
+                    ggUpgrade.upgrade()
+                }
+            }
+                .disabled(ggUpgrade.phase == .running)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(14)
+    }
+
+    @ViewBuilder
+    private var upgradeStatus: some View {
+        let needsInstall = Self.shouldInstallGG(version: GGAvailability.shared.version)
+        switch ggUpgrade.phase {
+        case .idle, .succeeded:
+            EmptyView()
+        case .running:
+            HStack(spacing: 6) {
+                Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                Text(needsInstall ? "Installing…" : "Upgrading…")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+        case .failed(let message):
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("warn"))
+                .lineLimit(2)
         }
     }
 
@@ -236,16 +371,22 @@ struct GGInboxTabView: View {
             if let icon = Self.ciIconName(entry.ciStatus) {
                 Icon(name: icon, size: 11, color: theme.color(Self.ciIconColorToken(entry.ciStatus)))
             }
-            Button {
-                if let url = URL(string: entry.prUrl) { NSWorkspace.shared.open(url) }
-            } label: {
-                Text("#\(entry.prNumber)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(theme.color("accent"))
+            if let refreshError = entry.refreshError {
+                Text(refreshError)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(theme.color("warn"))
+                    .lineLimit(2)
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help("Open PR in browser")
+            if let url = Self.validPRURL(entry.prUrl) {
+                Button { NSWorkspace.shared.open(url) } label: {
+                    prNumberLabel(entry.prNumber)
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Open PR in browser")
+            } else {
+                prNumberLabel(entry.prNumber)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 5)
         .contentShape(Rectangle())
@@ -286,6 +427,12 @@ struct GGInboxTabView: View {
         }
     }
 
+    private func prNumberLabel(_ number: Int) -> some View {
+        Text("#\(number)")
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundColor(theme.color("accent"))
+    }
+
     // MARK: actions
 
     private func resolveWorktreeId(_ entry: GGInboxEntry) -> String? {
@@ -300,13 +447,14 @@ struct GGInboxTabView: View {
     }
 
     private func refreshIfStale() {
+        guard supportsStreamingInbox else { return }
         guard inboxState.snapshot == nil
             || GGInboxStore.isStale(fetchedAt: inboxState.fetchedAt, now: Date()) else { return }
         refresh()
     }
 
     private func refresh() {
-        guard let project, state.ggInboxAvailable(projectId: project.id) else { return }
+        guard supportsStreamingInbox, let project, state.ggInboxAvailable(projectId: project.id) else { return }
         Task { @MainActor in
             await store.refresh(projectId: project.id, repoPath: project.path, service: service)
         }
