@@ -157,6 +157,21 @@ struct GGInboxHelpersTests {
         ))
     }
 
+    @Test func upgradeGateWaitsForAvailabilityProbe() {
+        #expect(!GGInboxTabView.shouldShowUpgradeRequired(
+            hasProbed: false,
+            supportsStreamingInbox: false
+        ))
+        #expect(GGInboxTabView.shouldShowUpgradeRequired(
+            hasProbed: true,
+            supportsStreamingInbox: false
+        ))
+        #expect(!GGInboxTabView.shouldShowUpgradeRequired(
+            hasProbed: true,
+            supportsStreamingInbox: true
+        ))
+    }
+
     @Test func validPRURLRequiresHTTPOrHTTPS() {
         #expect(GGInboxTabView.validPRURL("https://example.test/42") != nil)
         #expect(GGInboxTabView.validPRURL("") == nil)

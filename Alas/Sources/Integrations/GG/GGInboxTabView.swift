@@ -111,6 +111,10 @@ struct GGInboxTabView: View {
         return snapshot == nil || GGInboxStore.isStale(fetchedAt: fetchedAt, now: now)
     }
 
+    static func shouldShowUpgradeRequired(hasProbed: Bool, supportsStreamingInbox: Bool) -> Bool {
+        hasProbed && !supportsStreamingInbox
+    }
+
     static func validPRURL(_ rawValue: String?) -> URL? {
         guard let rawValue, let url = URL(string: rawValue),
               url.scheme == "https" || url.scheme == "http" else { return nil }
@@ -196,7 +200,12 @@ struct GGInboxTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !supportsStreamingInbox {
+        if !GGAvailability.shared.hasProbed {
+            probingState
+        } else if Self.shouldShowUpgradeRequired(
+            hasProbed: GGAvailability.shared.hasProbed,
+            supportsStreamingInbox: supportsStreamingInbox
+        ) {
             upgradeRequiredState
         } else {
             if let error = inboxState.lastError {
@@ -216,6 +225,18 @@ struct GGInboxTabView: View {
                 Spacer()
             }
         }
+    }
+
+    private var probingState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 12, height: 12)
+            Text("Checking gg version…")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var upgradeRequiredState: some View {
