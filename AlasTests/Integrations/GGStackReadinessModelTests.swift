@@ -410,32 +410,74 @@ struct GGStackReadinessModelTests {
         #expect(progress.liveStatus == "Syncing 2 of 2 commits…")
     }
 
-    @Test func unchangedPRUsesUpToDateRow() throws {
-        let action = GGStackActionState()
-        _ = action.beginAction(.sync)
-        action.appendSyncEvent(.prUpdated(position: 1, prNumber: 7, action: "unchanged"))
-        let progress = try #require(GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .open)]), action: action
-        ).syncProgress)
-        #expect(progress.rows == [.init(position: 1, text: "[1] PR #7 up to date")])
+    @Test func prUpdatedMapsKnownActionsAndUsesNeutralFallback() throws {
+        let cases = [
+            ("updated", "[1] PR #7 updated"),
+            ("unchanged", "[1] PR #7 up to date"),
+            ("up_to_date", "[1] PR #7 up to date"),
+            ("recreated", "[1] PR #7 recreated"),
+            ("future_action", "[1] PR #7"),
+        ]
+
+        for (reportedAction, expectedRow) in cases {
+            let action = GGStackActionState()
+            _ = action.beginAction(.sync)
+            action.appendSyncEvent(.prUpdated(position: 1, prNumber: 7, action: reportedAction))
+            let progress = try #require(GGStackReadinessModel.make(
+                stack: stack([entry(position: 1, prState: .open)]), action: action
+            ).syncProgress)
+            #expect(progress.rows == [.init(position: 1, text: expectedRow)])
+        }
     }
 
-    @Test func closedPRUsesAlreadyClosedRow() throws {
+    @Test func createdAndClosedPRRowsOnlyClaimPushWhenObserved() throws {
+        let created = GGStackActionState()
+        _ = created.beginAction(.sync)
+        created.appendSyncEvent(.prCreated(position: 1, prNumber: 7, prURL: nil, draft: false))
+        let createdProgress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]), action: created
+        ).syncProgress)
+        #expect(createdProgress.rows == [.init(position: 1, text: "[1] PR #7 created")])
+
         let closed = GGStackActionState()
         _ = closed.beginAction(.sync)
+        closed.appendSyncEvent(.pushDone(position: 1, forced: false))
         closed.appendSyncEvent(.prSkippedClosed(position: 1, prNumber: 7))
         let progress = try #require(GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open)]), action: closed
         ).syncProgress)
-        #expect(progress.rows == [.init(position: 1, text: "[1] PR #7 already closed")])
+        #expect(progress.rows == [.init(position: 1, text: "[1] Pushed · PR #7 already closed")])
     }
 
-    @Test func positionalPushErrorUsesFailureRowWithoutSpinner() throws {
+    @Test func positionalErrorCountsAsProcessedAndLaterEntryKeepsProgressLive() throws {
         let failed = GGStackActionState()
         _ = failed.beginAction(.sync)
+        failed.appendSyncEvent(.start(totalEntries: 2))
         failed.appendSyncEvent(.error(position: 1, operation: "push", message: "push failed"))
-        let progress = try #require(GGStackReadinessModel.make(
+        let afterError = try #require(GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open)]), action: failed
+        ).syncProgress)
+        #expect(afterError.rows == [.init(position: 1, text: "[1] Failed to push")])
+        #expect(afterError.liveStatus == "Syncing 1 of 2 commits…")
+        #expect(afterError.showsSpinner)
+
+        failed.appendSyncEvent(.entryStarted(position: 2, title: "Second"))
+        let afterNextEntry = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]), action: failed
+        ).syncProgress)
+        #expect(afterNextEntry.liveStatus == "Syncing [2] Second…")
+        #expect(afterNextEntry.showsSpinner)
+    }
+
+    @Test func summaryEntryErrorDoesNotDowngradeEarlierPushFailure() throws {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.error(position: 1, operation: "push", message: "push failed"))
+        action.appendSyncEvent(.error(position: 1, operation: nil, message: "push failed"))
+        action.appendSyncEvent(.summary)
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]), action: action
         ).syncProgress)
         #expect(progress.rows == [.init(position: 1, text: "[1] Failed to push")])
         #expect(progress.liveStatus == nil)
@@ -482,12 +524,16 @@ struct GGStackReadinessModelTests {
         action.setError("push failed")
         action.endAction(.sync)
 
-        let progress = try #require(GGStackReadinessModel.make(
+        let model = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: .open)]), action: action
-        ).syncProgress)
+        )
+        let progress = try #require(model.syncProgress)
         #expect(progress.rows == [.init(position: 1, text: "[1] Failed to push")])
         #expect(progress.liveStatus == nil)
         #expect(!progress.showsSpinner)
+        #expect(model.isRetainedSyncFailure)
+        #expect(!model.primaryActions.isEmpty)
+        #expect(!model.facts.isEmpty)
     }
 
     @Test func actionSummarySurfacesWhenIdleOnly() {

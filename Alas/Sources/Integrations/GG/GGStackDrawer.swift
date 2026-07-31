@@ -84,6 +84,7 @@ struct GGStackDrawer: View {
                 )],
                 overflowActions: [],
                 syncProgress: nil,
+                isRetainedSyncFailure: false,
                 isPaused: false,
                 actionSummary: rps.ggActionState.lastActionSummary,
                 localChangesNote: nil
@@ -283,6 +284,11 @@ struct GGStackDrawer: View {
                         .font(.system(size: 11))
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(3)
+                }
+                if model.isRetainedSyncFailure {
+                    actionRow(model)
+                    actionDetails(model)
+                    factsView(model)
                 }
             } else {
                 if let summary = model.actionSummary {

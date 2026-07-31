@@ -446,10 +446,11 @@ struct GGService {
                                     "gg sync emitted data after a terminal event."
                                 )
                             }
-                            if let event = GGSyncEvent.parse(line: line) {
+                            let events = GGSyncEvent.parseEvents(line: line)
+                            for event in events {
                                 continuation.yield(event)
-                                if case .summary = event { sawSummary = true }
                             }
+                            if events.contains(.summary) { sawSummary = true }
                         }
                         guard sawSummary else {
                             throw GGServiceError.malformedOutput(
@@ -461,7 +462,12 @@ struct GGService {
                             args: ["sync", "--json"],
                             worktreePath: worktreePath
                         )
-                        continuation.yield(GGSyncEvent.parse(line: result.stdout) ?? .summary)
+                        let events = GGSyncEvent.parseEvents(line: result.stdout)
+                        if events.isEmpty {
+                            continuation.yield(.summary)
+                        } else {
+                            for event in events { continuation.yield(event) }
+                        }
                     }
                     continuation.finish()
                 } catch {

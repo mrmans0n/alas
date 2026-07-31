@@ -67,7 +67,7 @@ struct GGServiceActionsTests {
 
     @Test func syncFallbackSurfacesJSONSummaryErrors() async throws {
         let runner = RecordingGGRunner(
-            stdout: #"{"version":1,"sync":{"entries":[{"position":1,"error":"push failed"}]}}"#
+            stdout: #"{"version":1,"sync":{"entries":[{"position":1,"error":"push failed"},{"position":2,"error":{"message":"PR failed"}}]}}"#
         )
         let service = GGService(runner: runner)
 
@@ -76,7 +76,29 @@ struct GGServiceActionsTests {
             events.append(event)
         }
 
-        #expect(events == [.error(position: 1, operation: nil, message: "push failed")])
+        #expect(events == [
+            .error(position: 1, operation: nil, message: "push failed"),
+            .error(position: 2, operation: nil, message: "PR failed"),
+            .summary,
+        ])
+    }
+
+    @Test func syncJSONLSummaryYieldsEveryEntryErrorBeforeTerminalSummary() async throws {
+        let runner = RecordingGGRunner(
+            stdout: #"{"event":"summary","entries":[{"position":1,"error":"push failed"},{"position":2,"error":"PR failed"}]}"#
+        )
+        let service = GGService(runner: runner)
+
+        var events: [GGSyncEvent] = []
+        for try await event in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {
+            events.append(event)
+        }
+
+        #expect(events == [
+            .error(position: 1, operation: nil, message: "push failed"),
+            .error(position: 2, operation: nil, message: "PR failed"),
+            .summary,
+        ])
     }
 
     @Test func landAllSendsAllFlagAndDecodes() async throws {

@@ -63,6 +63,16 @@ struct GGActionEventsTests {
         #expect(GGSyncEvent.parse(line: #"{"no_event_field":true}"#) == nil)
     }
 
+    @Test func summaryEnvelopePreservesEveryEntryErrorAndTerminalIdentity() {
+        let line = #"{"event":"summary","entries":[{"position":1,"error":"push failed"},{"position":2,"error":{"message":"PR failed"}}]}"#
+
+        #expect(GGSyncEvent.parseEvents(line: line) == [
+            .error(position: 1, operation: nil, message: "push failed"),
+            .error(position: 2, operation: nil, message: "PR failed"),
+            .summary,
+        ])
+    }
+
     @Test func decodesLandResult() throws {
         let json = #"{"version":1,"land":{"stack":"s","base":"main","landed":[{"position":1,"pr_number":42},{"position":2,"pr_number":43}]}}"#
         let result = try GGLandResult.decode(fromJSON: Data(json.utf8))

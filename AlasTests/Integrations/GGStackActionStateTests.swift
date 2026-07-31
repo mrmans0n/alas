@@ -47,11 +47,17 @@ struct GGStackActionStateTests {
 
     @Test func beginningAnyLaterActionClearsRetainedError() {
         let state = GGStackActionState()
+        _ = state.beginAction(.sync)
         state.setError("push failed")
+        state.markSyncTerminalFailure()
+        state.endAction(.sync)
+
+        #expect(state.syncHasTerminalFailure)
 
         _ = state.beginAction(.land)
 
         #expect(state.lastError == nil)
+        #expect(!state.syncHasTerminalFailure)
     }
 
     @Test func errorAndPausedRoundTrip() {

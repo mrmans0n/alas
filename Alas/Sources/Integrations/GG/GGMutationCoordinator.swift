@@ -291,16 +291,27 @@ final class GGMutationCoordinator {
             }
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
-            await refresh(after: request, result: .none)
-            if request.touchesRemote, case .malformedOutput = error {
-                return
+            let toleratesMalformedRemoteOutput: Bool
+            if request != .sync, request.touchesRemote, case .malformedOutput = error {
+                toleratesMalformedRemoteOutput = true
+            } else {
+                toleratesMalformedRemoteOutput = false
             }
-            if actionState.lastError == nil { actionState.setError(error.userMessage) }
+            if !toleratesMalformedRemoteOutput {
+                if request == .sync {
+                    actionState.markSyncTerminalFailure()
+                    if case .malformedOutput = error { actionState.setError(error.userMessage) }
+                }
+                if actionState.lastError == nil { actionState.setError(error.userMessage) }
+            }
+            await refresh(after: request, result: .none)
+            if toleratesMalformedRemoteOutput { return }
             throw error
         } catch {
             reconcilePausedState(after: request, error: error)
-            await refresh(after: request, result: .none)
+            if request == .sync { actionState.markSyncTerminalFailure() }
             actionState.setError(error.localizedDescription)
+            await refresh(after: request, result: .none)
             throw error
         }
     }

@@ -598,6 +598,57 @@ struct GGMutationCoordinatorTests {
         #expect(harness.actionState.syncProgress.isEmpty)
     }
 
+    @Test func syncCommandFailurePublishesTerminalStateBeforeSuspendedRefresh() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.service.syncEvents = [.start(totalEntries: 1)]
+        harness.service.error = GGServiceError.commandFailed(stderr: "sync failed")
+        var refreshStarted = false
+        var resumeRefresh: CheckedContinuation<Void, Never>?
+        harness.onRefreshStack = {
+            await withCheckedContinuation { continuation in
+                resumeRefresh = continuation
+                refreshStarted = true
+            }
+        }
+
+        let task = try #require(harness.coordinator.startApplying(.sync, confirmedAgainst: nil))
+        try await waitUntil { refreshStarted }
+
+        let model = GGStackReadinessModel.make(
+            stack: try #require(harness.stacks[0].stack),
+            action: harness.actionState
+        )
+        #expect(harness.coordinator.activeRequest == .sync)
+        #expect(harness.actionState.inFlightAction == .sync)
+        #expect(harness.actionState.lastError == "sync failed")
+        #expect(harness.actionState.syncHasTerminalFailure)
+        #expect(model.syncProgress?.liveStatus == nil)
+        #expect(model.syncProgress?.showsSpinner == false)
+
+        resumeRefresh?.resume()
+        await #expect(throws: GGServiceError.commandFailed(stderr: "sync failed")) {
+            try await task.value
+        }
+    }
+
+    @Test func syncProtocolViolationsPropagateAndPublishError() async {
+        for message in [
+            "gg sync ended without a summary event.",
+            "gg sync emitted data after a terminal event.",
+        ] {
+            let harness = GGMutationHarness(stacks: [stack(head: "a")])
+            harness.service.syncEvents = [.start(totalEntries: 1)]
+            harness.service.error = GGServiceError.malformedOutput(message)
+
+            await #expect(throws: GGServiceError.malformedOutput(message)) {
+                try await harness.coordinator.apply(.sync, confirmedAgainst: nil)
+            }
+
+            #expect(harness.actionState.lastError == message)
+            #expect(harness.actionState.syncHasTerminalFailure)
+        }
+    }
+
     @Test func reservingSyncImmediatelyPublishesPreparingFeedback() async throws {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
         harness.service.blockExecution = true
