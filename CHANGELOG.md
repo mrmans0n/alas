@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.9] - 2026-07-31
+
+### ✨ Features
+
+- Stream progressive `git-gud` inbox refresh feedback (#938).
+- Show progressive `git-gud` sync feedback (#939).
+
+### 🐛 Fixes
+
+- Stop external Markdown buffer observer loops (#937).
+
 ## [0.13.8] - 2026-07-30
 
 ### 🐛 Fixes
