@@ -335,12 +335,88 @@ struct GGService {
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8))
     }
 
-    /// Cross-stack triage snapshot from `gg inbox --json`. Runs at the
+    /// Streams cross-stack triage events from `gg inbox --jsonl`. Runs at the
     /// project root — one forge round-trip per project, never per worktree.
     /// Per-stack failures arrive in-band as `stackErrors`, not as thrown errors.
-    func inbox(repoPath: String) async throws -> GGInboxSnapshot {
-        let result = try await runChecked(args: ["inbox", "--json"], worktreePath: repoPath)
-        return try GGInboxSnapshot.decode(fromJSON: Data(result.stdout.utf8))
+    func inboxStream(repoPath: String) -> AsyncThrowingStream<GGInboxEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                var sawStart = false
+                var sawSummary = false
+                var fatalMessage: String?
+                var totalCandidates: Int?
+                var lastCompleted = 0
+
+                do {
+                    do {
+                        for try await line in runner.runStreaming(
+                            args: ["inbox", "--jsonl"],
+                            cwd: URL(fileURLWithPath: repoPath)
+                        ) {
+                            guard !sawSummary, fatalMessage == nil else {
+                                throw GGServiceError.malformedOutput("gg inbox emitted data after a terminal event.")
+                            }
+                            let event = try GGInboxEvent.decode(line: line)
+                            switch event {
+                            case .error(let message):
+                                fatalMessage = message
+                            case .start(let count, _):
+                                guard !sawStart else {
+                                    throw GGServiceError.malformedOutput("gg inbox emitted duplicate start events.")
+                                }
+                                sawStart = true
+                                totalCandidates = count
+                                continuation.yield(event)
+                            case .entry(let payload):
+                                try Self.validateInboxProgress(
+                                    started: sawStart,
+                                    expectedTotal: totalCandidates,
+                                    completed: payload.completed,
+                                    eventTotal: payload.totalCandidates,
+                                    lastCompleted: &lastCompleted
+                                )
+                                continuation.yield(event)
+                            case .entryError(let payload):
+                                try Self.validateInboxProgress(
+                                    started: sawStart,
+                                    expectedTotal: totalCandidates,
+                                    completed: payload.completed,
+                                    eventTotal: payload.totalCandidates,
+                                    lastCompleted: &lastCompleted
+                                )
+                                continuation.yield(event)
+                            case .stackError:
+                                guard sawStart else {
+                                    throw GGServiceError.malformedOutput("gg inbox emitted stack_error before start.")
+                                }
+                                continuation.yield(event)
+                            case .summary:
+                                guard sawStart else {
+                                    throw GGServiceError.malformedOutput("gg inbox emitted summary before start.")
+                                }
+                                sawSummary = true
+                                continuation.yield(event)
+                            }
+                        }
+                    } catch {
+                        if let fatalMessage {
+                            throw GGServiceError.commandFailed(stderr: fatalMessage)
+                        }
+                        throw error
+                    }
+
+                    if let fatalMessage {
+                        throw GGServiceError.commandFailed(stderr: fatalMessage)
+                    }
+                    guard sawStart, sawSummary else {
+                        throw GGServiceError.malformedOutput("gg inbox ended without a summary event.")
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
     }
 
     /// Streams sync events when `gg sync --jsonl` is supported; older gg
@@ -548,6 +624,25 @@ struct GGService {
 
     func checkout(worktreePath: String, target: String) async throws {
         _ = try await runChecked(args: ["mv", target], worktreePath: worktreePath)
+    }
+
+    private static func validateInboxProgress(
+        started: Bool,
+        expectedTotal: Int?,
+        completed: Int,
+        eventTotal: Int,
+        lastCompleted: inout Int
+    ) throws {
+        guard started, let expectedTotal else {
+            throw GGServiceError.malformedOutput("gg inbox emitted an entry before start.")
+        }
+        guard eventTotal == expectedTotal else {
+            throw GGServiceError.malformedOutput("gg inbox entry total did not match start total.")
+        }
+        guard lastCompleted < completed, completed <= eventTotal else {
+            throw GGServiceError.malformedOutput("gg inbox emitted invalid entry progress.")
+        }
+        lastCompleted = completed
     }
 
     /// Runs a gg command and maps a non-zero exit to `GGServiceError`, the
