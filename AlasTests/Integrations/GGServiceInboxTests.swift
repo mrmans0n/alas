@@ -55,51 +55,51 @@ struct GGServiceInboxTests {
     @Test(arguments: [
         InboxSequenceFailure(
             name: "summary without start",
-            lines: [summaryLine]
+            lines: [Self.summaryLine]
         ),
         InboxSequenceFailure(
             name: "duplicate start",
-            lines: [startLine, startLine, summaryLine]
+            lines: [Self.startLine, Self.startLine, Self.summaryLine]
         ),
         InboxSequenceFailure(
             name: "duplicate summary",
-            lines: [startLine, summaryLine, summaryLine]
+            lines: [Self.startLine, Self.summaryLine, Self.summaryLine]
         ),
         InboxSequenceFailure(
             name: "entry after summary",
-            lines: [startLine, summaryLine, entryLine]
+            lines: [Self.startLine, Self.summaryLine, Self.entryLine]
         ),
         InboxSequenceFailure(
             name: "clean EOF after start without summary",
-            lines: [startLine]
+            lines: [Self.startLine]
         ),
         InboxSequenceFailure(
             name: "malformed line",
-            lines: [startLine, "not json"]
+            lines: [Self.startLine, "not json"]
         ),
         InboxSequenceFailure(
             name: "entry total differs from start",
-            lines: [startLine, entryWithDifferentTotalLine]
+            lines: [Self.startLine, Self.entryWithDifferentTotalLine]
         ),
         InboxSequenceFailure(
             name: "entry before start",
-            lines: [entryLine]
+            lines: [Self.entryLine]
         ),
         InboxSequenceFailure(
             name: "repeated entry completion",
-            lines: [startTotalTwoLine, entryTotalTwoCompletedOneLine, entryTotalTwoCompletedOneLine]
+            lines: [Self.startTotalTwoLine, Self.entryTotalTwoCompletedOneLine, Self.entryTotalTwoCompletedOneLine]
         ),
         InboxSequenceFailure(
             name: "decreasing entry completion",
-            lines: [startTotalTwoLine, entryTotalTwoCompletedTwoLine, entryTotalTwoCompletedOneLine]
+            lines: [Self.startTotalTwoLine, Self.entryTotalTwoCompletedTwoLine, Self.entryTotalTwoCompletedOneLine]
         ),
         InboxSequenceFailure(
             name: "entry completion above total",
-            lines: [startLine, entryAboveTotalLine]
+            lines: [Self.startLine, Self.entryAboveTotalLine]
         ),
         InboxSequenceFailure(
             name: "entry error progress validation",
-            lines: [startLine, entryErrorAboveTotalLine]
+            lines: [Self.startLine, Self.entryErrorAboveTotalLine]
         ),
     ])
     func inboxRejectsInvalidSequence(_ fixture: InboxSequenceFailure) async {
@@ -126,7 +126,7 @@ struct GGServiceInboxTests {
     @Test func inboxRejectsFatalEventAfterDiscovery() async {
         let runner = InboxRecordingGGRunner(result: ProcessResult(
             exitCode: 1,
-            stdout: [startLine, fatalLine].joined(separator: "\n"),
+            stdout: [Self.startLine, Self.fatalLine].joined(separator: "\n"),
             stderr: "fallback stderr"
         ))
 
@@ -138,7 +138,7 @@ struct GGServiceInboxTests {
     @Test func inboxRejectsDataAfterFatalEvent() async {
         let runner = InboxRecordingGGRunner(result: ProcessResult(
             exitCode: 1,
-            stdout: [fatalLine, startLine].joined(separator: "\n"),
+            stdout: [Self.fatalLine, Self.startLine].joined(separator: "\n"),
             stderr: "fallback stderr"
         ))
 
