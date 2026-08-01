@@ -822,8 +822,18 @@ final class AppState {
         if let worktree,
            !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
             let rightPane = missionRightPaneState(for: worktree, baseRef: leg.baseRef)
-            async let reviewRefresh: Void = rightPane.refresh(forceReviewLoopRemote: true)
-            _ = await (issueRefresh, reviewRefresh)
+            await rightPane.refresh(forceReviewLoopRemote: true)
+            if let snapshot = rightPaneStore.reviewSnapshot(
+                worktreeId: worktree.id,
+                baseBranch: leg.baseRef
+            ) {
+                await missions.discoverMergedReview(
+                    worktreeId: worktree.id,
+                    baseRef: leg.baseRef,
+                    snapshot: snapshot
+                )
+            }
+            _ = await issueRefresh
         } else {
             async let reviewRefresh: Void = missions.refreshLinkedReview(id)
             _ = await (issueRefresh, reviewRefresh)

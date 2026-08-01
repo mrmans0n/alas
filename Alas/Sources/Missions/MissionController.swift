@@ -205,6 +205,34 @@ final class MissionController {
         }
     }
 
+    func discoverMergedReview(worktreeId: String, baseRef: String, snapshot: ReviewLoopSnapshot) async {
+        loadError = nil
+        do {
+            let active = try await persistence.list(includeCompleted: false)
+            for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
+                guard let leg = aggregate.primaryLeg,
+                      leg.reviewIdentity == nil,
+                      leg.baseRef == baseRef,
+                      let currentWorktree = environment.worktreeAtDestination(
+                          leg.projectId,
+                          leg.destinationPath
+                      ), currentWorktree.id == worktreeId,
+                      currentWorktree.branch == leg.branch,
+                      let request = await discoverMergedReview(for: leg, snapshot: snapshot)
+                else { continue }
+                await apply(
+                    signal: .review(
+                        state: request.state,
+                        identity: Self.reviewIdentity(for: request)
+                    ),
+                    to: aggregate.mission.id
+                )
+            }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
     func recordArchive(worktreeId: String) async {
         loadError = nil
         do {
@@ -396,20 +424,7 @@ final class MissionController {
                 }
                 if leg.reviewIdentity == nil,
                    let snapshot,
-                   snapshot.reviewRequest == nil,
-                   snapshot.local.branchName == leg.branch,
-                   !snapshot.local.headSHA.isEmpty,
-                   let request = await discoverReviewRequest(
-                       leg.projectId,
-                       leg.branch,
-                       leg.baseRef,
-                       snapshot.local.headSHA,
-                       snapshot.local.headRemoteOwner
-                   ),
-                   request.headRefName == leg.branch,
-                   request.headSHA == snapshot.local.headSHA,
-                   request.state == .merged,
-                   Self.review(request, matches: leg) {
+                   let request = await discoverMergedReview(for: leg, snapshot: snapshot) {
                     await apply(
                         signal: .review(
                             state: request.state,
@@ -422,6 +437,28 @@ final class MissionController {
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    private func discoverMergedReview(
+        for leg: MissionLeg,
+        snapshot: ReviewLoopSnapshot
+    ) async -> ReviewRequest? {
+        guard snapshot.reviewRequest == nil,
+              snapshot.local.branchName == leg.branch,
+              !snapshot.local.headSHA.isEmpty,
+              let request = await discoverReviewRequest(
+                  leg.projectId,
+                  leg.branch,
+                  leg.baseRef,
+                  snapshot.local.headSHA,
+                  snapshot.local.headRemoteOwner
+              ),
+              request.headRefName == leg.branch,
+              request.headSHA == snapshot.local.headSHA,
+              request.state == .merged,
+              Self.review(request, matches: leg)
+        else { return nil }
+        return request
     }
 
     private func restoreReappearedWorktreeIfNeeded(_ id: MissionID) async {
