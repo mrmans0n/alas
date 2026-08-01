@@ -135,6 +135,26 @@ struct MissionTabTests {
         #expect(pane.baseBranch == fixture.aggregate.primaryLeg?.baseRef)
     }
 
+    @Test func leavingMissionRestoresTheDefaultRightPaneBase() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        fixture.state.config.worktrees.baseBranch = "global-main"
+        let missionBase = try #require(fixture.aggregate.primaryLeg?.baseRef)
+        let pane = fixture.state.rightPaneStore.state(
+            for: fixture.worktree,
+            baseBranch: missionBase,
+            comparisonMode: fixture.state.config.changes.comparisonMode
+        )
+
+        fixture.state.restoreDefaultRightPaneBaseAfterMission(
+            worktree: fixture.worktree,
+            missionBaseRef: missionBase
+        )
+
+        #expect(pane.reviewLoop.currentBaseBranch == "global-main")
+    }
+
     @Test func openMissionPresentsDetailWhenProjectHasBeenRemoved() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeProject: false, includeWorktree: false)
         await fixture.state.missions.load()

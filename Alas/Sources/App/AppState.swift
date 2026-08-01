@@ -829,6 +829,21 @@ final class AppState {
         )
     }
 
+    func restoreDefaultRightPaneBaseAfterMission(
+        worktree: Worktree,
+        missionBaseRef: String
+    ) {
+        let defaultBase = config.worktrees.baseBranch
+        guard selectedWorktreeId == worktree.id,
+              missionBaseRef != defaultBase
+        else { return }
+        _ = rightPaneStore.state(
+            for: worktree,
+            baseBranch: defaultBase,
+            comparisonMode: config.changes.comparisonMode
+        )
+    }
+
     private func refreshMissionIssue(
         identity: MissionIssueIdentity,
         projectID: String
@@ -2080,10 +2095,10 @@ final class AppState {
             repoPath: URL(fileURLWithPath: project.path),
             destination: URL(fileURLWithPath: draft.destinationPath)
         )
-        let availableDestination = availablePreparedMissionDestination(
+        let availableDestination = try await availablePreparedMissionDestination(
             projectID: draft.projectId,
             requested: destination,
-            isRemote: URL(fileURLWithPath: project.path).isRemoteAlasPath
+            projectPath: URL(fileURLWithPath: project.path)
         )
         return MissionDraft(
             issue: draft.issue,
@@ -2100,19 +2115,40 @@ final class AppState {
     private func availablePreparedMissionDestination(
         projectID: String,
         requested: URL,
-        isRemote: Bool
-    ) -> URL {
+        projectPath: URL
+    ) async throws -> URL {
         let occupiedPaths = Set(projectsManager.worktrees(projectId: projectID).map {
             $0.path.standardizedFileURL.path
         })
-        func isAvailable(_ destination: URL) -> Bool {
-            let path = destination.standardizedFileURL.path
-            return !occupiedPaths.contains(path)
-                && (isRemote || !FileManager.default.fileExists(atPath: path))
+        if let host = RemoteHostRegistry.shared.host(forPath: projectPath.path) {
+            return try await Self.firstAvailableMissionDestination(
+                requested: requested,
+                occupiedPaths: occupiedPaths,
+                pathExists: { path in
+                    try await Self.remotePathExists(host: host, path: path)
+                }
+            )
         }
+        return try await Self.firstAvailableMissionDestination(
+            requested: requested,
+            occupiedPaths: occupiedPaths,
+            pathExists: { FileManager.default.fileExists(atPath: $0) }
+        )
+    }
 
+    nonisolated static func firstAvailableMissionDestination(
+        requested: URL,
+        occupiedPaths: Set<String>,
+        pathExists: (String) async throws -> Bool
+    ) async throws -> URL {
+        func isAvailable(_ destination: URL) async throws -> Bool {
+            let path = destination.standardizedFileURL.path
+            guard !occupiedPaths.contains(path) else { return false }
+            let exists = try await pathExists(path)
+            return !exists
+        }
         let requested = requested.standardizedFileURL
-        guard !isAvailable(requested) else { return requested }
+        if try await isAvailable(requested) { return requested }
         let parent = requested.deletingLastPathComponent()
         let name = requested.lastPathComponent
         var suffix = 2
@@ -2120,11 +2156,24 @@ final class AppState {
             let candidate = parent
                 .appendingPathComponent("\(name)-\(suffix)")
                 .standardizedFileURL
-            if isAvailable(candidate) {
+            if try await isAvailable(candidate) {
                 return candidate
             }
             suffix += 1
         }
+    }
+
+    nonisolated private static func remotePathExists(host: String, path: String) async throws -> Bool {
+        let command = "p=\(SSHCommand.shellQuote(path)); [ -e \"$p\" ] || [ -L \"$p\" ]"
+        let result = try await RemoteExec.run(host: host, cwd: nil, command: command)
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw NSError(
+                domain: "RemoteMissionDestination",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: "Could not check the Mission destination on \(host)."]
+            )
+        }
+        return result.exitCode == 0
     }
 
     nonisolated static func destinationPathReplacingLocalHome(

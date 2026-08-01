@@ -363,6 +363,15 @@ struct MissionTabView: View {
                 comparisonMode: state.config.changes.comparisonMode
             )
         }
+        .onDisappear {
+            guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+                  let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+            else { return }
+            state.restoreDefaultRightPaneBaseAfterMission(
+                worktree: worktree,
+                missionBaseRef: aggregate.primaryLeg?.baseRef ?? ""
+            )
+        }
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
