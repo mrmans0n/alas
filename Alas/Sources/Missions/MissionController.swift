@@ -14,7 +14,8 @@ typealias MissionStartupReviewSnapshot = @MainActor (
 typealias MissionReviewDiscovery = @MainActor (
     _ projectID: String,
     _ branch: String,
-    _ baseRef: String
+    _ baseRef: String,
+    _ headSHA: String
 ) async -> ReviewRequest?
 
 typealias MissionLinkedReviewRequest = @MainActor (
@@ -89,7 +90,7 @@ final class MissionController {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _ in nil },
         openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
         persistence = environment.persistence
@@ -367,6 +368,7 @@ final class MissionController {
                     if aggregate.mission.setupCheckpoint == .running {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
+                    await refreshLinkedReview(aggregate.mission.id)
                     continue
                 }
                 await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
@@ -390,13 +392,18 @@ final class MissionController {
                     )
                 }
                 if leg.reviewIdentity == nil,
-                   snapshot?.reviewRequest == nil,
+                   let snapshot,
+                   snapshot.reviewRequest == nil,
+                   snapshot.local.branchName == leg.branch,
+                   !snapshot.local.headSHA.isEmpty,
                    let request = await discoverReviewRequest(
                        leg.projectId,
                        leg.branch,
-                       leg.baseRef
+                       leg.baseRef,
+                       snapshot.local.headSHA
                    ),
-                   request.headRefName == leg.branch {
+                   request.headRefName == leg.branch,
+                   request.headSHA == snapshot.local.headSHA {
                     await apply(
                         signal: .review(
                             state: request.state,

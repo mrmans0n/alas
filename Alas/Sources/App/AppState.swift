@@ -726,11 +726,12 @@ final class AppState {
                 baseBranch: baseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
-        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef in
+        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA in
             await self?.discoverMissionReview(
                 projectID: projectID,
                 branch: branch,
-                baseRef: baseRef
+                baseRef: baseRef,
+                headSHA: headSHA
             )
         }, openMission: { [weak self] missionID in
             _ = self?.openMission(id: missionID)
@@ -923,7 +924,8 @@ final class AppState {
     private func discoverMissionReview(
         projectID: String,
         branch: String,
-        baseRef: String
+        baseRef: String,
+        headSHA: String
     ) async -> ReviewRequest? {
         guard let project = projectsManager.projects.first(where: { $0.id == projectID })
         else { return nil }
@@ -944,15 +946,26 @@ final class AppState {
                 await provider.isAvailable(cwd: cwd),
                 await provider.isAuthenticated(remote: remote, cwd: cwd)
             else { return nil }
-            return try await provider.missionReviewRequest(
+            let request = try await provider.missionReviewRequest(
                 remote: remote,
                 branch: branch,
                 headOwner: nil,
                 baseBranch: baseRef,
                 cwd: cwd
             )
+            guard request?.headSHA == headSHA else { return nil }
+            return request
         } catch {
             return nil
+        }
+    }
+
+    func reconcileDeletedMissionWorktree(_ worktreeID: String) async {
+        let missionIDs = missions.aggregates.compactMap { aggregate in
+            aggregate.primaryLeg?.worktreeId == worktreeID ? aggregate.mission.id : nil
+        }
+        for missionID in missionIDs {
+            await missions.recordMissingWorktree(missionID)
         }
     }
 
@@ -5125,6 +5138,7 @@ final class AppState {
             return
         }
 
+        await reconcileDeletedMissionWorktree(worktree.id)
         cleanupWorktreeState(worktreeId: worktree.id)
         // Always clear the deleting state after a successful remove,
         // even if the subsequent refresh fails.

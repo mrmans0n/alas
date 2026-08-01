@@ -222,6 +222,17 @@ struct MissionTabTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
+    @Test func directDeletionMarksTheMissionWorktreeMissing() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+
+        await fixture.state.reconcileDeletedMissionWorktree(fixture.worktree.id)
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+    }
+
     @Test func topologyCleanupRestoresAReappearedMissionWorktree() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()

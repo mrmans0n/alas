@@ -372,13 +372,15 @@ struct MissionReadinessEvaluatorTests {
 
     @Test func startupDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let currentSnapshot = Self.reviewSnapshotWithoutRequest()
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _, _ in nil },
-            startupReviewSnapshot: { _, _ in nil },
-            discoverReviewRequest: { projectID, branch, baseRef in
+            startupReviewSnapshot: { _, _ in currentSnapshot },
+            discoverReviewRequest: { projectID, branch, baseRef, headSHA in
                 #expect(projectID == "project-1")
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
+                #expect(headSHA == "abc123")
                 return request
             }
         )
@@ -389,6 +391,24 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
+    @Test func startupRejectsAHistoricalMergedReviewForAReusedBranch() async throws {
+        let historical = try #require(Self.reviewSnapshot(
+            state: .merged,
+            headSHA: "historical123"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
+            discoverReviewRequest: { _, _, _, _ in historical }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
     }
 
     @Test func mergedReviewWaitsForCreatingSetupToSettle() async throws {
@@ -465,6 +485,26 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+    }
+
+    @Test func startupRefreshesALinkedReviewWhenDestinationHasAReplacementBranch() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            worktreeBranch: "unrelated-branch",
+            linkedReviewRequest: { identity, projectID in
+                guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
+                return Self.reviewSnapshot(state: .merged).reviewRequest
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
     @Test func startupDoesNotArchiveAReplacementWorktreeOnTheWrongBranch() async throws {
@@ -565,7 +605,8 @@ struct MissionReadinessEvaluatorTests {
     private static func reviewSnapshot(
         state: ReviewRequestState,
         number: Int = 91,
-        branch: String = "fix/parser-crash"
+        branch: String = "fix/parser-crash",
+        headSHA: String = "abc123"
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -584,7 +625,7 @@ struct MissionReadinessEvaluatorTests {
             isDraft: false,
             headRefName: branch,
             baseRefName: "main",
-            headSHA: "abc123",
+            headSHA: headSHA,
             reviewDecision: .approved,
             mergeState: .clean,
             checks: [],
@@ -593,7 +634,7 @@ struct MissionReadinessEvaluatorTests {
         return ReviewLoopSnapshot(
             local: ReviewLoopLocalState(
                 branchName: branch,
-                headSHA: "abc123",
+                headSHA: headSHA,
                 baseBranch: "main",
                 hasWorkingTreeChanges: false,
                 hasStagedChanges: false,
@@ -607,6 +648,19 @@ struct MissionReadinessEvaluatorTests {
             providerAuthenticated: true,
             providerCapabilities: .readOnly,
             errorMessage: nil
+        )
+    }
+
+    private static func reviewSnapshotWithoutRequest() -> ReviewLoopSnapshot {
+        let snapshot = reviewSnapshot(state: .open)
+        return ReviewLoopSnapshot(
+            local: snapshot.local,
+            remote: snapshot.remote,
+            reviewRequest: nil,
+            providerAvailable: snapshot.providerAvailable,
+            providerAuthenticated: snapshot.providerAuthenticated,
+            providerCapabilities: snapshot.providerCapabilities,
+            errorMessage: snapshot.errorMessage
         )
     }
 }
@@ -637,7 +691,7 @@ private final class MissionLifecycleFake {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _ in nil },
         linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory
