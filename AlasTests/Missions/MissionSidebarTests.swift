@@ -92,6 +92,18 @@ struct MissionSidebarTests {
         #expect(byID[archived.mission.id.rawValue]?.isNavigationEnabled == true)
     }
 
+    @Test func persistedWorktreeIdDoesNotNavigateWhenTopologyHasNoMatchingRow() {
+        let mission = Self.mission(state: .running, worktreeId: "missing-wt")
+        let row = MissionSidebarModel.make(
+            aggregates: [mission],
+            activeProjectIds: ["project-1"],
+            existingProjectIds: ["project-1"],
+            knownWorktreeIds: []
+        ).active.first
+
+        #expect(row?.isNavigationEnabled == false)
+    }
+
     private static func mission(
         id: String = "mission-1",
         projectId: String = "project-1",

@@ -106,7 +106,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
         status = Self.status(for: aggregate.mission)
 
         if let worktreeId = aggregate.primaryLeg?.worktreeId {
-            isNavigationEnabled = knownWorktreeIds.isEmpty || knownWorktreeIds.contains(worktreeId)
+            isNavigationEnabled = knownWorktreeIds.contains(worktreeId)
         } else {
             isNavigationEnabled = false
         }
