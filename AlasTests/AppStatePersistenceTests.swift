@@ -178,6 +178,60 @@ struct AppStatePersistenceTests {
         #expect(state.selectedWorktreeId == nil)
     }
 
+    @Test func deferredMissionArchiveKeepsANewerSelection() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let recorder = ArchiveRecorderGate()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence,
+            missionArchiveRecorder: { _ in await recorder.waitForRelease() }
+        )
+        let worktree = Self.worktree
+        let other = Self.otherWorktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.projectsManager.insertOptimisticWorktree(other)
+        state.tabs.appendTerminal(worktreeId: worktree.id, title: "term", sessionId: "session")
+        state.selectedWorktreeId = worktree.id
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+        await recorder.waitUntilStarted()
+        state.selectedWorktreeId = other.id
+        await recorder.release()
+        let tabsClosed = await Self.waitForTabsToClose(worktreeId: worktree.id, state: state)
+
+        #expect(tabsClosed)
+        #expect(state.selectedWorktreeId == other.id)
+    }
+
+    @Test func deferredMissionArchiveDoesNothingAfterUnarchive() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let recorder = ArchiveRecorderGate()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence,
+            missionArchiveRecorder: { _ in await recorder.waitForRelease() }
+        )
+        let worktree = Self.worktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.tabs.appendTerminal(worktreeId: worktree.id, title: "term", sessionId: "session")
+        state.selectedWorktreeId = worktree.id
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+        await recorder.waitUntilStarted()
+        state.unarchiveWorktree(projectId: project.id, path: worktree.path)
+        await recorder.release()
+        await Task.yield()
+        await Task.yield()
+
+        #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path) == false)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).count == 1)
+        #expect(state.selectedWorktreeId == worktree.id)
+    }
+
     @Test func startupMissionReconciliationLoadsMergedReviewBeforePaneCreation() async throws {
         let project = Self.project
         let persistence = try Self.makeMissionPersistence()
@@ -236,6 +290,16 @@ struct AppStatePersistenceTests {
         lastActivity: Date(timeIntervalSince1970: 100)
     )
 
+    private static let otherWorktree = Worktree(
+        id: "worktree-2",
+        projectId: "project-1",
+        name: "other",
+        branch: "other",
+        path: URL(fileURLWithPath: "/tmp/alas-other"),
+        status: .clean,
+        lastActivity: Date(timeIntervalSince1970: 100)
+    )
+
     private static func makeMissionPersistence() throws -> MissionPersistence {
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = .running
@@ -263,6 +327,16 @@ struct AppStatePersistenceTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         return try #require(try await persistence.aggregate(id: MissionID(rawValue: "mission-1")))
+    }
+
+    private static func waitForTabsToClose(worktreeId: String, state: AppState) async -> Bool {
+        for _ in 0..<100 {
+            if state.tabs.tabs(forWorktree: worktreeId).isEmpty {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return state.tabs.tabs(forWorktree: worktreeId).isEmpty
     }
 
     private static func mergedReviewSnapshot() -> ReviewLoopSnapshot {
@@ -306,5 +380,36 @@ struct AppStatePersistenceTests {
             providerCapabilities: .readOnly,
             errorMessage: nil
         )
+    }
+}
+
+@MainActor
+private final class ArchiveRecorderGate {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        started = true
+        let waiters = startWaiters
+        startWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }

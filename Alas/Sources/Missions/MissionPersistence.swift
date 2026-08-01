@@ -76,6 +76,18 @@ actor MissionPersistence {
         try openedStore().replaceIssueSnapshot(missionID: missionID, snapshot: snapshot, event: event)
     }
 
+    func updateIssueRefreshError(
+        missionID: MissionID,
+        refreshError: String,
+        event: MissionEvent
+    ) throws {
+        try openedStore().updateIssueRefreshError(
+            missionID: missionID,
+            refreshError: refreshError,
+            event: event
+        )
+    }
+
     func markReady(
         id: MissionID,
         reviewIdentity: MissionReviewIdentity?,

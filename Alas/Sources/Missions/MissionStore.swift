@@ -252,6 +252,27 @@ final class MissionStore {
         }
     }
 
+    func updateIssueRefreshError(
+        missionID: MissionID,
+        refreshError: String,
+        event: MissionEvent
+    ) throws {
+        try validate(event: event, for: missionID)
+        try immediateTransaction {
+            try requireMission(missionID)
+            let changed = try db.execChanges(
+                "UPDATE mission_issue_sources SET refresh_error = ? WHERE mission_id = ?",
+                bindings: [refreshError, missionID.rawValue]
+            )
+            guard changed == 1 else { throw Error.malformedRecord }
+            try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
+                event.createdAt.timeIntervalSince1970,
+                missionID.rawValue,
+            ])
+            try insertEvent(event)
+        }
+    }
+
     func markReady(
         id: MissionID,
         reviewIdentity: MissionReviewIdentity?,

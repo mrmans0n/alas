@@ -6,6 +6,7 @@ import os
 @Observable
 @MainActor
 final class AppState {
+    typealias MissionArchiveRecorder = @MainActor (String) async -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -498,6 +499,8 @@ final class AppState {
     @ObservationIgnored
     private let missionStartupReviewSnapshot: MissionStartupReviewSnapshot?
     @ObservationIgnored
+    private let missionArchiveRecorder: MissionArchiveRecorder?
+    @ObservationIgnored
     private(set) lazy var missions = makeMissionController()
     @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
@@ -522,7 +525,8 @@ final class AppState {
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
-        missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil
+        missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
+        missionArchiveRecorder: MissionArchiveRecorder? = nil
     ) {
         self.store = store
         self.missionPersistence = missionPersistence
@@ -535,6 +539,7 @@ final class AppState {
         self.terminalSessionOpener = terminalSessionOpener
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
+        self.missionArchiveRecorder = missionArchiveRecorder
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -2260,8 +2265,6 @@ final class AppState {
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        let wasSelected = selectedWorktreeId == worktree.id
-
         projectsManager.setOperationState(id: worktree.id, state: nil)
         projectsManager.setWorktreeHidden(
             projectId: worktree.projectId,
@@ -2269,29 +2272,36 @@ final class AppState {
             hidden: true
         )
         saveProjects()
-        if projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) {
+        if projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path),
+           missions.hasActiveMission(worktreeId: worktree.id) {
             Task { @MainActor [weak self] in
-                await self?.missions.recordArchive(worktreeId: worktree.id)
-                self?.finishArchivingWorktree(
+                guard let self else { return }
+                if let missionArchiveRecorder = self.missionArchiveRecorder {
+                    await missionArchiveRecorder(worktree.id)
+                } else {
+                    await self.missions.recordArchive(worktreeId: worktree.id)
+                }
+                self.finishArchivingWorktree(
                     worktree,
-                    removedIndex: removedIndex,
-                    wasSelected: wasSelected
+                    removedIndex: removedIndex
                 )
             }
             return
         }
 
-        finishArchivingWorktree(worktree, removedIndex: removedIndex, wasSelected: wasSelected)
+        finishArchivingWorktree(worktree, removedIndex: removedIndex)
     }
 
     private func finishArchivingWorktree(
         _ worktree: Worktree,
-        removedIndex: Int,
-        wasSelected: Bool
+        removedIndex: Int
     ) {
+        guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
+            return
+        }
         cleanupWorktreeState(worktreeId: worktree.id)
 
-        if wasSelected {
+        if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
                 removedAtIndex: removedIndex

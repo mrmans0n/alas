@@ -233,6 +233,13 @@ final class MissionController {
         aggregates.first { $0.mission.id == id }
     }
 
+    func hasActiveMission(worktreeId: String) -> Bool {
+        aggregates.contains { aggregate in
+            aggregate.mission.state != .completed
+                && aggregate.primaryLeg?.worktreeId == worktreeId
+        }
+    }
+
     private func reconcileReadinessAtStartup() async {
         loadError = nil
         do {
@@ -349,22 +356,19 @@ final class MissionController {
         _ error: Error,
         aggregate: MissionAggregate
     ) async {
+        let message = Self.sanitized(error.localizedDescription)
+        let event = makeEvent(
+            aggregate: aggregate,
+            kind: .sourceRefreshed,
+            message: "Issue refresh failed: \(message)"
+        )
         do {
-            guard let current = try await persistence.aggregate(id: aggregate.mission.id) else { return }
-            var retained = current.issue
-            let message = Self.sanitized(error.localizedDescription)
-            retained.refreshError = message
-            let event = makeEvent(
-                aggregate: current,
-                kind: .sourceRefreshed,
-                message: "Issue refresh failed: \(message)"
-            )
-            try await persistence.replaceIssueSnapshot(
-                missionID: current.mission.id,
-                snapshot: retained,
+            try await persistence.updateIssueRefreshError(
+                missionID: aggregate.mission.id,
+                refreshError: message,
                 event: event
             )
-            try await publish(id: current.mission.id)
+            try await publish(id: aggregate.mission.id)
             loadError = nil
         } catch {
             loadError = error.localizedDescription

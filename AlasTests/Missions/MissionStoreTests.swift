@@ -133,6 +133,47 @@ struct MissionStoreTests {
         #expect(loaded.events.last?.kind == .sourceRefreshed)
     }
 
+    @Test("refresh-error write keeps a success committed after the failure read")
+    func refreshErrorUpdateDoesNotReplaceNewerSnapshot() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+
+        // Model the former controller interleaving: a failing refresh has read
+        // this snapshot when a concurrent successful refresh commits first.
+        let stale = try #require(try store.aggregate(id: aggregate.mission.id))
+        let refreshed = MissionFixtures.issue(
+            title: "Success committed after the failure read",
+            capturedAt: 200
+        )
+        try store.replaceIssueSnapshot(
+            missionID: aggregate.mission.id,
+            snapshot: refreshed,
+            event: MissionFixtures.event(
+                id: "success-after-read",
+                missionID: aggregate.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 200
+            )
+        )
+        try store.updateIssueRefreshError(
+            missionID: aggregate.mission.id,
+            refreshError: "Authentication is required for github.com.",
+            event: MissionFixtures.event(
+                id: "failure-after-success",
+                missionID: aggregate.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 201
+            )
+        )
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(stale.issue.title != refreshed.title)
+        #expect(loaded.issue.title == refreshed.title)
+        #expect(loaded.issue.capturedAt == refreshed.capturedAt)
+        #expect(loaded.issue.refreshError == "Authentication is required for github.com.")
+    }
+
     @Test("rejects a refreshed snapshot that changes the mission issue identity")
     func rejectsIssueIdentityChangeDuringRefresh() throws {
         let store = try MissionStore(path: temporaryPath())
