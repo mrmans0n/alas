@@ -45,6 +45,34 @@ struct WorktreeServiceTests {
         #expect(listed.count == 2)
     }
 
+    @Test func addRecreatesAPrunableWorktreeRegistration() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-prunable")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/prunable",
+            destination: dest,
+            projectId: "p"
+        )
+        try FileManager.default.removeItem(at: dest)
+
+        let recreated = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/prunable",
+            destination: dest,
+            projectId: "p"
+        )
+
+        #expect(recreated.branch == "feat/prunable")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
     @Test func removeDeletesWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

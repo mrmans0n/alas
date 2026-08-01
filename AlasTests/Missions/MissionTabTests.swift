@@ -237,6 +237,24 @@ struct MissionTabTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
+    @Test func topologyCleanupReconcilesMissingMissionFromALaterCheckpoint() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: false,
+            missionState: .needsAttention,
+            setupCheckpoint: .startingAgent,
+            attentionReason: "ACP setup failed."
+        )
+        await fixture.state.missions.load()
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [])
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+    }
+
     @Test func directDeletionMarksTheMissionWorktreeMissing() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()
@@ -454,13 +472,17 @@ private struct MissionNavigationFixture {
         hidden: Bool,
         includeProject: Bool = true,
         includeWorktree: Bool,
-        worktreeBranch: String = "fix/parser-crash"
+        worktreeBranch: String = "fix/parser-crash",
+        missionState: MissionState? = nil,
+        setupCheckpoint: MissionSetupCheckpoint = .running,
+        attentionReason: String? = nil
     ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
         var aggregate = MissionFixtures.creatingMission()
-        aggregate.mission.state = hidden ? .readyToComplete : .running
-        aggregate.mission.setupCheckpoint = .running
+        aggregate.mission.state = missionState ?? (hidden ? .readyToComplete : .running)
+        aggregate.mission.setupCheckpoint = setupCheckpoint
+        aggregate.mission.attentionReason = attentionReason
         aggregate.legs[0].worktreeId = "worktree-1"
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil

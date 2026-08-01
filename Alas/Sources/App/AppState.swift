@@ -1201,7 +1201,7 @@ final class AppState {
             )?.branch
             let replacementBranch = beforeIds.contains(persistedID)
                 && destinationBranch != leg.branch
-            let confirmedUnavailableAfterRefresh = aggregate.mission.state == .running
+            let confirmedUnavailableAfterRefresh = [.running, .needsAttention].contains(aggregate.mission.state)
                 && projectsManager.worktreeDiscoverySucceeded(projectId: leg.projectId)
                 && destinationBranch != leg.branch
             guard disappearedWorktree || replacementBranch || confirmedUnavailableAfterRefresh

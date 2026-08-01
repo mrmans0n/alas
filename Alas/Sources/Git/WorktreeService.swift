@@ -210,10 +210,25 @@ struct WorktreeService {
             cwd: repoPath
         )
         let branchExists = refCheck.exitCode == 0
+        var replacesPrunableRegistration = false
+        if branchExists,
+           let registration = try? await Process.git(
+               ["worktree", "list", "--porcelain"],
+               cwd: repoPath
+           ),
+           registration.exitCode == 0 {
+            replacesPrunableRegistration = Self.hasPrunableRegistration(
+                registration.stdout,
+                destination: destination,
+                branch: branch
+            )
+        }
 
         let args: [String]
         if branchExists {
-            args = ["worktree", "add", destination.path, branch]
+            args = ["worktree", "add"]
+                + (replacesPrunableRegistration ? ["-f"] : [])
+                + [destination.path, branch]
         } else {
             args = ["worktree", "add", destination.path, "-b", branch, base]
         }
@@ -244,7 +259,9 @@ struct WorktreeService {
 
         let fallbackArgs: [String]
         if branchNowExists {
-            fallbackArgs = ["worktree", "add", destination.path, branch]
+            fallbackArgs = ["worktree", "add"]
+                + (replacesPrunableRegistration ? ["-f"] : [])
+                + [destination.path, branch]
         } else {
             fallbackArgs = ["worktree", "add", destination.path, "-b", branch, base]
         }
@@ -255,6 +272,47 @@ struct WorktreeService {
         )
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
         return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+    }
+
+    private static func hasPrunableRegistration(
+        _ porcelain: String,
+        destination: URL,
+        branch: String
+    ) -> Bool {
+        func canonicalPath(_ url: URL) -> String {
+            url.deletingLastPathComponent()
+                .resolvingSymlinksInPath()
+                .appendingPathComponent(url.lastPathComponent)
+                .standardizedFileURL.path
+        }
+
+        let destinationPath = canonicalPath(destination)
+        var currentPath: String?
+        var currentBranch: String?
+        var currentPrunable = false
+
+        func matchesCurrent() -> Bool {
+            guard currentPrunable,
+                  let currentPath,
+                  canonicalPath(URL(fileURLWithPath: currentPath)) == destinationPath
+            else { return false }
+            return currentBranch == branch
+        }
+
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                if matchesCurrent() { return true }
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentBranch = nil
+                currentPrunable = false
+            } else if line.hasPrefix("branch ") {
+                let raw = String(line.dropFirst("branch ".count))
+                currentBranch = raw.replacingOccurrences(of: "refs/heads/", with: "")
+            } else if line.hasPrefix("prunable") {
+                currentPrunable = true
+            }
+        }
+        return matchesCurrent()
     }
 
     /// Remove a worktree. Pass the full `Worktree` (not just a path) so we can
