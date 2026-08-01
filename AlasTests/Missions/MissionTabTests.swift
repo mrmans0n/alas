@@ -158,6 +158,32 @@ struct MissionTabTests {
         #expect(presentation.actions.recoverWorktree)
     }
 
+    @Test func topologyCleanupDetectsAReplacementBranchAtTheSameWorktreeID() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        let beforeIds: Set<String> = [fixture.worktree.id]
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
+            name: "unrelated-branch",
+            branch: "unrelated-branch",
+            path: fixture.worktree.path,
+            status: .clean,
+            lastActivity: fixture.worktree.lastActivity
+        ))
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: beforeIds)
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+    }
+
     @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
 

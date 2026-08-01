@@ -55,6 +55,7 @@ final class ProjectsManager {
     private(set) var projects: [ProjectConfig]
     private(set) var worktreesByProject: [String: [Worktree]] = [:]
     private(set) var worktreeOperationStates: [String: WorktreeOperationState] = [:]
+    private(set) var worktreeRefreshFailures: Set<String> = []
 
     private let git = GitService()
     private let worktreeSvc = WorktreeService()
@@ -350,6 +351,21 @@ final class ProjectsManager {
     /// configuration. Returns `true` when the caller should persist changes.
     @discardableResult
     func refreshWorktrees(projectId: String) async throws -> Bool {
+        do {
+            let changed = try await refreshWorktreesImpl(projectId: projectId)
+            worktreeRefreshFailures.remove(projectId)
+            return changed
+        } catch {
+            worktreeRefreshFailures.insert(projectId)
+            throw error
+        }
+    }
+
+    func worktreeDiscoverySucceeded(projectId: String) -> Bool {
+        !worktreeRefreshFailures.contains(projectId)
+    }
+
+    private func refreshWorktreesImpl(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let configuredURL = URL(fileURLWithPath: project.path)
         let url: URL

@@ -337,6 +337,34 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
+    @Test func startupDoesNotArchiveAReplacementWorktreeOnTheWrongBranch() async throws {
+        let fake = try MissionLifecycleFake(
+            worktreeBranch: "unrelated-branch",
+            worktreeArchived: { _, _ in true }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+    }
+
+    @Test func startupPreservesRunningStateWhenWorktreeDiscoveryFailed() async throws {
+        let fake = try MissionLifecycleFake(
+            worktreeAvailable: false,
+            worktreeDiscoverySucceeded: { _ in false }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.mission.attentionReason == nil)
+    }
+
     @Test func startupMarksRemovedProjectForAttention() async throws {
         let fake = try MissionLifecycleFake(projectExists: { _ in false })
         await fake.controller.load()
@@ -474,6 +502,7 @@ private final class MissionLifecycleFake {
             throw CodeHostProviderError.malformedOutput("No issue refresh configured.")
         },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
+        worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
@@ -532,6 +561,7 @@ private final class MissionLifecycleFake {
             },
             linkedReviewRequest: linkedReviewRequest,
             projectExists: projectExists,
+            worktreeDiscoverySucceeded: worktreeDiscoverySucceeded,
             worktreeArchived: worktreeArchived,
             reviewSnapshot: reviewSnapshot,
             startupReviewSnapshot: startupReviewSnapshot

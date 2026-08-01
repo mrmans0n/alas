@@ -703,6 +703,8 @@ final class AppState {
             await self?.refreshMissionReview(identity: identity, worktreeID: worktreeID)
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
+        }, worktreeDiscoverySucceeded: { [weak self] projectID in
+            self?.projectsManager.worktreeDiscoverySucceeded(projectId: projectID) == true
         }, worktreeArchived: { [weak self] projectID, destinationPath in
             self?.projectsManager.isWorktreeHidden(
                 projectId: projectID,
@@ -1090,9 +1092,16 @@ final class AppState {
         let disappeared = beforeIds.subtracting(afterIds)
         let missingMissionIDs: Set<MissionID> = Set(missions.aggregates.compactMap { aggregate in
             guard let leg = aggregate.primaryLeg,
-                  disappeared.contains(leg.worktreeId ?? ""),
                   projects.contains(where: { $0.id == leg.projectId })
             else { return nil }
+            let persistedID = leg.worktreeId ?? ""
+            let disappearedWorktree = disappeared.contains(persistedID)
+            let replacementBranch = beforeIds.contains(persistedID)
+                && missionWorktreeAtDestination(
+                    projectID: leg.projectId,
+                    destinationPath: leg.destinationPath
+                )?.branch != leg.branch
+            guard disappearedWorktree || replacementBranch else { return nil }
             return aggregate.mission.id
         })
         for missionID in missingMissionIDs {

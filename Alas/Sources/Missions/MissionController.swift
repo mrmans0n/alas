@@ -33,6 +33,8 @@ final class MissionController {
     @ObservationIgnored
     private let projectExists: @MainActor (String) -> Bool
     @ObservationIgnored
+    private let worktreeDiscoverySucceeded: @MainActor (String) -> Bool
+    @ObservationIgnored
     private let worktreeArchived: @MainActor (String, String) -> Bool
     @ObservationIgnored
     private let reviewSnapshot: @MainActor (String) -> ReviewLoopSnapshot?
@@ -73,6 +75,7 @@ final class MissionController {
         },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _ in nil },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
+        worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
@@ -83,6 +86,7 @@ final class MissionController {
         self.issueRefresh = issueRefresh
         self.linkedReviewRequest = linkedReviewRequest
         self.projectExists = projectExists
+        self.worktreeDiscoverySucceeded = worktreeDiscoverySucceeded
         self.worktreeArchived = worktreeArchived
         self.reviewSnapshot = reviewSnapshot
         self.startupReviewSnapshot = startupReviewSnapshot
@@ -311,12 +315,9 @@ final class MissionController {
                     await recordMissingWorktree(aggregate.mission.id, projectRemoved: true)
                     continue
                 }
-                if worktreeArchived(leg.projectId, leg.destinationPath) {
-                    await apply(signal: .worktreeArchived, to: aggregate.mission.id)
-                    continue
-                }
                 guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath) else {
-                    if aggregate.mission.setupCheckpoint == .running {
+                    if aggregate.mission.setupCheckpoint == .running,
+                       worktreeDiscoverySucceeded(leg.projectId) {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
                     continue
@@ -325,6 +326,10 @@ final class MissionController {
                     if aggregate.mission.setupCheckpoint == .running {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
+                    continue
+                }
+                if worktreeArchived(leg.projectId, leg.destinationPath) {
+                    await apply(signal: .worktreeArchived, to: aggregate.mission.id)
                     continue
                 }
                 let snapshot: ReviewLoopSnapshot?
