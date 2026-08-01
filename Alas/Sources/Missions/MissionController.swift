@@ -176,12 +176,19 @@ final class MissionController {
                 else { continue }
                 guard snapshot.local.branchName == leg.branch else { continue }
                 let request: ReviewRequest
+                var replacesClosedReview = false
                 if let linked = leg.reviewIdentity {
                     if let visible = snapshot.reviewRequest,
                        Self.reviewIdentity(for: visible) == linked {
                         request = visible
                     } else if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef) {
-                        request = refreshed
+                        if refreshed.state == .closed,
+                           let visible = snapshot.reviewRequest {
+                            request = visible
+                            replacesClosedReview = true
+                        } else {
+                            request = refreshed
+                        }
                     } else {
                         continue
                     }
@@ -192,12 +199,15 @@ final class MissionController {
                 }
                 let identity = Self.reviewIdentity(for: request)
                 guard Self.review(request, matches: leg) else { continue }
-                if let linked = aggregate.primaryLeg?.reviewIdentity, linked != identity {
+                if let linked = aggregate.primaryLeg?.reviewIdentity,
+                   linked != identity,
+                   !replacesClosedReview {
                     continue
                 }
                 await apply(
                     signal: .review(state: request.state, identity: identity),
-                    to: aggregate.mission.id
+                    to: aggregate.mission.id,
+                    replaceReviewIdentity: replacesClosedReview
                 )
             }
         } catch {
@@ -495,7 +505,11 @@ final class MissionController {
         }
     }
 
-    private func apply(signal: MissionReadinessSignal, to id: MissionID) async {
+    private func apply(
+        signal: MissionReadinessSignal,
+        to id: MissionID,
+        replaceReviewIdentity: Bool = false
+    ) async {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
@@ -520,9 +534,10 @@ final class MissionController {
                 switch decision {
                 case .unchanged(let reviewIdentity):
                     guard aggregate.mission.state != .completed,
-                          aggregate.primaryLeg?.reviewIdentity == nil,
                           let reviewIdentity,
-                          var leg = aggregate.primaryLeg
+                          var leg = aggregate.primaryLeg,
+                          leg.reviewIdentity != reviewIdentity,
+                          leg.reviewIdentity == nil || replaceReviewIdentity
                     else { return }
                     leg.reviewIdentity = reviewIdentity
                     try await persistence.updateLeg(
@@ -535,7 +550,9 @@ final class MissionController {
                     )
 
                 case .ready(let reviewIdentity, let message):
-                    let linkedIdentity = aggregate.primaryLeg?.reviewIdentity ?? reviewIdentity
+                    let linkedIdentity = replaceReviewIdentity
+                        ? reviewIdentity
+                        : aggregate.primaryLeg?.reviewIdentity ?? reviewIdentity
                     try await persistence.markReady(
                         id: id,
                         reviewIdentity: linkedIdentity,

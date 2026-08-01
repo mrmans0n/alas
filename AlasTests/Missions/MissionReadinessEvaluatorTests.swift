@@ -148,6 +148,29 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.state == .running)
     }
 
+    @Test func closedLinkedReviewCanBeReplacedByANewerReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let closedLinkedReview = try #require(Self.reviewSnapshot(state: .closed).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? closedLinkedReview : nil
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged, number: 92)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
     @Test func liveReviewIgnoresAReplacementWorktreeOnAnotherBranch() async throws {
         let fake = try MissionLifecycleFake(worktreeBranch: "unrelated-branch")
         await fake.controller.load()
