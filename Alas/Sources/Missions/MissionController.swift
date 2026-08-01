@@ -21,7 +21,8 @@ typealias MissionReviewDiscovery = @MainActor (
 
 typealias MissionLinkedReviewRequest = @MainActor (
     _ identity: MissionReviewIdentity,
-    _ projectID: String
+    _ projectID: String,
+    _ baseRef: String
 ) async -> ReviewRequest?
 
 @Observable
@@ -85,7 +86,7 @@ final class MissionController {
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("Issue refresh is unavailable.")
         },
-        linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _ in nil },
+        linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
@@ -179,7 +180,7 @@ final class MissionController {
                     if let visible = snapshot.reviewRequest,
                        Self.reviewIdentity(for: visible) == linked {
                         request = visible
-                    } else if let refreshed = await linkedReviewRequest(linked, leg.projectId) {
+                    } else if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef) {
                         request = refreshed
                     } else {
                         continue
@@ -285,7 +286,7 @@ final class MissionController {
             guard let aggregate = try await persistence.aggregate(id: id),
                   let leg = aggregate.primaryLeg,
                   let identity = leg.reviewIdentity,
-                  let request = await linkedReviewRequest(identity, leg.projectId),
+                  let request = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
                   Self.review(request, matches: leg)
             else { return }
             await apply(

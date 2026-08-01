@@ -391,6 +391,27 @@ struct NewMissionDialogTests {
         #expect(fake.createdDrafts.last?.destinationPath == "\(fixed.path)-3")
     }
 
+    @Test("duplicate suffix skips active Mission reservations")
+    func duplicateSuffixSkipsActiveMissionReservations() async {
+        let seed = MissionBranchName.make(
+            issueNumber: 1842,
+            title: "Fix offline sync conflicts",
+            prefix: "feature/"
+        )
+        let fake = NewMissionDialogFake(
+            duplicateMissionID: .init(rawValue: "existing-mission"),
+            reservedBranchesByProject: ["alas": ["\(seed)-2"]]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+        #expect(await model.create(allowDuplicate: false) == nil)
+
+        #expect(model.prepareDuplicateCreation())
+
+        #expect(model.branch == "\(seed)-3")
+    }
+
     @Test("create failure keeps the editable confirmation visible")
     func createFailureKeepsConfirmationVisible() async {
         let fake = NewMissionDialogFake(createError: NewMissionDialogFake.TestError.createFailed)
@@ -499,6 +520,7 @@ private final class NewMissionDialogFake {
     let createError: (any Error)?
     let destination: (String, String) -> URL
     let occupiedDestinationPaths: Set<String>
+    let reservedBranchesByProject: [String: [String]]
 
     private var resolutionContinuation: CheckedContinuation<Void, Never>?
     private var branchContinuation: CheckedContinuation<Void, Never>?
@@ -524,7 +546,8 @@ private final class NewMissionDialogFake {
         destination: @escaping (String, String) -> URL = { projectID, branch in
             URL(fileURLWithPath: "/tmp/worktrees/\(projectID)/\(branch.replacingOccurrences(of: "/", with: "-"))")
         },
-        occupiedDestinationPaths: Set<String> = []
+        occupiedDestinationPaths: Set<String> = [],
+        reservedBranchesByProject: [String: [String]] = [:]
     ) {
         self.suspendResolution = suspendResolution
         self.suspendBranches = suspendBranches
@@ -539,6 +562,7 @@ private final class NewMissionDialogFake {
         self.createError = createError
         self.destination = destination
         self.occupiedDestinationPaths = occupiedDestinationPaths
+        self.reservedBranchesByProject = reservedBranchesByProject
         let snapshot = MissionIssueSnapshot(
             identity: .init(
                 provider: .github,
@@ -598,6 +622,9 @@ private final class NewMissionDialogFake {
             },
             configuredBranchPrefix: { [self] projectID in
                 configuredPrefixes[projectID] ?? "feature/"
+            },
+            reservedBranches: { [self] projectID in
+                reservedBranchesByProject[projectID] ?? []
             },
             enabledACPAgents: { [self] in agents },
             destination: { [self] projectID, branch in

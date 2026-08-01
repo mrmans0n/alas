@@ -219,8 +219,11 @@ struct MissionReadinessEvaluatorTests {
         )
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            linkedReviewRequest: { identity, projectID in
-                guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
+            linkedReviewRequest: { identity, projectID, baseRef in
+                guard identity == Self.reviewIdentity,
+                      projectID == "project-1",
+                      baseRef == "origin/main"
+                else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
         )
@@ -243,7 +246,7 @@ struct MissionReadinessEvaluatorTests {
         let unrelatedVisibleReview = Self.reviewSnapshot(state: .open, number: 92)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            linkedReviewRequest: { identity, projectID in
+            linkedReviewRequest: { identity, projectID, _ in
                 guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
@@ -270,7 +273,7 @@ struct MissionReadinessEvaluatorTests {
         ).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            linkedReviewRequest: { _, _ in retargeted }
+            linkedReviewRequest: { _, _, _ in retargeted }
         )
         await fake.controller.load()
 
@@ -379,7 +382,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            linkedReviewRequest: { identity, projectID in
+            linkedReviewRequest: { identity, projectID, _ in
                 guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
@@ -551,7 +554,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeBranch: "unrelated-branch",
-            linkedReviewRequest: { identity, projectID in
+            linkedReviewRequest: { identity, projectID, _ in
                 guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
@@ -753,7 +756,7 @@ private final class MissionLifecycleFake {
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
-        linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
+        linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-lifecycle-\(UUID().uuidString).sqlite")

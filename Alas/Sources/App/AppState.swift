@@ -703,8 +703,8 @@ final class AppState {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
             return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
-        }, linkedReviewRequest: { [weak self] identity, projectID in
-            await self?.refreshMissionReview(identity: identity, projectID: projectID)
+        }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
+            await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
         }, worktreeDiscoverySucceeded: { [weak self] projectID in
@@ -889,19 +889,26 @@ final class AppState {
 
     private func refreshMissionReview(
         identity: MissionReviewIdentity,
-        projectID: String
+        projectID: String,
+        baseRef: String
     ) async -> ReviewRequest? {
         guard let project = projectsManager.projects.first(where: { $0.id == projectID })
         else { return nil }
         let cwd = URL(fileURLWithPath: project.path)
         do {
             let remotes = try await GitService().remotes(worktreePath: cwd)
-            guard let remote = remotes
+            let matchingRemotes = remotes
                 .compactMap({ CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) })
-                .first(where: { candidate in
+                .filter { candidate in
                     candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
                         && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
-                }),
+                }
+            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+                forBaseBranch: baseRef,
+                remotes: remotes
+            )
+            guard let remote = matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
+                ?? matchingRemotes.first,
                 let provider = CodeHostProviderRegistry.live().provider(for: identity.provider),
                 await provider.isAvailable(cwd: cwd),
                 await provider.isAuthenticated(remote: remote, cwd: cwd)
@@ -2179,9 +2186,17 @@ final class AppState {
         requested: URL,
         projectPath: URL
     ) async throws -> URL {
-        let occupiedPaths = Set(projectsManager.worktrees(projectId: projectID).map {
+        let worktreePaths = projectsManager.worktrees(projectId: projectID).map {
             $0.path.standardizedFileURL.path
-        })
+        }
+        let missionPaths = missions.aggregates.compactMap { aggregate -> String? in
+            guard aggregate.mission.state != .completed,
+                  aggregate.primaryLeg?.projectId == projectID,
+                  let path = aggregate.primaryLeg?.destinationPath
+            else { return nil }
+            return URL(fileURLWithPath: path).standardizedFileURL.path
+        }
+        let occupiedPaths = Set(worktreePaths + missionPaths)
         if let host = RemoteHostRegistry.shared.host(forPath: projectPath.path) {
             return try await Self.firstAvailableMissionDestination(
                 requested: requested,

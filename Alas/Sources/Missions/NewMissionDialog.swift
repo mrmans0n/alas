@@ -56,6 +56,7 @@ final class NewMissionDialogModel {
         let branches: (String) async throws -> BranchInventory
         let configuredBase: (String) -> String
         let configuredBranchPrefix: (String) -> String
+        let reservedBranches: (String) -> [String]
         let enabledACPAgents: () -> [AgentDefinition]
         let destination: (String, String) -> URL
         let destinationAvailable: (String, URL) -> Bool
@@ -182,7 +183,7 @@ final class NewMissionDialogModel {
         baseIsUserOwned = false
         branch = availableBranch(
             seededBy: generatedBranch(projectID: projectId, issue: resolution.snapshot),
-            occupied: branchInventory.names,
+            occupied: branchInventory.names + environment.reservedBranches(projectId),
             projectID: projectId
         )
         branchIsUserOwned = false
@@ -240,7 +241,7 @@ final class NewMissionDialogModel {
             if updatesBranch, !branchIsUserOwned {
                 branch = availableBranch(
                     seededBy: nextSeededBranch,
-                    occupied: inventory.names,
+                    occupied: inventory.names + environment.reservedBranches(candidateID),
                     projectID: candidateID
                 )
             }
@@ -309,7 +310,7 @@ final class NewMissionDialogModel {
         guard existingMissionID != nil, let original = duplicateBranch else { return false }
         branch = availableBranch(
             seededBy: original,
-            occupied: branches + [original],
+            occupied: branches + environment.reservedBranches(projectId) + [original],
             projectID: projectId
         )
         branchIsUserOwned = false
@@ -741,6 +742,14 @@ extension NewMissionDialogModel.Environment {
             },
             configuredBase: { [weak state] _ in state?.config.worktrees.baseBranch ?? "main" },
             configuredBranchPrefix: { [weak state] _ in state?.config.worktrees.branchPrefix ?? "feature/" },
+            reservedBranches: { [weak state] projectID in
+                state?.missions.aggregates.compactMap { aggregate in
+                    guard aggregate.mission.state != .completed,
+                          aggregate.primaryLeg?.projectId == projectID
+                    else { return nil }
+                    return aggregate.primaryLeg?.branch
+                } ?? []
+            },
             enabledACPAgents: { [weak state] in state?.agentRegistry.enabled() ?? [] },
             destination: { [weak state] projectID, branch in
                 guard let state,
@@ -756,7 +765,15 @@ extension NewMissionDialogModel.Environment {
             destinationAvailable: { [weak state] projectID, destination in
                 guard let state else { return false }
                 let candidate = destination.standardizedFileURL.path
+                let reserved = state.missions.aggregates.contains { aggregate in
+                    guard aggregate.mission.state != .completed,
+                          aggregate.primaryLeg?.projectId == projectID,
+                          let path = aggregate.primaryLeg?.destinationPath
+                    else { return false }
+                    return URL(fileURLWithPath: path).standardizedFileURL.path == candidate
+                }
                 return !FileManager.default.fileExists(atPath: candidate)
+                    && !reserved
                     && !state.projectsManager.worktrees(projectId: projectID).contains {
                         $0.path.standardizedFileURL.path == candidate
                     }

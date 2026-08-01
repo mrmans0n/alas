@@ -3,6 +3,25 @@ import Foundation
 @testable import Alas
 
 @Suite struct WorktreeServiceCreatedAtTests {
+    @Test func parsePorcelainOmitsPrunableWorktrees() {
+        let porcelain = """
+        worktree /tmp/main
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree /tmp/deleted
+        HEAD def456
+        branch refs/heads/feature/deleted
+        prunable gitdir file points to non-existent location
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1")
+
+        #expect(parsed.map(\.branch) == ["main"])
+        #expect(parsed.map(\.path.path) == ["/tmp/main"])
+    }
+
     @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")

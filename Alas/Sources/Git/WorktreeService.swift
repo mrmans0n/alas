@@ -150,9 +150,10 @@ struct WorktreeService {
         var result: [Worktree] = []
         var currentPath: URL?
         var currentBranch: String?
+        var currentPrunable = false
 
         func flush() {
-            if let path = currentPath {
+            if let path = currentPath, !currentPrunable {
                 let branch = currentBranch ?? "(detached)"
                 let dirAttrs = try? FileManager.default.attributesOfItem(atPath: path.path)
                 let dirMtime = (dirAttrs?[.modificationDate] as? Date) ?? Date()
@@ -172,6 +173,7 @@ struct WorktreeService {
             }
             currentPath = nil
             currentBranch = nil
+            currentPrunable = false
         }
 
         for line in out.split(separator: "\n") {
@@ -182,6 +184,8 @@ struct WorktreeService {
                 let raw = String(line.dropFirst("branch ".count))
                 // refs/heads/foo → foo
                 currentBranch = raw.replacingOccurrences(of: "refs/heads/", with: "")
+            } else if line.hasPrefix("prunable") {
+                currentPrunable = true
             }
         }
         flush()
