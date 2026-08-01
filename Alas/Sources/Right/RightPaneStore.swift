@@ -363,6 +363,13 @@ final class RightPaneStore {
         states[worktreeId]
     }
 
+    func activeState(worktreeId: String, baseBranch: String) -> RightPaneState? {
+        guard let state = states[worktreeId],
+              state.reviewLoop.currentBaseBranch == baseBranch
+        else { return nil }
+        return state
+    }
+
     /// The first cached state currently reporting a merge failure, if any.
     /// Merge errors are surfaced app-wide (see RootView) independent of the
     /// selected worktree: the async merge can fail after the user has switched

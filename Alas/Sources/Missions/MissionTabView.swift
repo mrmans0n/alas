@@ -363,7 +363,14 @@ struct MissionTabView: View {
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
         let worktree = MissionTabContext.worktree(worktree, for: aggregate)
-        let rightPane = worktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
+        let rightPane = worktree.flatMap { worktree in
+            aggregate.primaryLeg.flatMap { leg in
+                state.rightPaneStore.activeState(
+                    worktreeId: worktree.id,
+                    baseBranch: leg.baseRef
+                )
+            }
+        }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,

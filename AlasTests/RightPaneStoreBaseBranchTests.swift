@@ -63,6 +63,17 @@ struct RightPaneStoreBaseBranchTests {
         #expect(store.reviewSnapshot(worktreeId: worktree.id, baseBranch: "release") == nil)
     }
 
+    @Test func activeStateRequiresTheConfiguredReviewBase() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/mission-summary")
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+
+        #expect(store.activeState(worktreeId: worktree.id, baseBranch: "main") === state)
+        #expect(store.activeState(worktreeId: worktree.id, baseBranch: "release") == nil)
+    }
+
     @Test func asyncProbeConfirmsSlashNamedOriginRef() async throws {
         let repo = try await makeRepoOnMain(branch: "release/1.0")
         defer { try? FileManager.default.removeItem(at: repo) }
