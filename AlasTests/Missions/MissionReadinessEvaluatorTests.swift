@@ -352,6 +352,27 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func linkedMergedReviewMustMatchThePersistedBranchTip() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let staleMerged = try #require(Self.reviewSnapshot(
+            state: .merged,
+            headSHA: "reviewed123"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { _, _, _ in staleMerged },
+            branchTip: { _, _ in "current456" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshLinkedReview(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func sourceIssueStateDoesNotChangeMissionReadiness() async throws {
         let refreshed = MissionFixtures.issue(title: "Fresh issue title", capturedAt: 250)
         var closed = refreshed
@@ -442,6 +463,23 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == nil)
         #expect(aggregate.events.last?.kind == .retryStarted)
         #expect(aggregate.events.last?.message == "Mission worktree became available again.")
+    }
+
+    @Test func reappearedWorktreeResumesPendingAgentSetup() async throws {
+        var missing = Self.runningAggregate()
+        missing.mission.state = .needsAttention
+        missing.mission.setupCheckpoint = .running
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].pendingInitialPrompt = "Fix the issue."
+        let fake = try MissionLifecycleFake(aggregate: missing)
+        await fake.controller.load()
+
+        await fake.controller.recordAvailableWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(fake.externalOperations == ["startACP"])
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .startingAgent)
     }
 
     @Test func startupRefreshesAMergedLinkedReviewWithoutAWorktree() async throws {
@@ -888,7 +926,8 @@ private final class MissionLifecycleFake {
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
-        linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil }
+        linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
+        branchTip: @escaping MissionBranchTip = { _, _ in "abc123" }
     ) throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-lifecycle-\(UUID().uuidString).sqlite")
@@ -942,6 +981,7 @@ private final class MissionLifecycleFake {
                 return try await issueRefresh(identity, projectID)
             },
             linkedReviewRequest: linkedReviewRequest,
+            branchTip: branchTip,
             projectExists: projectExists,
             worktreeDiscoverySucceeded: worktreeDiscoverySucceeded,
             worktreeArchived: worktreeArchived,

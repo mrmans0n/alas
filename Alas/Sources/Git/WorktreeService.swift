@@ -223,11 +223,19 @@ struct WorktreeService {
             )
         }
 
+        if replacesPrunableRegistration {
+            let removal = try await Process.git(
+                ["worktree", "remove", destination.path],
+                cwd: repoPath
+            )
+            guard removal.exitCode == 0 else {
+                throw WorktreeError.gitFailed(removal.stderr)
+            }
+        }
+
         let args: [String]
         if branchExists {
-            args = ["worktree", "add"]
-                + (replacesPrunableRegistration ? ["-f"] : [])
-                + [destination.path, branch]
+            args = ["worktree", "add", destination.path, branch]
         } else {
             args = ["worktree", "add", destination.path, "-b", branch, base]
         }
@@ -258,9 +266,7 @@ struct WorktreeService {
 
         let fallbackArgs: [String]
         if branchNowExists {
-            fallbackArgs = ["worktree", "add"]
-                + (replacesPrunableRegistration ? ["-f"] : [])
-                + [destination.path, branch]
+            fallbackArgs = ["worktree", "add", destination.path, branch]
         } else {
             fallbackArgs = ["worktree", "add", destination.path, "-b", branch, base]
         }

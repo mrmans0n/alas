@@ -25,6 +25,11 @@ typealias MissionLinkedReviewRequest = @MainActor (
     _ baseRef: String
 ) async -> ReviewRequest?
 
+typealias MissionBranchTip = @MainActor (
+    _ projectID: String,
+    _ branch: String
+) async -> String?
+
 @Observable
 @MainActor
 final class MissionController {
@@ -39,6 +44,8 @@ final class MissionController {
     private let issueRefresh: MissionIssueRefresh
     @ObservationIgnored
     private let linkedReviewRequest: MissionLinkedReviewRequest
+    @ObservationIgnored
+    private let branchTip: MissionBranchTip
     @ObservationIgnored
     private let projectExists: @MainActor (String) -> Bool
     @ObservationIgnored
@@ -87,6 +94,7 @@ final class MissionController {
             throw CodeHostProviderError.malformedOutput("Issue refresh is unavailable.")
         },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
+        branchTip: @escaping MissionBranchTip = { _, _ in nil },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
@@ -99,6 +107,7 @@ final class MissionController {
         self.environment = environment
         self.issueRefresh = issueRefresh
         self.linkedReviewRequest = linkedReviewRequest
+        self.branchTip = branchTip
         self.projectExists = projectExists
         self.worktreeDiscoverySucceeded = worktreeDiscoverySucceeded
         self.worktreeArchived = worktreeArchived
@@ -331,6 +340,12 @@ final class MissionController {
                   let request = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
                   Self.review(request, matches: leg)
             else { return }
+            if request.state == .merged {
+                guard let currentTip = await branchTip(leg.projectId, leg.branch),
+                      !currentTip.isEmpty,
+                      request.headSHA == currentTip
+                else { return }
+            }
             await apply(
                 signal: .review(state: request.state, identity: identity),
                 to: id
@@ -489,19 +504,35 @@ final class MissionController {
                       ),
                       worktree.branch == leg.branch
                 else { return }
-                try await persistence.updateSetup(
-                    id: id,
-                    state: .running,
-                    checkpoint: .running,
-                    attentionReason: nil,
-                    event: makeEvent(
-                        aggregate: aggregate,
-                        kind: .retryStarted,
-                        message: "Mission worktree became available again."
+                if leg.pendingInitialPrompt != nil {
+                    try await persistence.updateSetup(
+                        id: id,
+                        state: .creating,
+                        checkpoint: .startingAgent,
+                        attentionReason: nil,
+                        event: makeEvent(
+                            aggregate: aggregate,
+                            kind: .retryStarted,
+                            message: "Mission worktree became available again. Resuming agent setup."
+                        )
                     )
-                )
-                try await publish(id: id)
-                loadError = nil
+                    try await publish(id: id)
+                    await coordinator.advance(id: id)
+                } else {
+                    try await persistence.updateSetup(
+                        id: id,
+                        state: .running,
+                        checkpoint: .running,
+                        attentionReason: nil,
+                        event: makeEvent(
+                            aggregate: aggregate,
+                            kind: .retryStarted,
+                            message: "Mission worktree became available again."
+                        )
+                    )
+                    try await publish(id: id)
+                    loadError = nil
+                }
             } catch {
                 loadError = error.localizedDescription
             }

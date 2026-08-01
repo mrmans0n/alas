@@ -705,6 +705,8 @@ final class AppState {
             return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
         }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
             await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
+        }, branchTip: { [weak self] projectID, branch in
+            await self?.missionBranchTip(projectID: projectID, branch: branch)
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
         }, worktreeDiscoverySucceeded: { [weak self] projectID in
@@ -977,6 +979,18 @@ final class AppState {
         } catch {
             return nil
         }
+    }
+
+    private func missionBranchTip(projectID: String, branch: String) async -> String? {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
+        else { return nil }
+        let result = try? await Process.git(
+            ["rev-parse", "--verify", "refs/heads/\(branch)"],
+            cwd: URL(fileURLWithPath: project.path)
+        )
+        guard result?.exitCode == 0 else { return nil }
+        let tip = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return tip.isEmpty ? nil : tip
     }
 
     func reconcileDeletedMissionWorktree(_ worktreeID: String) async {

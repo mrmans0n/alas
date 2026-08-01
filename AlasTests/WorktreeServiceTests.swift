@@ -102,6 +102,49 @@ struct WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: dest.path))
     }
 
+    @Test func prunableRecoveryDoesNotOverrideALiveBranchCheckout() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let root = repo.deletingLastPathComponent()
+        let staleDest = root.appendingPathComponent("\(repo.lastPathComponent)-stale-registration")
+        let liveDest = root.appendingPathComponent("\(repo.lastPathComponent)-live-branch")
+        defer {
+            try? FileManager.default.removeItem(at: staleDest)
+            try? FileManager.default.removeItem(at: liveDest)
+        }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/stale-registration",
+            destination: staleDest,
+            projectId: "p"
+        )
+        _ = try await Process.git(["checkout", "--detach"], cwd: staleDest)
+        try FileManager.default.removeItem(at: staleDest)
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/live-branch",
+            destination: liveDest,
+            projectId: "p"
+        )
+
+        do {
+            _ = try await svc.add(
+                repoPath: repo,
+                base: "main",
+                branch: "feat/live-branch",
+                destination: staleDest,
+                projectId: "p"
+            )
+            Issue.record("expected the live branch checkout to remain protected")
+        } catch let error as WorktreeService.WorktreeError {
+            #expect(error.localizedDescription.contains("already used by worktree"))
+        }
+        #expect(FileManager.default.fileExists(atPath: liveDest.path))
+    }
+
     @Test func removeDeletesWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
