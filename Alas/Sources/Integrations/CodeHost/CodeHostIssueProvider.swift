@@ -63,6 +63,17 @@ enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {
         ) != nil {
             return status
         }
+        for line in output.split(whereSeparator: \.isNewline) {
+            if let status = leadingStatus(in: String(line)) {
+                return status
+            }
+        }
+        for status in [403, 404] where output.range(
+            of: "\\b\(status)\\b",
+            options: .regularExpression
+        ) != nil {
+            return status
+        }
         return nil
     }
 
