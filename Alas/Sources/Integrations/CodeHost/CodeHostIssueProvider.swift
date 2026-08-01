@@ -109,6 +109,10 @@ struct CodeHostIssueProviderRegistry: Sendable {
         providersByKind = Dictionary(uniqueKeysWithValues: providers.map { ($0.kind.rawValue, $0) })
     }
 
+    var supportedKinds: Set<CodeHostKind> {
+        Set(providersByKind.keys.compactMap(CodeHostKind.init(rawValue:)))
+    }
+
     func provider(for kind: CodeHostKind) -> (any CodeHostIssueProviding)? {
         providersByKind[kind.rawValue]
     }

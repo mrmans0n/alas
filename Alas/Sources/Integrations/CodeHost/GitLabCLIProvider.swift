@@ -64,17 +64,56 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest? {
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            includeAllStates: false,
+            cwd: cwd
+        )
+    }
+
+    func missionReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            includeAllStates: true,
+            cwd: cwd
+        )
+    }
+
+    private func reviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        includeAllStates: Bool,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
         let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        var args = [
+            "mr", "list",
+            "--source-branch", branch,
+            "--target-branch", base,
+            "--output", "json",
+            "--per-page", "20",
+        ]
+        if includeAllStates {
+            args.append("--all")
+        }
+        args += ["-R", remote.repositorySlug]
         let result = try await runner.run(
             "glab",
-            args: [
-                "mr", "list",
-                "--source-branch", branch,
-                "--target-branch", base,
-                "--output", "json",
-                "--per-page", "20",
-                "-R", remote.repositorySlug,
-            ],
+            args: args,
             cwd: cwd
         )
         guard result.exitCode == 0 else {

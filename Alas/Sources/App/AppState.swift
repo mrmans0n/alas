@@ -726,6 +726,12 @@ final class AppState {
                 baseBranch: baseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
+        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef in
+            await self?.discoverMissionReview(
+                projectID: projectID,
+                branch: branch,
+                baseRef: baseRef
+            )
         }, openMission: { [weak self] missionID in
             _ = self?.openMission(id: missionID)
         })
@@ -909,6 +915,42 @@ final class AppState {
                   request.number == identity.number
             else { return nil }
             return request
+        } catch {
+            return nil
+        }
+    }
+
+    private func discoverMissionReview(
+        projectID: String,
+        branch: String,
+        baseRef: String
+    ) async -> ReviewRequest? {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
+        else { return nil }
+        let cwd = URL(fileURLWithPath: project.path)
+        do {
+            let remotes = try await GitService().remotes(worktreePath: cwd)
+            let registry = CodeHostProviderRegistry.live()
+            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+                forBaseBranch: baseRef,
+                remotes: remotes
+            )
+            guard let remote = CodeHostRemoteDetector.detect(
+                from: remotes,
+                supportedKinds: registry.supportedKinds,
+                preferredRemoteName: preferredRemoteName
+            ),
+                let provider = registry.provider(for: remote.kind),
+                await provider.isAvailable(cwd: cwd),
+                await provider.isAuthenticated(remote: remote, cwd: cwd)
+            else { return nil }
+            return try await provider.missionReviewRequest(
+                remote: remote,
+                branch: branch,
+                headOwner: nil,
+                baseBranch: baseRef,
+                cwd: cwd
+            )
         } catch {
             return nil
         }

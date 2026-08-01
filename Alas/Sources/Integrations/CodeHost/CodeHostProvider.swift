@@ -123,6 +123,13 @@ protocol CodeHostProvider: Sendable {
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest?
+    func missionReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest?
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest
     func createReviewRequest(
         remote: CodeHostRemote,
@@ -243,6 +250,24 @@ protocol CodeHostProvider: Sendable {
 
     func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
+}
+
+extension CodeHostProvider {
+    func missionReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        try await currentReviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            cwd: cwd
+        )
+    }
 }
 
 extension CodeHostProvider {

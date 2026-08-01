@@ -296,6 +296,41 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest? {
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            state: "open",
+            cwd: cwd
+        )
+    }
+
+    func missionReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            state: "all",
+            cwd: cwd
+        )
+    }
+
+    private func reviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        state: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
         let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
         let result = try await runner.run(
             "gh",
@@ -303,7 +338,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                 "pr", "list",
                 "--head", branch,
                 "--base", base,
-                "--state", "open",
+                "--state", state,
                 "--limit", "20",
                 "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),

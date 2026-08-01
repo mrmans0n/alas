@@ -59,6 +59,21 @@ struct MissionIssueResolverTests {
         }
     }
 
+    @Test func shortReferenceProbesAProviderForACustomHost() async throws {
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@code.acme.internal:mrmans0n/alas.git")] },
+            providers: Self.registry
+        ))
+
+        let resolved = try await resolver.resolve("#1842")
+
+        #expect(resolved.remote.kind == .github)
+        #expect(resolved.remote.host == "code.acme.internal")
+        #expect(resolved.snapshot.identity.provider == .github)
+    }
+
     private static func environment(provider: FakeIssueProvider) -> MissionIssueResolver.Environment {
         .init(
             projects: { [cloneA] },

@@ -156,6 +156,21 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == nil)
     }
 
+    @Test func liveReviewIgnoresASnapshotCapturedFromAnotherBranch() async throws {
+        let fake = try MissionLifecycleFake()
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged, branch: "unrelated-branch")
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
     @Test func archiveIgnoresAReplacementWorktreeOnAnotherBranch() async throws {
         let fake = try MissionLifecycleFake(worktreeBranch: "unrelated-branch")
         await fake.controller.load()
@@ -355,6 +370,27 @@ struct MissionReadinessEvaluatorTests {
         #expect(fake.issueRefreshCalls.isEmpty)
     }
 
+    @Test func startupDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
+        let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            reviewSnapshot: { _, _ in nil },
+            startupReviewSnapshot: { _, _ in nil },
+            discoverReviewRequest: { projectID, branch, baseRef in
+                #expect(projectID == "project-1")
+                #expect(branch == "fix/parser-crash")
+                #expect(baseRef == "origin/main")
+                return request
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func mergedReviewWaitsForCreatingSetupToSettle() async throws {
         var creating = Self.runningAggregate()
         creating.mission.state = .creating
@@ -528,7 +564,8 @@ struct MissionReadinessEvaluatorTests {
 
     private static func reviewSnapshot(
         state: ReviewRequestState,
-        number: Int = 91
+        number: Int = 91,
+        branch: String = "fix/parser-crash"
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -545,7 +582,7 @@ struct MissionReadinessEvaluatorTests {
             url: remote.reviewRequestURL(number: number),
             state: state,
             isDraft: false,
-            headRefName: "fix/parser-crash",
+            headRefName: branch,
             baseRefName: "main",
             headSHA: "abc123",
             reviewDecision: .approved,
@@ -555,7 +592,7 @@ struct MissionReadinessEvaluatorTests {
         )
         return ReviewLoopSnapshot(
             local: ReviewLoopLocalState(
-                branchName: "fix/parser-crash",
+                branchName: branch,
                 headSHA: "abc123",
                 baseBranch: "main",
                 hasWorkingTreeChanges: false,
@@ -600,6 +637,7 @@ private final class MissionLifecycleFake {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _ in nil },
         linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory
@@ -658,7 +696,8 @@ private final class MissionLifecycleFake {
             worktreeDiscoverySucceeded: worktreeDiscoverySucceeded,
             worktreeArchived: worktreeArchived,
             reviewSnapshot: reviewSnapshot,
-            startupReviewSnapshot: startupReviewSnapshot
+            startupReviewSnapshot: startupReviewSnapshot,
+            discoverReviewRequest: discoverReviewRequest
         )
     }
 }

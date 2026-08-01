@@ -330,6 +330,26 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func missionReviewRequestIncludesCompletedPullRequests() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(await runner.commands.first?.args.contains("all") == true)
+        #expect(await runner.commands.first?.args.contains("open") == false)
+    }
+
     @Test func currentReviewRequestEnrichesMergeQueueMetadata() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),

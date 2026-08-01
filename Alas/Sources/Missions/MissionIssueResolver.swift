@@ -56,10 +56,22 @@ struct MissionIssueResolver {
                 throw CodeHostProviderError.malformedOutput("Select a project before resolving an issue.")
             }
             let remotes = try await environment.remotes(project)
-            guard let remote = CodeHostRemoteDetector.detect(from: remotes) else {
+            let candidates = Self.candidateRemotes(
+                remotes,
+                supportedKinds: environment.providers.supportedKinds
+            )
+            guard !candidates.isEmpty else {
                 throw CodeHostProviderError.malformedOutput("The selected project has no supported code host remote.")
             }
-            return try await resolve(number: number, remote: remote, candidates: [project.id], selectedProjectId: project.id, cwd: project.path)
+            var lastError: Error?
+            for remote in candidates {
+                do {
+                    return try await resolve(number: number, remote: remote, candidates: [project.id], selectedProjectId: project.id, cwd: project.path)
+                } catch {
+                    lastError = error
+                }
+            }
+            throw lastError ?? CodeHostProviderError.malformedOutput("The selected project has no supported code host remote.")
 
         case .url(let kind, let host, let slug, let number):
             var matches: [(project: ProjectConfig, remote: CodeHostRemote)] = []
@@ -100,6 +112,21 @@ struct MissionIssueResolver {
 
     private static func matches(remote: CodeHostRemote, kind: CodeHostKind, host: String, slug: String) -> Bool {
         remote.kind == kind && remote.host.caseInsensitiveCompare(host) == .orderedSame && remote.repositorySlug.caseInsensitiveCompare(slug) == .orderedSame
+    }
+
+    private static func candidateRemotes(
+        _ remotes: [GitRemote],
+        supportedKinds: Set<CodeHostKind>
+    ) -> [CodeHostRemote] {
+        if let detected = CodeHostRemoteDetector.detect(
+            from: remotes,
+            supportedKinds: supportedKinds
+        ) {
+            return [detected]
+        }
+        return supportedKinds.sorted(by: { $0.rawValue < $1.rawValue }).compactMap { kind in
+            CodeHostRemoteDetector.detect(from: remotes, matching: kind)
+        }
     }
 }
 
