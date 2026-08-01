@@ -137,6 +137,7 @@ struct MissionCoordinatorTests {
         missing.mission.setupCheckpoint = .running
         missing.legs[0].worktreeId = "missing-worktree"
         missing.legs[0].acpSessionId = "missing-session"
+        missing.legs[0].pendingInitialPrompt = nil
         let fake = MissionCoordinatorFake(
             existing: [missing],
             agentResult: .failure(.init(message: "Install Codex"))
@@ -154,10 +155,12 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 1)
+        #expect(fake.startedPromptIDs == [missing.legs[0].initialPromptId])
         #expect(recovered.mission.state == .needsAttention)
         #expect(recovered.mission.setupCheckpoint == .startingAgent)
         #expect(recovered.primaryLeg?.worktreeId == fake.worktree.id)
         #expect(recovered.primaryLeg?.acpSessionId != "missing-session")
+        #expect(recovered.primaryLeg?.pendingInitialPrompt != nil)
     }
 
     @Test("agent replacement is persisted before retrying the agent checkpoint")

@@ -143,6 +143,9 @@ final class MissionCoordinator {
             // ACP sessions are worktree-scoped. A replacement worktree gets a
             // new durable reservation at the agent checkpoint.
             leg.acpSessionId = nil
+            if leg.pendingInitialPrompt == nil {
+                leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
+            }
             retryLeg = leg
         }
         let checkpoint: MissionSetupCheckpoint = recreateWorktree
