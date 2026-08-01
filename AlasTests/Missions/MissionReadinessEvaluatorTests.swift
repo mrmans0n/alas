@@ -173,6 +173,30 @@ struct MissionReadinessEvaluatorTests {
         #expect(after.mission.state == .running)
     }
 
+    @Test func lateRefreshFailurePreservesNewerSuccessfulSnapshot() async throws {
+        let race = RefreshIssueRace(success: MissionFixtures.issue(
+            title: "Newer issue title",
+            capturedAt: 500
+        ))
+        let fake = try MissionLifecycleFake(issueRefresh: { _, _ in
+            try await race.refresh()
+        })
+        await fake.controller.load()
+
+        let slowFailure = Task { await fake.controller.refreshIssue(Self.missionID) }
+        await race.waitForSlowFailureToStart()
+
+        await fake.controller.refreshIssue(Self.missionID)
+        await race.releaseSlowFailure()
+        await slowFailure.value
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.issue.title == "Newer issue title")
+        #expect(aggregate.issue.capturedAt == Date(timeIntervalSince1970: 500))
+        #expect(aggregate.issue.refreshError == "Authentication is required for github.com.")
+    }
+
     @Test func startupRecognizesCurrentMergedReviewWithoutPolling() async throws {
         let snapshot = Self.reviewSnapshot(state: .merged)
         let fake = try MissionLifecycleFake(
@@ -188,6 +212,26 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
         #expect(fake.issueRefreshCalls.isEmpty)
+    }
+
+    @Test func startupLoadsMergedReviewWhenNoRightPaneSnapshotExists() async throws {
+        let snapshot = Self.reviewSnapshot(state: .merged)
+        var requestedWorktreeIDs: [String] = []
+        let fake = try MissionLifecycleFake(
+            reviewSnapshot: { _ in nil },
+            startupReviewSnapshot: { worktree in
+                requestedWorktreeIDs.append(worktree.id)
+                return snapshot
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(requestedWorktreeIDs == ["worktree-1"])
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
     @Test func startupMarksMissingWorktreeForAttentionWithoutTreatingItAsArchive() async throws {
@@ -338,7 +382,8 @@ private final class MissionLifecycleFake {
         },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
-        reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil }
+        reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
+        startupReviewSnapshot: @escaping @MainActor (Worktree) async -> ReviewLoopSnapshot? = { _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-lifecycle-\(UUID().uuidString).sqlite")
@@ -393,7 +438,8 @@ private final class MissionLifecycleFake {
             },
             projectExists: projectExists,
             worktreeArchived: worktreeArchived,
-            reviewSnapshot: reviewSnapshot
+            reviewSnapshot: reviewSnapshot,
+            startupReviewSnapshot: startupReviewSnapshot
         )
     }
 }
@@ -402,4 +448,45 @@ private final class MissionLifecycleFake {
 private final class MissionLifecycleRecorder {
     var issueRefreshCalls: [IssueRefreshCall] = []
     var externalOperations: [String] = []
+}
+
+@MainActor
+private final class RefreshIssueRace {
+    private let success: MissionIssueSnapshot
+    private var invocationCount = 0
+    private var slowFailureStarted = false
+    private var slowFailureStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var slowFailureRelease: CheckedContinuation<Void, Never>?
+
+    init(success: MissionIssueSnapshot) {
+        self.success = success
+    }
+
+    func refresh() async throws -> MissionIssueSnapshot {
+        invocationCount += 1
+        guard invocationCount == 1 else { return success }
+
+        slowFailureStarted = true
+        let waiters = slowFailureStartWaiters
+        slowFailureStartWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            slowFailureRelease = continuation
+        }
+        throw CodeHostProviderError.unauthenticated("github.com")
+    }
+
+    func waitForSlowFailureToStart() async {
+        guard !slowFailureStarted else { return }
+        await withCheckedContinuation { continuation in
+            slowFailureStartWaiters.append(continuation)
+        }
+    }
+
+    func releaseSlowFailure() {
+        slowFailureRelease?.resume()
+        slowFailureRelease = nil
+    }
 }

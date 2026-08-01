@@ -157,6 +157,50 @@ struct AppStatePersistenceTests {
         #expect(aggregate.events.last?.message == "Worktree archived in Alas.")
     }
 
+    @Test func archivingMissionWorktreeRecordsReadyBeforeSelectionCleanup() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence
+        )
+        let worktree = Self.worktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectedWorktreeId = worktree.id
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+
+        #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path))
+        #expect(state.selectedWorktreeId == worktree.id)
+
+        _ = try await Self.waitForMissionState(.readyToComplete, persistence: persistence)
+        #expect(state.selectedWorktreeId == nil)
+    }
+
+    @Test func startupMissionReconciliationLoadsMergedReviewBeforePaneCreation() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        var requestedWorktreeIDs: [String] = []
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence,
+            missionStartupReviewSnapshot: { worktree in
+                requestedWorktreeIDs.append(worktree.id)
+                return Self.mergedReviewSnapshot()
+            }
+        )
+        let worktree = Self.worktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+
+        #expect(state.rightPaneStore.reviewSnapshot(worktreeId: worktree.id) == nil)
+        await state.reconcileMissionsForStartup()
+        let aggregate = try await Self.waitForMissionState(.readyToComplete, persistence: persistence)
+
+        #expect(requestedWorktreeIDs == [worktree.id])
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 91)
+    }
+
     @Test func removingMissionProjectRecordsAttentionWithoutDeletingMission() async throws {
         let project = Self.project
         let persistence = try Self.makeMissionPersistence()
@@ -219,5 +263,48 @@ struct AppStatePersistenceTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         return try #require(try await persistence.aggregate(id: MissionID(rawValue: "mission-1")))
+    }
+
+    private static func mergedReviewSnapshot() -> ReviewLoopSnapshot {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "acme",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/acme/alas")!
+        )
+        return ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "fix/parser-crash",
+                headSHA: "abc123",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 1,
+                hasUpstream: true,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: ReviewRequest(
+                remote: remote,
+                number: 91,
+                title: "Mission review",
+                url: URL(string: "https://github.com/acme/alas/pull/91")!,
+                state: .merged,
+                isDraft: false,
+                headRefName: "fix/parser-crash",
+                baseRefName: "main",
+                headSHA: "abc123",
+                reviewDecision: .approved,
+                mergeState: .clean,
+                checks: [],
+                threads: []
+            ),
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
     }
 }

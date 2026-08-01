@@ -6,6 +6,10 @@ typealias MissionIssueRefresh = @MainActor (
     _ projectId: String
 ) async throws -> MissionIssueSnapshot
 
+typealias MissionStartupReviewSnapshot = @MainActor (
+    _ worktree: Worktree
+) async -> ReviewLoopSnapshot?
+
 @Observable
 @MainActor
 final class MissionController {
@@ -24,6 +28,8 @@ final class MissionController {
     private let worktreeArchived: @MainActor (String, String) -> Bool
     @ObservationIgnored
     private let reviewSnapshot: @MainActor (String) -> ReviewLoopSnapshot?
+    @ObservationIgnored
+    private let startupReviewSnapshot: MissionStartupReviewSnapshot
     @ObservationIgnored
     private var lifecycleMutations: Set<MissionID> = []
     @ObservationIgnored
@@ -53,7 +59,8 @@ final class MissionController {
         },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
-        reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil }
+        reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
+        startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _ in nil }
     ) {
         persistence = environment.persistence
         self.environment = environment
@@ -61,6 +68,7 @@ final class MissionController {
         self.projectExists = projectExists
         self.worktreeArchived = worktreeArchived
         self.reviewSnapshot = reviewSnapshot
+        self.startupReviewSnapshot = startupReviewSnapshot
     }
 
     func load() async {
@@ -241,14 +249,21 @@ final class MissionController {
                     await apply(signal: .worktreeArchived, to: aggregate.mission.id)
                     continue
                 }
-                guard environment.worktreeAtDestination(leg.projectId, leg.destinationPath) != nil else {
+                guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath) else {
                     if aggregate.mission.setupCheckpoint == .running {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
                     continue
                 }
+                let snapshot: ReviewLoopSnapshot?
                 if let worktreeID = leg.worktreeId,
-                   let snapshot = reviewSnapshot(worktreeID) {
+                   let cached = reviewSnapshot(worktreeID) {
+                    snapshot = cached
+                } else {
+                    snapshot = await startupReviewSnapshot(worktree)
+                }
+                if let worktreeID = leg.worktreeId,
+                   let snapshot {
                     await observeReview(worktreeId: worktreeID, snapshot: snapshot)
                 }
             }
@@ -334,21 +349,22 @@ final class MissionController {
         _ error: Error,
         aggregate: MissionAggregate
     ) async {
-        var retained = aggregate.issue
-        let message = Self.sanitized(error.localizedDescription)
-        retained.refreshError = message
-        let event = makeEvent(
-            aggregate: aggregate,
-            kind: .sourceRefreshed,
-            message: "Issue refresh failed: \(message)"
-        )
         do {
+            guard let current = try await persistence.aggregate(id: aggregate.mission.id) else { return }
+            var retained = current.issue
+            let message = Self.sanitized(error.localizedDescription)
+            retained.refreshError = message
+            let event = makeEvent(
+                aggregate: current,
+                kind: .sourceRefreshed,
+                message: "Issue refresh failed: \(message)"
+            )
             try await persistence.replaceIssueSnapshot(
-                missionID: aggregate.mission.id,
+                missionID: current.mission.id,
                 snapshot: retained,
                 event: event
             )
-            try await publish(id: aggregate.mission.id)
+            try await publish(id: current.mission.id)
             loadError = nil
         } catch {
             loadError = error.localizedDescription

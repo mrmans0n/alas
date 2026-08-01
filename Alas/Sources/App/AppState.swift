@@ -496,6 +496,8 @@ final class AppState {
     @ObservationIgnored
     private let missionPersistence: MissionPersistence
     @ObservationIgnored
+    private let missionStartupReviewSnapshot: MissionStartupReviewSnapshot?
+    @ObservationIgnored
     private(set) lazy var missions = makeMissionController()
     @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
@@ -519,7 +521,8 @@ final class AppState {
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
-        projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) }
+        projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
+        missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil
     ) {
         self.store = store
         self.missionPersistence = missionPersistence
@@ -531,6 +534,7 @@ final class AppState {
         }
         self.terminalSessionOpener = terminalSessionOpener
         self.projectGitWatcherFactory = projectGitWatcherFactory
+        self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -668,7 +672,22 @@ final class AppState {
             ) == true
         }, reviewSnapshot: { [weak self] worktreeID in
             self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID)
+        }, startupReviewSnapshot: { [weak self] worktree in
+            guard let self else { return nil }
+            if let missionStartupReviewSnapshot = self.missionStartupReviewSnapshot {
+                return await missionStartupReviewSnapshot(worktree)
+            }
+            return await self.rightPaneStore.startupReviewSnapshot(
+                for: worktree,
+                baseBranch: self.config.worktrees.baseBranch,
+                comparisonMode: self.config.changes.comparisonMode
+            )
         })
+    }
+
+    func reconcileMissionsForStartup() async {
+        await missions.load()
+        await missions.reconcileInterrupted()
     }
 
     private func refreshMissionIssue(
@@ -2243,19 +2262,34 @@ final class AppState {
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
         let wasSelected = selectedWorktreeId == worktree.id
 
-        cleanupWorktreeState(worktreeId: worktree.id)
         projectsManager.setOperationState(id: worktree.id, state: nil)
         projectsManager.setWorktreeHidden(
             projectId: worktree.projectId,
             path: worktree.path,
             hidden: true
         )
+        saveProjects()
         if projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) {
             Task { @MainActor [weak self] in
                 await self?.missions.recordArchive(worktreeId: worktree.id)
+                self?.finishArchivingWorktree(
+                    worktree,
+                    removedIndex: removedIndex,
+                    wasSelected: wasSelected
+                )
             }
+            return
         }
-        saveProjects()
+
+        finishArchivingWorktree(worktree, removedIndex: removedIndex, wasSelected: wasSelected)
+    }
+
+    private func finishArchivingWorktree(
+        _ worktree: Worktree,
+        removedIndex: Int,
+        wasSelected: Bool
+    ) {
+        cleanupWorktreeState(worktreeId: worktree.id)
 
         if wasSelected {
             selectWorktree(id: selectionAfterRemoval(

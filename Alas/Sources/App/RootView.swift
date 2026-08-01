@@ -71,8 +71,7 @@ struct RootView: View {
                 // Worktrees now exist — load any persisted tab files for them. Init
                 // can't do this because refreshAll runs async after init.
                 state.reloadTabs()
-                await state.missions.load()
-                await state.missions.reconcileInterrupted()
+                await state.reconcileMissionsForStartup()
                 if state.selectedWorktreeId == nil {
                     state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
                 }

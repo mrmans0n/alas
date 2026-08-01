@@ -304,6 +304,23 @@ final class RightPaneStore {
         states[worktreeId]?.reviewLoop.snapshot
     }
 
+    /// Performs the one review lookup needed while restoring Missions before a
+    /// right pane has been activated. The temporary state never starts its
+    /// watcher or timer, so this does not introduce background polling.
+    func startupReviewSnapshot(
+        for worktree: Worktree,
+        baseBranch: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode
+    ) async -> ReviewLoopSnapshot? {
+        if let cached = reviewSnapshot(worktreeId: worktree.id) {
+            return cached
+        }
+        let temporary = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+        temporary.comparisonMode = comparisonMode
+        await temporary.refresh(forceReviewLoopRemote: true)
+        return temporary.reviewLoop.snapshot
+    }
+
     /// Re-evaluate the gg gate across all cached right-pane states after a
     /// stacked-diffs config change in Settings (master toggle or a
     /// project's ggMode), so stale stack styling and the sidebar badge
