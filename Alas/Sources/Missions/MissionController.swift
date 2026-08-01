@@ -111,7 +111,7 @@ final class MissionController {
                aggregate.mission.state == .needsAttention,
                aggregate.mission.setupCheckpoint == .startingAgent,
                var leg = aggregate.primaryLeg {
-                if leg.agentId != agentId {
+                if leg.agentId != agentId, leg.pendingInitialPrompt != nil {
                     leg.agentId = agentId
                     // ACP sessions retain their original agent identity. A replacement
                     // therefore needs a fresh, durable session ID instead of mutating
@@ -148,21 +148,21 @@ final class MissionController {
             for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
                 guard let leg = aggregate.primaryLeg else { continue }
                 let request: ReviewRequest
-                if let visible = snapshot.reviewRequest {
+                if let linked = leg.reviewIdentity {
+                    if let visible = snapshot.reviewRequest,
+                       Self.reviewIdentity(for: visible) == linked {
+                        request = visible
+                    } else if let refreshed = await linkedReviewRequest(linked, worktreeId) {
+                        request = refreshed
+                    } else {
+                        continue
+                    }
+                } else if let visible = snapshot.reviewRequest {
                     request = visible
-                } else if let linked = leg.reviewIdentity,
-                          let refreshed = await linkedReviewRequest(linked, worktreeId) {
-                    request = refreshed
                 } else {
                     continue
                 }
-                let identity = MissionReviewIdentity(
-                    provider: request.provider,
-                    host: request.remote.host,
-                    repositorySlug: request.remote.repositorySlug,
-                    number: request.number,
-                    url: request.url
-                )
+                let identity = Self.reviewIdentity(for: request)
                 if let linked = aggregate.primaryLeg?.reviewIdentity, linked != identity {
                     continue
                 }
@@ -452,6 +452,16 @@ final class MissionController {
             .joined(separator: " ")
         let fallback = collapsed.isEmpty ? "Issue refresh failed." : collapsed
         return String(fallback.prefix(500))
+    }
+
+    private static func reviewIdentity(for request: ReviewRequest) -> MissionReviewIdentity {
+        MissionReviewIdentity(
+            provider: request.provider,
+            host: request.remote.host,
+            repositorySlug: request.remote.repositorySlug,
+            number: request.number,
+            url: request.url
+        )
     }
 
     private func replace(_ aggregate: MissionAggregate) {

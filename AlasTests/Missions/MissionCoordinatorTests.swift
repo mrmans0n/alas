@@ -408,6 +408,33 @@ struct MissionCoordinatorTests {
         #expect(recovered.mission.setupCheckpoint == .running)
     }
 
+    @Test("agent replacement keeps the started session after prompt consumption")
+    func agentReplacementKeepsStartedSessionAfterPromptConsumption() async throws {
+        let fake = MissionCoordinatorFake()
+        fake.idValues = [
+            "mission",
+            "leg",
+            "created-event",
+            "worktree-event",
+            "started-session",
+            "created-event",
+            "attention-event",
+        ]
+        let controller = MissionController(environment: fake.environment)
+
+        let id = try await controller.create(Self.draft, allowDuplicate: false)
+        let failed = await fake.waitUntilSettled(id)
+        #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
+
+        await controller.retry(id, agentId: "claude")
+        let recovered = try #require(try await fake.persistence.aggregate(id: id))
+
+        #expect(fake.startACPCalls == 1)
+        #expect(recovered.primaryLeg?.agentId == "codex")
+        #expect(recovered.primaryLeg?.acpSessionId == "started-session")
+        #expect(recovered.mission.state == .running)
+    }
+
     @Test("restart reuses the recorded worktree at the Mission destination")
     func interruptedWorktreeReusesRecordedDestinationArtifact() async throws {
         var existing = MissionFixtures.creatingMission()

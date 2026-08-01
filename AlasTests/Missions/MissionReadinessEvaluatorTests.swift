@@ -154,6 +154,29 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func linkedReviewIsRefreshedWhenAnotherReviewIsVisible() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let unrelatedVisibleReview = Self.reviewSnapshot(state: .open, number: 92)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { identity, worktreeID in
+                guard identity == Self.reviewIdentity, worktreeID == "worktree-1" else { return nil }
+                return Self.reviewSnapshot(state: .merged).reviewRequest
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            snapshot: unrelatedVisibleReview
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func sourceIssueStateDoesNotChangeMissionReadiness() async throws {
         let refreshed = MissionFixtures.issue(title: "Fresh issue title", capturedAt: 250)
         var closed = refreshed
