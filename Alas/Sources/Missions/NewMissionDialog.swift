@@ -89,6 +89,9 @@ final class NewMissionDialogModel {
         guard candidateProjectIds.contains(projectId) else {
             return "Choose a repository matched to this issue."
         }
+        guard !isLoadingBranches else {
+            return "Wait for repository branches to finish loading."
+        }
         guard branchErrorMessage == nil else {
             return "Reload repository branches before creating a Mission."
         }

@@ -99,6 +99,35 @@ struct NewMissionDialogTests {
         #expect(fake.createdDrafts.isEmpty)
     }
 
+    @Test("project switch blocks creation while branch inventory loads")
+    func projectSwitchBlocksCreationWhileBranchesLoad() async {
+        let fake = NewMissionDialogFake(
+            suspendBranches: true,
+            candidateProjectIds: ["alas", "alas-clone"],
+            configuredBases: ["alas": "main", "alas-clone": "trunk"],
+            branchesByProject: ["alas": ["main"], "alas-clone": ["trunk"]]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        let resolution = Task { await model.resolve() }
+        await fake.waitUntilBranchLoadStarts()
+        fake.finishBranchLoad()
+        await resolution.value
+
+        let selection = Task { await model.selectProject("alas-clone") }
+        await fake.waitUntilBranchLoadStarts()
+
+        #expect(model.isLoadingBranches)
+        #expect(model.validationMessage == "Wait for repository branches to finish loading.")
+        #expect(!model.canCreate)
+        #expect(await model.create(allowDuplicate: false) == nil)
+        #expect(fake.createdDrafts.isEmpty)
+
+        fake.finishBranchLoad()
+        await selection.value
+        #expect(model.canCreate)
+    }
+
     @Test("only matching projects can be selected")
     func projectSelectionIsLimitedToResolverMatches() async {
         let fake = NewMissionDialogFake(
