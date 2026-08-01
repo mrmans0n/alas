@@ -58,6 +58,38 @@ struct ACPWorktreeSessionBootstrapperTests {
         #expect(fake.attachCalls == 0)
     }
 
+    @Test("concurrent starts wait for the durable enqueue result")
+    func concurrentStartsWaitForDurableEnqueueResult() async {
+        let fake = BootstrapFake(sessionExists: false, suspendFirstEnqueue: true)
+        let bootstrapper = ACPWorktreeSessionBootstrapper(environment: fake.environment)
+        let first = Task { @MainActor in
+            do {
+                _ = try await bootstrapper.start(Self.request)
+                return nil as Error?
+            } catch {
+                return error
+            }
+        }
+
+        await fake.waitForEnqueueStart()
+        let second = Task { @MainActor in
+            do {
+                _ = try await bootstrapper.start(Self.request)
+                return nil as Error?
+            } catch {
+                return error
+            }
+        }
+        await Task.yield()
+
+        #expect(fake.enqueueCalls == 1)
+        fake.completeSuspendedEnqueue(accepted: false)
+
+        #expect(await first.value is ACPWorktreeSessionBootstrapError)
+        #expect(await second.value is ACPWorktreeSessionBootstrapError)
+        #expect(fake.attachCalls == 0)
+    }
+
     @Test("setup and authentication failures use their ready-state reasons")
     func setupAndAuthenticationFailuresUseTheirReadyStateReasons() async {
         for (state, expectedMessage) in [
@@ -99,6 +131,8 @@ private final class BootstrapFake {
     var enqueueSucceeds: Bool
     var state: ACPBootstrapReadyState
     var prepareError: Error?
+    var suspendFirstEnqueue: Bool
+    private var enqueueContinuation: CheckedContinuation<Bool, Never>?
     private(set) var prepareCalls = 0
     private(set) var createCalls = 0
     private(set) var enqueueCalls = 0
@@ -109,13 +143,15 @@ private final class BootstrapFake {
         queuedPromptIDs: [UUID] = [],
         enqueueSucceeds: Bool = true,
         readyState: ACPBootstrapReadyState = .ready,
-        prepareError: Error? = nil
+        prepareError: Error? = nil,
+        suspendFirstEnqueue: Bool = false
     ) {
         self.sessionExists = sessionExists
         promptIDs = queuedPromptIDs
         self.enqueueSucceeds = enqueueSucceeds
         state = readyState
         self.prepareError = prepareError
+        self.suspendFirstEnqueue = suspendFirstEnqueue
     }
 
     var environment: ACPWorktreeSessionBootstrapper.Environment {
@@ -133,15 +169,39 @@ private final class BootstrapFake {
             enqueuePrompt: { [weak self] _, _, id, _ in
                 guard let self else { return false }
                 self.enqueueCalls += 1
-                guard self.enqueueSucceeds else { return false }
-                if !self.promptIDs.contains(id) {
-                    self.promptIDs.append(id)
+                guard !self.promptIDs.contains(id) else { return true }
+                self.promptIDs.append(id)
+                let accepted: Bool
+                if self.suspendFirstEnqueue {
+                    self.suspendFirstEnqueue = false
+                    accepted = await withCheckedContinuation { continuation in
+                        self.enqueueContinuation = continuation
+                    }
+                } else {
+                    accepted = self.enqueueSucceeds
+                }
+                guard accepted else {
+                    self.promptIDs.removeAll { $0 == id }
+                    return false
                 }
                 return true
             },
             attach: { [weak self] _, _, _ in self?.attachCalls += 1 },
             readyState: { [weak self] _, _ in self?.state ?? .failed("ACP session is unavailable.") }
         )
+    }
+
+    func waitForEnqueueStart() async {
+        for _ in 0..<100 where enqueueContinuation == nil {
+            await Task.yield()
+        }
+        #expect(enqueueContinuation != nil)
+    }
+
+    func completeSuspendedEnqueue(accepted: Bool) {
+        let continuation = enqueueContinuation
+        enqueueContinuation = nil
+        continuation?.resume(returning: accepted)
     }
 }
 

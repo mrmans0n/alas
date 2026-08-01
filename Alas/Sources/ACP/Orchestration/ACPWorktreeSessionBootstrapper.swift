@@ -33,11 +33,35 @@ final class ACPWorktreeSessionBootstrapper {
 
     private let environment: Environment
 
+    private struct StartKey: Hashable {
+        let worktreeId: String
+        let sessionID: ACPSession.ID
+    }
+
+    private static var inFlightStarts: [StartKey: Task<ACPSession.ID, Error>] = [:]
+
     init(environment: Environment) {
         self.environment = environment
     }
 
     func start(_ request: ACPWorktreeSessionRequest) async throws -> ACPSession.ID {
+        let key = StartKey(worktreeId: request.worktreeId, sessionID: request.sessionID)
+        if let inFlight = Self.inFlightStarts[key] {
+            return try await inFlight.value
+        }
+        let environment = environment
+        let task = Task { @MainActor in
+            try await Self.start(request, in: environment)
+        }
+        Self.inFlightStarts[key] = task
+        defer { Self.inFlightStarts[key] = nil }
+        return try await task.value
+    }
+
+    private static func start(
+        _ request: ACPWorktreeSessionRequest,
+        in environment: Environment
+    ) async throws -> ACPSession.ID {
         let sessionAlreadyExists = await environment.sessionExists(request.worktreeId, request.sessionID)
         do {
             try await environment.prepareSession(
