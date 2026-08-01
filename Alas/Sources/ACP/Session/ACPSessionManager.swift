@@ -3786,9 +3786,23 @@ extension ACPSessionManager {
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard let session = sessions[sessionId] else { return false }
-        guard !session.queue.contains(where: { $0.id == id }) else { return true }
+        let source = ACPDelegatedPromptSource(
+            sessionId: "mission:\(sessionId)",
+            messageId: id.uuidString
+        )
+        guard !session.queue.contains(where: {
+            $0.id == id || $0.delegatedSource?.messageId == source.messageId
+        }) else { return true }
+        guard !session.transcript.messages.contains(where: { message in
+            guard case .user(_, _, _, _, let recordedSource) = message else { return false }
+            return recordedSource == source
+        }) else { return true }
 
-        let item = QueuedPrompt(id: id, blocks: ACPSessionRunner.blocks(text: text, attachments: []))
+        let item = QueuedPrompt(
+            id: id,
+            blocks: ACPSessionRunner.blocks(text: text, attachments: []),
+            delegatedSource: source
+        )
         session.queue.append(item)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue

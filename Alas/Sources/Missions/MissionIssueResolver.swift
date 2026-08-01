@@ -64,7 +64,9 @@ struct MissionIssueResolver {
         case .url(let kind, let host, let slug, let number):
             var matches: [(project: ProjectConfig, remote: CodeHostRemote)] = []
             for project in environment.projects() {
-                let remotes = try await environment.remotes(project)
+                guard let remotes = try? await environment.remotes(project) else {
+                    continue
+                }
                 if let remote = CodeHostRemoteDetector.detectAllMatching(remotes, kind: kind)
                     .first(where: { Self.matches(remote: $0, kind: kind, host: host, slug: slug) }) {
                     matches.append((project, remote))

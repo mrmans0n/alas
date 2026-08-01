@@ -65,7 +65,7 @@ struct MissionIntegrationTests {
         #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch already exists retry later")
-        #expect(aggregate.primaryLeg?.worktreeId == nil)
+        #expect(aggregate.primaryLeg?.worktreeId == harness.worktree.id)
         #expect(aggregate.primaryLeg?.acpSessionId == nil)
         #expect(aggregate.primaryLeg?.pendingInitialPrompt == harness.draft.initialPrompt)
     }
@@ -336,6 +336,7 @@ private final class MissionIntegrationHarness {
                 persistence: persistence,
                 now: { recorder.now() },
                 makeID: { recorder.makeID() },
+                plannedWorktreeID: { _ in .success(recorder.worktree.id) },
                 worktreeAtDestination: { projectID, destinationPath in
                     recorder.worktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
                 },

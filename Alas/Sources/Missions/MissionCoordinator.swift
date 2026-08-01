@@ -10,6 +10,7 @@ final class MissionCoordinator {
         let persistence: MissionPersistence
         let now: () -> Date
         let makeID: () -> String
+        let plannedWorktreeID: (MissionLeg) async -> Result<String, WorktreeCreationFailure>
         let worktreeAtDestination: (String, String) -> Worktree?
         let createWorktree: (MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>
         let startACP: (MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionOperationFailure>
@@ -21,6 +22,9 @@ final class MissionCoordinator {
             persistence: MissionPersistence,
             now: @escaping () -> Date,
             makeID: @escaping () -> String,
+            plannedWorktreeID: @escaping (MissionLeg) async -> Result<String, WorktreeCreationFailure> = { leg in
+                .success(Worktree.makeId(path: URL(fileURLWithPath: leg.destinationPath)))
+            },
             worktreeAtDestination: @escaping (String, String) -> Worktree?,
             createWorktree: @escaping (MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>,
             startACP: @escaping (MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionOperationFailure>,
@@ -31,6 +35,7 @@ final class MissionCoordinator {
             self.persistence = persistence
             self.now = now
             self.makeID = makeID
+            self.plannedWorktreeID = plannedWorktreeID
             self.worktreeAtDestination = worktreeAtDestination
             self.createWorktree = createWorktree
             self.startACP = startACP
@@ -250,6 +255,30 @@ final class MissionCoordinator {
             }
             worktree = existing
         } else {
+            if leg.worktreeId == nil {
+                switch await environment.plannedWorktreeID(leg) {
+                case .success(let worktreeID):
+                    leg.worktreeId = worktreeID
+                    do {
+                        try await environment.persistence.updateLeg(leg, event: nil)
+                        await notify(id: aggregate.mission.id)
+                    } catch {
+                        await persistFailure(
+                            aggregate: aggregate,
+                            checkpoint: .creatingWorktree,
+                            message: Self.persistenceFailureMessage
+                        )
+                        return false
+                    }
+                case .failure(let failure):
+                    await persistFailure(
+                        aggregate: aggregate,
+                        checkpoint: .creatingWorktree,
+                        message: failure.message
+                    )
+                    return false
+                }
+            }
             switch await environment.createWorktree(leg) {
             case .success(let created):
                 worktree = created
@@ -388,6 +417,9 @@ final class MissionCoordinator {
         for leg: MissionLeg
     ) -> Bool {
         leg.worktreeId == worktree.id
+            && leg.branch == worktree.branch
+            && URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+            == worktree.path.standardizedFileURL.path
     }
 
     private func settleRunning(_ aggregate: MissionAggregate) async -> Bool {

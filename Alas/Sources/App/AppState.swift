@@ -639,6 +639,22 @@ final class AppState {
             persistence: missionPersistence,
             now: { Date() },
             makeID: { UUID().uuidString },
+            plannedWorktreeID: { [weak self] leg in
+                guard let self,
+                      let project = self.projects.first(where: { $0.id == leg.projectId })
+                else {
+                    return .failure(.init(message: "The Mission project is no longer available."))
+                }
+                do {
+                    let destination = try await Self.preparedCreateWorktreeDestination(
+                        repoPath: URL(fileURLWithPath: project.path),
+                        destination: URL(fileURLWithPath: leg.destinationPath)
+                    )
+                    return .success(Worktree.makeId(path: destination))
+                } catch {
+                    return .failure(.init(message: error.localizedDescription))
+                }
+            },
             worktreeAtDestination: { [weak self] projectID, destinationPath in
                 self?.missionWorktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
             },

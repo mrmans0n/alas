@@ -49,6 +49,18 @@ struct MissionCoordinatorTests {
         #expect(fake.operations.first == "insert:creatingWorktree")
     }
 
+    @Test("worktree reservation is durable before Git starts")
+    func worktreeReservationIsDurableBeforeGitStarts() async throws {
+        let fake = MissionCoordinatorFake()
+        fake.aggregateObservedWhenGitStarted = true
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let id = try await coordinator.create(Self.draft)
+        _ = await fake.waitUntilSettled(id)
+
+        #expect(fake.worktreeReservationWasDurableWhenGitStarted)
+    }
+
     @Test("worktree failure stops before ACP and preserves the planned leg")
     func worktreeFailureDoesNotStartACP() async throws {
         let fake = MissionCoordinatorFake(worktreeResult: .failure(.init(message: "branch exists\nretry later")))
@@ -62,7 +74,7 @@ struct MissionCoordinatorTests {
         #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch exists retry later")
-        #expect(aggregate.primaryLeg?.worktreeId == nil)
+        #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
         #expect(aggregate.primaryLeg?.acpSessionId == nil)
         #expect(aggregate.primaryLeg?.pendingInitialPrompt == Self.draft.initialPrompt)
     }
@@ -517,10 +529,11 @@ struct MissionCoordinatorTests {
         _ = await fake.waitUntilSettled(id)
 
         #expect(fake.notifications.map(NotificationSnapshot.init) == [
-            NotificationSnapshot(state: .creating, checkpoint: .creatingWorktree, hasSession: false, clearedPrompt: false),
-            NotificationSnapshot(state: .creating, checkpoint: .startingAgent, hasSession: false, clearedPrompt: false),
-            NotificationSnapshot(state: .creating, checkpoint: .startingAgent, hasSession: true, clearedPrompt: false),
-            NotificationSnapshot(state: .running, checkpoint: .running, hasSession: true, clearedPrompt: true),
+            NotificationSnapshot(state: .creating, checkpoint: .creatingWorktree, hasWorktree: false, hasSession: false, clearedPrompt: false),
+            NotificationSnapshot(state: .creating, checkpoint: .creatingWorktree, hasWorktree: true, hasSession: false, clearedPrompt: false),
+            NotificationSnapshot(state: .creating, checkpoint: .startingAgent, hasWorktree: true, hasSession: false, clearedPrompt: false),
+            NotificationSnapshot(state: .creating, checkpoint: .startingAgent, hasWorktree: true, hasSession: true, clearedPrompt: false),
+            NotificationSnapshot(state: .running, checkpoint: .running, hasWorktree: true, hasSession: true, clearedPrompt: true),
         ])
     }
 }
@@ -528,12 +541,14 @@ struct MissionCoordinatorTests {
 private struct NotificationSnapshot: Equatable {
     let state: MissionState
     let checkpoint: MissionSetupCheckpoint
+    let hasWorktree: Bool
     let hasSession: Bool
     let clearedPrompt: Bool
 
     init(_ aggregate: MissionAggregate) {
         state = aggregate.mission.state
         checkpoint = aggregate.mission.setupCheckpoint
+        hasWorktree = aggregate.primaryLeg?.worktreeId != nil
         hasSession = aggregate.primaryLeg?.acpSessionId != nil
         clearedPrompt = aggregate.primaryLeg?.pendingInitialPrompt == nil
     }
@@ -541,11 +556,13 @@ private struct NotificationSnapshot: Equatable {
     init(
         state: MissionState,
         checkpoint: MissionSetupCheckpoint,
+        hasWorktree: Bool,
         hasSession: Bool,
         clearedPrompt: Bool
     ) {
         self.state = state
         self.checkpoint = checkpoint
+        self.hasWorktree = hasWorktree
         self.hasSession = hasSession
         self.clearedPrompt = clearedPrompt
     }
@@ -570,6 +587,7 @@ private final class MissionCoordinatorFake {
     var startACPOverride: ((MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>)?
     var aggregateObservedWhenGitStarted = false
     private(set) var missionWasDurableWhenGitStarted = false
+    private(set) var worktreeReservationWasDurableWhenGitStarted = false
     private(set) var createWorktreeCalls = 0
     private(set) var startACPCalls = 0
     private(set) var startedSessionIDs: [String] = []
@@ -619,6 +637,10 @@ private final class MissionCoordinatorFake {
                 self.idCounter += 1
                 return "id-\(self.idCounter)"
             },
+            plannedWorktreeID: { [weak self] _ in
+                guard let self else { return .failure(.init(message: "Fake released")) }
+                return .success(self.worktree.id)
+            },
             worktreeAtDestination: { [weak self] projectID, path in
                 guard let self,
                       projectID == self.worktree.projectId,
@@ -631,7 +653,9 @@ private final class MissionCoordinatorFake {
                 self.createWorktreeCalls += 1
                 self.operations.append("createWorktree")
                 if self.aggregateObservedWhenGitStarted {
-                    self.missionWasDurableWhenGitStarted = (try? await self.persistence.aggregate(id: leg.missionID)) != nil
+                    let aggregate = try? await self.persistence.aggregate(id: leg.missionID)
+                    self.missionWasDurableWhenGitStarted = aggregate != nil
+                    self.worktreeReservationWasDurableWhenGitStarted = aggregate?.primaryLeg?.worktreeId == self.worktree.id
                 }
                 if case .success(let worktree) = self.worktreeResult {
                     self.worktreeAtDestination = worktree

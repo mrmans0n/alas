@@ -41,6 +41,7 @@ final class MissionController {
         persistence: environment.persistence,
         now: environment.now,
         makeID: environment.makeID,
+        plannedWorktreeID: environment.plannedWorktreeID,
         worktreeAtDestination: environment.worktreeAtDestination,
         createWorktree: environment.createWorktree,
         startACP: environment.startACP,

@@ -25,6 +25,28 @@ struct MissionIssueResolverTests {
         #expect(resolved.snapshot.identity.number == 1842)
     }
 
+    @Test func fullURLContinuesPastAProjectWhoseRemotesAreUnavailable() async throws {
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA, Self.cloneB] },
+            selectedProjectId: { Self.cloneB.id },
+            remotes: { project in
+                if project.id == Self.cloneA.id {
+                    throw CodeHostProviderError.commandFailed(
+                        command: "git remote -v",
+                        stderr: "Repository unavailable"
+                    )
+                }
+                return [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")]
+            },
+            providers: Self.registry
+        ))
+
+        let resolved = try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+
+        #expect(resolved.candidateProjectIds == [Self.cloneB.id])
+        #expect(resolved.selectedProjectId == Self.cloneB.id)
+    }
+
     @Test func resolverReportsMissingCLIAndAuthenticationBeforeFetching() async {
         let missingCLI = MissionIssueResolver(environment: Self.environment(provider: FakeIssueProvider(available: false)))
         await #expect(throws: CodeHostProviderError.cliMissing("gh")) {
