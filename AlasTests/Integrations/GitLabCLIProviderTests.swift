@@ -4,6 +4,41 @@ import Testing
 @testable import Alas
 
 struct GitLabCLIProviderTests {
+    @Test func issueUsesEncodedSubgroupProjectAndMapsSnapshot() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: ""),
+        ])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+
+        #expect(issue.identity.repositorySlug == "platform/mobile/alas")
+        #expect(issue.labels == ["bug", "remote"])
+        #expect(issue.assignees == ["nacho"])
+        #expect(issue.state == .closed)
+        #expect(await runner.commands.first?.args == [
+            "api", "projects/platform%2Fmobile%2Falas/issues/77",
+            "--hostname", "gitlab.example.com", "--output", "json",
+        ])
+    }
+
+    @Test func issueClassifiesNotFoundAndPermissionDenied() async {
+        let notFoundRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "{\"message\":\"404 Project Not Found\"}", stderr: ""),
+        ])
+        let permissionRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "glab: 403 Forbidden"),
+        ])
+
+        await #expect(throws: CodeHostIssueProviderError.notFound(
+            provider: .gitlab, repositorySlug: "platform/mobile/alas", number: 77
+        )) {
+            try await GitLabCLIProvider(runner: notFoundRunner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+        }
+        await #expect(throws: CodeHostIssueProviderError.permissionDenied(host: "gitlab.example.com")) {
+            try await GitLabCLIProvider(runner: permissionRunner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+        }
+    }
+
     @Test func isAvailableReturnsTrueOnlyForVersionExitZero() async {
         let successRunner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "glab 1.101.0", stderr: ""),
@@ -2946,6 +2981,19 @@ struct GitLabCLIProviderTests {
           "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/105"
         }
       ]
+    }
+    """
+
+    private static let issueOutput = """
+    {
+      "iid": 77,
+      "title": "Fix subgroup issue loading",
+      "description": "Load an issue from a subgroup.",
+      "state": "closed",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/issues/77",
+      "updated_at": "2026-08-01T10:20:30.123Z",
+      "labels": ["bug", "remote"],
+      "assignees": [{ "username": "nacho" }]
     }
     """
 

@@ -3,6 +3,17 @@ import Testing
 @testable import Alas
 
 struct CodeHostRemoteDetectorTests {
+    @Test func parsedKindClassifiesUnknownEnterpriseHost() {
+        let remote = CodeHostRemoteDetector.detect(
+            from: [GitRemote(name: "origin", url: "git@github.example.com:mrmans0n/alas.git")],
+            matching: .github
+        )
+
+        #expect(remote?.kind == .github)
+        #expect(remote?.host == "github.example.com")
+        #expect(remote?.repositorySlug == "mrmans0n/alas")
+    }
+
     @Test func detectsGitHubHTTPSRemote() {
         let remote = CodeHostRemoteDetector.detect(from: [
             GitRemote(name: "origin", url: "https://github.com/mrmans0n/alas.git"),

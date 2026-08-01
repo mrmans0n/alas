@@ -1,8 +1,9 @@
 import Foundation
 
-struct GitHubCLIProvider: CodeHostProvider {
+struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     let kind: CodeHostKind = .github
     let capabilities: CodeHostProviderCapabilities = .githubCLI
+    let executable = "gh"
     static let pullRequestNodeQuery = """
     query($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
@@ -271,6 +272,21 @@ struct GitHubCLIProvider: CodeHostProvider {
         } catch {
             return false
         }
+    }
+
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+        let result = try await runner.run(
+            executable,
+            args: ["api", "--hostname", remote.host, "repos/\(remote.repositorySlug)/issues/\(number)"],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            if let error = CodeHostIssueProviderError.classification(provider: kind, remote: remote, number: number, result: result) {
+                throw error
+            }
+            throw CodeHostProviderError.commandFailed(command: "gh api issue", stderr: result.stderr)
+        }
+        return try Self.parseIssue(result.stdout, remote: remote, requestedNumber: number)
     }
 
     func currentReviewRequest(
@@ -1794,6 +1810,36 @@ struct GitHubCLIProvider: CodeHostProvider {
         throw CodeHostProviderError.malformedOutput("Unable to parse GitHub date")
     }
 
+    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> MissionIssueSnapshot {
+        let response: GitHubIssueResponse
+        do {
+            response = try JSONDecoder().decode(GitHubIssueResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitHub issue output.")
+        }
+        guard response.number == requestedNumber,
+              !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let url = try parseOptionalHTTPURL(response.htmlURL, context: "GitHub issue output is missing a valid URL.")
+        else {
+            throw CodeHostProviderError.malformedOutput("GitHub issue output is missing required fields.")
+        }
+        guard response.pullRequest == nil else {
+            throw CodeHostProviderError.malformedOutput("GitHub issue output describes a pull request, not an issue.")
+        }
+        return MissionIssueSnapshot(
+            identity: .init(provider: .github, host: remote.host, repositorySlug: remote.repositorySlug, number: response.number),
+            canonicalURL: url,
+            title: response.title,
+            body: response.body ?? "",
+            state: MissionIssueState(rawValue: response.state.lowercased()) ?? .unknown,
+            labels: response.labels.compactMap { normalizedOptionalString($0.name) },
+            assignees: response.assignees.compactMap { normalizedOptionalString($0.login) },
+            providerUpdatedAt: try parseOptionalDate(response.updatedAt),
+            capturedAt: Date(),
+            refreshError: nil
+        )
+    }
+
     private static func parseOptionalHTTPURL(_ value: String?, context: String) throws -> URL? {
         guard let value,
               !value.isEmpty
@@ -2324,6 +2370,42 @@ private struct GitHubAnnotationResponse: Decodable {
     let annotation_level: String
     let message: String
     let raw_details: String?
+}
+
+private struct GitHubIssueResponse: Decodable {
+    let number: Int
+    let title: String
+    let body: String?
+    let state: String
+    let htmlURL: String?
+    let updatedAt: String?
+    let labels: [Label]
+    let assignees: [Assignee]
+    let pullRequest: PullRequestMarker?
+
+    private enum CodingKeys: String, CodingKey {
+        case number, title, body, state, labels, assignees
+        case htmlURL = "html_url"
+        case updatedAt = "updated_at"
+        case pullRequest = "pull_request"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        number = try container.decode(Int.self, forKey: .number)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decodeIfPresent(String.self, forKey: .body)
+        state = try container.decode(String.self, forKey: .state)
+        htmlURL = try container.decodeIfPresent(String.self, forKey: .htmlURL)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        labels = try container.decodeIfPresent([Label].self, forKey: .labels) ?? []
+        assignees = try container.decodeIfPresent([Assignee].self, forKey: .assignees) ?? []
+        pullRequest = try container.decodeIfPresent(PullRequestMarker.self, forKey: .pullRequest)
+    }
+
+    struct Label: Decodable { let name: String? }
+    struct Assignee: Decodable { let login: String? }
+    struct PullRequestMarker: Decodable {}
 }
 
 private extension URL {

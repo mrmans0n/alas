@@ -3,6 +3,50 @@ import Testing
 @testable import Alas
 
 struct GitHubCLIProviderTests {
+    @Test func issueUsesHostAwareAPIAndMapsSnapshot() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: ""),
+        ])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(
+            remote: Self.enterpriseRemote,
+            number: 1842,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.identity == MissionIssueIdentity(
+            provider: .github,
+            host: "github.example.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 1842
+        ))
+        #expect(issue.labels == ["bug", "remote"])
+        #expect(issue.assignees == ["nacho"])
+        #expect(issue.state == .open)
+        #expect(issue.canonicalURL == URL(string: "https://github.example.com/mrmans0n/alas/issues/1842"))
+        #expect(await runner.commands.first?.args == [
+            "api", "--hostname", "github.example.com", "repos/mrmans0n/alas/issues/1842",
+        ])
+    }
+
+    @Test func issueClassifiesNotFoundAndPermissionDenied() async {
+        let notFoundRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "{\"message\":\"Not Found\",\"status\":404}", stderr: "gh: Not Found (HTTP 404)"),
+        ])
+        let permissionRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "gh: Resource not accessible by integration (HTTP 403)"),
+        ])
+
+        await #expect(throws: CodeHostIssueProviderError.notFound(
+            provider: .github, repositorySlug: "mrmans0n/alas", number: 1842
+        )) {
+            try await GitHubCLIProvider(runner: notFoundRunner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+        await #expect(throws: CodeHostIssueProviderError.permissionDenied(host: "github.example.com")) {
+            try await GitHubCLIProvider(runner: permissionRunner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+    }
+
     @Test func prListJSONParsesReviewRequest() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """
@@ -2522,6 +2566,28 @@ struct GitHubCLIProviderTests {
           "clientMutationId": "comment-1"
         }
       }
+    }
+    """
+
+    private static let enterpriseRemote = CodeHostRemote(
+        kind: .github,
+        host: "github.example.com",
+        owner: "mrmans0n",
+        repository: "alas",
+        remoteName: "origin",
+        webURL: URL(string: "https://github.example.com/mrmans0n/alas")!
+    )
+
+    private static let issueOutput = """
+    {
+      "number": 1842,
+      "title": "Fix remote issue loading",
+      "body": "Load the issue through the API.",
+      "state": "open",
+      "html_url": "https://github.example.com/mrmans0n/alas/issues/1842",
+      "updated_at": "2026-08-01T10:20:30Z",
+      "labels": [{ "name": "bug" }, { "name": "remote" }],
+      "assignees": [{ "login": "nacho" }]
     }
     """
 

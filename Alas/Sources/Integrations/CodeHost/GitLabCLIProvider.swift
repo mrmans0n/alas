@@ -1,9 +1,10 @@
 import CryptoKit
 import Foundation
 
-struct GitLabCLIProvider: CodeHostProvider {
+struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     let kind: CodeHostKind = .gitlab
     let capabilities: CodeHostProviderCapabilities = .gitlabCLI
+    let executable = "glab"
 
     private let runner: any CodeHostCommandRunning
 
@@ -36,6 +37,24 @@ struct GitLabCLIProvider: CodeHostProvider {
         } catch {
             return false
         }
+    }
+
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+        let result = try await runner.run(
+            executable,
+            args: [
+                "api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))/issues/\(number)",
+                "--hostname", remote.host, "--output", "json",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            if let error = CodeHostIssueProviderError.classification(provider: kind, remote: remote, number: number, result: result) {
+                throw error
+            }
+            throw CodeHostProviderError.commandFailed(command: "glab api issue", stderr: result.stderr)
+        }
+        return try Self.parseIssue(result.stdout, remote: remote, requestedNumber: number)
     }
 
     func currentReviewRequest(
@@ -1606,6 +1625,33 @@ struct GitLabCLIProvider: CodeHostProvider {
         throw CodeHostProviderError.malformedOutput("Unable to parse GitLab date")
     }
 
+    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> MissionIssueSnapshot {
+        let response: GitLabIssueResponse
+        do {
+            response = try JSONDecoder().decode(GitLabIssueResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitLab issue output.")
+        }
+        guard response.iid == requestedNumber,
+              !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let url = try parseOptionalHTTPURL(response.webURL, context: "GitLab issue output is missing a valid URL.")
+        else {
+            throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")
+        }
+        return MissionIssueSnapshot(
+            identity: .init(provider: .gitlab, host: remote.host, repositorySlug: remote.repositorySlug, number: response.iid),
+            canonicalURL: url,
+            title: response.title,
+            body: response.description ?? "",
+            state: MissionIssueState(rawValue: response.state.lowercased()) ?? .unknown,
+            labels: response.labels.compactMap(normalizedOptionalString),
+            assignees: response.assignees.compactMap { normalizedOptionalString($0.username) },
+            providerUpdatedAt: try parseOptionalGitLabDate(response.updatedAt),
+            capturedAt: Date(),
+            refreshError: nil
+        )
+    }
+
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = formatOptions
@@ -1888,6 +1934,37 @@ private struct GitLabProject: Decodable {
     private enum CodingKeys: String, CodingKey {
         case pathWithNamespace = "path_with_namespace"
     }
+}
+
+private struct GitLabIssueResponse: Decodable {
+    let iid: Int
+    let title: String
+    let description: String?
+    let state: String
+    let webURL: String?
+    let updatedAt: String?
+    let labels: [String]
+    let assignees: [Assignee]
+
+    private enum CodingKeys: String, CodingKey {
+        case iid, title, description, state, labels, assignees
+        case webURL = "web_url"
+        case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        iid = try container.decode(Int.self, forKey: .iid)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        state = try container.decode(String.self, forKey: .state)
+        webURL = try container.decodeIfPresent(String.self, forKey: .webURL)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        labels = try container.decodeIfPresent([String].self, forKey: .labels) ?? []
+        assignees = try container.decodeIfPresent([Assignee].self, forKey: .assignees) ?? []
+    }
+
+    struct Assignee: Decodable { let username: String? }
 }
 
 private struct GitLabPipeline: Decodable {
