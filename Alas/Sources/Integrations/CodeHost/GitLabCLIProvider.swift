@@ -1639,7 +1639,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")
         }
         return MissionIssueSnapshot(
-            identity: .init(provider: .gitlab, host: remote.host, repositorySlug: remote.repositorySlug, number: response.iid),
+            identity: remote.missionIssueIdentity(number: response.iid),
             canonicalURL: url,
             title: response.title,
             body: response.description ?? "",

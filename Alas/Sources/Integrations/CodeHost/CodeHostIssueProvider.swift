@@ -28,14 +28,66 @@ enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {
         number: Int,
         result: ProcessResult
     ) -> Self? {
-        let output = "\(result.stdout)\n\(result.stderr)".lowercased()
-        if output.contains("404") || output.contains("not found") {
+        let status = structuredStatus(in: result.stdout)
+            ?? structuredStatus(in: result.stderr)
+            ?? httpStatus(in: "\(result.stdout)\n\(result.stderr)")
+        switch status {
+        case 404:
             return .notFound(provider: provider, repositorySlug: remote.repositorySlug, number: number)
-        }
-        if output.contains("403") || output.contains("forbidden") || output.contains("permission denied") || output.contains("not authorized") {
+        case 403:
             return .permissionDenied(host: remote.host)
+        default:
+            return nil
+        }
+    }
+
+    private static func structuredStatus(in output: String) -> Int? {
+        guard let data = output.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else {
+            return nil
+        }
+        for key in ["status", "code"] {
+            if let status = dictionary[key] as? Int { return status }
+            if let status = dictionary[key] as? String, let value = Int(status) { return value }
+        }
+        guard let message = dictionary["message"] as? String else { return nil }
+        return leadingStatus(in: message)
+    }
+
+    private static func httpStatus(in output: String) -> Int? {
+        for status in [403, 404] where output.range(
+            of: "\\b(?:HTTP(?:\\s+status)?|status(?:\\s+code)?)\\s*[:=]?\\s*\(status)\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return status
         }
         return nil
+    }
+
+    private static func leadingStatus(in value: String) -> Int? {
+        for status in [403, 404] where value.range(
+            of: "^\\s*\(status)\\b",
+            options: .regularExpression
+        ) != nil {
+            return status
+        }
+        return nil
+    }
+}
+
+extension CodeHostRemote {
+    func missionIssueIdentity(number: Int) -> MissionIssueIdentity {
+        let host = host.lowercased()
+        let repositorySlug: String
+        switch kind {
+        case .github:
+            repositorySlug = self.repositorySlug.lowercased()
+        case .gitlab:
+            repositorySlug = self.repositorySlug.lowercased()
+        }
+        return MissionIssueIdentity(provider: kind, host: host, repositorySlug: repositorySlug, number: number)
     }
 }
 

@@ -1827,7 +1827,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             throw CodeHostProviderError.malformedOutput("GitHub issue output describes a pull request, not an issue.")
         }
         return MissionIssueSnapshot(
-            identity: .init(provider: .github, host: remote.host, repositorySlug: remote.repositorySlug, number: response.number),
+            identity: remote.missionIssueIdentity(number: response.number),
             canonicalURL: url,
             title: response.title,
             body: response.body ?? "",
@@ -2410,6 +2410,6 @@ private struct GitHubIssueResponse: Decodable {
 
 private extension URL {
     var isHTTPOrHTTPS: Bool {
-        scheme == "http" || scheme == "https"
+        (scheme == "http" || scheme == "https") && !(host ?? "").isEmpty
     }
 }

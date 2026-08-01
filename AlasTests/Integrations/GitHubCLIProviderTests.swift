@@ -47,6 +47,47 @@ struct GitHubCLIProviderTests {
         }
     }
 
+    @Test func issueRejectsURLWithoutHost() async {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "https://github.example.com/mrmans0n/alas/issues/1842",
+            with: "https:///no-host"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("GitHub issue output is missing a valid URL.")) {
+            try await GitHubCLIProvider(runner: runner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+    }
+
+    @Test func issueNormalizesIdentityComponents() async throws {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "GITHUB.EXAMPLE.COM",
+            owner: "MrMans0n",
+            repository: "Alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.example.com/MrMans0n/Alas")!
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: "")])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(remote: remote, number: 1842, cwd: Self.cwd)
+
+        #expect(issue.identity.host == "github.example.com")
+        #expect(issue.identity.repositorySlug == "mrmans0n/alas")
+    }
+
+    @Test func issuePreservesGenericCommandFailureForUnstructuredNotFoundText() async {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "local cache entry not found"),
+        ])
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "gh api issue", stderr: "local cache entry not found"
+        )) {
+            try await GitHubCLIProvider(runner: runner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+    }
+
     @Test func prListJSONParsesReviewRequest() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """
