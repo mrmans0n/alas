@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -119,10 +120,11 @@ struct NewMissionDialogTests {
             ]
         )
         let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
         model.reference = "#1842"
         await model.resolve()
 
-        model.branch = "nacho/keep-this-branch"
+        actions.branch.wrappedValue = "nacho/keep-this-branch"
         model.prompt = "Keep this independently edited prompt."
         await model.selectProject("alas-clone")
 
@@ -143,14 +145,63 @@ struct NewMissionDialogTests {
             ]
         )
         let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
         model.reference = "#1842"
         await model.resolve()
 
-        model.base = "release/next"
+        actions.base.wrappedValue = "release/next"
         await model.selectProject("alas-clone")
 
         #expect(model.base == "release/next")
         #expect(model.branch == "mission/1842-fix-offline-sync-conflicts")
+    }
+
+    @Test("a base edited away and back remains user-owned across project changes")
+    func projectChangePreservesBaseEditedBackToSeed() async {
+        let fake = NewMissionDialogFake(
+            candidateProjectIds: ["alas", "alas-clone"],
+            configuredBases: ["alas": "origin/main", "alas-clone": "trunk"],
+            configuredPrefixes: ["alas": "feature/", "alas-clone": "mission/"],
+            branchesByProject: [
+                "alas": ["origin/main"],
+                "alas-clone": ["release", "trunk"],
+            ]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
+        model.reference = "#1842"
+        await model.resolve()
+
+        actions.base.wrappedValue = "release/next"
+        actions.base.wrappedValue = "origin/main"
+        await model.selectProject("alas-clone")
+
+        #expect(model.base == "origin/main")
+        #expect(model.branch == "mission/1842-fix-offline-sync-conflicts")
+    }
+
+    @Test("a branch edited away and back remains user-owned across project changes")
+    func projectChangePreservesBranchEditedBackToSeed() async {
+        let fake = NewMissionDialogFake(
+            candidateProjectIds: ["alas", "alas-clone"],
+            configuredBases: ["alas": "origin/main", "alas-clone": "trunk"],
+            configuredPrefixes: ["alas": "feature/", "alas-clone": "mission/"],
+            branchesByProject: [
+                "alas": ["origin/main"],
+                "alas-clone": ["release", "trunk"],
+            ]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
+        model.reference = "#1842"
+        await model.resolve()
+
+        actions.branch.wrappedValue = "nacho/custom"
+        actions.branch.wrappedValue = "feature/1842-fix-offline-sync-conflicts"
+        await model.selectProject("alas-clone")
+
+        #expect(model.base == "trunk")
+        #expect(model.branch == "feature/1842-fix-offline-sync-conflicts")
     }
 
     @Test("the first enabled ACP-capable agent is the default")
@@ -235,9 +286,10 @@ struct NewMissionDialogTests {
     func successfulCreateBuildsDraftAndReturnsDurableID() async throws {
         let fake = NewMissionDialogFake()
         let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
         model.reference = "#1842"
         await model.resolve()
-        model.branch = "feature/1842-custom"
+        actions.branch.wrappedValue = "feature/1842-custom"
         model.prompt = "Custom prompt"
 
         let result = await model.create(allowDuplicate: false)
@@ -252,6 +304,31 @@ struct NewMissionDialogTests {
         #expect(draft.destinationPath == "/tmp/worktrees/alas/feature-1842-custom")
         #expect(draft.agentId == "codex")
         #expect(draft.initialPrompt == "Custom prompt")
+    }
+
+    @Test("the sheet dismisses only after durable Mission insertion succeeds")
+    func successfulCreateActionDismissesAfterDurableInsertion() async {
+        let fake = NewMissionDialogFake(suspendCreation: true)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        var didDismiss = false
+        let actions = NewMissionDialogActions(model: model) {
+            didDismiss = true
+        }
+        model.reference = "#1842"
+        await model.resolve()
+
+        let creation = Task { await actions.create(allowDuplicate: false) }
+        await fake.waitUntilCreateStarts()
+
+        #expect(model.phase == .creating)
+        #expect(!fake.missionWasDurableBeforeCreateReturned)
+        #expect(!didDismiss)
+
+        fake.finishCreation()
+        await creation.value
+
+        #expect(fake.missionWasDurableBeforeCreateReturned)
+        #expect(didDismiss)
     }
 
     fileprivate static func agent(id: String) -> AgentDefinition {
@@ -291,12 +368,14 @@ private final class NewMissionDialogFake {
     let agents: [AgentDefinition]
     let suspendResolution: Bool
     let suspendBranches: Bool
+    let suspendCreation: Bool
     let branchError: (any Error)?
     let duplicateMissionID: MissionID?
     let createError: (any Error)?
 
     private var resolutionContinuation: CheckedContinuation<Void, Never>?
     private var branchContinuation: CheckedContinuation<Void, Never>?
+    private var creationContinuation: CheckedContinuation<Void, Never>?
     private(set) var createdDrafts: [MissionDraft] = []
     private(set) var createAllowDuplicateValues: [Bool] = []
     private(set) var openedMissionIDs: [MissionID] = []
@@ -305,6 +384,7 @@ private final class NewMissionDialogFake {
     init(
         suspendResolution: Bool = false,
         suspendBranches: Bool = false,
+        suspendCreation: Bool = false,
         branchError: (any Error)? = nil,
         candidateProjectIds: [String] = ["alas"],
         configuredBases: [String: String] = ["alas": "origin/main"],
@@ -316,6 +396,7 @@ private final class NewMissionDialogFake {
     ) {
         self.suspendResolution = suspendResolution
         self.suspendBranches = suspendBranches
+        self.suspendCreation = suspendCreation
         self.branchError = branchError
         self.configuredBases = configuredBases
         self.configuredPrefixes = configuredPrefixes
@@ -387,6 +468,11 @@ private final class NewMissionDialogFake {
             createMission: { [self] draft, allowDuplicate in
                 createdDrafts.append(draft)
                 createAllowDuplicateValues.append(allowDuplicate)
+                if suspendCreation {
+                    await withCheckedContinuation { continuation in
+                        creationContinuation = continuation
+                    }
+                }
                 if let duplicateMissionID, !allowDuplicate {
                     throw NewMissionDialogModel.CreationError.duplicate(existing: duplicateMissionID)
                 }
@@ -420,5 +506,16 @@ private final class NewMissionDialogFake {
     func finishBranchLoad() {
         branchContinuation?.resume()
         branchContinuation = nil
+    }
+
+    func waitUntilCreateStarts() async {
+        while creationContinuation == nil {
+            await Task.yield()
+        }
+    }
+
+    func finishCreation() {
+        creationContinuation?.resume()
+        creationContinuation = nil
     }
 }

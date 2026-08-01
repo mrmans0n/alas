@@ -34,8 +34,8 @@ final class NewMissionDialogModel {
     var phase: Phase = .entry
     var resolved: ResolvedMissionIssue?
     var projectId = ""
-    var base = ""
-    var branch = ""
+    private(set) var base = ""
+    private(set) var branch = ""
     var agentId = ""
     var prompt = ""
     var errorMessage: String?
@@ -63,9 +63,9 @@ final class NewMissionDialogModel {
     @ObservationIgnored
     private var projectGeneration = 0
     @ObservationIgnored
-    private var seededBase = ""
+    private var baseIsUserOwned = false
     @ObservationIgnored
-    private var seededBranch = ""
+    private var branchIsUserOwned = false
 
     init(environment: Environment) {
         self.environment = environment
@@ -162,9 +162,9 @@ final class NewMissionDialogModel {
             availableBranches: discoveredBranches,
             configuredDefault: configuredBase
         )
-        seededBase = base
+        baseIsUserOwned = false
         branch = generatedBranch(projectID: projectId, issue: resolution.snapshot)
-        seededBranch = branch
+        branchIsUserOwned = false
         prompt = MissionPromptBuilder.build(snapshot: resolution.snapshot)
         agentId = agentOptions.first?.id ?? ""
         phase = .confirmation
@@ -185,8 +185,8 @@ final class NewMissionDialogModel {
             return
         }
 
-        let updatesBase = base == seededBase
-        let updatesBranch = branch == seededBranch
+        let updatesBase = !baseIsUserOwned
+        let updatesBranch = !branchIsUserOwned
         projectGeneration &+= 1
         let generation = projectGeneration
         projectId = candidateID
@@ -194,11 +194,9 @@ final class NewMissionDialogModel {
         existingMissionID = nil
 
         let nextSeededBase = environment.configuredBase(candidateID)
-        seededBase = nextSeededBase
         if updatesBase { base = nextSeededBase }
 
         let nextSeededBranch = generatedBranch(projectID: candidateID, issue: issue)
-        seededBranch = nextSeededBranch
         if updatesBranch { branch = nextSeededBranch }
 
         branches = []
@@ -208,13 +206,12 @@ final class NewMissionDialogModel {
             let discovered = try await environment.branches(candidateID)
             guard projectGeneration == generation, projectId == candidateID else { return }
             branches = discovered
-            if updatesBase, base == seededBase {
+            if updatesBase, !baseIsUserOwned {
                 let preferred = NewWorktreeDialog.preferredBaseBranch(
                     availableBranches: discovered,
                     configuredDefault: nextSeededBase
                 )
                 base = preferred
-                seededBase = preferred
             }
         } catch {
             guard projectGeneration == generation, projectId == candidateID else { return }
@@ -270,6 +267,16 @@ final class NewMissionDialogModel {
         existingMissionID = nil
     }
 
+    fileprivate func updateBaseFromUser(_ value: String) {
+        base = value
+        baseIsUserOwned = true
+    }
+
+    fileprivate func updateBranchFromUser(_ value: String) {
+        branch = value
+        branchIsUserOwned = true
+    }
+
     private func acceptsResolution(generation: Int, input: String) -> Bool {
         resolutionGeneration == generation
             && phase == .resolving
@@ -292,8 +299,8 @@ final class NewMissionDialogModel {
         errorMessage = nil
         branchErrorMessage = nil
         existingMissionID = nil
-        seededBase = ""
-        seededBranch = ""
+        baseIsUserOwned = false
+        branchIsUserOwned = false
     }
 
     private func generatedBranch(projectID: String, issue: MissionIssueSnapshot) -> String {
@@ -302,6 +309,40 @@ final class NewMissionDialogModel {
             title: issue.title,
             prefix: environment.configuredBranchPrefix(projectID)
         )
+    }
+}
+
+@MainActor
+struct NewMissionDialogActions {
+    private let model: NewMissionDialogModel
+    private let dismiss: () -> Void
+
+    init(model: NewMissionDialogModel, dismiss: @escaping () -> Void) {
+        self.model = model
+        self.dismiss = dismiss
+    }
+
+    var base: Binding<String> {
+        Binding(
+            get: { model.base },
+            set: { model.updateBaseFromUser($0) }
+        )
+    }
+
+    var branch: Binding<String> {
+        Binding(
+            get: { model.branch },
+            set: { model.updateBranchFromUser($0) }
+        )
+    }
+
+    @discardableResult
+    func create(allowDuplicate: Bool) async -> MissionID? {
+        guard let missionID = await model.create(allowDuplicate: allowDuplicate) else {
+            return nil
+        }
+        dismiss()
+        return missionID
     }
 }
 
@@ -386,7 +427,7 @@ struct NewMissionDialog: View {
                 }
                 DialogField(label: "Base branch") {
                     BranchPicker(
-                        selection: $model.base,
+                        selection: actions.base,
                         branches: model.branches,
                         isLoading: model.isLoadingBranches,
                         errorMessage: model.branchErrorMessage
@@ -395,7 +436,7 @@ struct NewMissionDialog: View {
                 }
                 DialogField(label: "Branch name") {
                     AlasField(
-                        text: $model.branch,
+                        text: actions.branch,
                         monospaced: true,
                         inputFilter: .branchName
                     )
@@ -459,6 +500,12 @@ struct NewMissionDialog: View {
         return projects.filter { candidateIDs.contains($0.id) }
     }
 
+    private var actions: NewMissionDialogActions {
+        NewMissionDialogActions(model: model) {
+            presented = false
+        }
+    }
+
     private var projectSelection: Binding<String> {
         Binding(
             get: { model.projectId },
@@ -508,19 +555,11 @@ struct NewMissionDialog: View {
 
     private func createMission() {
         guard model.canCreate else { return }
-        Task {
-            if await model.create(allowDuplicate: false) != nil {
-                presented = false
-            }
-        }
+        Task { await actions.create(allowDuplicate: false) }
     }
 
     private func createAnotherMission() {
-        Task {
-            if await model.create(allowDuplicate: true) != nil {
-                presented = false
-            }
-        }
+        Task { await actions.create(allowDuplicate: true) }
     }
 
     private func openExistingMission() {
