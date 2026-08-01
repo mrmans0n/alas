@@ -746,7 +746,7 @@ final class AppState {
             ?? worktrees.first {
                 $0.path.standardizedFileURL.path == destinationPath
             }
-        guard let worktree else {
+        guard let worktree, worktree.branch == leg.branch else {
             let tab = presentMissingMissionTab(aggregate: aggregate, leg: leg)
             return .success(.mission(tab))
         }

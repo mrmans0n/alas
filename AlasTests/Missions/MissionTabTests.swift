@@ -98,6 +98,25 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
     }
 
+    @Test func openMissionPresentsRecoveryForAReplacementBranch() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            worktreeBranch: "unrelated-branch"
+        )
+        await fixture.state.missions.load()
+
+        let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
+
+        #expect(try result.get() == .mission(MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        )))
+        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
+        #expect(fixture.state.tabs.activeTab(forWorktree: fixture.worktree.id) == nil)
+    }
+
     @Test func openMissionPresentsDetailWhenProjectHasBeenRemoved() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeProject: false, includeWorktree: false)
         await fixture.state.missions.load()
@@ -321,7 +340,12 @@ private struct MissionNavigationFixture {
     let worktree: Worktree
     let state: AppState
 
-    init(hidden: Bool, includeProject: Bool = true, includeWorktree: Bool) throws {
+    init(
+        hidden: Bool,
+        includeProject: Bool = true,
+        includeWorktree: Bool,
+        worktreeBranch: String = "fix/parser-crash"
+    ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
         var aggregate = MissionFixtures.creatingMission()
@@ -338,7 +362,7 @@ private struct MissionNavigationFixture {
             id: "worktree-1",
             projectId: "project-1",
             name: "fix/parser-crash",
-            branch: "fix/parser-crash",
+            branch: worktreeBranch,
             path: URL(fileURLWithPath: "/tmp/alas-mission"),
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 100)
