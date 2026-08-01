@@ -15,7 +15,8 @@ typealias MissionReviewDiscovery = @MainActor (
     _ projectID: String,
     _ branch: String,
     _ baseRef: String,
-    _ headSHA: String
+    _ headSHA: String,
+    _ headOwner: String?
 ) async -> ReviewRequest?
 
 typealias MissionLinkedReviewRequest = @MainActor (
@@ -90,7 +91,7 @@ final class MissionController {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
         openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
         persistence = environment.persistence
@@ -400,7 +401,8 @@ final class MissionController {
                        leg.projectId,
                        leg.branch,
                        leg.baseRef,
-                       snapshot.local.headSHA
+                       snapshot.local.headSHA,
+                       snapshot.local.headRemoteOwner
                    ),
                    request.headRefName == leg.branch,
                    request.headSHA == snapshot.local.headSHA {

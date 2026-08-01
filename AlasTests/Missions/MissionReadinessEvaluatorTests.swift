@@ -372,15 +372,16 @@ struct MissionReadinessEvaluatorTests {
 
     @Test func startupDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
-        let currentSnapshot = Self.reviewSnapshotWithoutRequest()
+        let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { _, _ in currentSnapshot },
-            discoverReviewRequest: { projectID, branch, baseRef, headSHA in
+            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
+                #expect(headOwner == "acme-fork")
                 return request
             }
         )
@@ -400,7 +401,7 @@ struct MissionReadinessEvaluatorTests {
         ).reviewRequest)
         let fake = try MissionLifecycleFake(
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _ in historical }
+            discoverReviewRequest: { _, _, _, _, _ in historical }
         )
         await fake.controller.load()
 
@@ -606,7 +607,8 @@ struct MissionReadinessEvaluatorTests {
         state: ReviewRequestState,
         number: Int = 91,
         branch: String = "fix/parser-crash",
-        headSHA: String = "abc123"
+        headSHA: String = "abc123",
+        headOwner: String? = nil
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -640,6 +642,7 @@ struct MissionReadinessEvaluatorTests {
                 hasStagedChanges: false,
                 aheadCommitCount: 1,
                 hasUpstream: true,
+                headRemoteOwner: headOwner,
                 needsPush: false
             ),
             remote: remote,
@@ -651,8 +654,8 @@ struct MissionReadinessEvaluatorTests {
         )
     }
 
-    private static func reviewSnapshotWithoutRequest() -> ReviewLoopSnapshot {
-        let snapshot = reviewSnapshot(state: .open)
+    private static func reviewSnapshotWithoutRequest(headOwner: String? = nil) -> ReviewLoopSnapshot {
+        let snapshot = reviewSnapshot(state: .open, headOwner: headOwner)
         return ReviewLoopSnapshot(
             local: snapshot.local,
             remote: snapshot.remote,
@@ -691,7 +694,7 @@ private final class MissionLifecycleFake {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
         linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory

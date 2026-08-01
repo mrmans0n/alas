@@ -726,12 +726,13 @@ final class AppState {
                 baseBranch: baseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
-        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA in
+        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA, headOwner in
             await self?.discoverMissionReview(
                 projectID: projectID,
                 branch: branch,
                 baseRef: baseRef,
-                headSHA: headSHA
+                headSHA: headSHA,
+                headOwner: headOwner
             )
         }, openMission: { [weak self] missionID in
             _ = self?.openMission(id: missionID)
@@ -925,7 +926,8 @@ final class AppState {
         projectID: String,
         branch: String,
         baseRef: String,
-        headSHA: String
+        headSHA: String,
+        headOwner: String?
     ) async -> ReviewRequest? {
         guard let project = projectsManager.projects.first(where: { $0.id == projectID })
         else { return nil }
@@ -949,7 +951,7 @@ final class AppState {
             let request = try await provider.missionReviewRequest(
                 remote: remote,
                 branch: branch,
-                headOwner: nil,
+                headOwner: headOwner,
                 baseBranch: baseRef,
                 cwd: cwd
             )
