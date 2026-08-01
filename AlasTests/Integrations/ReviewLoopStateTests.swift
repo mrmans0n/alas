@@ -5,6 +5,34 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
+    @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
+        let store = RightPaneStore()
+        let remote = Self.makeRemote()
+        let request = Self.makeReviewRequest(remote: remote, checks: [])
+        let snapshot = ReviewLoopSnapshot(
+            local: Self.makeLocal(needsPush: false),
+            remote: remote,
+            reviewRequest: request,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
+        var received: [(String, ReviewLoopSnapshot)] = []
+        store.reviewSnapshotDidChange = { worktreeID, snapshot in
+            received.append((worktreeID, snapshot))
+        }
+
+        store.observeCompletedRemoteReviewRefresh(
+            worktreeId: "worktree-1",
+            snapshot: snapshot
+        )
+
+        #expect(received.count == 1)
+        #expect(received.first?.0 == "worktree-1")
+        #expect(received.first?.1 == snapshot)
+    }
+
     @Test func inFlightActionRejectsConcurrentReviewActions() {
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),

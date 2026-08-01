@@ -22,6 +22,9 @@ final class RightPaneStore {
     /// retain the app.
     weak var appState: AppState?
 
+    @ObservationIgnored
+    var reviewSnapshotDidChange: ((String, ReviewLoopSnapshot) -> Void)?
+
     private let git: GitService
 
     init(git: GitService = GitService()) {
@@ -188,6 +191,12 @@ final class RightPaneStore {
                     targetSHA: entry.sha
                 )
             }
+            new.reviewSnapshotDidChange = { [weak self] snapshot in
+                self?.observeCompletedRemoteReviewRefresh(
+                    worktreeId: worktree.id,
+                    snapshot: snapshot
+                )
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in
@@ -282,6 +291,17 @@ final class RightPaneStore {
 
     func invalidateSnapshot(worktreeId: String) {
         states[worktreeId]?.markSnapshotUnknown()
+    }
+
+    func observeCompletedRemoteReviewRefresh(
+        worktreeId: String,
+        snapshot: ReviewLoopSnapshot
+    ) {
+        reviewSnapshotDidChange?(worktreeId, snapshot)
+    }
+
+    func reviewSnapshot(worktreeId: String) -> ReviewLoopSnapshot? {
+        states[worktreeId]?.reviewLoop.snapshot
     }
 
     /// Re-evaluate the gg gate across all cached right-pane states after a

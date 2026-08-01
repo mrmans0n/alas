@@ -576,6 +576,11 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, snapshot in
+            Task { @MainActor [weak self] in
+                await self?.missions.observeReview(worktreeId: worktreeID, snapshot: snapshot)
+            }
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.flushAllACPComposerDrafts()
         }
@@ -649,7 +654,55 @@ final class AppState {
                 }
             },
             notifyChanged: { _ in }
-        ))
+        ), issueRefresh: { [weak self] identity, projectID in
+            guard let self else {
+                throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
+            }
+            return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
+        }, projectExists: { [weak self] projectID in
+            self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
+        }, worktreeArchived: { [weak self] projectID, destinationPath in
+            self?.projectsManager.isWorktreeHidden(
+                projectId: projectID,
+                path: URL(fileURLWithPath: destinationPath)
+            ) == true
+        }, reviewSnapshot: { [weak self] worktreeID in
+            self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID)
+        })
+    }
+
+    private func refreshMissionIssue(
+        identity: MissionIssueIdentity,
+        projectID: String
+    ) async throws -> MissionIssueSnapshot {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID }) else {
+            throw CodeHostProviderError.malformedOutput("The Mission project is no longer available.")
+        }
+        let cwd = URL(fileURLWithPath: project.path)
+        let remotes = try await GitService().remotes(worktreePath: cwd)
+        let remote = remotes
+            .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) }
+            .first { candidate in
+                candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
+                    && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
+            }
+        guard let remote else {
+            throw CodeHostProviderError.malformedOutput("The project no longer has the Mission issue remote.")
+        }
+        guard let provider = CodeHostIssueProviderRegistry.live().provider(for: identity.provider) else {
+            throw CodeHostProviderError.unsupportedProvider(identity.provider)
+        }
+        guard await provider.isAvailable(cwd: cwd) else {
+            throw CodeHostProviderError.cliMissing(provider.executable)
+        }
+        guard await provider.isAuthenticated(remote: remote, cwd: cwd) else {
+            throw CodeHostProviderError.unauthenticated(remote.host)
+        }
+        let snapshot = try await provider.issue(remote: remote, number: identity.number, cwd: cwd)
+        guard snapshot.identity == identity else {
+            throw CodeHostProviderError.malformedOutput("The provider returned a different issue.")
+        }
+        return snapshot
     }
 
     /// Returns a worktree that is safe to reuse for a Mission checkpoint.
@@ -1926,6 +1979,9 @@ final class AppState {
         stopProjectGitWatcher(projectId: id)
         unpersistedGGWorktreeModes.removeValue(forKey: id)
         projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
+        Task { @MainActor [weak self] in
+            await self?.missions.recordMissingWorktree(projectId: id, projectRemoved: true)
+        }
         spacesManager.removeProjectEverywhere(id)
         saveProjects()
         saveSpaces()
@@ -2194,6 +2250,11 @@ final class AppState {
             path: worktree.path,
             hidden: true
         )
+        if projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) {
+            Task { @MainActor [weak self] in
+                await self?.missions.recordArchive(worktreeId: worktree.id)
+            }
+        }
         saveProjects()
 
         if wasSelected {

@@ -42,6 +42,8 @@ final class RightPaneState: GGSplitCommitServicing {
 
     let worktree: Worktree
     let reviewLoop: ReviewLoopState
+    @ObservationIgnored
+    var reviewSnapshotDidChange: ((ReviewLoopSnapshot) -> Void)?
     var changes: [ChangedFile] = []
     var stashes: [GitStash] = []
     var stashesExpanded: Bool = false
@@ -1657,6 +1659,9 @@ final class RightPaneState: GGSplitCommitServicing {
         lastReviewLoopRemoteRefreshAt = now
         lastReviewLoopRemoteFingerprint = fingerprint
         await reviewLoop.refresh(attempt, remotes: remotes)
+        if let snapshot = reviewLoop.snapshot {
+            reviewSnapshotDidChange?(snapshot)
+        }
     }
 
     nonisolated static func reviewRequestReloadFingerprint(_ request: ReviewRequest?) -> String {
