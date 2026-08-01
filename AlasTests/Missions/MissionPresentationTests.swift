@@ -165,6 +165,53 @@ struct MissionPresentationTests {
         #expect(presentation.actions.completeMission)
         #expect(!presentation.actions.openChanges)
         #expect(!presentation.actions.openAgent)
+        #expect(presentation.worktreeRecovery == .recreateMissing)
+    }
+
+    @Test func archivedWorktreeRecoveryRemainsASeparateRestoreAction() {
+        let presentation = MissionTabPresentation(
+            aggregate: Self.runningAggregate(),
+            worktree: Self.worktree,
+            worktreeArchived: true,
+            worktreeRecoveryAvailable: true,
+            availableACPAgentIDs: ["codex"]
+        )
+
+        #expect(presentation.worktreeRecovery == .restoreArchived)
+        #expect(!presentation.actions.openChanges)
+    }
+
+    @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() {
+        var aggregate = Self.runningAggregate()
+        aggregate.issue = .init(
+            identity: .init(
+                provider: .github,
+                host: "github.example.com",
+                repositorySlug: "stored/mission-repo",
+                number: 42
+            ),
+            canonicalURL: URL(string: "https://github.example.com/stored/mission-repo/issues/42")!,
+            title: aggregate.issue.title,
+            body: aggregate.issue.body,
+            state: aggregate.issue.state,
+            labels: aggregate.issue.labels,
+            assignees: aggregate.issue.assignees,
+            providerUpdatedAt: aggregate.issue.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 123),
+            refreshError: aggregate.issue.refreshError
+        )
+
+        let presentation = MissionTabPresentation(
+            aggregate: aggregate,
+            worktree: Self.worktree,
+            projectName: "Incorrect project display name",
+            availableACPAgentIDs: ["codex"]
+        )
+
+        #expect(presentation.repositoryName == "stored/mission-repo")
+        #expect(presentation.issueCapturedAt == Date(timeIntervalSince1970: 123))
+        #expect(presentation.baseCopy == "origin/main")
+        #expect(presentation.destinationCopy == "/tmp/alas-mission")
     }
 
     private static let worktree = Worktree(

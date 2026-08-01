@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -87,7 +89,53 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == nil)
     }
 
-    @Test func controllerOpensMissionAfterWorktreeSuccessEvenWhenACPStartupFails() async throws {
+    @Test func selectedMissionRetainsMissingWorktreeRecoveryPresentation() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId
+        )
+        fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
+
+        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
+        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        let view = MissionTabView(
+            state: fixture.state,
+            worktree: nil,
+            tabState: try #require(fixture.state.missingMissionTab)
+        )
+        #expect(view.tabState.missionID == fixture.aggregate.mission.id)
+    }
+
+    @Test func missionDetailRendersStoredHeaderCaptureAndLegFields() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        let view = MissionTabView(
+            state: fixture.state,
+            worktree: nil,
+            tabState: MissionTabState(
+                missionID: fixture.aggregate.mission.id,
+                worktreeId: fixture.worktree.id,
+                title: fixture.aggregate.mission.title
+            )
+        )
+        .environment(\.theme, try ThemeStore().current)
+        let host = NSHostingController(rootView: view)
+
+        host.view.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        host.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "mission-header-repository", in: host.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "mission-header-captured-at", in: host.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "mission-leg-base", in: host.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "mission-leg-destination", in: host.view) != nil)
+    }
+
+    @Test func controllerOpensExactlyOnceAfterWorktreeSuccessBeforeACPFailure() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-open-checkpoint-\(UUID().uuidString).sqlite")
         let persistence = MissionPersistence(path: databaseURL.path)
@@ -101,6 +149,8 @@ struct MissionTabTests {
             lastActivity: Date(timeIntervalSince1970: 100)
         )
         var openedMissionIDs: [MissionID] = []
+        var notifications: [MissionAggregate] = []
+        var checkpointAtOpen: MissionAggregate?
         var knownWorktree: Worktree?
         var nextID = 0
         let controller = MissionController(
@@ -119,9 +169,12 @@ struct MissionTabTests {
                 startACP: { _, _ in
                     .failure(.init(message: "ACP executable is unavailable."))
                 },
-                notifyChanged: { _ in }
+                notifyChanged: { notifications.append($0) }
             ),
-            openMission: { openedMissionIDs.append($0) }
+            openMission: {
+                openedMissionIDs.append($0)
+                checkpointAtOpen = notifications.last
+            }
         )
         let id = try await controller.create(
             MissionDraft(
@@ -144,11 +197,69 @@ struct MissionTabTests {
         }
         let failed = try #require(try await persistence.aggregate(id: id))
 
-        #expect(openedMissionIDs.contains(id))
+        #expect(openedMissionIDs == [id])
+        #expect(checkpointAtOpen?.mission.state == .creating)
+        #expect(checkpointAtOpen?.mission.setupCheckpoint == .startingAgent)
+        #expect(checkpointAtOpen?.primaryLeg?.worktreeId == worktree.id)
+        #expect(checkpointAtOpen?.primaryLeg?.acpSessionId == nil)
         #expect(failed.primaryLeg?.worktreeId == worktree.id)
+        #expect(failed.primaryLeg?.acpSessionId != nil)
         #expect(failed.mission.setupCheckpoint == .startingAgent)
         #expect(failed.mission.state == .needsAttention)
     }
+
+    @Test func restartReconciliationDoesNotReopenMissionForReservedSession() async throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-restart-no-focus-\(UUID().uuidString).sqlite")
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.setupCheckpoint = .startingAgent
+        aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].acpSessionId = "reserved-session"
+        let store = try MissionStore(path: databaseURL.path)
+        try store.insert(aggregate)
+        let persistence = MissionPersistence(path: databaseURL.path)
+        let worktree = Worktree(
+            id: "worktree-1",
+            projectId: "project-1",
+            name: "fix/parser-crash",
+            branch: "fix/parser-crash",
+            path: URL(fileURLWithPath: "/tmp/alas-mission"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 100)
+        )
+        var openedMissionIDs: [MissionID] = []
+        let controller = MissionController(
+            environment: .init(
+                persistence: persistence,
+                now: { Date(timeIntervalSince1970: 100) },
+                makeID: { "generated" },
+                worktreeAtDestination: { _, _ in worktree },
+                createWorktree: { _ in .failure(.init(message: "Unexpected Git")) },
+                startACP: { _, _ in .failure(.init(message: "ACP executable is unavailable.")) },
+                notifyChanged: { _ in }
+            ),
+            openMission: { openedMissionIDs.append($0) }
+        )
+
+        await controller.load()
+        await controller.reconcileInterrupted()
+        let failed = try #require(try await persistence.aggregate(id: aggregate.mission.id))
+
+        #expect(openedMissionIDs.isEmpty)
+        #expect(failed.primaryLeg?.acpSessionId == "reserved-session")
+        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.setupCheckpoint == .startingAgent)
+    }
+}
+
+@MainActor
+private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+    if view.accessibilityIdentifier() == identifier {
+        return view
+    }
+    return view.subviews.lazy.compactMap {
+        subview(withAccessibilityIdentifier: identifier, in: $0)
+    }.first
 }
 
 @MainActor

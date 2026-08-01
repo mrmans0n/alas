@@ -101,6 +101,32 @@ struct MissionCoordinatorTests {
         #expect(aggregate.mission.state == .running)
     }
 
+    @Test("missing worktree recovery restarts the worktree checkpoint")
+    func missingWorktreeRecoveryRestartsWorktreeCheckpoint() async throws {
+        var missing = MissionFixtures.creatingMission()
+        missing.mission.state = .needsAttention
+        missing.mission.setupCheckpoint = .running
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].worktreeId = "missing-worktree"
+        missing.legs[0].acpSessionId = "missing-session"
+        let fake = MissionCoordinatorFake(
+            existing: [missing],
+            agentResult: .failure(.init(message: "Install Codex"))
+        )
+        fake.worktreeAtDestination = nil
+        let controller = MissionController(environment: fake.environment)
+
+        await controller.retry(missing.mission.id)
+        let recovered = await fake.waitUntilSettled(missing.mission.id)
+
+        #expect(fake.createWorktreeCalls == 1)
+        #expect(fake.startACPCalls == 1)
+        #expect(recovered.mission.state == .needsAttention)
+        #expect(recovered.mission.setupCheckpoint == .startingAgent)
+        #expect(recovered.primaryLeg?.worktreeId == fake.worktree.id)
+        #expect(recovered.primaryLeg?.acpSessionId != "missing-session")
+    }
+
     @Test("agent replacement is persisted before retrying the agent checkpoint")
     func agentReplacementIsPersistedBeforeRetry() async throws {
         let fake = MissionCoordinatorFake(agentResult: .failure(.init(message: "Install Codex")))

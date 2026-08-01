@@ -14,6 +14,7 @@ final class MissionCoordinator {
         let createWorktree: (MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>
         let startACP: (MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionOperationFailure>
         let notifyChanged: (MissionAggregate) -> Void
+        let didCreateWorktree: (MissionID) -> Void
         let reportFailure: (MissionID?, String) -> Void
 
         init(
@@ -24,6 +25,7 @@ final class MissionCoordinator {
             createWorktree: @escaping (MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>,
             startACP: @escaping (MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionOperationFailure>,
             notifyChanged: @escaping (MissionAggregate) -> Void,
+            didCreateWorktree: @escaping (MissionID) -> Void = { _ in },
             reportFailure: @escaping (MissionID?, String) -> Void = { _, _ in }
         ) {
             self.persistence = persistence
@@ -33,6 +35,7 @@ final class MissionCoordinator {
             self.createWorktree = createWorktree
             self.startACP = startACP
             self.notifyChanged = notifyChanged
+            self.didCreateWorktree = didCreateWorktree
             self.reportFailure = reportFailure
         }
     }
@@ -117,7 +120,7 @@ final class MissionCoordinator {
         }
     }
 
-    func retry(id: MissionID) async {
+    func retry(id: MissionID, recreateWorktree: Bool = false) async {
         let aggregate: MissionAggregate
         do {
             guard let loaded = try await environment.persistence.aggregate(id: id),
@@ -128,22 +131,45 @@ final class MissionCoordinator {
             reportPersistenceFailure(id: id, operation: "load Mission setup progress", error: error)
             return
         }
+        var retryLeg = aggregate.primaryLeg
+        if recreateWorktree {
+            guard var leg = retryLeg else { return }
+            leg.worktreeId = nil
+            // ACP sessions are worktree-scoped. A replacement worktree gets a
+            // new durable reservation at the agent checkpoint.
+            leg.acpSessionId = nil
+            retryLeg = leg
+        }
+        let checkpoint: MissionSetupCheckpoint = recreateWorktree
+            ? .creatingWorktree
+            : aggregate.mission.setupCheckpoint
         let now = environment.now()
         let retryEvent = event(
             missionID: id,
-            legID: aggregate.primaryLeg?.id,
+            legID: retryLeg?.id,
             kind: .retryStarted,
-            message: retryMessage(for: aggregate.mission.setupCheckpoint),
+            message: retryMessage(for: checkpoint),
             at: now
         )
         do {
-            try await environment.persistence.updateSetup(
-                id: id,
-                state: .creating,
-                checkpoint: aggregate.mission.setupCheckpoint,
-                attentionReason: nil,
-                event: retryEvent
-            )
+            if let retryLeg {
+                try await environment.persistence.updateSetup(
+                    id: id,
+                    leg: retryLeg,
+                    state: .creating,
+                    checkpoint: checkpoint,
+                    attentionReason: nil,
+                    event: retryEvent
+                )
+            } else {
+                try await environment.persistence.updateSetup(
+                    id: id,
+                    state: .creating,
+                    checkpoint: checkpoint,
+                    attentionReason: nil,
+                    event: retryEvent
+                )
+            }
             if let changed = try await environment.persistence.aggregate(id: id) {
                 environment.notifyChanged(changed)
             }
@@ -245,6 +271,7 @@ final class MissionCoordinator {
                 event: checkpointEvent
             )
             await notify(id: aggregate.mission.id)
+            environment.didCreateWorktree(aggregate.mission.id)
             return true
         } catch {
             await persistFailure(

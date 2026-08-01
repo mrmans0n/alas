@@ -33,6 +33,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
+    private(set) var missingMissionTab: MissionTabState?
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
     private var _tabs: TabsManager?
@@ -731,11 +732,13 @@ final class AppState {
         }
 
         focusGlobalWorktree(id: worktree.id, projectId: leg.projectId)
-        return .success(tabs.openOrFocusMission(
+        let tab = tabs.openOrFocusMission(
             worktreeId: worktree.id,
             missionID: id,
             title: aggregate.mission.title
-        ))
+        )
+        missingMissionTab = nil
+        return .success(tab)
     }
 
     func openMissionChanges(worktree: Worktree) {
@@ -1017,6 +1020,12 @@ final class AppState {
     func cleanupMissingWorktrees(beforeIds: Set<String>) {
         let afterIds = allWorktreeIds()
         let disappeared = beforeIds.subtracting(afterIds)
+        let selectedMissingMission: MissionTabState? = selectedWorktreeId.flatMap { worktreeID in
+            guard disappeared.contains(worktreeID),
+                  case .mission(let tab) = tabs.activeTab(forWorktree: worktreeID)
+            else { return nil }
+            return tab
+        }
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
@@ -1032,7 +1041,11 @@ final class AppState {
             saveSpaces()
         }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
-            selectWorktree(id: resolvedSelectionForActiveSpace())
+            if let selectedMissingMission {
+                missingMissionTab = selectedMissingMission
+            } else {
+                selectWorktree(id: resolvedSelectionForActiveSpace())
+            }
         }
     }
 
@@ -1238,6 +1251,9 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
+        if id != missingMissionTab?.worktreeId {
+            missingMissionTab = nil
+        }
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)

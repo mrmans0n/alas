@@ -74,6 +74,12 @@ struct MissionACPSummary: Equatable {
 }
 
 struct MissionTabPresentation: Equatable {
+    enum WorktreeRecovery: Equatable {
+        case none
+        case restoreArchived
+        case recreateMissing
+    }
+
     enum StateTone: Equatable {
         case progress
         case success
@@ -97,6 +103,7 @@ struct MissionTabPresentation: Equatable {
     let repositoryName: String
     let issueNumberCopy: String
     let title: String
+    let issueCapturedAt: Date
     let stateLabel: String
     let stateTone: StateTone
     let checkpointCopy: String?
@@ -114,6 +121,7 @@ struct MissionTabPresentation: Equatable {
     let readinessCopy: String
     let events: [MissionEvent]
     let actions: Actions
+    let worktreeRecovery: WorktreeRecovery
     let issueDestination: URL
     let agentDestination: String?
     let changesDestination: String?
@@ -127,7 +135,7 @@ struct MissionTabPresentation: Equatable {
         acpSummary: MissionACPSummary? = nil,
         diffCounts: MissionDiffCounts? = nil,
         reviewSnapshot: ReviewLoopSnapshot? = nil,
-        projectName: String? = nil,
+        projectName _: String? = nil,
         worktreeArchived: Bool = false,
         worktreeRecoveryAvailable: Bool = false,
         availableACPAgentIDs: Set<String> = []
@@ -136,9 +144,10 @@ struct MissionTabPresentation: Equatable {
         let issue = aggregate.issue
         let leg = aggregate.primaryLeg
         providerName = issue.identity.provider.displayName
-        repositoryName = projectName ?? issue.identity.repositorySlug
+        repositoryName = issue.identity.repositorySlug
         issueNumberCopy = "#\(issue.identity.number)"
         title = mission.title
+        issueCapturedAt = issue.capturedAt
         stateLabel = Self.stateLabel(mission.state)
         stateTone = Self.stateTone(mission.state)
         checkpointCopy = Self.checkpointCopy(mission)
@@ -183,6 +192,15 @@ struct MissionTabPresentation: Equatable {
             && mission.setupCheckpoint == .running
         let canComplete = [MissionState.running, .needsAttention, .readyToComplete]
             .contains(mission.state)
+        let recovery: WorktreeRecovery
+        if worktreeArchived, worktree != nil {
+            recovery = .restoreArchived
+        } else if worktree == nil, worktreeRecoveryAvailable {
+            recovery = .recreateMissing
+        } else {
+            recovery = .none
+        }
+        worktreeRecovery = recovery
         actions = Actions(
             openAgent: openAgent,
             openChanges: hasUsableWorktree,
@@ -190,7 +208,7 @@ struct MissionTabPresentation: Equatable {
             refresh: true,
             retryWorktree: retryWorktree,
             retryAgent: retryAgent,
-            recoverWorktree: worktreeRecoveryAvailable,
+            recoverWorktree: recovery != .none,
             completeMission: canComplete
         )
         issueDestination = issue.canonicalURL
@@ -272,7 +290,7 @@ struct MissionTabPresentation: Equatable {
 
 struct MissionTabView: View {
     @Bindable var state: AppState
-    let worktree: Worktree
+    let worktree: Worktree?
     let tabState: MissionTabState
 
     @State private var completionConfirmationPresented = false
@@ -313,7 +331,7 @@ struct MissionTabView: View {
             .environment(\.theme, theme)
         }
         .task(id: rightPaneActivationKey) {
-            guard !worktreeIsArchived else { return }
+            guard let worktree, !worktreeIsArchived else { return }
             _ = state.rightPaneStore.state(
                 for: worktree,
                 baseBranch: state.config.worktrees.baseBranch,
@@ -323,7 +341,7 @@ struct MissionTabView: View {
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
-        let rightPane = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        let rightPane = worktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
@@ -333,9 +351,9 @@ struct MissionTabView: View {
             },
             diffCounts: rightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
             reviewSnapshot: rightPane?.reviewLoop.snapshot,
-            projectName: state.projects.first(where: { $0.id == worktree.projectId })?.name,
             worktreeArchived: worktreeIsArchived,
-            worktreeRecoveryAvailable: worktreeIsArchived,
+            worktreeRecoveryAvailable: worktree == nil
+                && aggregate.primaryLeg.map { leg in state.projects.contains { $0.id == leg.projectId } } == true,
             availableACPAgentIDs: Set(enabledACPAgents.map(\.id))
         )
 
@@ -376,15 +394,18 @@ struct MissionTabView: View {
     }
 
     private var worktreeIsArchived: Bool {
-        state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
+        guard let worktree else { return false }
+        return state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
     }
 
     private var rightPaneActivationKey: String {
-        "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
+        guard let worktree else { return tabState.id }
+        return "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
     }
 
     private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {
-        guard let id = aggregate.primaryLeg?.acpSessionId,
+        guard let worktree,
+              let id = aggregate.primaryLeg?.acpSessionId,
               let manager = state.acpManager(forWorktreeId: worktree.id)
         else { return nil }
         return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
@@ -397,7 +418,8 @@ struct MissionTabView: View {
     }
 
     private func openAgent() {
-        guard !worktreeIsArchived,
+        guard let worktree,
+              !worktreeIsArchived,
               let sessionID = state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.acpSessionId
         else { return }
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
@@ -405,6 +427,7 @@ struct MissionTabView: View {
     }
 
     private func openChanges() {
+        guard let worktree else { return }
         state.openMissionChanges(worktree: worktree)
     }
 
@@ -417,6 +440,10 @@ struct MissionTabView: View {
     }
 
     private func recoverWorktree() {
+        guard let worktree else {
+            Task { await state.missions.retry(tabState.missionID) }
+            return
+        }
         guard worktreeIsArchived else { return }
         state.unarchiveWorktree(projectId: worktree.projectId, path: worktree.path)
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
@@ -433,10 +460,17 @@ private struct MissionHeaderSection: View {
                 Text("\(presentation.providerName.uppercased()) · \(presentation.repositoryName) \(presentation.issueNumberCopy)")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.color("fg-dim"))
+                    .accessibilityIdentifier("mission-header-repository")
+                    .background(MissionAccessibilityMarker(identifier: "mission-header-repository"))
                 Text(presentation.title)
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(theme.color("fg"))
                     .textSelection(.enabled)
+                Text("Captured \(presentation.issueCapturedAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .accessibilityIdentifier("mission-header-captured-at")
+                    .background(MissionAccessibilityMarker(identifier: "mission-header-captured-at"))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
@@ -507,6 +541,17 @@ private struct MissionLegSection: View {
                 }
             }
             .font(.system(size: 12))
+            .foregroundStyle(theme.color("fg-dim"))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Base: \(presentation.baseCopy)")
+                    .accessibilityIdentifier("mission-leg-base")
+                    .background(MissionAccessibilityMarker(identifier: "mission-leg-base"))
+                Text("Worktree: \(presentation.destinationCopy)")
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("mission-leg-destination")
+                    .background(MissionAccessibilityMarker(identifier: "mission-leg-destination"))
+            }
+            .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(theme.color("fg-dim"))
             HStack(spacing: 8) {
                 if presentation.agentDestination != nil {
@@ -642,7 +687,12 @@ private struct MissionReadinessSection: View {
                     Button("Retry Agent", action: onRetryAgent)
                 }
                 if presentation.actions.recoverWorktree {
-                    Button("Restore Worktree", action: onRecoverWorktree)
+                    Button(
+                        presentation.worktreeRecovery == .recreateMissing
+                            ? "Recreate Worktree"
+                            : "Restore Worktree",
+                        action: onRecoverWorktree
+                    )
                 }
                 if presentation.actions.completeMission {
                     Button("Complete Mission", action: onCompleteMission)
@@ -711,5 +761,19 @@ private struct MissionAgentReplacementPopover: View {
         }
         .padding(16)
         .frame(width: 360)
+    }
+}
+
+private struct MissionAccessibilityMarker: NSViewRepresentable {
+    let identifier: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setAccessibilityIdentifier(identifier)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.setAccessibilityIdentifier(identifier)
     }
 }

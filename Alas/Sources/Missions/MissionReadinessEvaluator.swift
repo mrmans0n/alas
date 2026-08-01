@@ -15,6 +15,8 @@ enum MissionReadinessDecision: Equatable, Sendable {
 }
 
 enum MissionReadinessEvaluator {
+    static let missingWorktreeMessage = "The Mission worktree is no longer available."
+
     static func evaluate(
         currentState: MissionState,
         signal: MissionReadinessSignal
@@ -40,7 +42,7 @@ enum MissionReadinessEvaluator {
         case .worktreeArchived:
             return .ready(reviewIdentity: nil, message: "Worktree archived in Alas.")
         case .worktreeMissing:
-            return .needsAttention("The Mission worktree is no longer available.")
+            return .needsAttention(missingWorktreeMessage)
         case .projectRemoved:
             return .needsAttention("The Mission project is no longer available.")
         case .refreshUnavailable:

@@ -47,10 +47,9 @@ final class MissionController {
         notifyChanged: { [weak self] aggregate in
             self?.environment.notifyChanged(aggregate)
             self?.replace(aggregate)
-            if aggregate.primaryLeg?.worktreeId != nil,
-               aggregate.mission.setupCheckpoint == .startingAgent {
-                self?.openMission(aggregate.mission.id)
-            }
+        },
+        didCreateWorktree: { [weak self] missionID in
+            self?.openMission(missionID)
         },
         reportFailure: { [weak self] id, message in
             self?.environment.reportFailure(id, message)
@@ -96,6 +95,7 @@ final class MissionController {
 
     func retry(_ id: MissionID, agentId: String? = nil) async {
         do {
+            var recreateWorktree = false
             if let agentId,
                var aggregate = try await persistence.aggregate(id: id),
                aggregate.mission.state == .needsAttention,
@@ -113,8 +113,13 @@ final class MissionController {
                     replace(aggregate)
                 }
             }
+            if let aggregate = try await persistence.aggregate(id: id) {
+                recreateWorktree = aggregate.mission.state == .needsAttention
+                    && aggregate.mission.setupCheckpoint == .running
+                    && aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+            }
             loadError = nil
-            await coordinator.retry(id: id)
+            await coordinator.retry(id: id, recreateWorktree: recreateWorktree)
         } catch {
             loadError = error.localizedDescription
         }

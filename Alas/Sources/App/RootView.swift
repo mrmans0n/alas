@@ -229,14 +229,18 @@ struct RootView: View {
         case .creating(let wt):
             CreatingWorktreeView(worktree: wt)
         case .empty:
-            EmptyTabView(
-                onNewTerminal: {},
-                onNewAgentTerminal: {},
-                onNewAgentChat: {},
-                newTerminalShortcut: nil,
-                newAgentTerminalShortcut: nil,
-                newAgentChatShortcut: nil
-            )
+            if let tabState = state.missingMissionTab {
+                MissionTabView(state: state, worktree: nil, tabState: tabState)
+            } else {
+                EmptyTabView(
+                    onNewTerminal: {},
+                    onNewAgentTerminal: {},
+                    onNewAgentChat: {},
+                    newTerminalShortcut: nil,
+                    newAgentTerminalShortcut: nil,
+                    newAgentChatShortcut: nil
+                )
+            }
         }
     }
 
