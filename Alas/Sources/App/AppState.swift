@@ -1370,9 +1370,38 @@ final class AppState {
         return .text(["creating \(branch) at \(destination.path)"])
     }
 
+    /// Starts a delegated worktree creation and waits for its reconciled row.
+    /// The existing creation path remains the single owner of optimistic UI,
+    /// startup, refresh, and failure handling.
+    func createWorktreeAndWait(
+        projectId: String,
+        base: String,
+        branch: String,
+        destination: URL,
+        runStartup: Bool,
+        ggWorktreeMode: GGWorktreeMode = .inherit
+    ) async -> Result<Worktree, WorktreeCreationFailure> {
+        let id = await createWorktree(
+            projectId: projectId,
+            base: base,
+            branch: branch,
+            destination: destination,
+            runStartup: runStartup,
+            launchSurface: .delegated,
+            ggWorktreeMode: ggWorktreeMode
+        )
+        guard !id.isEmpty else {
+            return .failure(.init(message: "Could not start worktree creation."))
+        }
+        return await WorktreeCreationCompletion.wait(
+            id: id,
+            operationState: { self.projectsManager.operationState(for: id) },
+            worktree: { self.worktree(withId: id) }
+        )
+    }
+
     /// Creates a worktree for delegated ACP work without changing the visible
-    /// project/worktree selection. The existing creation path remains the
-    /// single owner of validation, startup, refresh, and failure handling.
+    /// project/worktree selection.
     private func createDelegatedWorktree(
         projectId: String,
         branch: String,
@@ -1406,31 +1435,19 @@ final class AppState {
                 configuredDefault: config.worktrees.baseBranch
             )
         }
-        let id = await createWorktree(
+        let result = await createWorktreeAndWait(
             projectId: projectId,
             base: selectedBase,
             branch: branch,
             destination: destination,
-            runStartup: true,
-            launchSurface: .delegated
+            runStartup: true
         )
-        guard !id.isEmpty else { return .failure(.init(message: "Could not start worktree creation.")) }
-        for _ in 0..<1_200 {
-            switch projectsManager.operationState(for: id) {
-            case .createFailed(_, let message, _, _):
-                return .failure(.init(message: message))
-            case .creating:
-                try? await Task.sleep(for: .milliseconds(250))
-            case .deleting, .deleteFailed:
-                return .failure(.init(message: "Worktree creation was interrupted."))
-            case nil:
-                if let worktree = worktree(withId: id) {
-                    return .success(worktree)
-                }
-                try? await Task.sleep(for: .milliseconds(250))
-            }
+        switch result {
+        case .success(let worktree):
+            return .success(worktree)
+        case .failure(let error):
+            return .failure(.init(message: error.message))
         }
-        return .failure(.init(message: "Timed out waiting for worktree creation."))
     }
 
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
