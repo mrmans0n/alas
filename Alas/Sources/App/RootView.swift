@@ -17,6 +17,7 @@ struct RootView: View {
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
     @State private var newWorktreePresentation: NewWorktreePresentation?
+    @State private var newMissionPresentation: NewMissionPresentation?
     @State private var commitReviewSessionLaunchError: CommitReviewSessionLaunchError?
     @Environment(\.openWindow) private var openWindow
 
@@ -49,7 +50,8 @@ struct RootView: View {
                 showNewProject: $showNewProject,
                 editingProject: $editingProject,
                 removingProject: $removingProject,
-                newWorktreePresentation: $newWorktreePresentation
+                newWorktreePresentation: $newWorktreePresentation,
+                newMissionPresentation: $newMissionPresentation
             ))
             .alert(
                 "Could not open review session",
@@ -332,6 +334,7 @@ private struct RootPresentationHandlers: ViewModifier {
     @Binding var editingProject: ProjectConfig?
     @Binding var removingProject: ProjectConfig?
     @Binding var newWorktreePresentation: NewWorktreePresentation?
+    @Binding var newMissionPresentation: NewMissionPresentation?
 
     func body(content: Content) -> some View {
         content
@@ -356,6 +359,16 @@ private struct RootPresentationHandlers: ViewModifier {
                     set: { if !$0 { newWorktreePresentation = nil } }
                 ),
                 presetProjectId: presentation.projectId
+            )
+        }
+        .sheet(item: $newMissionPresentation) { _ in
+            NewMissionDialog(
+                presented: Binding(
+                    get: { newMissionPresentation != nil },
+                    set: { if !$0 { newMissionPresentation = nil } }
+                ),
+                projects: state.projects,
+                environment: .live(state: state)
             )
         }
         .sheet(item: $state.pendingRunScriptCreation) { presentation in

@@ -1,0 +1,424 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@MainActor
+@Suite("New Mission dialog")
+struct NewMissionDialogTests {
+    @Test("resolution moves through resolving and seeds confirmation once")
+    func resolvedIssueSeedsEditableConfirmationOnce() async {
+        let fake = NewMissionDialogFake(suspendResolution: true)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "https://github.com/mrmans0n/alas/issues/1842"
+
+        let resolution = Task { await model.resolve() }
+        await fake.waitUntilResolutionStarts()
+        #expect(model.phase == .resolving)
+
+        fake.finishResolution()
+        await resolution.value
+
+        #expect(model.phase == .confirmation)
+        #expect(model.projectId == "alas")
+        #expect(model.base == "origin/main")
+        #expect(model.branch == "feature/1842-fix-offline-sync-conflicts")
+        #expect(model.agentId == "codex")
+        #expect(model.prompt.contains("## Issue context"))
+        #expect(model.prompt.contains("https://github.com/mrmans0n/alas/issues/1842"))
+    }
+
+    @Test("cancel while resolving rejects the late result")
+    func cancelWhileResolvingRejectsLateResult() async {
+        let fake = NewMissionDialogFake(suspendResolution: true)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        let resolution = Task { await model.resolve() }
+        await fake.waitUntilResolutionStarts()
+
+        model.cancelResolution()
+        fake.finishResolution()
+        await resolution.value
+
+        #expect(model.phase == .entry)
+        #expect(model.resolved == nil)
+        #expect(model.projectId.isEmpty)
+    }
+
+    @Test("changing the reference rejects a late resolution")
+    func lateResolutionCannotOverwriteNewReference() async {
+        let fake = NewMissionDialogFake(suspendResolution: true)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1"
+        let first = Task { await model.resolve() }
+        await fake.waitUntilResolutionStarts()
+
+        model.reference = "#2"
+        fake.finishResolution()
+        await first.value
+
+        #expect(model.reference == "#2")
+        #expect(model.phase == .entry)
+        #expect(model.resolved == nil)
+    }
+
+    @Test("a stale branch failure cannot mutate a newer issue entry")
+    func staleBranchFailureCannotSetError() async {
+        let fake = NewMissionDialogFake(
+            suspendBranches: true,
+            branchError: NewMissionDialogFake.TestError.branchFailed
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1"
+        let first = Task { await model.resolve() }
+        await fake.waitUntilBranchLoadStarts()
+
+        model.reference = "#2"
+        fake.finishBranchLoad()
+        await first.value
+
+        #expect(model.reference == "#2")
+        #expect(model.phase == .entry)
+        #expect(model.errorMessage == nil)
+        #expect(model.branchErrorMessage == nil)
+    }
+
+    @Test("only matching projects can be selected")
+    func projectSelectionIsLimitedToResolverMatches() async {
+        let fake = NewMissionDialogFake(
+            candidateProjectIds: ["alas", "alas-clone"],
+            configuredBases: ["alas": "origin/main", "alas-clone": "trunk"],
+            configuredPrefixes: ["alas": "feature/", "alas-clone": "mission/"],
+            branchesByProject: [
+                "alas": ["origin/main"],
+                "alas-clone": ["release", "trunk"],
+            ]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "https://github.com/mrmans0n/alas/issues/1842"
+        await model.resolve()
+
+        await model.selectProject("alas-clone")
+        #expect(model.projectId == "alas-clone")
+        #expect(model.base == "trunk")
+        #expect(model.branch == "mission/1842-fix-offline-sync-conflicts")
+
+        await model.selectProject("unrelated")
+        #expect(model.projectId == "alas-clone")
+        #expect(model.errorMessage == "Choose a repository matched to this issue.")
+    }
+
+    @Test("project changes refresh only untouched base and branch drafts")
+    func projectChangePreservesIndependentlyEditedDrafts() async {
+        let fake = NewMissionDialogFake(
+            candidateProjectIds: ["alas", "alas-clone"],
+            configuredBases: ["alas": "origin/main", "alas-clone": "trunk"],
+            configuredPrefixes: ["alas": "feature/", "alas-clone": "mission/"],
+            branchesByProject: [
+                "alas": ["origin/main"],
+                "alas-clone": ["release", "trunk"],
+            ]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        model.branch = "nacho/keep-this-branch"
+        model.prompt = "Keep this independently edited prompt."
+        await model.selectProject("alas-clone")
+
+        #expect(model.base == "trunk")
+        #expect(model.branch == "nacho/keep-this-branch")
+        #expect(model.prompt == "Keep this independently edited prompt.")
+    }
+
+    @Test("an edited base survives a project branch refresh")
+    func projectChangePreservesEditedBase() async {
+        let fake = NewMissionDialogFake(
+            candidateProjectIds: ["alas", "alas-clone"],
+            configuredBases: ["alas": "origin/main", "alas-clone": "trunk"],
+            configuredPrefixes: ["alas": "feature/", "alas-clone": "mission/"],
+            branchesByProject: [
+                "alas": ["origin/main"],
+                "alas-clone": ["release", "trunk"],
+            ]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        model.base = "release/next"
+        await model.selectProject("alas-clone")
+
+        #expect(model.base == "release/next")
+        #expect(model.branch == "mission/1842-fix-offline-sync-conflicts")
+    }
+
+    @Test("the first enabled ACP-capable agent is the default")
+    func defaultAgentSkipsNonACPAgents() async {
+        let fake = NewMissionDialogFake(agents: [
+            Self.agent(id: "terminal-only"),
+            Self.agent(id: "codex"),
+            Self.agent(id: "claude"),
+        ])
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+
+        await model.resolve()
+
+        #expect(model.agentOptions.map(\.id) == ["codex", "claude"])
+        #expect(model.agentId == "codex")
+        #expect(model.validationMessage == nil)
+        #expect(model.canCreate)
+    }
+
+    @Test("confirmation rejects creation without an enabled ACP agent")
+    func noCapableAgentProducesValidation() async {
+        let fake = NewMissionDialogFake(agents: [Self.agent(id: "terminal-only")])
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        #expect(model.agentOptions.isEmpty)
+        #expect(model.agentId.isEmpty)
+        #expect(model.validationMessage == "Enable an ACP-capable agent in Settings before creating a Mission.")
+        #expect(!model.canCreate)
+        #expect(await model.create(allowDuplicate: false) == nil)
+        #expect(fake.createdDrafts.isEmpty)
+    }
+
+    @Test("duplicate offers opening the existing Mission")
+    func duplicateCanOpenExistingMission() async {
+        let existing = MissionID(rawValue: "existing-mission")
+        let fake = NewMissionDialogFake(duplicateMissionID: existing)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        #expect(await model.create(allowDuplicate: false) == nil)
+        #expect(model.phase == .confirmation)
+        #expect(model.existingMissionID == existing)
+
+        #expect(model.openExistingMission() == existing)
+        #expect(fake.openedMissionIDs == [existing])
+    }
+
+    @Test("duplicate can be created only with an explicit override")
+    func duplicateCanCreateAnotherMission() async {
+        let fake = NewMissionDialogFake(duplicateMissionID: .init(rawValue: "existing-mission"))
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        #expect(await model.create(allowDuplicate: false) == nil)
+        let created = await model.create(allowDuplicate: true)
+
+        #expect(created == MissionID(rawValue: "new-mission"))
+        #expect(fake.createAllowDuplicateValues == [false, true])
+    }
+
+    @Test("create failure keeps the editable confirmation visible")
+    func createFailureKeepsConfirmationVisible() async {
+        let fake = NewMissionDialogFake(createError: NewMissionDialogFake.TestError.createFailed)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        let result = await model.create(allowDuplicate: false)
+
+        #expect(result == nil)
+        #expect(model.phase == .confirmation)
+        #expect(model.errorMessage == "Mission insertion failed.")
+        #expect(model.resolved != nil)
+    }
+
+    @Test("create returns only after the durable Mission insertion succeeds")
+    func successfulCreateBuildsDraftAndReturnsDurableID() async throws {
+        let fake = NewMissionDialogFake()
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+        model.branch = "feature/1842-custom"
+        model.prompt = "Custom prompt"
+
+        let result = await model.create(allowDuplicate: false)
+        let draft = try #require(fake.createdDrafts.first)
+
+        #expect(result == MissionID(rawValue: "new-mission"))
+        #expect(fake.missionWasDurableBeforeCreateReturned)
+        #expect(draft.issue.identity.number == 1842)
+        #expect(draft.projectId == "alas")
+        #expect(draft.baseRef == "origin/main")
+        #expect(draft.branch == "feature/1842-custom")
+        #expect(draft.destinationPath == "/tmp/worktrees/alas/feature-1842-custom")
+        #expect(draft.agentId == "codex")
+        #expect(draft.initialPrompt == "Custom prompt")
+    }
+
+    fileprivate static func agent(id: String) -> AgentDefinition {
+        AgentDefinition(
+            id: id,
+            displayName: id.capitalized,
+            binary: id,
+            binaryOverride: nil,
+            promptModeArgs: [],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true,
+            builtinLogoAssetName: nil
+        )
+    }
+}
+
+@MainActor
+private final class NewMissionDialogFake {
+    enum TestError: LocalizedError {
+        case branchFailed
+        case createFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .branchFailed: "Branch loading failed."
+            case .createFailed: "Mission insertion failed."
+            }
+        }
+    }
+
+    let resolvedIssue: ResolvedMissionIssue
+    let configuredBases: [String: String]
+    let configuredPrefixes: [String: String]
+    let branchesByProject: [String: [String]]
+    let agents: [AgentDefinition]
+    let suspendResolution: Bool
+    let suspendBranches: Bool
+    let branchError: (any Error)?
+    let duplicateMissionID: MissionID?
+    let createError: (any Error)?
+
+    private var resolutionContinuation: CheckedContinuation<Void, Never>?
+    private var branchContinuation: CheckedContinuation<Void, Never>?
+    private(set) var createdDrafts: [MissionDraft] = []
+    private(set) var createAllowDuplicateValues: [Bool] = []
+    private(set) var openedMissionIDs: [MissionID] = []
+    private(set) var missionWasDurableBeforeCreateReturned = false
+
+    init(
+        suspendResolution: Bool = false,
+        suspendBranches: Bool = false,
+        branchError: (any Error)? = nil,
+        candidateProjectIds: [String] = ["alas"],
+        configuredBases: [String: String] = ["alas": "origin/main"],
+        configuredPrefixes: [String: String] = ["alas": "feature/"],
+        branchesByProject: [String: [String]] = ["alas": ["origin/main", "main"]],
+        agents: [AgentDefinition] = [NewMissionDialogTests.agent(id: "codex")],
+        duplicateMissionID: MissionID? = nil,
+        createError: (any Error)? = nil
+    ) {
+        self.suspendResolution = suspendResolution
+        self.suspendBranches = suspendBranches
+        self.branchError = branchError
+        self.configuredBases = configuredBases
+        self.configuredPrefixes = configuredPrefixes
+        self.branchesByProject = branchesByProject
+        self.agents = agents
+        self.duplicateMissionID = duplicateMissionID
+        self.createError = createError
+        let snapshot = MissionIssueSnapshot(
+            identity: .init(
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                number: 1842
+            ),
+            canonicalURL: URL(string: "https://github.com/mrmans0n/alas/issues/1842")!,
+            title: "Fix offline sync conflicts",
+            body: "Offline changes can overwrite newer server changes.",
+            state: .open,
+            labels: ["bug", "sync"],
+            assignees: ["nacho"],
+            providerUpdatedAt: Date(timeIntervalSince1970: 100),
+            capturedAt: Date(timeIntervalSince1970: 101),
+            refreshError: nil
+        )
+        self.resolvedIssue = ResolvedMissionIssue(
+            snapshot: snapshot,
+            remote: .init(
+                kind: .github,
+                host: "github.com",
+                owner: "mrmans0n",
+                repository: "alas",
+                remoteName: "origin",
+                webURL: URL(string: "https://github.com/mrmans0n/alas")!
+            ),
+            candidateProjectIds: candidateProjectIds,
+            selectedProjectId: candidateProjectIds[0]
+        )
+    }
+
+    var environment: NewMissionDialogModel.Environment {
+        .init(
+            resolveIssue: { [self] _ in
+                if suspendResolution {
+                    await withCheckedContinuation { continuation in
+                        resolutionContinuation = continuation
+                    }
+                }
+                return resolvedIssue
+            },
+            branches: { [self] projectID in
+                if suspendBranches {
+                    await withCheckedContinuation { continuation in
+                        branchContinuation = continuation
+                    }
+                }
+                if let branchError { throw branchError }
+                return branchesByProject[projectID] ?? []
+            },
+            configuredBase: { [self] projectID in
+                configuredBases[projectID] ?? "main"
+            },
+            configuredBranchPrefix: { [self] projectID in
+                configuredPrefixes[projectID] ?? "feature/"
+            },
+            enabledACPAgents: { [self] in agents },
+            destination: { projectID, branch in
+                URL(fileURLWithPath: "/tmp/worktrees/\(projectID)/\(branch.replacingOccurrences(of: "/", with: "-"))")
+            },
+            createMission: { [self] draft, allowDuplicate in
+                createdDrafts.append(draft)
+                createAllowDuplicateValues.append(allowDuplicate)
+                if let duplicateMissionID, !allowDuplicate {
+                    throw NewMissionDialogModel.CreationError.duplicate(existing: duplicateMissionID)
+                }
+                if let createError { throw createError }
+                missionWasDurableBeforeCreateReturned = true
+                return MissionID(rawValue: "new-mission")
+            },
+            openMission: { [self] missionID in
+                openedMissionIDs.append(missionID)
+            }
+        )
+    }
+
+    func waitUntilResolutionStarts() async {
+        while resolutionContinuation == nil {
+            await Task.yield()
+        }
+    }
+
+    func finishResolution() {
+        resolutionContinuation?.resume()
+        resolutionContinuation = nil
+    }
+
+    func waitUntilBranchLoadStarts() async {
+        while branchContinuation == nil {
+            await Task.yield()
+        }
+    }
+
+    func finishBranchLoad() {
+        branchContinuation?.resume()
+        branchContinuation = nil
+    }
+}
