@@ -253,6 +253,19 @@ final class MissionController {
         }
     }
 
+    func sidebarModel(
+        activeProjectIds: [String],
+        existingProjectIds: [String],
+        knownWorktreeIds: Set<String>
+    ) -> MissionSidebarModel {
+        MissionSidebarModel.make(
+            aggregates: aggregates,
+            activeProjectIds: activeProjectIds,
+            existingProjectIds: existingProjectIds,
+            knownWorktreeIds: knownWorktreeIds
+        )
+    }
+
     private func reconcileReadinessAtStartup() async {
         loadError = nil
         do {

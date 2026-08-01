@@ -142,6 +142,9 @@ struct RootView: View {
             onNewWorktree: { projectId in
                 newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
             },
+            onNewMission: {
+                newMissionPresentation = NewMissionPresentation()
+            },
             onHideSidebar: {
                 state.config.sidebarVisible = false
                 state.saveConfig()
