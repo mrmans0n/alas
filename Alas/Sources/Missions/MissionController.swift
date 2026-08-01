@@ -147,6 +147,12 @@ final class MissionController {
             let active = try await persistence.list(includeCompleted: false)
             for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
                 guard let leg = aggregate.primaryLeg else { continue }
+                guard let currentWorktree = environment.worktreeAtDestination(
+                    leg.projectId,
+                    leg.destinationPath
+                ), currentWorktree.id == worktreeId,
+                    currentWorktree.branch == leg.branch
+                else { continue }
                 let request: ReviewRequest
                 if let linked = leg.reviewIdentity {
                     if let visible = snapshot.reviewRequest,

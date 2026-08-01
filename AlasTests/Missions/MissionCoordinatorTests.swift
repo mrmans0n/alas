@@ -130,6 +130,26 @@ struct MissionCoordinatorTests {
         #expect(aggregate.mission.state == .running)
     }
 
+    @Test("agent retry rejects a replacement worktree on another branch")
+    func agentRetryRejectsWrongBranchReplacement() async throws {
+        var retrying = MissionFixtures.creatingMission()
+        retrying.mission.state = .needsAttention
+        retrying.mission.setupCheckpoint = .startingAgent
+        retrying.legs[0].worktreeId = "worktree-1"
+        retrying.legs[0].acpSessionId = "session-1"
+        let fake = MissionCoordinatorFake(existing: [retrying])
+        fake.worktree.branch = "unrelated-branch"
+        fake.worktreeAtDestination = fake.worktree
+        let controller = MissionController(environment: fake.environment)
+
+        await controller.retry(retrying.mission.id)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: retrying.mission.id))
+
+        #expect(fake.startACPCalls == 0)
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+    }
+
     @Test("missing worktree recovery restarts the worktree checkpoint")
     func missingWorktreeRecoveryRestartsWorktreeCheckpoint() async throws {
         var missing = MissionFixtures.creatingMission()
@@ -601,7 +621,7 @@ private struct NotificationSnapshot: Equatable {
 @MainActor
 private final class MissionCoordinatorFake {
     let persistence: MissionPersistence
-    let worktree = Worktree(
+    var worktree = Worktree(
         id: "worktree-1",
         projectId: "project-1",
         name: "fix/parser-crash",

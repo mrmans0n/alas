@@ -329,7 +329,9 @@ final class MissionCoordinator {
 
     private func advanceAgent(_ aggregate: MissionAggregate) async -> Bool {
         guard var leg = aggregate.primaryLeg else { return false }
-        guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath) else {
+        guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath),
+              worktree.branch == leg.branch
+        else {
             await persistFailure(
                 aggregate: aggregate,
                 checkpoint: .startingAgent,
