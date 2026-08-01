@@ -656,7 +656,8 @@ extension NewMissionDialogModel.Environment {
                     throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
                 }
                 do {
-                    return try await state.missions.create(draft, allowDuplicate: allowDuplicate)
+                    let preparedDraft = try await state.preparedMissionDraft(draft)
+                    return try await state.missions.create(preparedDraft, allowDuplicate: allowDuplicate)
                 } catch MissionStore.Error.duplicateActiveIssueIdentity {
                     if let existing = state.missions.aggregates.first(where: {
                         $0.mission.state != .completed && $0.issue.identity == draft.issue.identity

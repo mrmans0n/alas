@@ -699,6 +699,8 @@ final class AppState {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
             return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
+        }, linkedReviewRequest: { [weak self] identity, worktreeID in
+            await self?.refreshMissionReview(identity: identity, worktreeID: worktreeID)
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
         }, worktreeArchived: { [weak self] projectID, destinationPath in
@@ -847,6 +849,42 @@ final class AppState {
             throw CodeHostProviderError.malformedOutput("The provider returned a different issue.")
         }
         return snapshot
+    }
+
+    private func refreshMissionReview(
+        identity: MissionReviewIdentity,
+        worktreeID: String
+    ) async -> ReviewRequest? {
+        guard let worktree = worktree(withId: worktreeID),
+              let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
+        else { return nil }
+        let cwd = URL(fileURLWithPath: project.path)
+        do {
+            let remotes = try await GitService().remotes(worktreePath: cwd)
+            guard let remote = remotes
+                .compactMap({ CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) })
+                .first(where: { candidate in
+                    candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
+                        && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
+                }),
+                let provider = CodeHostProviderRegistry.live().provider(for: identity.provider),
+                await provider.isAvailable(cwd: cwd),
+                await provider.isAuthenticated(remote: remote, cwd: cwd)
+            else { return nil }
+            let request = try await provider.reviewRequest(
+                remote: remote,
+                number: identity.number,
+                cwd: cwd
+            )
+            guard request.provider == identity.provider,
+                  request.remote.host.caseInsensitiveCompare(identity.host) == .orderedSame,
+                  request.remote.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame,
+                  request.number == identity.number
+            else { return nil }
+            return request
+        } catch {
+            return nil
+        }
     }
 
     /// Returns a worktree that is safe to reuse for a Mission checkpoint.
@@ -1993,6 +2031,26 @@ final class AppState {
             .deletingLastPathComponent()
             .resolvingSymlinksInPath()
             .appendingPathComponent(preparedDestination.lastPathComponent)
+    }
+
+    func preparedMissionDraft(_ draft: MissionDraft) async throws -> MissionDraft {
+        guard let project = projects.first(where: { $0.id == draft.projectId }) else {
+            throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
+        }
+        let destination = try await Self.preparedCreateWorktreeDestination(
+            repoPath: URL(fileURLWithPath: project.path),
+            destination: URL(fileURLWithPath: draft.destinationPath)
+        )
+        return MissionDraft(
+            issue: draft.issue,
+            projectId: draft.projectId,
+            baseRef: draft.baseRef,
+            branch: draft.branch,
+            destinationPath: destination.path,
+            agentId: draft.agentId,
+            initialPromptId: draft.initialPromptId,
+            initialPrompt: draft.initialPrompt
+        )
     }
 
     nonisolated static func destinationPathReplacingLocalHome(

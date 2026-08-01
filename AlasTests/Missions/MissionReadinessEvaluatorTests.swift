@@ -122,6 +122,38 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.state == .running)
     }
 
+    @Test func linkedReviewIsRefreshedAfterItLeavesTheOpenReviewSnapshot() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let openSnapshot = Self.reviewSnapshot(state: .open)
+        let missingOpenReview = ReviewLoopSnapshot(
+            local: openSnapshot.local,
+            remote: openSnapshot.remote,
+            reviewRequest: nil,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { identity, worktreeID in
+                guard identity == Self.reviewIdentity, worktreeID == "worktree-1" else { return nil }
+                return Self.reviewSnapshot(state: .merged).reviewRequest
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            snapshot: missingOpenReview
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func sourceIssueStateDoesNotChangeMissionReadiness() async throws {
         let refreshed = MissionFixtures.issue(title: "Fresh issue title", capturedAt: 250)
         var closed = refreshed
@@ -383,7 +415,8 @@ private final class MissionLifecycleFake {
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
-        startupReviewSnapshot: @escaping @MainActor (Worktree) async -> ReviewLoopSnapshot? = { _ in nil }
+        startupReviewSnapshot: @escaping @MainActor (Worktree) async -> ReviewLoopSnapshot? = { _ in nil },
+        linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-lifecycle-\(UUID().uuidString).sqlite")
@@ -436,6 +469,7 @@ private final class MissionLifecycleFake {
                 recorder.issueRefreshCalls.append(.init(identity: identity, projectID: projectID))
                 return try await issueRefresh(identity, projectID)
             },
+            linkedReviewRequest: linkedReviewRequest,
             projectExists: projectExists,
             worktreeArchived: worktreeArchived,
             reviewSnapshot: reviewSnapshot,

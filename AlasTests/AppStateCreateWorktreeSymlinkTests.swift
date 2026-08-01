@@ -84,4 +84,48 @@ struct AppStateCreateWorktreeSymlinkTests {
         #expect(state.projectsManager.operationState(for: optimisticId) == nil)
         #expect(state.selectedWorktreeId == optimisticId)
     }
+
+    @Test
+    func liveMissionCreationPersistsPreparedSymlinkDestination() async throws {
+        let realRepo = try await makeRepo(name: "mission-real")
+        let persistenceDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-mission-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: persistenceDirectory, withIntermediateDirectories: true)
+        let parent = realRepo.deletingLastPathComponent()
+        let linkURL = parent.appendingPathComponent("mission-link-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: realRepo)
+        defer {
+            try? FileManager.default.removeItem(at: persistenceDirectory)
+            try? FileManager.default.removeItem(at: linkURL)
+            try? FileManager.default.removeItem(at: realRepo)
+        }
+
+        let state = AppState(missionPersistence: MissionPersistence(
+            path: persistenceDirectory.appendingPathComponent("missions.sqlite").path
+        ))
+        let project = try await state.projectsManager.addProject(
+            path: realRepo,
+            displayName: "mission-symlink-repo",
+            color: "#5fb7c4"
+        )
+        let rawDestination = linkURL.appendingPathComponent("mission-worktree")
+        let draft = MissionDraft(
+            issue: MissionFixtures.issue(),
+            projectId: project.id,
+            baseRef: "missing-base",
+            branch: "mission-symlink-branch",
+            destinationPath: rawDestination.path,
+            agentId: "codex",
+            initialPromptId: UUID(),
+            initialPrompt: "Investigate."
+        )
+
+        let id = try await NewMissionDialogModel.Environment.live(state: state)
+            .createMission(draft, false)
+        let aggregate = try #require(state.missions.aggregate(id: id))
+
+        #expect(aggregate.primaryLeg?.destinationPath == realRepo
+            .appendingPathComponent("mission-worktree")
+            .path)
+    }
 }

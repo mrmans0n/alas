@@ -10,6 +10,11 @@ typealias MissionStartupReviewSnapshot = @MainActor (
     _ worktree: Worktree
 ) async -> ReviewLoopSnapshot?
 
+typealias MissionLinkedReviewRequest = @MainActor (
+    _ identity: MissionReviewIdentity,
+    _ worktreeID: String
+) async -> ReviewRequest?
+
 @Observable
 @MainActor
 final class MissionController {
@@ -22,6 +27,8 @@ final class MissionController {
     private let environment: MissionCoordinator.Environment
     @ObservationIgnored
     private let issueRefresh: MissionIssueRefresh
+    @ObservationIgnored
+    private let linkedReviewRequest: MissionLinkedReviewRequest
     @ObservationIgnored
     private let projectExists: @MainActor (String) -> Bool
     @ObservationIgnored
@@ -63,6 +70,7 @@ final class MissionController {
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("Issue refresh is unavailable.")
         },
+        linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _ in nil },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
@@ -72,6 +80,7 @@ final class MissionController {
         persistence = environment.persistence
         self.environment = environment
         self.issueRefresh = issueRefresh
+        self.linkedReviewRequest = linkedReviewRequest
         self.projectExists = projectExists
         self.worktreeArchived = worktreeArchived
         self.reviewSnapshot = reviewSnapshot
@@ -133,18 +142,27 @@ final class MissionController {
     }
 
     func observeReview(worktreeId: String, snapshot: ReviewLoopSnapshot) async {
-        guard let request = snapshot.reviewRequest else { return }
         loadError = nil
-        let identity = MissionReviewIdentity(
-            provider: request.provider,
-            host: request.remote.host,
-            repositorySlug: request.remote.repositorySlug,
-            number: request.number,
-            url: request.url
-        )
         do {
             let active = try await persistence.list(includeCompleted: false)
             for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
+                guard let leg = aggregate.primaryLeg else { continue }
+                let request: ReviewRequest
+                if let visible = snapshot.reviewRequest {
+                    request = visible
+                } else if let linked = leg.reviewIdentity,
+                          let refreshed = await linkedReviewRequest(linked, worktreeId) {
+                    request = refreshed
+                } else {
+                    continue
+                }
+                let identity = MissionReviewIdentity(
+                    provider: request.provider,
+                    host: request.remote.host,
+                    repositorySlug: request.remote.repositorySlug,
+                    number: request.number,
+                    url: request.url
+                )
                 if let linked = aggregate.primaryLeg?.reviewIdentity, linked != identity {
                     continue
                 }
