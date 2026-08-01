@@ -195,7 +195,11 @@ struct MissionTabPresentation: Equatable {
         let recovery: WorktreeRecovery
         if worktreeArchived, worktree != nil {
             recovery = .restoreArchived
-        } else if worktree == nil, worktreeRecoveryAvailable {
+        } else if worktree == nil,
+                  worktreeRecoveryAvailable,
+                  mission.state == .needsAttention,
+                  mission.setupCheckpoint == .running,
+                  mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage {
             recovery = .recreateMissing
         } else {
             recovery = .none

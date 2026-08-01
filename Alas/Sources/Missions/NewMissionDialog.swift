@@ -9,6 +9,11 @@ struct NewMissionPresentation: Identifiable, Equatable {
 @Observable
 @MainActor
 final class NewMissionDialogModel {
+    struct BranchInventory {
+        let names: [String]
+        let remoteNames: Set<String>
+    }
+
     enum Phase: Equatable {
         case entry
         case resolving
@@ -44,10 +49,11 @@ final class NewMissionDialogModel {
     private(set) var branches: [String] = []
     private(set) var isLoadingBranches = false
     private(set) var branchErrorMessage: String?
+    private var remoteNames: Set<String> = []
 
     struct Environment {
         let resolveIssue: (String) async throws -> ResolvedMissionIssue
-        let branches: (String) async throws -> [String]
+        let branches: (String) async throws -> BranchInventory
         let configuredBase: (String) -> String
         let configuredBranchPrefix: (String) -> String
         let enabledACPAgents: () -> [AgentDefinition]
@@ -143,13 +149,13 @@ final class NewMissionDialogModel {
         }
 
         isLoadingBranches = true
-        let discoveredBranches: [String]
+        let branchInventory: BranchInventory
         let branchLoadError: String?
         do {
-            discoveredBranches = try await environment.branches(resolution.selectedProjectId)
+            branchInventory = try await environment.branches(resolution.selectedProjectId)
             branchLoadError = nil
         } catch {
-            discoveredBranches = []
+            branchInventory = BranchInventory(names: [], remoteNames: [])
             branchLoadError = error.localizedDescription
         }
         guard acceptsResolution(generation: generation, input: input) else { return }
@@ -157,19 +163,20 @@ final class NewMissionDialogModel {
         resolved = resolution
         candidateProjectIds = resolution.candidateProjectIds
         projectId = resolution.selectedProjectId
-        branches = discoveredBranches
+        branches = branchInventory.names
+        remoteNames = branchInventory.remoteNames
         branchErrorMessage = branchLoadError
         isLoadingBranches = false
 
         let configuredBase = environment.configuredBase(projectId)
         base = NewWorktreeDialog.preferredBaseBranch(
-            availableBranches: discoveredBranches,
+            availableBranches: branchInventory.names,
             configuredDefault: configuredBase
         )
         baseIsUserOwned = false
         branch = availableBranch(
             seededBy: generatedBranch(projectID: projectId, issue: resolution.snapshot),
-            occupied: discoveredBranches,
+            occupied: branchInventory.names,
             projectID: projectId
         )
         branchIsUserOwned = false
@@ -209,15 +216,17 @@ final class NewMissionDialogModel {
         if updatesBranch { branch = nextSeededBranch }
 
         branches = []
+        remoteNames = []
         branchErrorMessage = nil
         isLoadingBranches = true
         do {
-            let discovered = try await environment.branches(candidateID)
+            let inventory = try await environment.branches(candidateID)
             guard projectGeneration == generation, projectId == candidateID else { return }
-            branches = discovered
+            branches = inventory.names
+            remoteNames = inventory.remoteNames
             if updatesBase, !baseIsUserOwned {
                 let preferred = NewWorktreeDialog.preferredBaseBranch(
-                    availableBranches: discovered,
+                    availableBranches: inventory.names,
                     configuredDefault: nextSeededBase
                 )
                 base = preferred
@@ -225,7 +234,7 @@ final class NewMissionDialogModel {
             if updatesBranch, !branchIsUserOwned {
                 branch = availableBranch(
                     seededBy: nextSeededBranch,
-                    occupied: discovered,
+                    occupied: inventory.names,
                     projectID: candidateID
                 )
             }
@@ -349,6 +358,7 @@ final class NewMissionDialogModel {
         agentId = ""
         prompt = ""
         branches = []
+        remoteNames = []
         isLoadingBranches = false
         errorMessage = nil
         branchErrorMessage = nil
@@ -369,22 +379,9 @@ final class NewMissionDialogModel {
     private func availableBranch(
         seededBy seed: String,
         occupied: [String],
-        projectID: String
+        projectID _: String
     ) -> String {
         let rawOccupied = Set(occupied)
-        var remoteNames: Set<String> = ["origin"]
-        let configuredBase = environment.configuredBase(projectID)
-        if let separator = configuredBase.firstIndex(of: "/") {
-            remoteNames.insert(String(configuredBase[..<separator]))
-        }
-        for branch in occupied {
-            guard let separator = branch.firstIndex(of: "/") else { continue }
-            let suffix = String(branch[branch.index(after: separator)...])
-            if rawOccupied.contains(suffix) {
-                remoteNames.insert(String(branch[..<separator]))
-            }
-        }
-
         var occupied = rawOccupied
         for branch in rawOccupied {
             guard let separator = branch.firstIndex(of: "/"),
@@ -727,7 +724,14 @@ extension NewMissionDialogModel.Environment {
                 guard let project = state?.projects.first(where: { $0.id == projectID }) else {
                     throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
                 }
-                return try await GitService().branches(at: URL(fileURLWithPath: project.path))
+                let path = URL(fileURLWithPath: project.path)
+                let git = GitService()
+                let branches = try await git.branches(at: path)
+                let remotes = try await git.remotes(worktreePath: path)
+                return NewMissionDialogModel.BranchInventory(
+                    names: branches,
+                    remoteNames: Set(remotes.map(\.name))
+                )
             },
             configuredBase: { [weak state] _ in state?.config.worktrees.baseBranch ?? "main" },
             configuredBranchPrefix: { [weak state] _ in state?.config.worktrees.branchPrefix ?? "feature/" },

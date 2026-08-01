@@ -289,6 +289,26 @@ struct NewMissionDialogTests {
         #expect(model.branch == "\(seed)-3")
     }
 
+    @Test("generated branch checks every configured remote")
+    func generatedBranchSkipsCustomRemoteTrackingBranches() async {
+        let seed = MissionBranchName.make(
+            issueNumber: 1842,
+            title: "Fix offline sync conflicts",
+            prefix: "feature/"
+        )
+        let fake = NewMissionDialogFake(
+            configuredBases: ["alas": "main"],
+            branchesByProject: ["alas": ["fork/\(seed)", "fork/\(seed)-2"]],
+            remoteNamesByProject: ["alas": ["fork"]]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+
+        await model.resolve()
+
+        #expect(model.branch == "\(seed)-3")
+    }
+
     @Test("duplicate can be created only with an explicit override")
     func duplicateCanCreateAnotherMission() async {
         let fake = NewMissionDialogFake(duplicateMissionID: .init(rawValue: "existing-mission"))
@@ -424,6 +444,7 @@ private final class NewMissionDialogFake {
     let configuredBases: [String: String]
     let configuredPrefixes: [String: String]
     let branchesByProject: [String: [String]]
+    let remoteNamesByProject: [String: Set<String>]
     let agents: [AgentDefinition]
     let suspendResolution: Bool
     let suspendBranches: Bool
@@ -451,6 +472,7 @@ private final class NewMissionDialogFake {
         configuredBases: [String: String] = ["alas": "origin/main"],
         configuredPrefixes: [String: String] = ["alas": "feature/"],
         branchesByProject: [String: [String]] = ["alas": ["origin/main", "main"]],
+        remoteNamesByProject: [String: Set<String>] = ["alas": ["origin"]],
         agents: [AgentDefinition] = [NewMissionDialogTests.agent(id: "codex")],
         duplicateMissionID: MissionID? = nil,
         createError: (any Error)? = nil,
@@ -466,6 +488,7 @@ private final class NewMissionDialogFake {
         self.configuredBases = configuredBases
         self.configuredPrefixes = configuredPrefixes
         self.branchesByProject = branchesByProject
+        self.remoteNamesByProject = remoteNamesByProject
         self.agents = agents
         self.duplicateMissionID = duplicateMissionID
         self.createError = createError
@@ -520,7 +543,10 @@ private final class NewMissionDialogFake {
                     }
                 }
                 if let branchError { throw branchError }
-                return branchesByProject[projectID] ?? []
+                return NewMissionDialogModel.BranchInventory(
+                    names: branchesByProject[projectID] ?? [],
+                    remoteNames: remoteNamesByProject[projectID] ?? []
+                )
             },
             configuredBase: { [self] projectID in
                 configuredBases[projectID] ?? "main"

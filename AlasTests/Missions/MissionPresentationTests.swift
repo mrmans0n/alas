@@ -177,6 +177,21 @@ struct MissionPresentationTests {
         #expect(presentation.worktreeRecovery == .recreateMissing)
     }
 
+    @Test func completedMissionDoesNotOfferMissingWorktreeRecovery() {
+        var aggregate = Self.runningAggregate()
+        aggregate.mission.state = .completed
+        aggregate.mission.completedAt = Date(timeIntervalSince1970: 300)
+
+        let presentation = MissionTabPresentation(
+            aggregate: aggregate,
+            worktree: nil,
+            worktreeRecoveryAvailable: true
+        )
+
+        #expect(presentation.worktreeRecovery == .none)
+        #expect(!presentation.actions.recoverWorktree)
+    }
+
     @Test func archivedWorktreeRecoveryRemainsASeparateRestoreAction() {
         let presentation = MissionTabPresentation(
             aggregate: Self.runningAggregate(),
