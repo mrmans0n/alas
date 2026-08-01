@@ -83,6 +83,22 @@ struct NewMissionDialogTests {
         #expect(model.branchErrorMessage == nil)
     }
 
+    @Test("branch inventory failure blocks Mission creation")
+    func branchInventoryFailureBlocksCreation() async {
+        let fake = NewMissionDialogFake(branchError: NewMissionDialogFake.TestError.branchFailed)
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+
+        await model.resolve()
+
+        #expect(model.phase == .confirmation)
+        #expect(model.branchErrorMessage == "Branch loading failed.")
+        #expect(model.validationMessage == "Reload repository branches before creating a Mission.")
+        #expect(!model.canCreate)
+        #expect(await model.create(allowDuplicate: false) == nil)
+        #expect(fake.createdDrafts.isEmpty)
+    }
+
     @Test("only matching projects can be selected")
     func projectSelectionIsLimitedToResolverMatches() async {
         let fake = NewMissionDialogFake(

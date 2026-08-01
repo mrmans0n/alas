@@ -703,8 +703,8 @@ final class AppState {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
             return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
-        }, linkedReviewRequest: { [weak self] identity, worktreeID in
-            await self?.refreshMissionReview(identity: identity, worktreeID: worktreeID)
+        }, linkedReviewRequest: { [weak self] identity, projectID in
+            await self?.refreshMissionReview(identity: identity, projectID: projectID)
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
         }, worktreeDiscoverySucceeded: { [weak self] projectID in
@@ -817,7 +817,8 @@ final class AppState {
             async let reviewRefresh: Void = rightPane.refresh(forceReviewLoopRemote: true)
             _ = await (issueRefresh, reviewRefresh)
         } else {
-            await issueRefresh
+            async let reviewRefresh: Void = missions.refreshLinkedReview(id)
+            _ = await (issueRefresh, reviewRefresh)
         }
     }
 
@@ -880,10 +881,9 @@ final class AppState {
 
     private func refreshMissionReview(
         identity: MissionReviewIdentity,
-        worktreeID: String
+        projectID: String
     ) async -> ReviewRequest? {
-        guard let worktree = worktree(withId: worktreeID),
-              let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
         else { return nil }
         let cwd = URL(fileURLWithPath: project.path)
         do {

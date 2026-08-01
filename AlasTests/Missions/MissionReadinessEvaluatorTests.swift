@@ -182,8 +182,8 @@ struct MissionReadinessEvaluatorTests {
         )
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            linkedReviewRequest: { identity, worktreeID in
-                guard identity == Self.reviewIdentity, worktreeID == "worktree-1" else { return nil }
+            linkedReviewRequest: { identity, projectID in
+                guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
         )
@@ -206,8 +206,8 @@ struct MissionReadinessEvaluatorTests {
         let unrelatedVisibleReview = Self.reviewSnapshot(state: .open, number: 92)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            linkedReviewRequest: { identity, worktreeID in
-                guard identity == Self.reviewIdentity, worktreeID == "worktree-1" else { return nil }
+            linkedReviewRequest: { identity, projectID in
+                guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
         )
@@ -314,6 +314,26 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == nil)
         #expect(aggregate.events.last?.kind == .retryStarted)
         #expect(aggregate.events.last?.message == "Mission worktree became available again.")
+    }
+
+    @Test func startupRefreshesAMergedLinkedReviewWithoutAWorktree() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            worktreeAvailable: false,
+            linkedReviewRequest: { identity, projectID in
+                guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
+                return Self.reviewSnapshot(state: .merged).reviewRequest
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
     @Test func startupRecognizesCurrentMergedReviewWithoutPolling() async throws {

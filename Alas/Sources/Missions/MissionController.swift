@@ -13,7 +13,7 @@ typealias MissionStartupReviewSnapshot = @MainActor (
 
 typealias MissionLinkedReviewRequest = @MainActor (
     _ identity: MissionReviewIdentity,
-    _ worktreeID: String
+    _ projectID: String
 ) async -> ReviewRequest?
 
 @Observable
@@ -166,7 +166,7 @@ final class MissionController {
                     if let visible = snapshot.reviewRequest,
                        Self.reviewIdentity(for: visible) == linked {
                         request = visible
-                    } else if let refreshed = await linkedReviewRequest(linked, worktreeId) {
+                    } else if let refreshed = await linkedReviewRequest(linked, leg.projectId) {
                         request = refreshed
                     } else {
                         continue
@@ -266,6 +266,22 @@ final class MissionController {
         }
     }
 
+    func refreshLinkedReview(_ id: MissionID) async {
+        do {
+            guard let aggregate = try await persistence.aggregate(id: id),
+                  let leg = aggregate.primaryLeg,
+                  let identity = leg.reviewIdentity,
+                  let request = await linkedReviewRequest(identity, leg.projectId)
+            else { return }
+            await apply(
+                signal: .review(state: request.state, identity: identity),
+                to: id
+            )
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
     func complete(_ id: MissionID) async {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
@@ -332,6 +348,7 @@ final class MissionController {
                        worktreeDiscoverySucceeded(leg.projectId) {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
+                    await refreshLinkedReview(aggregate.mission.id)
                     continue
                 }
                 guard worktree.branch == leg.branch else {

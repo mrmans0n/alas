@@ -89,6 +89,9 @@ final class NewMissionDialogModel {
         guard candidateProjectIds.contains(projectId) else {
             return "Choose a repository matched to this issue."
         }
+        guard branchErrorMessage == nil else {
+            return "Reload repository branches before creating a Mission."
+        }
         guard !base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Choose a base branch."
         }
