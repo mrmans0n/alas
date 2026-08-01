@@ -86,7 +86,7 @@ struct AppStateCreateWorktreeSymlinkTests {
     }
 
     @Test
-    func liveMissionCreationPersistsPreparedSymlinkDestination() async throws {
+    func liveMissionCreationAvoidsCollisionAtPreparedSymlinkDestination() async throws {
         let realRepo = try await makeRepo(name: "mission-real")
         let persistenceDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-mission-symlink-\(UUID().uuidString)")
@@ -109,6 +109,16 @@ struct AppStateCreateWorktreeSymlinkTests {
             color: "#5fb7c4"
         )
         let rawDestination = linkURL.appendingPathComponent("mission-worktree")
+        let preparedDestination = realRepo.appendingPathComponent("mission-worktree")
+        state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: "occupied-mission-worktree",
+            projectId: project.id,
+            name: "occupied",
+            branch: "occupied",
+            path: preparedDestination,
+            status: .clean,
+            lastActivity: .now
+        ))
         let draft = MissionDraft(
             issue: MissionFixtures.issue(),
             projectId: project.id,
@@ -124,8 +134,6 @@ struct AppStateCreateWorktreeSymlinkTests {
             .createMission(draft, false)
         let aggregate = try #require(state.missions.aggregate(id: id))
 
-        #expect(aggregate.primaryLeg?.destinationPath == realRepo
-            .appendingPathComponent("mission-worktree")
-            .path)
+        #expect(aggregate.primaryLeg?.destinationPath == "\(preparedDestination.path)-2")
     }
 }

@@ -2061,16 +2061,51 @@ final class AppState {
             repoPath: URL(fileURLWithPath: project.path),
             destination: URL(fileURLWithPath: draft.destinationPath)
         )
+        let availableDestination = availablePreparedMissionDestination(
+            projectID: draft.projectId,
+            requested: destination,
+            isRemote: URL(fileURLWithPath: project.path).isRemoteAlasPath
+        )
         return MissionDraft(
             issue: draft.issue,
             projectId: draft.projectId,
             baseRef: draft.baseRef,
             branch: draft.branch,
-            destinationPath: destination.path,
+            destinationPath: availableDestination.path,
             agentId: draft.agentId,
             initialPromptId: draft.initialPromptId,
             initialPrompt: draft.initialPrompt
         )
+    }
+
+    private func availablePreparedMissionDestination(
+        projectID: String,
+        requested: URL,
+        isRemote: Bool
+    ) -> URL {
+        let occupiedPaths = Set(projectsManager.worktrees(projectId: projectID).map {
+            $0.path.standardizedFileURL.path
+        })
+        func isAvailable(_ destination: URL) -> Bool {
+            let path = destination.standardizedFileURL.path
+            return !occupiedPaths.contains(path)
+                && (isRemote || !FileManager.default.fileExists(atPath: path))
+        }
+
+        let requested = requested.standardizedFileURL
+        guard !isAvailable(requested) else { return requested }
+        let parent = requested.deletingLastPathComponent()
+        let name = requested.lastPathComponent
+        var suffix = 2
+        while true {
+            let candidate = parent
+                .appendingPathComponent("\(name)-\(suffix)")
+                .standardizedFileURL
+            if isAvailable(candidate) {
+                return candidate
+            }
+            suffix += 1
+        }
     }
 
     nonisolated static func destinationPathReplacingLocalHome(
