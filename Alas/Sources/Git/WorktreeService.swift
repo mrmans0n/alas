@@ -211,8 +211,7 @@ struct WorktreeService {
         )
         let branchExists = refCheck.exitCode == 0
         var replacesPrunableRegistration = false
-        if branchExists,
-           let registration = try? await Process.git(
+        if let registration = try? await Process.git(
                ["worktree", "list", "--porcelain"],
                cwd: repoPath
            ),

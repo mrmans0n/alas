@@ -133,34 +133,37 @@ final class MissionController {
     }
 
     func retry(_ id: MissionID, agentId: String? = nil) async {
-        do {
-            var recreateWorktree = false
-            if let agentId,
-               var aggregate = try await persistence.aggregate(id: id),
-               aggregate.mission.state == .needsAttention,
-               aggregate.mission.setupCheckpoint == .startingAgent,
-               var leg = aggregate.primaryLeg {
-                if leg.agentId != agentId, leg.pendingInitialPrompt != nil {
-                    leg.agentId = agentId
-                    // ACP sessions retain their original agent identity. A replacement
-                    // therefore needs a fresh, durable session ID instead of mutating
-                    // the prior session or accidentally hydrating it for the new agent.
-                    leg.acpSessionId = environment.makeID()
-                    try await persistence.updateLeg(leg, event: nil)
-                    aggregate.legs = [leg]
-                    environment.notifyChanged(aggregate)
-                    replace(aggregate)
+        await withLifecycleMutation(id: id) { [weak self] in
+            guard let self else { return }
+            do {
+                var recreateWorktree = false
+                if let agentId,
+                   var aggregate = try await persistence.aggregate(id: id),
+                   aggregate.mission.state == .needsAttention,
+                   aggregate.mission.setupCheckpoint == .startingAgent,
+                   var leg = aggregate.primaryLeg {
+                    if leg.agentId != agentId, leg.pendingInitialPrompt != nil {
+                        leg.agentId = agentId
+                        // ACP sessions retain their original agent identity. A replacement
+                        // therefore needs a fresh, durable session ID instead of mutating
+                        // the prior session or accidentally hydrating it for the new agent.
+                        leg.acpSessionId = environment.makeID()
+                        try await persistence.updateLeg(leg, event: nil)
+                        aggregate.legs = [leg]
+                        environment.notifyChanged(aggregate)
+                        replace(aggregate)
+                    }
                 }
+                if let aggregate = try await persistence.aggregate(id: id) {
+                    recreateWorktree = aggregate.mission.state == .needsAttention
+                        && aggregate.mission.setupCheckpoint == .running
+                        && aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+                }
+                loadError = nil
+                await coordinator.retry(id: id, recreateWorktree: recreateWorktree)
+            } catch {
+                loadError = error.localizedDescription
             }
-            if let aggregate = try await persistence.aggregate(id: id) {
-                recreateWorktree = aggregate.mission.state == .needsAttention
-                    && aggregate.mission.setupCheckpoint == .running
-                    && aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
-            }
-            loadError = nil
-            await coordinator.retry(id: id, recreateWorktree: recreateWorktree)
-        } catch {
-            loadError = error.localizedDescription
         }
     }
 

@@ -88,6 +88,7 @@ struct WorktreeServiceTests {
             projectId: "p"
         )
         _ = try await Process.git(["checkout", "--detach"], cwd: dest)
+        _ = try await Process.git(["branch", "-D", "feat/detached-prunable"], cwd: repo)
         try FileManager.default.removeItem(at: dest)
 
         let recreated = try await svc.add(

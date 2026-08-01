@@ -76,6 +76,31 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
     }
 
+    @Test func retryAndCompletionAreSerialized() async throws {
+        var missing = Self.runningAggregate()
+        missing.mission.state = .needsAttention
+        missing.mission.setupCheckpoint = .running
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        let gate = MissionWorktreeCreationGate()
+        let fake = try MissionLifecycleFake(
+            aggregate: missing,
+            worktreeAvailable: false,
+            createWorktree: { _ in await gate.create() }
+        )
+        await fake.controller.load()
+
+        let retry = Task { await fake.controller.retry(Self.missionID) }
+        await gate.waitUntilStarted()
+        let completion = Task { await fake.controller.complete(Self.missionID) }
+        await Task.yield()
+        await gate.release()
+        await retry.value
+        await completion.value
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .completed)
+    }
+
     @Test func removedProjectNeedsAttention() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,
@@ -927,7 +952,8 @@ private final class MissionLifecycleFake {
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
-        branchTip: @escaping MissionBranchTip = { _, _ in "abc123" }
+        branchTip: @escaping MissionBranchTip = { _, _ in "abc123" },
+        createWorktree: ((MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>)? = nil
     ) throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-lifecycle-\(UUID().uuidString).sqlite")
@@ -966,8 +992,11 @@ private final class MissionLifecycleFake {
                         lastActivity: Date(timeIntervalSince1970: 100)
                     )
                 },
-                createWorktree: { _ in
+                createWorktree: { leg in
                     recorder.externalOperations.append("createWorktree")
+                    if let createWorktree {
+                        return await createWorktree(leg)
+                    }
                     return .failure(.init(message: "Unexpected worktree creation."))
                 },
                 startACP: { _, _ in
@@ -1036,5 +1065,35 @@ private final class RefreshIssueRace {
     func releaseSlowFailure() {
         slowFailureRelease?.resume()
         slowFailureRelease = nil
+    }
+}
+
+@MainActor
+private final class MissionWorktreeCreationGate {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func create() async -> Result<Worktree, WorktreeCreationFailure> {
+        started = true
+        let waiters = startWaiters
+        startWaiters = []
+        for waiter in waiters { waiter.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+        return .failure(.init(message: "Creation failed."))
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
