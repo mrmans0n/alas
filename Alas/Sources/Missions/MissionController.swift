@@ -31,6 +31,8 @@ final class MissionController {
     @ObservationIgnored
     private let startupReviewSnapshot: MissionStartupReviewSnapshot
     @ObservationIgnored
+    private let openMission: @MainActor (MissionID) -> Void
+    @ObservationIgnored
     private var lifecycleMutations: Set<MissionID> = []
     @ObservationIgnored
     private var lifecycleWaiters: [MissionID: [CheckedContinuation<Void, Never>]] = [:]
@@ -45,6 +47,10 @@ final class MissionController {
         notifyChanged: { [weak self] aggregate in
             self?.environment.notifyChanged(aggregate)
             self?.replace(aggregate)
+            if aggregate.primaryLeg?.worktreeId != nil,
+               aggregate.mission.setupCheckpoint == .startingAgent {
+                self?.openMission(aggregate.mission.id)
+            }
         },
         reportFailure: { [weak self] id, message in
             self?.environment.reportFailure(id, message)
@@ -60,7 +66,8 @@ final class MissionController {
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
-        startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _ in nil }
+        startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _ in nil },
+        openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
         persistence = environment.persistence
         self.environment = environment
@@ -69,6 +76,7 @@ final class MissionController {
         self.worktreeArchived = worktreeArchived
         self.reviewSnapshot = reviewSnapshot
         self.startupReviewSnapshot = startupReviewSnapshot
+        self.openMission = openMission
     }
 
     func load() async {

@@ -202,7 +202,8 @@ struct RootView: View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
+            projectsManager: state.projectsManager,
+            allowsHiddenSelectedWorktree: allowsHiddenSelectedWorktreeForMission
         )
         switch resolver.resolve() {
         case .worktree(let wt):
@@ -237,6 +238,14 @@ struct RootView: View {
                 newAgentChatShortcut: nil
             )
         }
+    }
+
+    private var allowsHiddenSelectedWorktreeForMission: Bool {
+        guard let worktreeID = state.selectedWorktreeId,
+              let tab = state.tabs.activeTab(forWorktree: worktreeID),
+              case .mission = tab
+        else { return false }
+        return true
     }
 
     private func selectedWorktree() -> Worktree? {

@@ -259,6 +259,59 @@ struct TabsManagerTests {
         #expect(first.title == "Review Changes")
     }
 
+    @Test func openOrFocusMissionDoesNotDuplicateAndRefreshesTitle() {
+        let worktreeId = "tabs-manager-mission-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+
+        let first = manager.openOrFocusMission(
+            worktreeId: worktreeId,
+            missionID: .init(rawValue: "mission-1"),
+            title: "Old title"
+        )
+        let other = manager.appendTerminal(worktreeId: worktreeId, title: "Other", sessionId: "session")
+        manager.activate(worktreeId: worktreeId, tabId: other.id)
+        let refreshed = manager.openOrFocusMission(
+            worktreeId: worktreeId,
+            missionID: .init(rawValue: "mission-1"),
+            title: "New title"
+        )
+
+        #expect(first.id == refreshed.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 2)
+        #expect(manager.activeTabId(forWorktree: worktreeId) == first.id)
+        #expect(refreshed.title == "New title")
+    }
+
+    @Test func openOrFocusMissionMovesStableTabToUpdatedWorktreeIdentity() {
+        let firstWorktreeID = "tabs-manager-mission-old-\(UUID().uuidString)"
+        let secondWorktreeID = "tabs-manager-mission-new-\(UUID().uuidString)"
+        defer {
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: firstWorktreeID))
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: secondWorktreeID))
+        }
+        let manager = TabsManager()
+        _ = manager.openOrFocusMission(
+            worktreeId: firstWorktreeID,
+            missionID: .init(rawValue: "mission-1"),
+            title: "Mission"
+        )
+
+        let moved = manager.openOrFocusMission(
+            worktreeId: secondWorktreeID,
+            missionID: .init(rawValue: "mission-1"),
+            title: "Mission moved"
+        )
+
+        #expect(manager.tabs(forWorktree: firstWorktreeID).isEmpty)
+        #expect(manager.tabs(forWorktree: secondWorktreeID) == [moved])
+        #expect(moved == .mission(.init(
+            missionID: .init(rawValue: "mission-1"),
+            worktreeId: secondWorktreeID,
+            title: "Mission moved"
+        )))
+    }
+
     @Test func openOrFocusFileSnapshotReusesWorktreePathRefTab() {
         let worktreeId = "tabs-manager-file-snapshot-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

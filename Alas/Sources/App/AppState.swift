@@ -3,6 +3,20 @@ import AppKit
 import Observation
 import os
 
+enum MissionOpenError: LocalizedError, Equatable {
+    case missionUnavailable(MissionID)
+    case worktreeUnavailable(missionID: MissionID)
+
+    var errorDescription: String? {
+        switch self {
+        case .missionUnavailable:
+            "The Mission record is unavailable."
+        case .worktreeUnavailable:
+            "The Mission worktree is not available in Alas. Refresh the project worktrees and try again."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -687,12 +701,85 @@ final class AppState {
                 baseBranch: self.config.worktrees.baseBranch,
                 comparisonMode: self.config.changes.comparisonMode
             )
+        }, openMission: { [weak self] missionID in
+            _ = self?.openMission(id: missionID)
         })
     }
 
     func reconcileMissionsForStartup() async {
         await missions.load()
         await missions.reconcileInterrupted()
+    }
+
+    @discardableResult
+    func openMission(id: MissionID) -> Result<Tab, MissionOpenError> {
+        guard let aggregate = missions.aggregate(id: id),
+              let leg = aggregate.primaryLeg
+        else {
+            return .failure(.missionUnavailable(id))
+        }
+
+        let worktrees = projectsManager.worktrees(projectId: leg.projectId)
+        let destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+        let worktree = leg.worktreeId
+            .flatMap { worktreeID in worktrees.first { $0.id == worktreeID } }
+            ?? worktrees.first {
+                $0.path.standardizedFileURL.path == destinationPath
+            }
+        guard let worktree else {
+            return .failure(.worktreeUnavailable(missionID: id))
+        }
+
+        focusGlobalWorktree(id: worktree.id, projectId: leg.projectId)
+        return .success(tabs.openOrFocusMission(
+            worktreeId: worktree.id,
+            missionID: id,
+            title: aggregate.mission.title
+        ))
+    }
+
+    func openMissionChanges(worktree: Worktree) {
+        guard !projectsManager.isWorktreeHidden(
+            projectId: worktree.projectId,
+            path: worktree.path
+        ) else { return }
+
+        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        let rightPane = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        )
+        rightPane.activeTab = .changes
+        if !config.rightPaneVisible {
+            config.rightPaneVisible = true
+            _ = saveConfig()
+        }
+    }
+
+    func refreshMission(_ id: MissionID) async {
+        guard let aggregate = missions.aggregate(id: id),
+              let leg = aggregate.primaryLeg
+        else { return }
+
+        async let issueRefresh: Void = missions.refreshIssue(id)
+        let worktree = projectsManager.worktrees(projectId: leg.projectId).first { candidate in
+            candidate.id == leg.worktreeId
+                || candidate.path.standardizedFileURL.path
+                    == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+        }
+        if let worktree,
+           !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
+            let rightPane = rightPaneStore.state(
+                for: worktree,
+                baseBranch: config.worktrees.baseBranch,
+                comparisonMode: config.changes.comparisonMode
+            )
+            async let reviewRefresh: Void = rightPane.refresh(forceReviewLoopRemote: true)
+            _ = await (issueRefresh, reviewRefresh)
+        } else {
+            await issueRefresh
+        }
     }
 
     private func refreshMissionIssue(

@@ -34,6 +34,47 @@ struct CenterSelectionStateResolverTests {
         }
     }
 
+    @Test func returnsHiddenWorktreeOnlyForExplicitMissionSelection() {
+        let project = ProjectConfig(
+            id: "p1",
+            name: "A",
+            path: "/tmp/a",
+            color: "#fff",
+            addedAt: Date(),
+            hiddenWorktreePaths: ["/tmp/a-hidden"]
+        )
+        let worktree = Worktree(
+            id: "wt-hidden",
+            projectId: project.id,
+            name: "archived",
+            branch: "archived",
+            path: URL(fileURLWithPath: "/tmp/a-hidden"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+        manager.insertOptimisticWorktree(worktree)
+
+        let ordinary = CenterSelectionStateResolver(
+            selectedWorktreeId: worktree.id,
+            projects: [project],
+            projectsManager: manager
+        ).resolve()
+        let mission = CenterSelectionStateResolver(
+            selectedWorktreeId: worktree.id,
+            projects: [project],
+            projectsManager: manager,
+            allowsHiddenSelectedWorktree: true
+        ).resolve()
+
+        #expect(ordinary == .empty)
+        if case .worktree(let resolved) = mission {
+            #expect(resolved == worktree)
+        } else {
+            Issue.record("Expected hidden Mission worktree")
+        }
+    }
+
     @Test func returnsDeletingWhenDeletingState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())

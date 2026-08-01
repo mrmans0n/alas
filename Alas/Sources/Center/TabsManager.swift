@@ -776,6 +776,53 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusMission(
+        worktreeId: String,
+        missionID: MissionID,
+        title: String
+    ) -> Tab {
+        let state = MissionTabState(
+            missionID: missionID,
+            worktreeId: worktreeId,
+            title: title
+        )
+
+        // Mission identity is global even though its tab is persisted with the
+        // primary worktree. If reconciliation changes the worktree identity,
+        // move the tab instead of leaving duplicate copies behind.
+        for sourceWorktreeID in Array(byWorktree.keys) where sourceWorktreeID != worktreeId {
+            guard var source = byWorktree[sourceWorktreeID] else { continue }
+            let removedIndices = source.tabs.indices.filter { source.tabs[$0].id == state.id }
+            guard !removedIndices.isEmpty else { continue }
+            source.tabs.removeAll { $0.id == state.id }
+            if source.activeTabId == state.id {
+                if source.tabs.isEmpty {
+                    source.activeTabId = nil
+                } else {
+                    let neighbour = min(removedIndices[0], source.tabs.count - 1)
+                    source.activeTabId = source.tabs[neighbour].id
+                }
+            }
+            byWorktree[sourceWorktreeID] = source
+            persist(sourceWorktreeID)
+        }
+
+        if var file = byWorktree[worktreeId],
+           let index = file.tabs.firstIndex(where: { $0.id == state.id }) {
+            let tab = Tab.mission(state)
+            file.tabs[index] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+
+        let tab = Tab.mission(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusFileSnapshot(worktreeId: String, relativePath: String, ref: String = "HEAD") -> Tab {
         let state = FileSnapshotTabState(worktreeId: worktreeId, relativePath: relativePath, ref: ref)
         if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {

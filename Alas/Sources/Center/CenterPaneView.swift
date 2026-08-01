@@ -305,6 +305,13 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(sessionState.id)
+                    case .mission(let missionState):
+                        MissionTabView(
+                            state: state,
+                            worktree: worktree,
+                            tabState: missionState
+                        )
+                        .id(missionState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,

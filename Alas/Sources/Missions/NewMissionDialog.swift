@@ -669,10 +669,7 @@ extension NewMissionDialogModel.Environment {
                 }
             },
             openMission: { [weak state] missionID in
-                guard let worktreeID = state?.missions.aggregate(id: missionID)?.primaryLeg?.worktreeId else {
-                    return
-                }
-                state?.selectWorktree(id: worktreeID)
+                _ = state?.openMission(id: missionID)
             }
         )
     }

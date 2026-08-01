@@ -1,0 +1,715 @@
+import AppKit
+import SwiftUI
+
+struct MissionDiffCounts: Equatable {
+    let fileCount: Int
+    let additions: Int
+    let deletions: Int
+
+    init(fileCount: Int, additions: Int, deletions: Int) {
+        self.fileCount = fileCount
+        self.additions = additions
+        self.deletions = deletions
+    }
+
+    init(changes: [ChangedFile]) {
+        fileCount = changes.count
+        additions = changes.reduce(0) { $0 + $1.add }
+        deletions = changes.reduce(0) { $0 + $1.del }
+    }
+}
+
+enum MissionAgentActivity: Equatable {
+    case unavailable
+    case connecting
+    case ready
+    case working
+    case needsInput
+    case disconnected
+    case failed
+
+    var label: String {
+        switch self {
+        case .unavailable: "Unavailable"
+        case .connecting: "Connecting"
+        case .ready: "Ready"
+        case .working: "Working"
+        case .needsInput: "Needs input"
+        case .disconnected: "Disconnected"
+        case .failed: "Failed"
+        }
+    }
+}
+
+struct MissionACPSummary: Equatable {
+    let agentID: String
+    let agentName: String
+    let activity: MissionAgentActivity
+
+    @MainActor
+    init(session: ACPSession, agentName: String) {
+        agentID = session.agentId
+        self.agentName = agentName
+        switch session.agentState {
+        case .idle, .spawning:
+            activity = .connecting
+        case .ready:
+            switch session.transcript.streamingState {
+            case .idle: activity = .ready
+            case .sending, .streaming: activity = .working
+            case .awaitingPermission, .awaitingInput: activity = .needsInput
+            }
+        case .disconnected:
+            activity = .disconnected
+        case .failed:
+            activity = .failed
+        }
+    }
+
+    init(agentID: String, agentName: String, activity: MissionAgentActivity) {
+        self.agentID = agentID
+        self.agentName = agentName
+        self.activity = activity
+    }
+}
+
+struct MissionTabPresentation: Equatable {
+    enum StateTone: Equatable {
+        case progress
+        case success
+        case warning
+        case attention
+        case complete
+    }
+
+    struct Actions: Equatable {
+        let openAgent: Bool
+        let openChanges: Bool
+        let openIssue: Bool
+        let refresh: Bool
+        let retryWorktree: Bool
+        let retryAgent: Bool
+        let recoverWorktree: Bool
+        let completeMission: Bool
+    }
+
+    let providerName: String
+    let repositoryName: String
+    let issueNumberCopy: String
+    let title: String
+    let stateLabel: String
+    let stateTone: StateTone
+    let checkpointCopy: String?
+    let errorCopy: String?
+    let staleSourceCopy: String?
+    let issueBody: String
+    let labels: [String]
+    let assignees: [String]
+    let branchCopy: String
+    let baseCopy: String
+    let destinationCopy: String
+    let agentCopy: String
+    let diffCopy: String
+    let reviewCopy: String
+    let readinessCopy: String
+    let events: [MissionEvent]
+    let actions: Actions
+    let issueDestination: URL
+    let agentDestination: String?
+    let changesDestination: String?
+    let reviewDestination: URL?
+    let agentReplacementRequired: Bool
+    let completionConfirmationRequired: Bool
+
+    init(
+        aggregate: MissionAggregate,
+        worktree: Worktree?,
+        acpSummary: MissionACPSummary? = nil,
+        diffCounts: MissionDiffCounts? = nil,
+        reviewSnapshot: ReviewLoopSnapshot? = nil,
+        projectName: String? = nil,
+        worktreeArchived: Bool = false,
+        worktreeRecoveryAvailable: Bool = false,
+        availableACPAgentIDs: Set<String> = []
+    ) {
+        let mission = aggregate.mission
+        let issue = aggregate.issue
+        let leg = aggregate.primaryLeg
+        providerName = issue.identity.provider.displayName
+        repositoryName = projectName ?? issue.identity.repositorySlug
+        issueNumberCopy = "#\(issue.identity.number)"
+        title = mission.title
+        stateLabel = Self.stateLabel(mission.state)
+        stateTone = Self.stateTone(mission.state)
+        checkpointCopy = Self.checkpointCopy(mission)
+        errorCopy = mission.attentionReason
+        staleSourceCopy = issue.refreshError.map {
+            "Stored issue snapshot may be stale: \($0)"
+        }
+        issueBody = issue.body
+        labels = issue.labels
+        assignees = issue.assignees
+        branchCopy = worktree?.branch ?? leg?.branch ?? "Worktree unavailable"
+        baseCopy = leg?.baseRef ?? ""
+        destinationCopy = worktree?.path.path ?? leg?.destinationPath ?? ""
+        if let acpSummary {
+            agentCopy = "\(acpSummary.agentName) · \(acpSummary.activity.label)"
+        } else if let agentID = leg?.agentId {
+            agentCopy = "\(agentID) · Session unavailable"
+        } else {
+            agentCopy = "No ACP agent"
+        }
+        if let diffCounts {
+            let files = diffCounts.fileCount == 1 ? "1 file" : "\(diffCounts.fileCount) files"
+            diffCopy = "\(files) · +\(diffCounts.additions) −\(diffCounts.deletions)"
+        } else {
+            diffCopy = "Changes unavailable"
+        }
+        let linkedReview = leg?.reviewIdentity
+        reviewCopy = Self.reviewCopy(identity: linkedReview, snapshot: reviewSnapshot)
+        reviewDestination = linkedReview?.url
+        readinessCopy = Self.readinessCopy(aggregate)
+        events = aggregate.events.sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+            return lhs.id < rhs.id
+        }
+
+        let isAttention = mission.state == .needsAttention
+        let retryWorktree = isAttention && mission.setupCheckpoint == .creatingWorktree
+        let retryAgent = isAttention && mission.setupCheckpoint == .startingAgent
+        let hasUsableWorktree = worktree != nil && !worktreeArchived
+        let openAgent = hasUsableWorktree
+            && leg?.acpSessionId != nil
+            && mission.setupCheckpoint == .running
+        let canComplete = [MissionState.running, .needsAttention, .readyToComplete]
+            .contains(mission.state)
+        actions = Actions(
+            openAgent: openAgent,
+            openChanges: hasUsableWorktree,
+            openIssue: true,
+            refresh: true,
+            retryWorktree: retryWorktree,
+            retryAgent: retryAgent,
+            recoverWorktree: worktreeRecoveryAvailable,
+            completeMission: canComplete
+        )
+        issueDestination = issue.canonicalURL
+        agentDestination = leg?.acpSessionId
+        changesDestination = worktree?.id
+        agentReplacementRequired = retryAgent
+            && leg.map { !availableACPAgentIDs.contains($0.agentId) } == true
+        completionConfirmationRequired = canComplete
+    }
+
+    private static func stateLabel(_ state: MissionState) -> String {
+        switch state {
+        case .creating: "Creating"
+        case .running: "Running"
+        case .needsAttention: "Needs attention"
+        case .readyToComplete: "Ready to complete"
+        case .completed: "Completed"
+        }
+    }
+
+    private static func stateTone(_ state: MissionState) -> StateTone {
+        switch state {
+        case .creating: .progress
+        case .running: .success
+        case .needsAttention: .attention
+        case .readyToComplete: .warning
+        case .completed: .complete
+        }
+    }
+
+    private static func checkpointCopy(_ mission: MissionRecord) -> String? {
+        switch (mission.state, mission.setupCheckpoint) {
+        case (.creating, .creatingWorktree): "Creating worktree…"
+        case (.creating, .startingAgent): "Starting ACP agent…"
+        case (.creating, .running): "Finalizing Mission setup…"
+        case (.needsAttention, .creatingWorktree): "Worktree creation needs attention."
+        case (.needsAttention, .startingAgent): "ACP agent startup needs attention."
+        case (.needsAttention, .running): "Mission needs attention."
+        default: nil
+        }
+    }
+
+    private static func reviewCopy(
+        identity: MissionReviewIdentity?,
+        snapshot: ReviewLoopSnapshot?
+    ) -> String {
+        guard let identity else { return "No \(CodeHostKind.github.reviewRequestLabel)/\(CodeHostKind.gitlab.reviewRequestLabel) linked" }
+        let base = "\(identity.provider.reviewRequestLabel) \(identity.provider.reviewRequestNumberPrefix)\(identity.number)"
+        guard let request = snapshot?.reviewRequest,
+              request.provider == identity.provider,
+              request.remote.host.caseInsensitiveCompare(identity.host) == .orderedSame,
+              request.remote.repositorySlug == identity.repositorySlug,
+              request.number == identity.number
+        else { return base }
+        let state: String
+        switch request.state {
+        case .open: state = "Open"
+        case .closed: state = "Closed"
+        case .merged: state = "Merged"
+        }
+        return "\(base) · \(state)"
+    }
+
+    private static func readinessCopy(_ aggregate: MissionAggregate) -> String {
+        switch aggregate.mission.state {
+        case .readyToComplete:
+            return aggregate.events
+                .last(where: { $0.kind == .ready })?.message
+                ?? "A completion condition was detected. Completion remains a user action."
+        case .completed:
+            return "Mission completed. Provider issue and worktree state were left unchanged."
+        case .creating:
+            return "Setup must finish before readiness can be evaluated."
+        case .running, .needsAttention:
+            return "Ready when the linked PR/MR merges or the worktree is archived in Alas. Completion remains a user action."
+        }
+    }
+}
+
+struct MissionTabView: View {
+    @Bindable var state: AppState
+    let worktree: Worktree
+    let tabState: MissionTabState
+
+    @State private var completionConfirmationPresented = false
+    @State private var agentPickerPresented = false
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Group {
+            if let aggregate = state.missions.aggregate(id: tabState.missionID) {
+                missionContent(aggregate)
+            } else {
+                ContentUnavailableView(
+                    "Mission unavailable",
+                    systemImage: "scope",
+                    description: Text("The Mission record could not be loaded.")
+                )
+            }
+        }
+        .confirmationDialog(
+            "Complete Mission?",
+            isPresented: $completionConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Complete Mission") {
+                Task { await state.missions.complete(tabState.missionID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This only marks the Mission completed in Alas. It does not stop the agent, archive the worktree, merge code, or change the source issue.")
+        }
+        .popover(isPresented: $agentPickerPresented) {
+            MissionAgentReplacementPopover(
+                agents: enabledACPAgents,
+                storedAgentID: state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.agentId ?? ""
+            ) { agentID in
+                Task { await state.missions.retry(tabState.missionID, agentId: agentID) }
+            }
+            .environment(\.theme, theme)
+        }
+        .task(id: rightPaneActivationKey) {
+            guard !worktreeIsArchived else { return }
+            _ = state.rightPaneStore.state(
+                for: worktree,
+                baseBranch: state.config.worktrees.baseBranch,
+                comparisonMode: state.config.changes.comparisonMode
+            )
+        }
+    }
+
+    private func missionContent(_ aggregate: MissionAggregate) -> some View {
+        let rightPane = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        let session = linkedSession(aggregate)
+        let presentation = MissionTabPresentation(
+            aggregate: aggregate,
+            worktree: worktree,
+            acpSummary: session.map {
+                MissionACPSummary(session: $0, agentName: agentName(for: $0.agentId))
+            },
+            diffCounts: rightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
+            reviewSnapshot: rightPane?.reviewLoop.snapshot,
+            projectName: state.projects.first(where: { $0.id == worktree.projectId })?.name,
+            worktreeArchived: worktreeIsArchived,
+            worktreeRecoveryAvailable: worktreeIsArchived,
+            availableACPAgentIDs: Set(enabledACPAgents.map(\.id))
+        )
+
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 18) {
+                MissionHeaderSection(presentation: presentation)
+                MissionLegSection(
+                    presentation: presentation,
+                    session: session,
+                    agentName: session.map { agentName(for: $0.agentId) },
+                    onOpenAgent: openAgent,
+                    onOpenChanges: openChanges,
+                    onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
+                    onOpenReview: {
+                        if let url = presentation.reviewDestination {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                )
+                MissionIssueContextSection(presentation: presentation, onRefresh: refresh)
+                MissionActivitySection(events: presentation.events)
+                MissionReadinessSection(
+                    presentation: presentation,
+                    onRetryWorktree: retryWorktree,
+                    onRetryAgent: { agentPickerPresented = true },
+                    onRecoverWorktree: recoverWorktree,
+                    onCompleteMission: { completionConfirmationPresented = true }
+                )
+            }
+            .frame(maxWidth: 820, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var enabledACPAgents: [AgentDefinition] {
+        NewWorktreeDialog.acpCapableAgents(from: state.agentRegistry.enabled())
+    }
+
+    private var worktreeIsArchived: Bool {
+        state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
+    }
+
+    private var rightPaneActivationKey: String {
+        "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
+    }
+
+    private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {
+        guard let id = aggregate.primaryLeg?.acpSessionId,
+              let manager = state.acpManager(forWorktreeId: worktree.id)
+        else { return nil }
+        return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
+    }
+
+    private func agentName(for id: String) -> String {
+        state.agent(id: id)?.displayName
+            ?? AgentBuiltins.entry(id: id)?.displayName
+            ?? id
+    }
+
+    private func openAgent() {
+        guard !worktreeIsArchived,
+              let sessionID = state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.acpSessionId
+        else { return }
+        state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        Task { await state.openExistingACPSession(sessionId: sessionID) }
+    }
+
+    private func openChanges() {
+        state.openMissionChanges(worktree: worktree)
+    }
+
+    private func refresh() {
+        Task { await state.refreshMission(tabState.missionID) }
+    }
+
+    private func retryWorktree() {
+        Task { await state.missions.retry(tabState.missionID) }
+    }
+
+    private func recoverWorktree() {
+        guard worktreeIsArchived else { return }
+        state.unarchiveWorktree(projectId: worktree.projectId, path: worktree.path)
+        state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+    }
+}
+
+private struct MissionHeaderSection: View {
+    let presentation: MissionTabPresentation
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("\(presentation.providerName.uppercased()) · \(presentation.repositoryName) \(presentation.issueNumberCopy)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("fg-dim"))
+                Text(presentation.title)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(theme.color("fg"))
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct MissionStateChip: View {
+    let label: String
+    let tone: MissionTabPresentation.StateTone
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+
+    private var color: Color {
+        switch tone {
+        case .progress: theme.color("accent")
+        case .success: theme.color("add")
+        case .warning: theme.color("mod")
+        case .attention: theme.color("del")
+        case .complete: theme.color("fg-muted")
+        }
+    }
+}
+
+private struct MissionLegSection: View {
+    let presentation: MissionTabPresentation
+    let session: ACPSession?
+    let agentName: String?
+    let onOpenAgent: () -> Void
+    let onOpenChanges: () -> Void
+    let onOpenIssue: () -> Void
+    let onOpenReview: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(presentation.repositoryName)
+                    .font(.headline)
+                Spacer()
+                Text(presentation.branchCopy)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 14) {
+                if let session, let agentName {
+                    MissionLiveAgentStatus(session: session, agentName: agentName)
+                } else {
+                    Text(presentation.agentCopy)
+                }
+                Text(presentation.diffCopy)
+                if let reviewDestination = presentation.reviewDestination {
+                    Button(presentation.reviewCopy, action: onOpenReview)
+                        .buttonStyle(.link)
+                        .help(reviewDestination.absoluteString)
+                } else {
+                    Text(presentation.reviewCopy)
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(theme.color("fg-dim"))
+            HStack(spacing: 8) {
+                if presentation.agentDestination != nil {
+                    Button("Open Agent", action: onOpenAgent)
+                        .disabled(!presentation.actions.openAgent)
+                }
+                if presentation.changesDestination != nil {
+                    Button("Open Changes", action: onOpenChanges)
+                        .disabled(!presentation.actions.openChanges)
+                }
+                Button("Open Issue", action: onOpenIssue)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(14)
+        .background(theme.color("bg-2"))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct MissionLiveAgentStatus: View {
+    @ObservedObject var session: ACPSession
+    let agentName: String
+
+    var body: some View {
+        let summary = MissionACPSummary(session: session, agentName: agentName)
+        Text("\(summary.agentName) · \(summary.activity.label)")
+    }
+}
+
+private struct MissionIssueContextSection: View {
+    let presentation: MissionTabPresentation
+    let onRefresh: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("ISSUE CONTEXT")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                Spacer()
+                Button("Refresh", action: onRefresh)
+                    .buttonStyle(.borderless)
+                    .disabled(!presentation.actions.refresh)
+            }
+            Text(presentation.issueBody)
+                .font(.body)
+                .foregroundStyle(theme.color("fg"))
+                .textSelection(.enabled)
+            if !presentation.labels.isEmpty {
+                Text(presentation.labels.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(theme.color("fg-dim"))
+            }
+            if !presentation.assignees.isEmpty {
+                Text("Assigned to \(presentation.assignees.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(theme.color("fg-dim"))
+            }
+            if let stale = presentation.staleSourceCopy {
+                Label(stale, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(theme.color("mod"))
+            }
+        }
+        .padding(14)
+        .background(theme.color("bg-0"))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        }
+    }
+}
+
+private struct MissionActivitySection: View {
+    let events: [MissionEvent]
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ACTIVITY")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(theme.color("fg-muted"))
+            ForEach(events, id: \.id) { event in
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(event.createdAt, style: .time)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(theme.color("fg-faint"))
+                    Text(event.message)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.color("fg-dim"))
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+}
+
+private struct MissionReadinessSection: View {
+    let presentation: MissionTabPresentation
+    let onRetryWorktree: () -> Void
+    let onRetryAgent: () -> Void
+    let onRecoverWorktree: () -> Void
+    let onCompleteMission: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let checkpoint = presentation.checkpointCopy {
+                Text(checkpoint)
+                    .font(.headline)
+                    .foregroundStyle(theme.color("fg"))
+            }
+            if let error = presentation.errorCopy {
+                Text(error)
+                    .font(.body)
+                    .foregroundStyle(theme.color("del"))
+                    .textSelection(.enabled)
+            }
+            Text(presentation.readinessCopy)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-dim"))
+            HStack(spacing: 8) {
+                if presentation.actions.retryWorktree {
+                    Button("Retry Worktree", action: onRetryWorktree)
+                }
+                if presentation.actions.retryAgent {
+                    Button("Retry Agent", action: onRetryAgent)
+                }
+                if presentation.actions.recoverWorktree {
+                    Button("Restore Worktree", action: onRecoverWorktree)
+                }
+                if presentation.actions.completeMission {
+                    Button("Complete Mission", action: onCompleteMission)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(theme.color("bg-2"))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        }
+    }
+}
+
+private struct MissionAgentReplacementPopover: View {
+    let agents: [AgentDefinition]
+    let onRetry: (String) -> Void
+    @State private var selectedAgentID: String
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        agents: [AgentDefinition],
+        storedAgentID: String,
+        onRetry: @escaping (String) -> Void
+    ) {
+        self.agents = agents
+        self.onRetry = onRetry
+        let initial = agents.contains(where: { $0.id == storedAgentID })
+            ? storedAgentID
+            : agents.first?.id ?? ""
+        _selectedAgentID = State(initialValue: initial)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Retry ACP Agent")
+                .font(.headline)
+            Text("Choose an enabled ACP agent. Retrying starts only the agent checkpoint and keeps the existing worktree.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Picker("ACP agent", selection: $selectedAgentID) {
+                ForEach(agents) { agent in
+                    Label {
+                        Text(agent.displayName)
+                    } icon: {
+                        Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
+                    }
+                    .tag(agent.id)
+                }
+            }
+            .pickerStyle(.menu)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Retry Agent") {
+                    onRetry(selectedAgentID)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedAgentID.isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+}
