@@ -103,6 +103,35 @@ struct WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: dest.path))
     }
 
+    @Test func addRecreatesAnAbsentLockedWorktreeRegistration() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-locked-missing")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/locked-missing",
+            destination: dest,
+            projectId: "p"
+        )
+        _ = try await Process.git(["worktree", "lock", dest.path], cwd: repo)
+        try FileManager.default.removeItem(at: dest)
+
+        let recreated = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/locked-missing",
+            destination: dest,
+            projectId: "p"
+        )
+
+        #expect(recreated.branch == "feat/locked-missing")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
     @Test func prunableRecoveryDoesNotOverrideALiveBranchCheckout() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

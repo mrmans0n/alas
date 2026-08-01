@@ -22,6 +22,26 @@ import Foundation
         #expect(parsed.map(\.path.path) == ["/tmp/main"])
     }
 
+    @Test func parsePorcelainOmitsAbsentLockedWorktrees() {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-locked-missing-\(UUID().uuidString)")
+        let porcelain = """
+        worktree /tmp/main
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree \(missing.path)
+        HEAD def456
+        branch refs/heads/feature/locked
+        locked
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1")
+
+        #expect(parsed.map(\.branch) == ["main"])
+    }
+
     @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")

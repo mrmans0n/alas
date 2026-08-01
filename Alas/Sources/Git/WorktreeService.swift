@@ -151,9 +151,15 @@ struct WorktreeService {
         var currentPath: URL?
         var currentBranch: String?
         var currentPrunable = false
+        var currentLocked = false
 
         func flush() {
-            if let path = currentPath, !currentPrunable {
+            let absentLockedPath = currentPath.map { path in
+                currentLocked
+                    && !path.isRemoteAlasPath
+                    && !FileManager.default.fileExists(atPath: path.path)
+            } ?? false
+            if let path = currentPath, !currentPrunable, !absentLockedPath {
                 let branch = currentBranch ?? "(detached)"
                 let dirAttrs = try? FileManager.default.attributesOfItem(atPath: path.path)
                 let dirMtime = (dirAttrs?[.modificationDate] as? Date) ?? Date()
@@ -174,6 +180,7 @@ struct WorktreeService {
             currentPath = nil
             currentBranch = nil
             currentPrunable = false
+            currentLocked = false
         }
 
         for line in out.split(separator: "\n") {
@@ -186,6 +193,8 @@ struct WorktreeService {
                 currentBranch = raw.replacingOccurrences(of: "refs/heads/", with: "")
             } else if line.hasPrefix("prunable") {
                 currentPrunable = true
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
             }
         }
         flush()
@@ -210,19 +219,28 @@ struct WorktreeService {
             cwd: repoPath
         )
         let branchExists = refCheck.exitCode == 0
-        var replacesPrunableRegistration = false
+        var staleRegistration: StaleWorktreeRegistration?
         if let registration = try? await Process.git(
                ["worktree", "list", "--porcelain"],
                cwd: repoPath
            ),
            registration.exitCode == 0 {
-            replacesPrunableRegistration = Self.hasPrunableRegistration(
+            staleRegistration = Self.staleRegistration(
                 registration.stdout,
                 destination: destination
             )
         }
 
-        if replacesPrunableRegistration {
+        if staleRegistration == .locked {
+            let unlock = try await Process.git(
+                ["worktree", "unlock", destination.path],
+                cwd: repoPath
+            )
+            guard unlock.exitCode == 0 else {
+                throw WorktreeError.gitFailed(unlock.stderr)
+            }
+        }
+        if staleRegistration != nil {
             let removal = try await Process.git(
                 ["worktree", "remove", destination.path],
                 cwd: repoPath
@@ -278,10 +296,15 @@ struct WorktreeService {
         return makeWorktree(destination: destination, branch: branch, projectId: projectId)
     }
 
-    private static func hasPrunableRegistration(
+    private enum StaleWorktreeRegistration {
+        case prunable
+        case locked
+    }
+
+    private static func staleRegistration(
         _ porcelain: String,
         destination: URL
-    ) -> Bool {
+    ) -> StaleWorktreeRegistration? {
         func canonicalPath(_ url: URL) -> String {
             url.deletingLastPathComponent()
                 .resolvingSymlinksInPath()
@@ -292,25 +315,34 @@ struct WorktreeService {
         let destinationPath = canonicalPath(destination)
         var currentPath: String?
         var currentPrunable = false
+        var currentLocked = false
 
-        func matchesCurrent() -> Bool {
-            guard currentPrunable,
-                  let currentPath,
+        func currentRegistration() -> StaleWorktreeRegistration? {
+            guard let currentPath,
                   canonicalPath(URL(fileURLWithPath: currentPath)) == destinationPath
-            else { return false }
-            return true
+            else { return nil }
+            if currentPrunable { return .prunable }
+            if currentLocked,
+               !destination.isRemoteAlasPath,
+               !FileManager.default.fileExists(atPath: destination.path) {
+                return .locked
+            }
+            return nil
         }
 
         for line in porcelain.split(separator: "\n") {
             if line.hasPrefix("worktree ") {
-                if matchesCurrent() { return true }
+                if let registration = currentRegistration() { return registration }
                 currentPath = String(line.dropFirst("worktree ".count))
                 currentPrunable = false
+                currentLocked = false
             } else if line.hasPrefix("prunable") {
                 currentPrunable = true
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
             }
         }
-        return matchesCurrent()
+        return currentRegistration()
     }
 
     /// Remove a worktree. Pass the full `Worktree` (not just a path) so we can
