@@ -99,6 +99,24 @@ struct NewMissionDialogTests {
         #expect(fake.createdDrafts.isEmpty)
     }
 
+    @Test("a manually entered active Mission branch blocks creation")
+    func reservedManualBranchBlocksCreation() async {
+        let fake = NewMissionDialogFake(
+            reservedBranchesByProject: ["alas": ["feature/reserved"]]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
+        model.reference = "#1842"
+        await model.resolve()
+
+        actions.branch.wrappedValue = "feature/reserved"
+
+        #expect(model.validationMessage == "Another active Mission already reserves this branch.")
+        #expect(!model.canCreate)
+        #expect(await model.create(allowDuplicate: false) == nil)
+        #expect(fake.createdDrafts.isEmpty)
+    }
+
     @Test("project switch blocks creation while branch inventory loads")
     func projectSwitchBlocksCreationWhileBranchesLoad() async {
         let fake = NewMissionDialogFake(

@@ -73,6 +73,35 @@ struct WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: dest.path))
     }
 
+    @Test func addRecreatesADetachedPrunableWorktreeRegistration() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-detached-prunable")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/detached-prunable",
+            destination: dest,
+            projectId: "p"
+        )
+        _ = try await Process.git(["checkout", "--detach"], cwd: dest)
+        try FileManager.default.removeItem(at: dest)
+
+        let recreated = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/detached-prunable",
+            destination: dest,
+            projectId: "p"
+        )
+
+        #expect(recreated.branch == "feat/detached-prunable")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
     @Test func removeDeletesWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -219,8 +219,7 @@ struct WorktreeService {
            registration.exitCode == 0 {
             replacesPrunableRegistration = Self.hasPrunableRegistration(
                 registration.stdout,
-                destination: destination,
-                branch: branch
+                destination: destination
             )
         }
 
@@ -276,8 +275,7 @@ struct WorktreeService {
 
     private static func hasPrunableRegistration(
         _ porcelain: String,
-        destination: URL,
-        branch: String
+        destination: URL
     ) -> Bool {
         func canonicalPath(_ url: URL) -> String {
             url.deletingLastPathComponent()
@@ -288,7 +286,6 @@ struct WorktreeService {
 
         let destinationPath = canonicalPath(destination)
         var currentPath: String?
-        var currentBranch: String?
         var currentPrunable = false
 
         func matchesCurrent() -> Bool {
@@ -296,18 +293,14 @@ struct WorktreeService {
                   let currentPath,
                   canonicalPath(URL(fileURLWithPath: currentPath)) == destinationPath
             else { return false }
-            return currentBranch == branch
+            return true
         }
 
         for line in porcelain.split(separator: "\n") {
             if line.hasPrefix("worktree ") {
                 if matchesCurrent() { return true }
                 currentPath = String(line.dropFirst("worktree ".count))
-                currentBranch = nil
                 currentPrunable = false
-            } else if line.hasPrefix("branch ") {
-                let raw = String(line.dropFirst("branch ".count))
-                currentBranch = raw.replacingOccurrences(of: "refs/heads/", with: "")
             } else if line.hasPrefix("prunable") {
                 currentPrunable = true
             }

@@ -104,6 +104,9 @@ final class NewMissionDialogModel {
         if case .invalid(let message) = GitNameValidator.validateBranchName(trimmedBranch) {
             return message
         }
+        guard !environment.reservedBranches(projectId).contains(trimmedBranch) else {
+            return "Another active Mission already reserves this branch."
+        }
         guard !agentOptions.isEmpty else {
             return "Enable an ACP-capable agent in Settings before creating a Mission."
         }
