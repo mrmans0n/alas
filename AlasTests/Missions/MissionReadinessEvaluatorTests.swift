@@ -294,6 +294,38 @@ struct MissionReadinessEvaluatorTests {
         #expect(fake.issueRefreshCalls.isEmpty)
     }
 
+    @Test func mergedReviewWaitsForCreatingSetupToSettle() async throws {
+        var creating = Self.runningAggregate()
+        creating.mission.state = .creating
+        creating.mission.setupCheckpoint = .running
+        let fake = try MissionLifecycleFake(aggregate: creating)
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            snapshot: Self.reviewSnapshot(state: .merged)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.events.suffix(2).map(\.kind) == [.agentStarted, .ready])
+    }
+
+    @Test func archiveWaitsForCreatingSetupToSettle() async throws {
+        var creating = Self.runningAggregate()
+        creating.mission.state = .creating
+        creating.mission.setupCheckpoint = .running
+        let fake = try MissionLifecycleFake(aggregate: creating)
+        await fake.controller.load()
+
+        await fake.controller.recordArchive(worktreeId: "worktree-1")
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.events.suffix(2).map(\.kind) == [.agentStarted, .ready])
+        #expect(aggregate.events.last?.message == "Worktree archived in Alas.")
+    }
+
     @Test func startupLoadsMergedReviewWhenNoRightPaneSnapshotExists() async throws {
         let snapshot = Self.reviewSnapshot(state: .merged)
         var requestedWorktreeIDs: [String] = []

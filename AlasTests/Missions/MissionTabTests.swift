@@ -117,6 +117,24 @@ struct MissionTabTests {
         #expect(fixture.state.tabs.activeTab(forWorktree: fixture.worktree.id) == nil)
     }
 
+    @Test func openMissionChangesUsesThePersistedMissionBase() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        let pane = fixture.state.rightPaneStore.state(
+            for: fixture.worktree,
+            baseBranch: "global-main",
+            comparisonMode: fixture.state.config.changes.comparisonMode
+        )
+        #expect(pane.baseBranch == "global-main")
+
+        fixture.state.openMissionChanges(
+            worktree: fixture.worktree,
+            missionID: fixture.aggregate.mission.id
+        )
+
+        #expect(pane.baseBranch == fixture.aggregate.primaryLeg?.baseRef)
+    }
+
     @Test func openMissionPresentsDetailWhenProjectHasBeenRemoved() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeProject: false, includeWorktree: false)
         await fixture.state.missions.load()

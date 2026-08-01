@@ -353,11 +353,24 @@ final class MissionController {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
-                guard let aggregate = try await persistence.aggregate(id: id) else { return }
+                guard var aggregate = try await persistence.aggregate(id: id) else { return }
+                let setupWasCreating = aggregate.mission.state == .creating
+                if setupWasCreating {
+                    await coordinator.advance(id: id)
+                    guard let settled = try await persistence.aggregate(id: id),
+                          settled.mission.state != .creating
+                    else { return }
+                    aggregate = settled
+                }
                 let decision = MissionReadinessEvaluator.evaluate(
                     currentState: aggregate.mission.state,
                     signal: signal
                 )
+                if setupWasCreating,
+                   aggregate.mission.state != .running,
+                   case .ready = decision {
+                    return
+                }
                 switch decision {
                 case .unchanged(let reviewIdentity):
                     guard aggregate.mission.state != .completed,

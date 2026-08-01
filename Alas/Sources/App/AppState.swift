@@ -775,18 +775,19 @@ final class AppState {
         return tab
     }
 
-    func openMissionChanges(worktree: Worktree) {
+    func openMissionChanges(worktree: Worktree, missionID: MissionID) {
+        guard let leg = missions.aggregate(id: missionID)?.primaryLeg,
+              leg.projectId == worktree.projectId,
+              leg.worktreeId == nil || leg.worktreeId == worktree.id,
+              leg.branch == worktree.branch
+        else { return }
         guard !projectsManager.isWorktreeHidden(
             projectId: worktree.projectId,
             path: worktree.path
         ) else { return }
 
         focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        let rightPane = rightPaneStore.state(
-            for: worktree,
-            baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode
-        )
+        let rightPane = missionRightPaneState(for: worktree, baseRef: leg.baseRef)
         rightPane.activeTab = .changes
         if !config.rightPaneVisible {
             config.rightPaneVisible = true
@@ -801,22 +802,27 @@ final class AppState {
 
         async let issueRefresh: Void = missions.refreshIssue(id)
         let worktree = projectsManager.worktrees(projectId: leg.projectId).first { candidate in
-            candidate.id == leg.worktreeId
+            (candidate.id == leg.worktreeId
                 || candidate.path.standardizedFileURL.path
-                    == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+                == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path)
+                && candidate.branch == leg.branch
         }
         if let worktree,
            !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
-            let rightPane = rightPaneStore.state(
-                for: worktree,
-                baseBranch: config.worktrees.baseBranch,
-                comparisonMode: config.changes.comparisonMode
-            )
+            let rightPane = missionRightPaneState(for: worktree, baseRef: leg.baseRef)
             async let reviewRefresh: Void = rightPane.refresh(forceReviewLoopRemote: true)
             _ = await (issueRefresh, reviewRefresh)
         } else {
             await issueRefresh
         }
+    }
+
+    private func missionRightPaneState(for worktree: Worktree, baseRef: String) -> RightPaneState {
+        rightPaneStore.state(
+            for: worktree,
+            baseBranch: baseRef,
+            comparisonMode: config.changes.comparisonMode
+        )
     }
 
     private func refreshMissionIssue(

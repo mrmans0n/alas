@@ -461,7 +461,7 @@ struct MissionTabView: View {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
               let worktree = MissionTabContext.worktree(worktree, for: aggregate)
         else { return }
-        state.openMissionChanges(worktree: worktree)
+        state.openMissionChanges(worktree: worktree, missionID: tabState.missionID)
     }
 
     private func refresh() {
