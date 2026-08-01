@@ -202,6 +202,26 @@ struct MissionTabTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
+    @Test func topologyCleanupRestoresAReappearedMissionWorktree() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId
+        )
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
+        fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [])
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.mission.attentionReason == nil)
+        #expect(fixture.state.missingMissionTab == nil)
+    }
+
     @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
 

@@ -213,6 +213,10 @@ final class MissionController {
         await apply(signal: projectRemoved ? .projectRemoved : .worktreeMissing, to: id)
     }
 
+    func recordAvailableWorktree(_ id: MissionID) async {
+        await restoreReappearedWorktreeIfNeeded(id)
+    }
+
     func recordMissingWorktree(projectId: String, projectRemoved: Bool) async {
         loadError = nil
         do {

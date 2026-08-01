@@ -1117,6 +1117,25 @@ final class AppState {
         for missionID in missingMissionIDs {
             await missions.recordMissingWorktree(missionID)
         }
+        let restoredMissionIDs: Set<MissionID> = Set(missions.aggregates.compactMap { aggregate in
+            guard aggregate.mission.state == .needsAttention,
+                  aggregate.mission.setupCheckpoint == .running,
+                  aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
+                  let leg = aggregate.primaryLeg,
+                  missionWorktreeAtDestination(
+                      projectID: leg.projectId,
+                      destinationPath: leg.destinationPath
+                  )?.branch == leg.branch
+            else { return nil }
+            return aggregate.mission.id
+        })
+        for missionID in restoredMissionIDs {
+            await missions.recordAvailableWorktree(missionID)
+        }
+        if let missingMissionTab,
+           restoredMissionIDs.contains(missingMissionTab.missionID) {
+            self.missingMissionTab = nil
+        }
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
     }
 
