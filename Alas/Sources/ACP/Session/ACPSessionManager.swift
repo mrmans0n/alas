@@ -3779,6 +3779,32 @@ extension ACPSessionManager {
         return true
     }
 
+    @discardableResult
+    func enqueuePrompt(
+        id: UUID,
+        text: String,
+        into sessionId: ACPSession.ID
+    ) async -> Bool {
+        guard let session = sessions[sessionId] else { return false }
+        guard !session.queue.contains(where: { $0.id == id }) else { return true }
+
+        let item = QueuedPrompt(id: id, blocks: ACPSessionRunner.blocks(text: text, attachments: []))
+        session.queue.append(item)
+        let fence = leaseFence(sessionId: sessionId)
+        let items = session.queue
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }
+        guard await task.value == true else {
+            if let index = session.queue.firstIndex(where: { $0.id == item.id }) {
+                session.queue.remove(at: index)
+            }
+            return false
+        }
+        runners[sessionId]?.flushQueueIfIdle()
+        return true
+    }
+
     /// Composer submit. Returns `true` if the prompt was accepted (either
     /// sent immediately or queued for delivery once the agent is ready).
     /// `onCompleted` fires once the underlying send/enqueue resolves; the

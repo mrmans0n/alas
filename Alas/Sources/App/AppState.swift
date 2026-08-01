@@ -5270,6 +5270,74 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
+    func startACPSession(
+        worktree: Worktree,
+        sessionID: ACPSession.ID,
+        agentID: String,
+        promptID: UUID,
+        prompt: String
+    ) async throws -> ACPSession.ID {
+        guard let manager = acpManager(for: worktree) else {
+            throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
+        }
+        let bootstrapper = ACPWorktreeSessionBootstrapper(environment: .init(
+            sessionExists: { _, id in
+                await manager.persistedSessionRow(id: id) != nil
+            },
+            prepareSession: { _, id, agentId in
+                if manager.liveSession(for: id) != nil {
+                    await manager.hydrateIfNeeded(id: id)
+                    return
+                }
+                if await manager.persistedSessionRow(id: id) != nil,
+                   manager.placeholderSession(id: id) != nil {
+                    await manager.hydrateIfNeeded(id: id)
+                    return
+                }
+                _ = manager.createSession(
+                    id: id,
+                    agentId: agentId,
+                    autoRunDefault: self.config.harness.acpAutoRunByDefault
+                )
+            },
+            enqueuePrompt: { _, id, promptID, text in
+                await manager.enqueuePrompt(id: promptID, text: text, into: id)
+            },
+            attach: { _, id, freshlyCreated in
+                await manager.attach(to: id, freshlyCreated: freshlyCreated)
+            },
+            readyState: { _, id in
+                Self.acpBootstrapReadyState(for: manager.liveSession(for: id))
+            }
+        ))
+        return try await bootstrapper.start(.init(
+            worktreeId: worktree.id,
+            sessionID: sessionID,
+            agentId: agentID,
+            promptID: promptID,
+            prompt: prompt
+        ))
+    }
+
+    private static func acpBootstrapReadyState(for session: ACPSession?) -> ACPBootstrapReadyState {
+        guard let session else { return .failed("Could not start ACP session.") }
+        switch session.setupState {
+        case .needsSetup(let reason), .setupError(let reason):
+            return .needsSetup(reason)
+        case .needsAuth(_, let reason):
+            return .needsAuthentication(reason ?? "ACP session needs authentication.")
+        case .checking, .ready:
+            break
+        }
+        if case .ready = session.agentState {
+            return .ready
+        }
+        if case .failed(let reason) = session.agentState {
+            return .failed(reason)
+        }
+        return .failed("Could not start ACP session.")
+    }
+
     func forkACPSession(
         worktree: Worktree,
         sourceSessionID: ACPSession.ID,

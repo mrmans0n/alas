@@ -5,6 +5,33 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager")
 struct ACPSessionManagerTests {
+    @Test("ordinary stable prompt is persisted only once")
+    func ordinaryStablePromptIsPersistedOnlyOnce() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-stable-prompt-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        _ = manager.createSession(id: "mission-session", agentId: "codex", autoRunDefault: false)
+        let promptID = UUID(uuidString: "C4A54F3E-C70B-4EB6-B20D-FC51E22D5C22")!
+
+        #expect(await manager.enqueuePrompt(
+            id: promptID,
+            text: "Investigate.",
+            into: "mission-session"
+        ))
+        #expect(await manager.enqueuePrompt(
+            id: promptID,
+            text: "Investigate.",
+            into: "mission-session"
+        ))
+
+        let session = try #require(manager.liveSession(for: "mission-session"))
+        #expect(session.queue.count == 1)
+        #expect(session.queue.first?.id == promptID)
+        #expect(session.queue.first?.delegatedSource == nil)
+        #expect(try store.loadQueue(sessionId: "mission-session").map(\.id) == [promptID])
+    }
+
     @Test("delegated prompt already recorded in the transcript is not requeued")
     func delegatedPromptRecordedInTranscriptIsNotRequeued() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-delegated-dedupe-\(UUID()).sqlite")
