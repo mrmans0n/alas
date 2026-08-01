@@ -288,6 +288,21 @@ struct MissionTabPresentation: Equatable {
     }
 }
 
+enum MissionTabContext {
+    static func worktree(_ candidate: Worktree?, for aggregate: MissionAggregate) -> Worktree? {
+        guard let candidate, let leg = aggregate.primaryLeg,
+              candidate.projectId == leg.projectId,
+              candidate.branch == leg.branch,
+              leg.worktreeId == nil || candidate.id == leg.worktreeId
+        else { return nil }
+        return candidate
+    }
+
+    static func baseBranch(for aggregate: MissionAggregate, fallback: String) -> String {
+        aggregate.primaryLeg?.baseRef ?? fallback
+    }
+}
+
 struct MissionTabView: View {
     @Bindable var state: AppState
     let worktree: Worktree?
@@ -331,16 +346,23 @@ struct MissionTabView: View {
             .environment(\.theme, theme)
         }
         .task(id: rightPaneActivationKey) {
-            guard let worktree, !worktreeIsArchived else { return }
+            guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+                  let worktree = MissionTabContext.worktree(worktree, for: aggregate),
+                  !worktreeIsArchived
+            else { return }
             _ = state.rightPaneStore.state(
                 for: worktree,
-                baseBranch: state.config.worktrees.baseBranch,
+                baseBranch: MissionTabContext.baseBranch(
+                    for: aggregate,
+                    fallback: state.config.worktrees.baseBranch
+                ),
                 comparisonMode: state.config.changes.comparisonMode
             )
         }
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
+        let worktree = MissionTabContext.worktree(worktree, for: aggregate)
         let rightPane = worktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
@@ -394,17 +416,25 @@ struct MissionTabView: View {
     }
 
     private var worktreeIsArchived: Bool {
-        guard let worktree else { return false }
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+              let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+        else { return false }
         return state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
     }
 
     private var rightPaneActivationKey: String {
-        guard let worktree else { return tabState.id }
-        return "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+              let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+        else { return tabState.id }
+        let baseRef = MissionTabContext.baseBranch(
+            for: aggregate,
+            fallback: state.config.worktrees.baseBranch
+        )
+        return "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(baseRef)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
     }
 
     private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {
-        guard let worktree,
+        guard let worktree = MissionTabContext.worktree(worktree, for: aggregate),
               let id = aggregate.primaryLeg?.acpSessionId,
               let manager = state.acpManager(forWorktreeId: worktree.id)
         else { return nil }
@@ -418,7 +448,8 @@ struct MissionTabView: View {
     }
 
     private func openAgent() {
-        guard let worktree,
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+              let worktree = MissionTabContext.worktree(worktree, for: aggregate),
               !worktreeIsArchived,
               let sessionID = state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.acpSessionId
         else { return }
@@ -427,7 +458,9 @@ struct MissionTabView: View {
     }
 
     private func openChanges() {
-        guard let worktree else { return }
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+              let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+        else { return }
         state.openMissionChanges(worktree: worktree)
     }
 
@@ -440,7 +473,8 @@ struct MissionTabView: View {
     }
 
     private func recoverWorktree() {
-        guard let worktree else {
+        let aggregate = state.missions.aggregate(id: tabState.missionID)
+        guard let worktree = aggregate.flatMap({ MissionTabContext.worktree(worktree, for: $0) }) else {
             Task { await state.missions.retry(tabState.missionID) }
             return
         }

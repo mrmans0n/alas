@@ -299,8 +299,9 @@ struct MissionReadinessEvaluatorTests {
         var requestedWorktreeIDs: [String] = []
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _ in nil },
-            startupReviewSnapshot: { worktree in
+            startupReviewSnapshot: { worktree, baseRef in
                 requestedWorktreeIDs.append(worktree.id)
+                #expect(baseRef == "origin/main")
                 return snapshot
             }
         )
@@ -475,7 +476,7 @@ private final class MissionLifecycleFake {
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
-        startupReviewSnapshot: @escaping @MainActor (Worktree) async -> ReviewLoopSnapshot? = { _ in nil },
+        startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory

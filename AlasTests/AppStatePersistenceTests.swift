@@ -239,8 +239,9 @@ struct AppStatePersistenceTests {
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
             missionPersistence: persistence,
-            missionStartupReviewSnapshot: { worktree in
+            missionStartupReviewSnapshot: { worktree, baseRef in
                 requestedWorktreeIDs.append(worktree.id)
+                #expect(baseRef == "origin/main")
                 return Self.mergedReviewSnapshot()
             }
         )

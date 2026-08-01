@@ -4,6 +4,15 @@ import Testing
 
 @MainActor
 struct MissionPresentationTests {
+    @Test func tabContextRejectsReplacementBranchAndUsesMissionBase() {
+        let aggregate = Self.runningAggregate()
+        var replacement = Self.worktree
+        replacement.branch = "unrelated-branch"
+
+        #expect(MissionTabContext.worktree(replacement, for: aggregate) == nil)
+        #expect(MissionTabContext.baseBranch(for: aggregate, fallback: "global-main") == "origin/main")
+    }
+
     @Test func creatingWorktreeExposesOnlyCheckpointRecoveryActions() {
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = .needsAttention

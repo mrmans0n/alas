@@ -710,14 +710,14 @@ final class AppState {
             ) == true
         }, reviewSnapshot: { [weak self] worktreeID in
             self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID)
-        }, startupReviewSnapshot: { [weak self] worktree in
+        }, startupReviewSnapshot: { [weak self] worktree, baseRef in
             guard let self else { return nil }
             if let missionStartupReviewSnapshot = self.missionStartupReviewSnapshot {
-                return await missionStartupReviewSnapshot(worktree)
+                return await missionStartupReviewSnapshot(worktree, baseRef)
             }
             return await self.rightPaneStore.startupReviewSnapshot(
                 for: worktree,
-                baseBranch: self.config.worktrees.baseBranch,
+                baseBranch: baseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
         }, openMission: { [weak self] missionID in

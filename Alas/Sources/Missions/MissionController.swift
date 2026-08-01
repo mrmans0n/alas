@@ -7,7 +7,8 @@ typealias MissionIssueRefresh = @MainActor (
 ) async throws -> MissionIssueSnapshot
 
 typealias MissionStartupReviewSnapshot = @MainActor (
-    _ worktree: Worktree
+    _ worktree: Worktree,
+    _ baseRef: String
 ) async -> ReviewLoopSnapshot?
 
 typealias MissionLinkedReviewRequest = @MainActor (
@@ -74,7 +75,7 @@ final class MissionController {
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
-        startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _ in nil },
+        startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
         persistence = environment.persistence
@@ -331,7 +332,7 @@ final class MissionController {
                    let cached = reviewSnapshot(worktreeID) {
                     snapshot = cached
                 } else {
-                    snapshot = await startupReviewSnapshot(worktree)
+                    snapshot = await startupReviewSnapshot(worktree, leg.baseRef)
                 }
                 if let worktreeID = leg.worktreeId,
                    let snapshot {
