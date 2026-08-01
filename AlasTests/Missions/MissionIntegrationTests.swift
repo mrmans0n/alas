@@ -355,7 +355,7 @@ private final class MissionIntegrationHarness {
             },
             projectExists: { $0 == "project-1" },
             worktreeArchived: { _, _ in false },
-            reviewSnapshot: { _ in nil },
+            reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { _, _ in nil }
         )
     }

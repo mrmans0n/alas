@@ -248,7 +248,10 @@ struct AppStatePersistenceTests {
         let worktree = Self.worktree
         state.projectsManager.insertOptimisticWorktree(worktree)
 
-        #expect(state.rightPaneStore.reviewSnapshot(worktreeId: worktree.id) == nil)
+        #expect(state.rightPaneStore.reviewSnapshot(
+            worktreeId: worktree.id,
+            baseBranch: state.config.worktrees.baseBranch
+        ) == nil)
         await state.reconcileMissionsForStartup()
         let aggregate = try await Self.waitForMissionState(.readyToComplete, persistence: persistence)
 

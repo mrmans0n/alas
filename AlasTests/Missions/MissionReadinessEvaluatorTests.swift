@@ -282,7 +282,9 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             projectExists: { $0 == "project-1" },
             worktreeArchived: { _, _ in false },
-            reviewSnapshot: { $0 == "worktree-1" ? snapshot : nil }
+            reviewSnapshot: { worktreeID, baseRef in
+                worktreeID == "worktree-1" && baseRef == "origin/main" ? snapshot : nil
+            }
         )
         await fake.controller.load()
 
@@ -330,7 +332,7 @@ struct MissionReadinessEvaluatorTests {
         let snapshot = Self.reviewSnapshot(state: .merged)
         var requestedWorktreeIDs: [String] = []
         let fake = try MissionLifecycleFake(
-            reviewSnapshot: { _ in nil },
+            reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { worktree, baseRef in
                 requestedWorktreeIDs.append(worktree.id)
                 #expect(baseRef == "origin/main")
@@ -536,7 +538,7 @@ private final class MissionLifecycleFake {
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
-        reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
+        reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         linkedReviewRequest: @escaping @MainActor (MissionReviewIdentity, String) async -> ReviewRequest? = { _, _ in nil }
     ) throws {

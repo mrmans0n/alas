@@ -37,7 +37,7 @@ final class MissionController {
     @ObservationIgnored
     private let worktreeArchived: @MainActor (String, String) -> Bool
     @ObservationIgnored
-    private let reviewSnapshot: @MainActor (String) -> ReviewLoopSnapshot?
+    private let reviewSnapshot: @MainActor (String, String) -> ReviewLoopSnapshot?
     @ObservationIgnored
     private let startupReviewSnapshot: MissionStartupReviewSnapshot
     @ObservationIgnored
@@ -77,7 +77,7 @@ final class MissionController {
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
-        reviewSnapshot: @escaping @MainActor (String) -> ReviewLoopSnapshot? = { _ in nil },
+        reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
         openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
@@ -334,7 +334,7 @@ final class MissionController {
                 }
                 let snapshot: ReviewLoopSnapshot?
                 if let worktreeID = leg.worktreeId,
-                   let cached = reviewSnapshot(worktreeID) {
+                   let cached = reviewSnapshot(worktreeID, leg.baseRef) {
                     snapshot = cached
                 } else {
                     snapshot = await startupReviewSnapshot(worktree, leg.baseRef)

@@ -300,8 +300,11 @@ final class RightPaneStore {
         reviewSnapshotDidChange?(worktreeId, snapshot)
     }
 
-    func reviewSnapshot(worktreeId: String) -> ReviewLoopSnapshot? {
-        states[worktreeId]?.reviewLoop.snapshot
+    func reviewSnapshot(worktreeId: String, baseBranch: String) -> ReviewLoopSnapshot? {
+        guard let state = states[worktreeId],
+              state.reviewLoop.currentBaseBranch == baseBranch
+        else { return nil }
+        return state.reviewLoop.snapshot
     }
 
     /// Performs the one review lookup needed while restoring Missions before a
@@ -312,7 +315,7 @@ final class RightPaneStore {
         baseBranch: String,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode
     ) async -> ReviewLoopSnapshot? {
-        if let cached = reviewSnapshot(worktreeId: worktree.id) {
+        if let cached = reviewSnapshot(worktreeId: worktree.id, baseBranch: baseBranch) {
             return cached
         }
         let temporary = RightPaneState(worktree: worktree, baseBranch: baseBranch)

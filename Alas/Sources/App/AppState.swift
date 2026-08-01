@@ -710,8 +710,8 @@ final class AppState {
                 projectId: projectID,
                 path: URL(fileURLWithPath: destinationPath)
             ) == true
-        }, reviewSnapshot: { [weak self] worktreeID in
-            self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID)
+        }, reviewSnapshot: { [weak self] worktreeID, baseRef in
+            self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID, baseBranch: baseRef)
         }, startupReviewSnapshot: { [weak self] worktree, baseRef in
             guard let self else { return nil }
             if let missionStartupReviewSnapshot = self.missionStartupReviewSnapshot {
