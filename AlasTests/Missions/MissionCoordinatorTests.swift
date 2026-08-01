@@ -238,6 +238,62 @@ struct MissionCoordinatorTests {
         #expect(try await fake.persistence.aggregate(id: aggregate.mission.id)?.mission.state == .running)
     }
 
+    @Test("delete-failed worktree satisfies the Mission artifact checkpoint")
+    func deleteFailedWorktreeSatisfiesMissionDestination() async throws {
+        let project = ProjectConfig(
+            id: "project-1",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "teal",
+            addedAt: .now
+        )
+        let state = AppState(store: MissionProjectStore(projects: [project]))
+        let retained = Worktree(
+            id: "retained-worktree",
+            projectId: project.id,
+            name: "fix/parser-crash",
+            branch: "fix/parser-crash",
+            path: URL(fileURLWithPath: Self.draft.destinationPath),
+            status: .dirty,
+            lastActivity: .now
+        )
+        state.projectsManager.insertOptimisticWorktree(retained)
+        state.projectsManager.setOperationState(
+            id: retained.id,
+            state: .deleteFailed(message: "worktree contains changes")
+        )
+
+        #expect(state.missionWorktreeAtDestination(
+            projectID: project.id,
+            destinationPath: Self.draft.destinationPath
+        ) == retained)
+
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .needsAttention
+        aggregate.mission.attentionReason = "retrying worktree setup"
+        let fake = MissionCoordinatorFake(existing: [aggregate])
+        var retryGitCalls = 0
+        let coordinator = MissionCoordinator(environment: .init(
+            persistence: fake.persistence,
+            now: { Date() },
+            makeID: { UUID().uuidString },
+            worktreeAtDestination: { projectID, destinationPath in
+                state.missionWorktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
+            },
+            createWorktree: { _ in
+                retryGitCalls += 1
+                return .failure(.init(message: "should not create a duplicate worktree"))
+            },
+            startACP: { leg, _ in .success(leg.acpSessionId ?? "") },
+            notifyChanged: { _ in }
+        ))
+
+        await coordinator.retry(id: aggregate.mission.id)
+
+        #expect(retryGitCalls == 0)
+        #expect(try await fake.persistence.aggregate(id: aggregate.mission.id)?.mission.state == .running)
+    }
+
     @Test("checkpoint persistence failure becomes recoverable attention")
     func checkpointPersistenceFailureBecomesAttention() async throws {
         let fake = MissionCoordinatorFake()

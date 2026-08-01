@@ -652,15 +652,21 @@ final class AppState {
         ))
     }
 
-    /// Returns only a reconciled worktree. Optimistic create/delete rows cannot
-    /// satisfy a Mission checkpoint because their Git operation has not settled.
+    /// Returns a worktree that is safe to reuse for a Mission checkpoint.
+    /// Pending and failed creates are optimistic rows, while a failed delete
+    /// leaves the real worktree in place and must remain reusable.
     func missionWorktreeAtDestination(projectID: String, destinationPath: String) -> Worktree? {
         let targetPath = URL(fileURLWithPath: destinationPath).standardizedFileURL.path
         guard let worktree = projectsManager.worktrees(projectId: projectID).first(where: {
             $0.path.standardizedFileURL.path == targetPath
-        }), projectsManager.operationState(for: worktree.id) == nil
+        })
         else { return nil }
-        return worktree
+        switch projectsManager.operationState(for: worktree.id) {
+        case nil, .deleteFailed:
+            return worktree
+        case .creating, .deleting, .createFailed:
+            return nil
+        }
     }
 
     /// All worktree IDs currently known to the projects manager (including
