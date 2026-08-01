@@ -237,6 +237,17 @@ final class MissionCoordinator {
         guard var leg = aggregate.primaryLeg else { return false }
         let worktree: Worktree
         if let existing = environment.worktreeAtDestination(leg.projectId, leg.destinationPath) {
+            guard canReuseExistingWorktree(
+                existing,
+                for: leg
+            ) else {
+                await persistFailure(
+                    aggregate: aggregate,
+                    checkpoint: .creatingWorktree,
+                    message: "A worktree already exists at the Mission destination. Choose a different branch or remove the existing worktree."
+                )
+                return false
+            }
             worktree = existing
         } else {
             switch await environment.createWorktree(leg) {
@@ -326,7 +337,10 @@ final class MissionCoordinator {
             }
         }
 
-        let retryLeg = leg
+        if leg.pendingInitialPrompt == nil {
+            return await settleRunning(aggregate)
+        }
+
         switch await environment.startACP(leg, worktree) {
         case .success:
             leg.pendingInitialPrompt = nil
@@ -352,7 +366,7 @@ final class MissionCoordinator {
             } catch {
                 await persistFailure(
                     aggregate: aggregate,
-                    leg: retryLeg,
+                    leg: leg,
                     checkpoint: .startingAgent,
                     message: Self.persistenceFailureMessage
                 )
@@ -367,6 +381,13 @@ final class MissionCoordinator {
             )
             return false
         }
+    }
+
+    private func canReuseExistingWorktree(
+        _ worktree: Worktree,
+        for leg: MissionLeg
+    ) -> Bool {
+        leg.worktreeId == worktree.id
     }
 
     private func settleRunning(_ aggregate: MissionAggregate) async -> Bool {
@@ -401,9 +422,12 @@ final class MissionCoordinator {
     private func reconcileArtifacts(in aggregate: MissionAggregate) async {
         guard aggregate.mission.setupCheckpoint == .creatingWorktree,
               var leg = aggregate.primaryLeg,
-              leg.worktreeId == nil,
               let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath)
         else { return }
+
+        guard canReuseExistingWorktree(worktree, for: leg) else {
+            return
+        }
 
         leg.worktreeId = worktree.id
         let now = environment.now()

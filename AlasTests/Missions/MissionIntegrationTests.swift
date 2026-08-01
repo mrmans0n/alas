@@ -238,7 +238,7 @@ private final class MissionIntegrationHarness {
         recorder.existingWorktree = worktree
         switch checkpoint {
         case .creatingWorktree:
-            aggregate.legs[0].worktreeId = nil
+            aggregate.legs[0].worktreeId = worktree.id
             aggregate.legs[0].acpSessionId = nil
         case .startingAgent:
             aggregate.legs[0].worktreeId = worktree.id

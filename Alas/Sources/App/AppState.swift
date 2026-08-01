@@ -729,7 +729,8 @@ final class AppState {
                 $0.path.standardizedFileURL.path == destinationPath
             }
         guard let worktree else {
-            return .failure(.worktreeUnavailable(missionID: id))
+            let tab = presentMissingMissionTab(aggregate: aggregate, leg: leg)
+            return .success(.mission(tab))
         }
 
         focusGlobalWorktree(id: worktree.id, projectId: leg.projectId)
@@ -740,6 +741,18 @@ final class AppState {
         )
         missingMissionTab = nil
         return .success(tab)
+    }
+
+    @discardableResult
+    private func presentMissingMissionTab(aggregate: MissionAggregate, leg: MissionLeg) -> MissionTabState {
+        let tab = MissionTabState(
+            missionID: aggregate.mission.id,
+            worktreeId: leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)",
+            title: aggregate.mission.title
+        )
+        missingMissionTab = tab
+        focusGlobalWorktree(id: tab.worktreeId, projectId: leg.projectId)
+        return tab
     }
 
     func openMissionChanges(worktree: Worktree) {
@@ -1075,13 +1088,7 @@ final class AppState {
               projects.contains(where: { $0.id == leg.projectId })
         else { return }
 
-        let tab = MissionTabState(
-            missionID: aggregate.mission.id,
-            worktreeId: leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)",
-            title: aggregate.mission.title
-        )
-        missingMissionTab = tab
-        focusGlobalWorktree(id: tab.worktreeId, projectId: leg.projectId)
+        presentMissingMissionTab(aggregate: aggregate, leg: leg)
     }
 
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call

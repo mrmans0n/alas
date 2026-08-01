@@ -79,14 +79,38 @@ struct MissionTabTests {
         #expect(fixture.state.tabs.activeTab(forWorktree: "worktree-1")?.id == "mission:mission-1")
     }
 
-    @Test func openMissionReturnsClearFailureWhenNoKnownWorktreeRowExists() async throws {
+    @Test func openMissionPresentsDetailWhenNoKnownWorktreeRowExists() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
         await fixture.state.missions.load()
 
         let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
 
-        #expect(result == .failure(.worktreeUnavailable(missionID: fixture.aggregate.mission.id)))
-        #expect(fixture.state.selectedWorktreeId == nil)
+        #expect(try result.get() == .mission(MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        )))
+        #expect(fixture.state.missingMissionTab == MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        ))
+        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+    }
+
+    @Test func openMissionPresentsDetailWhenProjectHasBeenRemoved() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeProject: false, includeWorktree: false)
+        await fixture.state.missions.load()
+
+        let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
+
+        #expect(try result.get() == .mission(MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        )))
+        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
+        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
     }
 
     @Test func selectedMissionRetainsMissingWorktreeRecoveryPresentation() async throws {
@@ -297,7 +321,7 @@ private struct MissionNavigationFixture {
     let worktree: Worktree
     let state: AppState
 
-    init(hidden: Bool, includeWorktree: Bool) throws {
+    init(hidden: Bool, includeProject: Bool = true, includeWorktree: Bool) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
         var aggregate = MissionFixtures.creatingMission()
@@ -351,7 +375,7 @@ private struct MissionNavigationFixture {
         )
         let state = AppState(
             store: MissionNavigationStore(
-                projectsFile: ProjectsFile(projects: [project]),
+                projectsFile: ProjectsFile(projects: includeProject ? [project] : []),
                 spacesFile: spaces
             ),
             missionPersistence: persistence

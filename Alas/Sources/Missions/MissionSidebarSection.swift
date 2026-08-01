@@ -96,7 +96,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
     let status: Status
     let isNavigationEnabled: Bool
 
-    init(aggregate: MissionAggregate, knownWorktreeIds: Set<String> = []) {
+    init(aggregate: MissionAggregate, knownWorktreeIds _: Set<String> = []) {
         id = aggregate.mission.id
         title = aggregate.mission.title
         providerAbbreviation = aggregate.issue.identity.provider.missionSidebarAbbreviation
@@ -105,10 +105,10 @@ struct MissionSidebarRow: Equatable, Identifiable {
         updatedAt = aggregate.mission.updatedAt
         status = Self.status(for: aggregate.mission)
 
-        if let worktreeId = aggregate.primaryLeg?.worktreeId {
-            isNavigationEnabled = knownWorktreeIds.contains(worktreeId)
-        } else {
+        if aggregate.mission.state == .creating, aggregate.primaryLeg?.worktreeId == nil {
             isNavigationEnabled = false
+        } else {
+            isNavigationEnabled = true
         }
     }
 
@@ -121,7 +121,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
         if isNavigationEnabled {
             return "\(prefix) · \(status.title)"
         }
-        return "\(prefix) · Worktree is not available yet."
+        return "\(prefix) · Open Mission details."
     }
 
     private static func status(for mission: MissionRecord) -> Status {

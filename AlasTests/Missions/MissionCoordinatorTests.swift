@@ -67,6 +67,23 @@ struct MissionCoordinatorTests {
         #expect(aggregate.primaryLeg?.pendingInitialPrompt == Self.draft.initialPrompt)
     }
 
+    @Test("new Mission creation does not adopt an unrelated existing destination")
+    func newMissionCreationDoesNotAdoptExistingDestination() async throws {
+        let fake = MissionCoordinatorFake()
+        fake.worktreeAtDestination = fake.worktree
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let id = try await coordinator.create(Self.draft)
+        let aggregate = await fake.waitUntilSettled(id)
+
+        #expect(fake.createWorktreeCalls == 0)
+        #expect(fake.startACPCalls == 0)
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
+        #expect(aggregate.mission.attentionReason == "A worktree already exists at the Mission destination. Choose a different branch or remove the existing worktree.")
+        #expect(aggregate.primaryLeg?.worktreeId == nil)
+    }
+
     @Test("ACP failure preserves the worktree, stable session, and pending prompt")
     func acpFailurePreservesSuccessfulArtifacts() async throws {
         let fake = MissionCoordinatorFake(agentResult: .failure(.init(message: "Install Codex")))
@@ -301,6 +318,7 @@ struct MissionCoordinatorTests {
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = .needsAttention
         aggregate.mission.attentionReason = "retrying worktree setup"
+        aggregate.legs[0].worktreeId = retained.id
         let fake = MissionCoordinatorFake(existing: [aggregate])
         var retryGitCalls = 0
         let coordinator = MissionCoordinator(environment: .init(
@@ -344,9 +362,44 @@ struct MissionCoordinatorTests {
         #expect(fake.reportedFailures.isEmpty)
     }
 
-    @Test("restart reconciles an interrupted worktree by destination")
-    func interruptedWorktreeReconcilesByDestination() async throws {
-        let existing = MissionFixtures.creatingMission()
+    @Test("agent checkpoint persistence failure does not leave the initial prompt retryable")
+    func agentCheckpointPersistenceFailureClearsPromptBeforeRecovery() async throws {
+        let fake = MissionCoordinatorFake()
+        // The agent checkpoint event collides after ACP startup has succeeded.
+        // The recovery event should persist the consumed prompt receipt.
+        fake.idValues = [
+            "mission",
+            "leg",
+            "created-event",
+            "worktree-event",
+            "session",
+            "created-event",
+            "attention-event",
+        ]
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let id = try await coordinator.create(Self.draft)
+        let failed = await fake.waitUntilSettled(id)
+
+        #expect(fake.startACPCalls == 1)
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
+        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.setupCheckpoint == .startingAgent)
+        #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
+
+        await coordinator.retry(id: id)
+        let recovered = try #require(try await fake.persistence.aggregate(id: id))
+
+        #expect(fake.startACPCalls == 1)
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
+        #expect(recovered.mission.state == .running)
+        #expect(recovered.mission.setupCheckpoint == .running)
+    }
+
+    @Test("restart reuses the recorded worktree at the Mission destination")
+    func interruptedWorktreeReusesRecordedDestinationArtifact() async throws {
+        var existing = MissionFixtures.creatingMission()
+        existing.legs[0].worktreeId = "worktree-1"
         let fake = MissionCoordinatorFake(existing: [existing])
         fake.worktreeAtDestination = fake.worktree
         let coordinator = MissionCoordinator(environment: fake.environment)
@@ -383,6 +436,7 @@ struct MissionCoordinatorTests {
         var existing = MissionFixtures.creatingMission()
         existing.mission.state = .needsAttention
         existing.mission.attentionReason = "Git response was lost."
+        existing.legs[0].worktreeId = "worktree-1"
         let fake = MissionCoordinatorFake(existing: [existing])
         fake.worktreeAtDestination = fake.worktree
         let coordinator = MissionCoordinator(environment: fake.environment)
@@ -519,6 +573,7 @@ private final class MissionCoordinatorFake {
     private(set) var createWorktreeCalls = 0
     private(set) var startACPCalls = 0
     private(set) var startedSessionIDs: [String] = []
+    private(set) var startedPromptIDs: [UUID] = []
     private(set) var startedAgentIDs: [String] = []
     private(set) var operations: [String] = []
     private(set) var notifications: [MissionAggregate] = []
@@ -591,6 +646,9 @@ private final class MissionCoordinatorFake {
                 self.operations.append("startACP")
                 self.startedAgentIDs.append(leg.agentId)
                 self.startedSessionIDs.append(leg.acpSessionId ?? "")
+                if leg.pendingInitialPrompt != nil {
+                    self.startedPromptIDs.append(leg.initialPromptId)
+                }
                 if let startACPOverride = self.startACPOverride {
                     return await startACPOverride(leg, self.worktree)
                 }
