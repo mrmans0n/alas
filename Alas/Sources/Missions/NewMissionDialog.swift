@@ -52,6 +52,7 @@ final class NewMissionDialogModel {
         let configuredBranchPrefix: (String) -> String
         let enabledACPAgents: () -> [AgentDefinition]
         let destination: (String, String) -> URL
+        let destinationAvailable: (String, URL) -> Bool
         let createMission: (MissionDraft, Bool) async throws -> MissionID
         let openMission: (MissionID) -> Void
     }
@@ -250,7 +251,7 @@ final class NewMissionDialogModel {
                 projectId: projectId,
                 baseRef: base,
                 branch: branch,
-                destinationPath: environment.destination(projectId, branch).path,
+                destinationPath: availableDestination(projectID: projectId, branch: branch).path,
                 agentId: agentId,
                 initialPromptId: UUID(),
                 initialPrompt: prompt
@@ -307,6 +308,24 @@ final class NewMissionDialogModel {
         resolutionGeneration == generation
             && phase == .resolving
             && reference.trimmingCharacters(in: .whitespacesAndNewlines) == input
+    }
+
+    private func availableDestination(projectID: String, branch: String) -> URL {
+        let requested = environment.destination(projectID, branch).standardizedFileURL
+        guard !environment.destinationAvailable(projectID, requested) else { return requested }
+
+        let parent = requested.deletingLastPathComponent()
+        let name = requested.lastPathComponent
+        var suffix = 2
+        while true {
+            let candidate = parent
+                .appendingPathComponent("\(name)-\(suffix)")
+                .standardizedFileURL
+            if environment.destinationAvailable(projectID, candidate) {
+                return candidate
+            }
+            suffix += 1
+        }
     }
 
     private func invalidateResolution() {
@@ -690,6 +709,14 @@ extension NewMissionDialogModel.Environment {
                     repoName: project.name,
                     branch: branch
                 )
+            },
+            destinationAvailable: { [weak state] projectID, destination in
+                guard let state else { return false }
+                let candidate = destination.standardizedFileURL.path
+                return !FileManager.default.fileExists(atPath: candidate)
+                    && !state.projectsManager.worktrees(projectId: projectID).contains {
+                        $0.path.standardizedFileURL.path == candidate
+                    }
             },
             createMission: { [weak state] draft, allowDuplicate in
                 guard let state else {

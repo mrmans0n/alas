@@ -47,6 +47,8 @@ final class MissionController {
     @ObservationIgnored
     private var lifecycleWaiters: [MissionID: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
+    private var issueRefreshGenerations: [MissionID: Int] = [:]
+    @ObservationIgnored
     private lazy var coordinator = MissionCoordinator(environment: .init(
         persistence: environment.persistence,
         now: environment.now,
@@ -227,6 +229,8 @@ final class MissionController {
     }
 
     func refreshIssue(_ id: MissionID) async {
+        issueRefreshGenerations[id, default: 0] &+= 1
+        let generation = issueRefreshGenerations[id, default: 0]
         do {
             guard let loaded = try await persistence.aggregate(id: id),
                   let leg = loaded.primaryLeg
@@ -235,9 +239,11 @@ final class MissionController {
             do {
                 refreshed = try await issueRefresh(loaded.issue.identity, leg.projectId)
             } catch {
+                guard issueRefreshGenerations[id] == generation else { return }
                 await persistRefreshFailure(error, aggregate: loaded)
                 return
             }
+            guard issueRefreshGenerations[id] == generation else { return }
             let event = makeEvent(
                 aggregate: loaded,
                 kind: .sourceRefreshed,
@@ -251,6 +257,7 @@ final class MissionController {
             try await publish(id: id)
             loadError = nil
         } catch {
+            guard issueRefreshGenerations[id] == generation else { return }
             loadError = error.localizedDescription
         }
     }
@@ -329,6 +336,7 @@ final class MissionController {
                     }
                     continue
                 }
+                await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
                 if worktreeArchived(leg.projectId, leg.destinationPath) {
                     await apply(signal: .worktreeArchived, to: aggregate.mission.id)
                     continue
@@ -351,6 +359,40 @@ final class MissionController {
             }
         } catch {
             loadError = error.localizedDescription
+        }
+    }
+
+    private func restoreReappearedWorktreeIfNeeded(_ id: MissionID) async {
+        await withLifecycleMutation(id: id) { [weak self] in
+            guard let self else { return }
+            do {
+                guard let aggregate = try await persistence.aggregate(id: id),
+                      aggregate.mission.state == .needsAttention,
+                      aggregate.mission.setupCheckpoint == .running,
+                      aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
+                      let leg = aggregate.primaryLeg,
+                      let worktree = environment.worktreeAtDestination(
+                          leg.projectId,
+                          leg.destinationPath
+                      ),
+                      worktree.branch == leg.branch
+                else { return }
+                try await persistence.updateSetup(
+                    id: id,
+                    state: .running,
+                    checkpoint: .running,
+                    attentionReason: nil,
+                    event: makeEvent(
+                        aggregate: aggregate,
+                        kind: .retryStarted,
+                        message: "Mission worktree became available again."
+                    )
+                )
+                try await publish(id: id)
+                loadError = nil
+            } catch {
+                loadError = error.localizedDescription
+            }
         }
     }
 

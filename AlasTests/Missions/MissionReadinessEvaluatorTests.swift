@@ -275,7 +275,7 @@ struct MissionReadinessEvaluatorTests {
         #expect(after.mission.state == .running)
     }
 
-    @Test func lateRefreshFailurePreservesNewerSuccessfulSnapshot() async throws {
+    @Test func lateRefreshFailureCannotOverwriteANewerSuccess() async throws {
         let race = RefreshIssueRace(success: MissionFixtures.issue(
             title: "Newer issue title",
             capturedAt: 500
@@ -296,7 +296,24 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.issue.title == "Newer issue title")
         #expect(aggregate.issue.capturedAt == Date(timeIntervalSince1970: 500))
-        #expect(aggregate.issue.refreshError == "Authentication is required for github.com.")
+        #expect(aggregate.issue.refreshError == nil)
+    }
+
+    @Test func startupRestoresAReappearedMissionWorktree() async throws {
+        var missing = Self.runningAggregate()
+        missing.mission.state = .needsAttention
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        let fake = try MissionLifecycleFake(aggregate: missing)
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == nil)
+        #expect(aggregate.events.last?.kind == .retryStarted)
+        #expect(aggregate.events.last?.message == "Mission worktree became available again.")
     }
 
     @Test func startupRecognizesCurrentMergedReviewWithoutPolling() async throws {

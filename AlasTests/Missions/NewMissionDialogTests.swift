@@ -291,6 +291,23 @@ struct NewMissionDialogTests {
         #expect(fake.createdDrafts.last?.destinationPath != fake.createdDrafts.first?.destinationPath)
     }
 
+    @Test("create skips occupied destinations when the template ignores the branch")
+    func createSkipsOccupiedDestinationFromBranchlessTemplate() async {
+        let fixed = URL(fileURLWithPath: "/tmp/worktrees/alas/fixed")
+        let fake = NewMissionDialogFake(
+            destination: { _, _ in fixed },
+            occupiedDestinationPaths: [fixed.path, "\(fixed.path)-2"]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+        await model.resolve()
+
+        let created = await model.create(allowDuplicate: false)
+
+        #expect(created == MissionID(rawValue: "new-mission"))
+        #expect(fake.createdDrafts.last?.destinationPath == "\(fixed.path)-3")
+    }
+
     @Test("create failure keeps the editable confirmation visible")
     func createFailureKeepsConfirmationVisible() async {
         let fake = NewMissionDialogFake(createError: NewMissionDialogFake.TestError.createFailed)
@@ -396,6 +413,8 @@ private final class NewMissionDialogFake {
     let branchError: (any Error)?
     let duplicateMissionID: MissionID?
     let createError: (any Error)?
+    let destination: (String, String) -> URL
+    let occupiedDestinationPaths: Set<String>
 
     private var resolutionContinuation: CheckedContinuation<Void, Never>?
     private var branchContinuation: CheckedContinuation<Void, Never>?
@@ -416,7 +435,11 @@ private final class NewMissionDialogFake {
         branchesByProject: [String: [String]] = ["alas": ["origin/main", "main"]],
         agents: [AgentDefinition] = [NewMissionDialogTests.agent(id: "codex")],
         duplicateMissionID: MissionID? = nil,
-        createError: (any Error)? = nil
+        createError: (any Error)? = nil,
+        destination: @escaping (String, String) -> URL = { projectID, branch in
+            URL(fileURLWithPath: "/tmp/worktrees/\(projectID)/\(branch.replacingOccurrences(of: "/", with: "-"))")
+        },
+        occupiedDestinationPaths: Set<String> = []
     ) {
         self.suspendResolution = suspendResolution
         self.suspendBranches = suspendBranches
@@ -428,6 +451,8 @@ private final class NewMissionDialogFake {
         self.agents = agents
         self.duplicateMissionID = duplicateMissionID
         self.createError = createError
+        self.destination = destination
+        self.occupiedDestinationPaths = occupiedDestinationPaths
         let snapshot = MissionIssueSnapshot(
             identity: .init(
                 provider: .github,
@@ -486,8 +511,11 @@ private final class NewMissionDialogFake {
                 configuredPrefixes[projectID] ?? "feature/"
             },
             enabledACPAgents: { [self] in agents },
-            destination: { projectID, branch in
-                URL(fileURLWithPath: "/tmp/worktrees/\(projectID)/\(branch.replacingOccurrences(of: "/", with: "-"))")
+            destination: { [self] projectID, branch in
+                destination(projectID, branch)
+            },
+            destinationAvailable: { [self] _, destination in
+                !occupiedDestinationPaths.contains(destination.standardizedFileURL.path)
             },
             createMission: { [self] draft, allowDuplicate in
                 createdDrafts.append(draft)
