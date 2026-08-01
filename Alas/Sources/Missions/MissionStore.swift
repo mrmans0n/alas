@@ -4,6 +4,7 @@ final class MissionStore {
     enum Error: Swift.Error, Equatable {
         case exactlyOneLeg
         case duplicateActiveIssueIdentity
+        case issueIdentityChanged
         case malformedRecord
         case missionNotFound
         case invalidEvent
@@ -188,6 +189,9 @@ final class MissionStore {
         try validate(event: event, for: missionID)
         try immediateTransaction {
             try requireMission(missionID)
+            guard try issueIdentity(missionID: missionID) == snapshot.identity else {
+                throw Error.issueIdentityChanged
+            }
             let changed = try db.execChanges("""
             UPDATE mission_issue_sources
             SET provider = ?, host = ?, repository_slug = ?, issue_number = ?,
@@ -359,6 +363,22 @@ final class MissionStore {
     private func requireMission(_ id: MissionID) throws {
         let rows = try db.query("SELECT id FROM missions WHERE id = ?", bindings: [id.rawValue])
         guard !rows.isEmpty else { throw Error.missionNotFound }
+    }
+
+    private func issueIdentity(missionID: MissionID) throws -> MissionIssueIdentity {
+        let rows = try db.query("""
+        SELECT provider, host, repository_slug, issue_number
+        FROM mission_issue_sources
+        WHERE mission_id = ?
+        """, bindings: [missionID.rawValue])
+        guard let row = rows.first,
+              let providerRaw = row["provider"] as? String,
+              let provider = CodeHostKind(rawValue: providerRaw),
+              let host = row["host"] as? String,
+              let repositorySlug = row["repository_slug"] as? String,
+              let number = row["issue_number"] as? Int64
+        else { throw Error.malformedRecord }
+        return .init(provider: provider, host: host, repositorySlug: repositorySlug, number: Int(number))
     }
 
     private func insertMission(_ mission: MissionRecord) throws {

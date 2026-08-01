@@ -133,6 +133,31 @@ struct MissionStoreTests {
         #expect(loaded.events.last?.kind == .sourceRefreshed)
     }
 
+    @Test("rejects a refreshed snapshot that changes the mission issue identity")
+    func rejectsIssueIdentityChangeDuringRefresh() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+        let changedIdentity = MissionFixtures.issue(number: 43, capturedAt: 150)
+
+        #expect(throws: (any Error).self) {
+            try store.replaceIssueSnapshot(
+                missionID: aggregate.mission.id,
+                snapshot: changedIdentity,
+                event: MissionFixtures.event(
+                    id: "wrong-identity-refresh",
+                    missionID: aggregate.mission.id,
+                    kind: .sourceRefreshed,
+                    createdAt: 150
+                )
+            )
+        }
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.issue == aggregate.issue)
+        #expect(loaded.events.map(\.id) == ["mission-1-event-1"])
+    }
+
     @Test("lists active missions before completed missions")
     func ordersActiveMissionsBeforeCompletedMissions() throws {
         let store = try MissionStore(path: temporaryPath())
