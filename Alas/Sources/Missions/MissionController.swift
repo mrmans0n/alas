@@ -307,6 +307,12 @@ final class MissionController {
                     }
                     continue
                 }
+                guard worktree.branch == leg.branch else {
+                    if aggregate.mission.setupCheckpoint == .running {
+                        await recordMissingWorktree(aggregate.mission.id)
+                    }
+                    continue
+                }
                 let snapshot: ReviewLoopSnapshot?
                 if let worktreeID = leg.worktreeId,
                    let cached = reviewSnapshot(worktreeID) {

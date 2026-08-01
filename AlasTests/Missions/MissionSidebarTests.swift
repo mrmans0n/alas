@@ -3,6 +3,13 @@ import Testing
 @testable import Alas
 
 struct MissionSidebarTests {
+    @Test func orphanedMissionsKeepTheWorkspaceVisibleWithoutProjects() {
+        #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            hasMissions: true
+        ))
+    }
+
     @Test func missionAppearsInEverySpaceContainingItsProject() {
         let mission = Self.mission(projectId: "alas", state: .running)
 

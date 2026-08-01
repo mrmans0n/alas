@@ -300,6 +300,17 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
+    @Test func startupRejectsAWorktreeOnTheWrongBranch() async throws {
+        let fake = try MissionLifecycleFake(worktreeBranch: "unrelated-branch")
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+    }
+
     @Test func startupMarksRemovedProjectForAttention() async throws {
         let fake = try MissionLifecycleFake(projectExists: { _ in false })
         await fake.controller.load()
@@ -432,6 +443,7 @@ private final class MissionLifecycleFake {
     init(
         aggregate: MissionAggregate = MissionReadinessEvaluatorTests.runningAggregate(),
         worktreeAvailable: Bool = true,
+        worktreeBranch: String = "fix/parser-crash",
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("No issue refresh configured.")
         },
@@ -472,7 +484,7 @@ private final class MissionLifecycleFake {
                         id: "worktree-1",
                         projectId: "project-1",
                         name: "fix/parser-crash",
-                        branch: "fix/parser-crash",
+                        branch: worktreeBranch,
                         path: URL(fileURLWithPath: "/tmp/alas-mission"),
                         status: .clean,
                         lastActivity: Date(timeIntervalSince1970: 100)

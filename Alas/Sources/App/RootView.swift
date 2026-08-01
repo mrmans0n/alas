@@ -11,6 +11,12 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
     let message: String
 }
 
+enum RootWorkspaceVisibilityPolicy {
+    static func showsWorkspace(hasProjects: Bool, hasMissions: Bool) -> Bool {
+        hasProjects || hasMissions
+    }
+}
+
 struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
@@ -95,7 +101,10 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if state.projects.isEmpty {
+        if !RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: !state.projects.isEmpty,
+            hasMissions: !state.missions.aggregates.isEmpty
+        ) {
             EmptyState(
                 canCreateWorktree: false,
                 onAddProject: { showNewProject = true },

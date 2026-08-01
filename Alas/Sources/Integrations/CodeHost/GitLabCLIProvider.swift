@@ -1643,7 +1643,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             canonicalURL: url,
             title: response.title,
             body: response.description ?? "",
-            state: MissionIssueState(rawValue: response.state.lowercased()) ?? .unknown,
+            state: issueState(response.state),
             labels: response.labels.compactMap(normalizedOptionalString),
             assignees: response.assignees.compactMap { normalizedOptionalString($0.username) },
             providerUpdatedAt: try parseOptionalGitLabDate(response.updatedAt),
@@ -1656,6 +1656,14 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = formatOptions
         return formatter.date(from: value)
+    }
+
+    private static func issueState(_ rawValue: String) -> MissionIssueState {
+        switch rawValue.lowercased() {
+        case "open", "opened": .open
+        case "closed": .closed
+        default: .unknown
+        }
     }
 
     private static func normalizedOptionalString(_ value: String?) -> String? {

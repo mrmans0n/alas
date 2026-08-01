@@ -21,6 +21,20 @@ struct GitLabCLIProviderTests {
         ])
     }
 
+    @Test func issueMapsGitLabOpenedStateToOpen() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(
+                exitCode: 0,
+                stdout: Self.issueOutput.replacingOccurrences(of: "\"closed\"", with: "\"opened\""),
+                stderr: ""
+            ),
+        ])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+
+        #expect(issue.state == .open)
+    }
+
     @Test func issueClassifiesNotFoundAndPermissionDenied() async {
         let notFoundRunner = FakeRunner(results: [
             ProcessResult(exitCode: 1, stdout: "{\"message\":\"404 Project Not Found\"}", stderr: ""),
