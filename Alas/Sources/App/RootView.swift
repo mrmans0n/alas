@@ -771,7 +771,7 @@ private struct RootBaseHandlers: ViewModifier {
                 let beforeIds = state.allWorktreeIds()
                 Task {
                     _ = await state.refreshAllProjectTopologies()
-                    state.cleanupMissingWorktrees(beforeIds: beforeIds)
+                    await state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasTerminateAllTerminals)) { _ in

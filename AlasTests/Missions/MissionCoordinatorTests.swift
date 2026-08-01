@@ -104,9 +104,8 @@ struct MissionCoordinatorTests {
     @Test("missing worktree recovery restarts the worktree checkpoint")
     func missingWorktreeRecoveryRestartsWorktreeCheckpoint() async throws {
         var missing = MissionFixtures.creatingMission()
-        missing.mission.state = .needsAttention
+        missing.mission.state = .running
         missing.mission.setupCheckpoint = .running
-        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
         missing.legs[0].worktreeId = "missing-worktree"
         missing.legs[0].acpSessionId = "missing-session"
         let fake = MissionCoordinatorFake(
@@ -115,6 +114,11 @@ struct MissionCoordinatorTests {
         )
         fake.worktreeAtDestination = nil
         let controller = MissionController(environment: fake.environment)
+
+        await controller.recordMissingWorktree(missing.mission.id)
+        let marked = try #require(try await fake.persistence.aggregate(id: missing.mission.id))
+        #expect(marked.mission.state == .needsAttention)
+        #expect(marked.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
 
         await controller.retry(missing.mission.id)
         let recovered = await fake.waitUntilSettled(missing.mission.id)

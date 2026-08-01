@@ -98,16 +98,45 @@ struct MissionTabTests {
             id: fixture.worktree.id,
             projectId: fixture.worktree.projectId
         )
-        fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
 
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
-        let view = MissionTabView(
-            state: fixture.state,
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        let presentation = MissionTabPresentation(
+            aggregate: aggregate,
             worktree: nil,
-            tabState: try #require(fixture.state.missingMissionTab)
+            worktreeRecoveryAvailable: true
         )
-        #expect(view.tabState.missionID == fixture.aggregate.mission.id)
+        #expect(presentation.worktreeRecovery == .recreateMissing)
+        #expect(presentation.actions.recoverWorktree)
+    }
+
+    @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+
+        await fixture.state.reconcileMissionsForStartup()
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(fixture.state.missingMissionTab == MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        ))
+        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        let presentation = MissionTabPresentation(
+            aggregate: aggregate,
+            worktree: nil,
+            worktreeRecoveryAvailable: true
+        )
+        #expect(presentation.worktreeRecovery == .recreateMissing)
+        #expect(presentation.actions.recoverWorktree)
     }
 
     @Test func missionDetailRendersStoredHeaderCaptureAndLegFields() async throws {

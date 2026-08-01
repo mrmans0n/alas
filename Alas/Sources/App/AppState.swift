@@ -710,6 +710,7 @@ final class AppState {
     func reconcileMissionsForStartup() async {
         await missions.load()
         await missions.reconcileInterrupted()
+        presentMissingMissionRecoveryIfNeeded()
     }
 
     @discardableResult
@@ -1017,8 +1018,23 @@ final class AppState {
     /// Tear down tabs, terminals, harness state, and editor buffers for any
     /// worktree IDs that existed in `beforeIds` but are absent after a refresh.
     /// Also re-points selection if the selected worktree was removed.
-    func cleanupMissingWorktrees(beforeIds: Set<String>) {
+    func cleanupMissingWorktrees(beforeIds: Set<String>) async {
         let afterIds = allWorktreeIds()
+        let disappeared = beforeIds.subtracting(afterIds)
+        let missingMissionIDs: Set<MissionID> = Set(missions.aggregates.compactMap { aggregate in
+            guard let leg = aggregate.primaryLeg,
+                  disappeared.contains(leg.worktreeId ?? ""),
+                  projects.contains(where: { $0.id == leg.projectId })
+            else { return nil }
+            return aggregate.mission.id
+        })
+        for missionID in missingMissionIDs {
+            await missions.recordMissingWorktree(missionID)
+        }
+        cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
+    }
+
+    private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>) {
         let disappeared = beforeIds.subtracting(afterIds)
         let selectedMissingMission: MissionTabState? = selectedWorktreeId.flatMap { worktreeID in
             guard disappeared.contains(worktreeID),
@@ -1047,6 +1063,25 @@ final class AppState {
                 selectWorktree(id: resolvedSelectionForActiveSpace())
             }
         }
+    }
+
+    private func presentMissingMissionRecoveryIfNeeded() {
+        guard missingMissionTab == nil,
+              let aggregate = missions.aggregates.first(where: {
+                  $0.mission.state == .needsAttention
+                      && $0.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+              }),
+              let leg = aggregate.primaryLeg,
+              projects.contains(where: { $0.id == leg.projectId })
+        else { return }
+
+        let tab = MissionTabState(
+            missionID: aggregate.mission.id,
+            worktreeId: leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)",
+            title: aggregate.mission.title
+        )
+        missingMissionTab = tab
+        focusGlobalWorktree(id: tab.worktreeId, projectId: leg.projectId)
     }
 
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
@@ -2106,14 +2141,15 @@ final class AppState {
         stopProjectGitWatcher(projectId: id)
         unpersistedGGWorktreeModes.removeValue(forKey: id)
         projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
-        Task { @MainActor [weak self] in
-            await self?.missions.recordMissingWorktree(projectId: id, projectRemoved: true)
-        }
         spacesManager.removeProjectEverywhere(id)
         saveProjects()
         saveSpaces()
-        let removedIds = beforeIds.subtracting(allWorktreeIds())
-        cleanupMissingWorktrees(beforeIds: beforeIds)
+        let afterIds = allWorktreeIds()
+        let removedIds = beforeIds.subtracting(afterIds)
+        cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
+        Task { @MainActor [weak self] in
+            await self?.missions.recordMissingWorktree(projectId: id, projectRemoved: true)
+        }
         for root in remoteRootsToUnregister {
             RemoteHostRegistry.shared.unregister(root: root)
         }
@@ -2263,7 +2299,7 @@ final class AppState {
         if !addedIds.isEmpty {
             tabs.loadAll(worktreeIds: Array(addedIds))
         }
-        cleanupMissingWorktrees(beforeIds: beforeIds)
+        await cleanupMissingWorktrees(beforeIds: beforeIds)
     }
 
     /// Refresh every project, persist any reconciled configuration, and move

@@ -47,3 +47,20 @@ A repository-wide test run was started and reached the active test host without 
 5. PASS: `git diff --check`.
 
 No broad suite was run for this review-fix round.
+
+## Review follow-up: durable missing-worktree recovery
+
+- Runtime topology cleanup now awaits `MissionController.recordMissingWorktree` for active Missions whose known worktree ID disappeared, before it tears down the row and retains the selected Mission recovery tab. The persisted state is therefore `needsAttention` at the running checkpoint with the canonical missing-worktree reason before `Recreate Worktree` can call retry.
+- Startup reconciliation promotes a persisted missing-worktree Mission into `missingMissionTab` and focuses its containing Space, so the existing nil-worktree `MissionTabView` renders the actionable `Recreate Worktree` surface instead of leaving `openMission` at its unavailable failure.
+- `MissionController.retry` continues to detect that durable missing-worktree state and invokes `MissionCoordinator.retry(recreateWorktree: true)`. The regression fixture starts from a running Mission, records the missing transition, and proves exactly one worktree creation and ACP restart. Archived rows retain their separate hidden-row `Restore Worktree`/unarchive behavior.
+- Project-removal cleanup remains synchronous for existing tabs and selection; only the durable project-missing Mission recording stays asynchronous.
+
+### Follow-up TDD and verification evidence
+
+1. Added production-path regressions for selected runtime disappearance and startup disappearance, each asserting the persisted missing reason and the actionable recovery presentation.
+2. Strengthened the recovery retry fixture to start in `.running`, apply the production missing-worktree signal, then assert exactly one replacement worktree/ACP attempt.
+3. The focused suite initially exposed six existing project-removal cleanup assertions after an async cleanup refactor; extracted the synchronous cleanup core and kept only runtime Mission marking asynchronous. The corrected focused result passed with 147 tests, 0 failed, and 0 skipped.
+4. PASS: `rtk swiftformat --lint` on the 6 changed Swift files (0 files require formatting).
+5. PASS: `git diff --check`.
+
+No broad suite was run for this review-fix round.

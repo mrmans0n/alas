@@ -464,7 +464,7 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt2")
     }
 
-    @Test func cleanupMissingActiveSpaceWorktreeDoesNotSelectOtherSpaceWorktree() {
+    @Test func cleanupMissingActiveSpaceWorktreeDoesNotSelectOtherSpaceWorktree() async {
         let p1 = project("p1")
         let p2 = project("p2")
         let spaces = SpacesFile(
@@ -482,7 +482,7 @@ struct AppStateSpacesTests {
         let beforeIds = state.allWorktreeIds()
         state.projectsManager.removeOptimisticWorktree(id: "wt1", projectId: "p1")
 
-        state.cleanupMissingWorktrees(beforeIds: beforeIds)
+        await state.cleanupMissingWorktrees(beforeIds: beforeIds)
 
         #expect(state.spacesManager.activeSpaceId == "s1")
         #expect(state.selectedWorktreeId == nil)
