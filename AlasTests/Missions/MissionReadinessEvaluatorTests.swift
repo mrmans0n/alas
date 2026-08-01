@@ -54,6 +54,28 @@ struct MissionReadinessEvaluatorTests {
         ) == .needsAttention("The Mission worktree is no longer available."))
     }
 
+    @Test func missingWorktreeAfterAgentFailureResetsToRecreationCheckpoint() async throws {
+        var failedAgent = Self.runningAggregate()
+        failedAgent.mission.state = .needsAttention
+        failedAgent.mission.setupCheckpoint = .startingAgent
+        failedAgent.mission.attentionReason = "ACP setup failed."
+        let fake = try MissionLifecycleFake(aggregate: failedAgent, worktreeAvailable: false)
+        await fake.controller.load()
+
+        await fake.controller.recordMissingWorktree(Self.missionID)
+        var aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+
+        await fake.controller.retry(Self.missionID)
+        aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(fake.externalOperations == ["createWorktree"])
+        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
+    }
+
     @Test func removedProjectNeedsAttention() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,

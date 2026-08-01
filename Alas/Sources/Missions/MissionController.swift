@@ -502,13 +502,19 @@ final class MissionController {
                     )
 
                 case .needsAttention(let message):
+                    let checkpoint: MissionSetupCheckpoint = if case .worktreeMissing = signal {
+                        .running
+                    } else {
+                        aggregate.mission.setupCheckpoint
+                    }
                     guard aggregate.mission.state != .needsAttention
                             || aggregate.mission.attentionReason != message
+                            || aggregate.mission.setupCheckpoint != checkpoint
                     else { return }
                     try await persistence.updateSetup(
                         id: id,
                         state: .needsAttention,
-                        checkpoint: aggregate.mission.setupCheckpoint,
+                        checkpoint: checkpoint,
                         attentionReason: message,
                         event: makeEvent(
                             aggregate: aggregate,
