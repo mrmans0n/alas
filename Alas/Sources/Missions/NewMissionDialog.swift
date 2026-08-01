@@ -169,7 +169,8 @@ final class NewMissionDialogModel {
         baseIsUserOwned = false
         branch = availableBranch(
             seededBy: generatedBranch(projectID: projectId, issue: resolution.snapshot),
-            occupied: discoveredBranches
+            occupied: discoveredBranches,
+            projectID: projectId
         )
         branchIsUserOwned = false
         prompt = MissionPromptBuilder.build(snapshot: resolution.snapshot)
@@ -222,7 +223,11 @@ final class NewMissionDialogModel {
                 base = preferred
             }
             if updatesBranch, !branchIsUserOwned {
-                branch = availableBranch(seededBy: nextSeededBranch, occupied: discovered)
+                branch = availableBranch(
+                    seededBy: nextSeededBranch,
+                    occupied: discovered,
+                    projectID: candidateID
+                )
             }
         } catch {
             guard projectGeneration == generation, projectId == candidateID else { return }
@@ -287,7 +292,11 @@ final class NewMissionDialogModel {
 
     func prepareDuplicateCreation() -> Bool {
         guard existingMissionID != nil, let original = duplicateBranch else { return false }
-        branch = availableBranch(seededBy: original, occupied: branches + [original])
+        branch = availableBranch(
+            seededBy: original,
+            occupied: branches + [original],
+            projectID: projectId
+        )
         branchIsUserOwned = false
         existingMissionID = nil
         errorMessage = nil
@@ -357,8 +366,32 @@ final class NewMissionDialogModel {
         )
     }
 
-    private func availableBranch(seededBy seed: String, occupied: [String]) -> String {
-        let occupied = Set(occupied)
+    private func availableBranch(
+        seededBy seed: String,
+        occupied: [String],
+        projectID: String
+    ) -> String {
+        let rawOccupied = Set(occupied)
+        var remoteNames: Set<String> = ["origin"]
+        let configuredBase = environment.configuredBase(projectID)
+        if let separator = configuredBase.firstIndex(of: "/") {
+            remoteNames.insert(String(configuredBase[..<separator]))
+        }
+        for branch in occupied {
+            guard let separator = branch.firstIndex(of: "/") else { continue }
+            let suffix = String(branch[branch.index(after: separator)...])
+            if rawOccupied.contains(suffix) {
+                remoteNames.insert(String(branch[..<separator]))
+            }
+        }
+
+        var occupied = rawOccupied
+        for branch in rawOccupied {
+            guard let separator = branch.firstIndex(of: "/"),
+                  remoteNames.contains(String(branch[..<separator]))
+            else { continue }
+            occupied.insert(String(branch[branch.index(after: separator)...]))
+        }
         guard occupied.contains(seed) else { return seed }
         var suffix = 2
         var candidate = "\(seed)-\(suffix)"
