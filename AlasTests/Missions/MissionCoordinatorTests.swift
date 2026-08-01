@@ -119,6 +119,47 @@ struct MissionCoordinatorTests {
         #expect(controller.aggregate(id: id) == aggregate)
     }
 
+    @Test("agent replacement uses a fresh persisted ACP session with the replacement agent")
+    func agentReplacementCreatesSessionForReplacementAgent() async throws {
+        let fake = MissionCoordinatorFake(agentResult: .failure(.init(message: "Install Codex")))
+        fake.idValues = ["mission", "leg", "created", "worktree", "old-session", "new-session"]
+        let sessionStore = try ACPSessionStore(path: FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-agent-replacement-\(UUID()).sqlite").path)
+        let sessionManager = ACPSessionManager(
+            worktreeId: fake.worktree.id,
+            worktreePath: fake.worktree.path.path,
+            store: sessionStore
+        )
+        sessionManager.createSession(id: "old-session", agentId: "codex")
+        await sessionManager.flushPersistence()
+        fake.startACPOverride = { leg, _ in
+            guard let sessionID = leg.acpSessionId else {
+                return .failure(.init(message: "Missing session"))
+            }
+            if await sessionManager.persistedSessionRow(id: sessionID) == nil {
+                sessionManager.createSession(id: sessionID, agentId: leg.agentId)
+                await sessionManager.flushPersistence()
+            }
+            return .failure(.init(message: "Install \(leg.agentId)"))
+        }
+        let controller = MissionController(environment: fake.environment)
+
+        let id = try await controller.create(Self.draft, allowDuplicate: false)
+        _ = await fake.waitUntilSettled(id)
+        await controller.retry(id, agentId: "claude")
+        let firstRetry = try #require(try await fake.persistence.aggregate(id: id))
+        let replacementSessionID = try #require(firstRetry.primaryLeg?.acpSessionId)
+
+        #expect(replacementSessionID != "old-session")
+        #expect(try sessionStore.loadSession(id: "old-session")?.agentId == "codex")
+        #expect(try sessionStore.loadSession(id: replacementSessionID)?.agentId == "claude")
+
+        await controller.retry(id, agentId: "claude")
+        let repeatedRetry = try #require(try await fake.persistence.aggregate(id: id))
+        #expect(repeatedRetry.primaryLeg?.acpSessionId == replacementSessionID)
+        #expect(try sessionStore.loadSession(id: replacementSessionID)?.agentId == "claude")
+    }
+
     @Test("agent replacement is ignored outside the agent checkpoint")
     func agentReplacementIsIgnoredForWorktreeRetry() async throws {
         let fake = MissionCoordinatorFake(worktreeResult: .failure(.init(message: "Git failed")))
@@ -133,6 +174,88 @@ struct MissionCoordinatorTests {
         #expect(aggregate.primaryLeg?.agentId == "codex")
         #expect(fake.startedAgentIDs == ["codex"])
         #expect(aggregate.mission.state == .running)
+    }
+
+    @Test("failed optimistic worktree stays eligible for Mission worktree retry")
+    func failedOptimisticWorktreeDoesNotSatisfyMissionDestination() async throws {
+        let project = ProjectConfig(
+            id: "project-1",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "teal",
+            addedAt: .now
+        )
+        let state = AppState(store: MissionProjectStore(projects: [project]))
+        let failed = Worktree(
+            id: "optimistic-worktree",
+            projectId: project.id,
+            name: "fix/parser-crash",
+            branch: "fix/parser-crash",
+            path: URL(fileURLWithPath: Self.draft.destinationPath),
+            status: .running,
+            lastActivity: .now
+        )
+        state.projectsManager.insertOptimisticWorktree(failed)
+        state.projectsManager.setOperationState(
+            id: failed.id,
+            state: .createFailed(
+                projectId: project.id,
+                message: "branch exists",
+                base: Self.draft.baseRef,
+                ggWorktreeMode: .off
+            )
+        )
+
+        #expect(state.missionWorktreeAtDestination(
+            projectID: project.id,
+            destinationPath: Self.draft.destinationPath
+        ) == nil)
+
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .needsAttention
+        aggregate.mission.attentionReason = "branch exists"
+        let fake = MissionCoordinatorFake(existing: [aggregate])
+        var retryGitCalls = 0
+        let coordinator = MissionCoordinator(environment: .init(
+            persistence: fake.persistence,
+            now: { Date() },
+            makeID: { UUID().uuidString },
+            worktreeAtDestination: { projectID, destinationPath in
+                state.missionWorktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
+            },
+            createWorktree: { _ in
+                retryGitCalls += 1
+                state.projectsManager.setOperationState(id: failed.id, state: nil)
+                return .success(failed)
+            },
+            startACP: { leg, _ in .success(leg.acpSessionId ?? "") },
+            notifyChanged: { _ in }
+        ))
+
+        await coordinator.retry(id: aggregate.mission.id)
+
+        #expect(retryGitCalls == 1)
+        #expect(try await fake.persistence.aggregate(id: aggregate.mission.id)?.mission.state == .running)
+    }
+
+    @Test("checkpoint persistence failure becomes recoverable attention")
+    func checkpointPersistenceFailureBecomesAttention() async throws {
+        let fake = MissionCoordinatorFake()
+        // The worktree checkpoint event collides with the already persisted
+        // creation event. The following ID lets the recovery attention event win.
+        fake.idValues = ["mission", "leg", "created-event", "created-event", "attention-event"]
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let id = try await coordinator.create(Self.draft)
+        let aggregate = await fake.waitUntilSettled(id)
+
+        #expect(fake.createWorktreeCalls == 1)
+        #expect(fake.startACPCalls == 0)
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
+        #expect(aggregate.mission.attentionReason == "Could not persist Mission setup progress. Retry this Mission.")
+        #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
+        #expect(fake.reportedFailures.isEmpty)
     }
 
     @Test("restart reconciles an interrupted worktree by destination")
@@ -304,6 +427,7 @@ private final class MissionCoordinatorFake {
     var worktreeResult: Result<Worktree, WorktreeCreationFailure>
     var agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>?
     var worktreeAtDestination: Worktree?
+    var startACPOverride: ((MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>)?
     var aggregateObservedWhenGitStarted = false
     private(set) var missionWasDurableWhenGitStarted = false
     private(set) var createWorktreeCalls = 0
@@ -312,9 +436,11 @@ private final class MissionCoordinatorFake {
     private(set) var startedAgentIDs: [String] = []
     private(set) var operations: [String] = []
     private(set) var notifications: [MissionAggregate] = []
+    private(set) var reportedFailures: [(MissionID?, String)] = []
 
     private var idCounter = 0
     private var clock: TimeInterval = 1_000
+    var idValues: [String] = []
 
     init(
         existing: [MissionAggregate] = [],
@@ -346,6 +472,9 @@ private final class MissionCoordinatorFake {
             },
             makeID: { [weak self] in
                 guard let self else { return UUID().uuidString }
+                if !self.idValues.isEmpty {
+                    return self.idValues.removeFirst()
+                }
                 self.idCounter += 1
                 return "id-\(self.idCounter)"
             },
@@ -376,6 +505,9 @@ private final class MissionCoordinatorFake {
                 self.operations.append("startACP")
                 self.startedAgentIDs.append(leg.agentId)
                 self.startedSessionIDs.append(leg.acpSessionId ?? "")
+                if let startACPOverride = self.startACPOverride {
+                    return await startACPOverride(leg, self.worktree)
+                }
                 return self.agentResult ?? .success(leg.acpSessionId ?? "")
             },
             notifyChanged: { [weak self] aggregate in
@@ -396,6 +528,9 @@ private final class MissionCoordinatorFake {
                           aggregate.primaryLeg?.pendingInitialPrompt == nil {
                     self.operations.append("clearPrompt:running")
                 }
+            },
+            reportFailure: { [weak self] id, message in
+                self?.reportedFailures.append((id, message))
             }
         )
     }
@@ -410,5 +545,15 @@ private final class MissionCoordinatorFake {
             await Task.yield()
         }
         return try! await persistence.aggregate(id: id)!
+    }
+}
+
+private struct MissionProjectStore: PersistenceStoreProtocol {
+    let projects: [ProjectConfig]
+
+    func write<T: Encodable>(_: T, to _: URL) throws {}
+
+    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+        T.self == ProjectsFile.self ? ProjectsFile(projects: projects) as? T : nil
     }
 }

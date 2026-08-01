@@ -14,6 +14,27 @@ final class MissionCoordinator {
         let createWorktree: (MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>
         let startACP: (MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionOperationFailure>
         let notifyChanged: (MissionAggregate) -> Void
+        let reportFailure: (MissionID?, String) -> Void
+
+        init(
+            persistence: MissionPersistence,
+            now: @escaping () -> Date,
+            makeID: @escaping () -> String,
+            worktreeAtDestination: @escaping (String, String) -> Worktree?,
+            createWorktree: @escaping (MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>,
+            startACP: @escaping (MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionOperationFailure>,
+            notifyChanged: @escaping (MissionAggregate) -> Void,
+            reportFailure: @escaping (MissionID?, String) -> Void = { _, _ in }
+        ) {
+            self.persistence = persistence
+            self.now = now
+            self.makeID = makeID
+            self.worktreeAtDestination = worktreeAtDestination
+            self.createWorktree = createWorktree
+            self.startACP = startACP
+            self.notifyChanged = notifyChanged
+            self.reportFailure = reportFailure
+        }
     }
 
     private let environment: Environment
@@ -78,9 +99,13 @@ final class MissionCoordinator {
             await withCheckedContinuation { continuation in
                 advanceWaiters[id, default: []].append(continuation)
             }
-            if let aggregate = try? await environment.persistence.aggregate(id: id),
-               aggregate.mission.state == .creating {
-                await advance(id: id)
+            do {
+                if let aggregate = try await environment.persistence.aggregate(id: id),
+                   aggregate.mission.state == .creating {
+                    await advance(id: id)
+                }
+            } catch {
+                reportPersistenceFailure(id: id, operation: "load Mission setup progress", error: error)
             }
             return
         }
@@ -93,9 +118,16 @@ final class MissionCoordinator {
     }
 
     func retry(id: MissionID) async {
-        guard let aggregate = try? await environment.persistence.aggregate(id: id),
-              aggregate.mission.state == .needsAttention
-        else { return }
+        let aggregate: MissionAggregate
+        do {
+            guard let loaded = try await environment.persistence.aggregate(id: id),
+                  loaded.mission.state == .needsAttention
+            else { return }
+            aggregate = loaded
+        } catch {
+            reportPersistenceFailure(id: id, operation: "load Mission setup progress", error: error)
+            return
+        }
         let now = environment.now()
         let retryEvent = event(
             missionID: id,
@@ -116,28 +148,52 @@ final class MissionCoordinator {
                 environment.notifyChanged(changed)
             }
         } catch {
+            await persistFailure(
+                aggregate: aggregate,
+                checkpoint: aggregate.mission.setupCheckpoint,
+                message: Self.persistenceFailureMessage
+            )
             return
         }
         await advance(id: id)
     }
 
     func reconcileInterrupted() async {
-        guard let unsettled = try? await environment.persistence.list(states: [.creating, .needsAttention]) else {
+        let unsettled: [MissionAggregate]
+        do {
+            unsettled = try await environment.persistence.list(states: [.creating, .needsAttention])
+        } catch {
+            reportPersistenceFailure(id: nil, operation: "load interrupted Missions", error: error)
             return
         }
 
         for aggregate in unsettled where aggregate.mission.state == .needsAttention {
             await reconcileArtifacts(in: aggregate)
         }
-        guard let creating = try? await environment.persistence.list(states: [.creating]) else { return }
+        let creating: [MissionAggregate]
+        do {
+            creating = try await environment.persistence.list(states: [.creating])
+        } catch {
+            reportPersistenceFailure(id: nil, operation: "load interrupted Missions", error: error)
+            return
+        }
         for aggregate in creating {
             await advance(id: aggregate.mission.id)
         }
     }
 
     private func performAdvance(id: MissionID) async {
-        while let aggregate = try? await environment.persistence.aggregate(id: id),
-              aggregate.mission.state == .creating {
+        while true {
+            let aggregate: MissionAggregate
+            do {
+                guard let loaded = try await environment.persistence.aggregate(id: id),
+                      loaded.mission.state == .creating
+                else { return }
+                aggregate = loaded
+            } catch {
+                reportPersistenceFailure(id: id, operation: "load Mission setup progress", error: error)
+                return
+            }
             let didAdvance: Bool
             switch aggregate.mission.setupCheckpoint {
             case .creatingWorktree:
@@ -191,6 +247,12 @@ final class MissionCoordinator {
             await notify(id: aggregate.mission.id)
             return true
         } catch {
+            await persistFailure(
+                aggregate: aggregate,
+                leg: leg,
+                checkpoint: .creatingWorktree,
+                message: Self.persistenceFailureMessage
+            )
             return false
         }
     }
@@ -212,6 +274,12 @@ final class MissionCoordinator {
                 try await environment.persistence.updateLeg(leg, event: nil)
                 await notify(id: aggregate.mission.id)
             } catch {
+                await persistFailure(
+                    aggregate: aggregate,
+                    leg: leg,
+                    checkpoint: .startingAgent,
+                    message: Self.persistenceFailureMessage
+                )
                 return false
             }
         }
@@ -221,10 +289,17 @@ final class MissionCoordinator {
                 try await environment.persistence.updateLeg(leg, event: nil)
                 await notify(id: aggregate.mission.id)
             } catch {
+                await persistFailure(
+                    aggregate: aggregate,
+                    leg: leg,
+                    checkpoint: .startingAgent,
+                    message: Self.persistenceFailureMessage
+                )
                 return false
             }
         }
 
+        let retryLeg = leg
         switch await environment.startACP(leg, worktree) {
         case .success:
             leg.pendingInitialPrompt = nil
@@ -248,11 +323,18 @@ final class MissionCoordinator {
                 await notify(id: aggregate.mission.id)
                 return true
             } catch {
+                await persistFailure(
+                    aggregate: aggregate,
+                    leg: retryLeg,
+                    checkpoint: .startingAgent,
+                    message: Self.persistenceFailureMessage
+                )
                 return false
             }
         case .failure(let failure):
             await persistFailure(
                 aggregate: aggregate,
+                leg: leg,
                 checkpoint: .startingAgent,
                 message: failure.message
             )
@@ -280,6 +362,11 @@ final class MissionCoordinator {
             await notify(id: aggregate.mission.id)
             return true
         } catch {
+            await persistFailure(
+                aggregate: aggregate,
+                checkpoint: .running,
+                message: Self.persistenceFailureMessage
+            )
             return false
         }
     }
@@ -311,12 +398,19 @@ final class MissionCoordinator {
             )
             await notify(id: aggregate.mission.id)
         } catch {
+            await persistFailure(
+                aggregate: aggregate,
+                leg: leg,
+                checkpoint: .startingAgent,
+                message: Self.persistenceFailureMessage
+            )
             return
         }
     }
 
     private func persistFailure(
         aggregate: MissionAggregate,
+        leg: MissionLeg? = nil,
         checkpoint: MissionSetupCheckpoint,
         message: String
     ) async {
@@ -329,23 +423,43 @@ final class MissionCoordinator {
             at: environment.now()
         )
         do {
-            try await environment.persistence.updateSetup(
-                id: aggregate.mission.id,
-                state: .needsAttention,
-                checkpoint: checkpoint,
-                attentionReason: sanitized,
-                event: failureEvent
-            )
+            if let leg {
+                try await environment.persistence.updateSetup(
+                    id: aggregate.mission.id,
+                    leg: leg,
+                    state: .needsAttention,
+                    checkpoint: checkpoint,
+                    attentionReason: sanitized,
+                    event: failureEvent
+                )
+            } else {
+                try await environment.persistence.updateSetup(
+                    id: aggregate.mission.id,
+                    state: .needsAttention,
+                    checkpoint: checkpoint,
+                    attentionReason: sanitized,
+                    event: failureEvent
+                )
+            }
             await notify(id: aggregate.mission.id)
         } catch {
-            return
+            reportPersistenceFailure(id: aggregate.mission.id, operation: "record Mission setup recovery", error: error)
         }
     }
 
     private func notify(id: MissionID) async {
-        if let aggregate = try? await environment.persistence.aggregate(id: id) {
-            environment.notifyChanged(aggregate)
+        do {
+            if let aggregate = try await environment.persistence.aggregate(id: id) {
+                environment.notifyChanged(aggregate)
+            }
+        } catch {
+            reportPersistenceFailure(id: id, operation: "publish Mission setup progress", error: error)
         }
+    }
+
+    private func reportPersistenceFailure(id: MissionID?, operation: String, error: Error) {
+        let detail = Self.sanitized(error.localizedDescription)
+        environment.reportFailure(id, "Could not \(operation): \(detail)")
     }
 
     private func event(
@@ -384,4 +498,6 @@ final class MissionCoordinator {
         let fallback = collapsed.isEmpty ? "Mission setup failed." : collapsed
         return String(fallback.prefix(500))
     }
+
+    private static let persistenceFailureMessage = "Could not persist Mission setup progress. Retry this Mission."
 }

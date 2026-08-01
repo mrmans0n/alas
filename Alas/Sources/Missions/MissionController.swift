@@ -22,6 +22,10 @@ final class MissionController {
         notifyChanged: { [weak self] aggregate in
             self?.environment.notifyChanged(aggregate)
             self?.replace(aggregate)
+        },
+        reportFailure: { [weak self] id, message in
+            self?.environment.reportFailure(id, message)
+            self?.loadError = message
         }
     ))
 
@@ -52,20 +56,27 @@ final class MissionController {
                aggregate.mission.state == .needsAttention,
                aggregate.mission.setupCheckpoint == .startingAgent,
                var leg = aggregate.primaryLeg {
-                leg.agentId = agentId
-                try await persistence.updateLeg(leg, event: nil)
-                aggregate.legs = [leg]
-                environment.notifyChanged(aggregate)
-                replace(aggregate)
+                if leg.agentId != agentId {
+                    leg.agentId = agentId
+                    // ACP sessions retain their original agent identity. A replacement
+                    // therefore needs a fresh, durable session ID instead of mutating
+                    // the prior session or accidentally hydrating it for the new agent.
+                    leg.acpSessionId = environment.makeID()
+                    try await persistence.updateLeg(leg, event: nil)
+                    aggregate.legs = [leg]
+                    environment.notifyChanged(aggregate)
+                    replace(aggregate)
+                }
             }
-            await coordinator.retry(id: id)
             loadError = nil
+            await coordinator.retry(id: id)
         } catch {
             loadError = error.localizedDescription
         }
     }
 
     func reconcileInterrupted() async {
+        loadError = nil
         await coordinator.reconcileInterrupted()
     }
 

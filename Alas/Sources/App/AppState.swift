@@ -611,11 +611,7 @@ final class AppState {
             now: { Date() },
             makeID: { UUID().uuidString },
             worktreeAtDestination: { [weak self] projectID, destinationPath in
-                guard let self else { return nil }
-                let targetPath = URL(fileURLWithPath: destinationPath).standardizedFileURL.path
-                return self.projectsManager.worktrees(projectId: projectID).first {
-                    $0.path.standardizedFileURL.path == targetPath
-                }
+                self?.missionWorktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
             },
             createWorktree: { [weak self] leg in
                 guard let self else {
@@ -654,6 +650,17 @@ final class AppState {
             },
             notifyChanged: { _ in }
         ))
+    }
+
+    /// Returns only a reconciled worktree. Optimistic create/delete rows cannot
+    /// satisfy a Mission checkpoint because their Git operation has not settled.
+    func missionWorktreeAtDestination(projectID: String, destinationPath: String) -> Worktree? {
+        let targetPath = URL(fileURLWithPath: destinationPath).standardizedFileURL.path
+        guard let worktree = projectsManager.worktrees(projectId: projectID).first(where: {
+            $0.path.standardizedFileURL.path == targetPath
+        }), projectsManager.operationState(for: worktree.id) == nil
+        else { return nil }
+        return worktree
     }
 
     /// All worktree IDs currently known to the projects manager (including
