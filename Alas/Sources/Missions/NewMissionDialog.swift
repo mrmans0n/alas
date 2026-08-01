@@ -66,6 +66,8 @@ final class NewMissionDialogModel {
     private var baseIsUserOwned = false
     @ObservationIgnored
     private var branchIsUserOwned = false
+    @ObservationIgnored
+    private var duplicateBranch: String?
 
     init(environment: Environment) {
         self.environment = environment
@@ -118,6 +120,7 @@ final class NewMissionDialogModel {
         errorMessage = nil
         branchErrorMessage = nil
         existingMissionID = nil
+        duplicateBranch = nil
         resolved = nil
         candidateProjectIds = []
         projectId = ""
@@ -192,6 +195,7 @@ final class NewMissionDialogModel {
         projectId = candidateID
         errorMessage = nil
         existingMissionID = nil
+        duplicateBranch = nil
 
         let nextSeededBase = environment.configuredBase(candidateID)
         if updatesBase { base = nextSeededBase }
@@ -226,6 +230,11 @@ final class NewMissionDialogModel {
             errorMessage = "Resolve an issue before creating a Mission."
             return nil
         }
+        if allowDuplicate, duplicateBranch == branch {
+            errorMessage = "Choose a different branch for the additional Mission."
+            phase = .confirmation
+            return nil
+        }
         guard let validationMessage else {
             phase = .creating
             errorMessage = nil
@@ -244,6 +253,7 @@ final class NewMissionDialogModel {
                 return try await environment.createMission(draft, allowDuplicate)
             } catch let CreationError.duplicate(existing) {
                 existingMissionID = existing
+                duplicateBranch = branch
                 phase = .confirmation
                 return nil
             } catch {
@@ -265,6 +275,23 @@ final class NewMissionDialogModel {
 
     func cancelDuplicateChoice() {
         existingMissionID = nil
+        duplicateBranch = nil
+    }
+
+    func prepareDuplicateCreation() -> Bool {
+        guard existingMissionID != nil, let original = duplicateBranch else { return false }
+        let occupied = Set(branches)
+        var suffix = 2
+        var candidate = "\(original)-\(suffix)"
+        while occupied.contains(candidate) {
+            suffix += 1
+            candidate = "\(original)-\(suffix)"
+        }
+        branch = candidate
+        branchIsUserOwned = false
+        existingMissionID = nil
+        errorMessage = nil
+        return true
     }
 
     fileprivate func updateBaseFromUser(_ value: String) {
@@ -301,6 +328,7 @@ final class NewMissionDialogModel {
         existingMissionID = nil
         baseIsUserOwned = false
         branchIsUserOwned = false
+        duplicateBranch = nil
     }
 
     private func generatedBranch(projectID: String, issue: MissionIssueSnapshot) -> String {
@@ -559,6 +587,7 @@ struct NewMissionDialog: View {
     }
 
     private func createAnotherMission() {
+        guard model.prepareDuplicateCreation() else { return }
         Task { await actions.create(allowDuplicate: true) }
     }
 

@@ -104,6 +104,7 @@ struct MissionIntegrationTests {
 
         await harness.controller.observeReview(
             worktreeId: worktreeID,
+            baseRef: "origin/main",
             snapshot: MissionIntegrationHarness.reviewSnapshot(state: .merged)
         )
         let ready = try #require(try await harness.persistence.aggregate(id: id))

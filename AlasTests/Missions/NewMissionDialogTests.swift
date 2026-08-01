@@ -261,10 +261,16 @@ struct NewMissionDialogTests {
         await model.resolve()
 
         #expect(await model.create(allowDuplicate: false) == nil)
+        let originalBranch = model.branch
+        #expect(await model.create(allowDuplicate: true) == nil)
+        #expect(model.errorMessage == "Choose a different branch for the additional Mission.")
+        #expect(model.prepareDuplicateCreation())
         let created = await model.create(allowDuplicate: true)
 
         #expect(created == MissionID(rawValue: "new-mission"))
         #expect(fake.createAllowDuplicateValues == [false, true])
+        #expect(fake.createdDrafts.last?.branch == "\(originalBranch)-2")
+        #expect(fake.createdDrafts.last?.destinationPath != fake.createdDrafts.first?.destinationPath)
     }
 
     @Test("create failure keeps the editable confirmation visible")

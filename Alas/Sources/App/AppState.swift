@@ -600,9 +600,13 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
-        rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, snapshot in
+        rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, baseRef, snapshot in
             Task { @MainActor [weak self] in
-                await self?.missions.observeReview(worktreeId: worktreeID, snapshot: snapshot)
+                await self?.missions.observeReview(
+                    worktreeId: worktreeID,
+                    baseRef: baseRef,
+                    snapshot: snapshot
+                )
             }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in

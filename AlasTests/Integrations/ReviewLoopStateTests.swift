@@ -7,6 +7,16 @@ import Testing
 struct ReviewLoopStateTests {
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
         let store = RightPaneStore()
+        let worktree = Worktree(
+            id: "worktree-1",
+            projectId: "project-1",
+            name: "feature/review",
+            branch: "feature/review",
+            path: URL(fileURLWithPath: "/tmp/alas-review-loop-callback"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        _ = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
         let remote = Self.makeRemote()
         let request = Self.makeReviewRequest(remote: remote, checks: [])
         let snapshot = ReviewLoopSnapshot(
@@ -18,9 +28,9 @@ struct ReviewLoopStateTests {
             providerCapabilities: .readOnly,
             errorMessage: nil
         )
-        var received: [(String, ReviewLoopSnapshot)] = []
-        store.reviewSnapshotDidChange = { worktreeID, snapshot in
-            received.append((worktreeID, snapshot))
+        var received: [(String, String, ReviewLoopSnapshot)] = []
+        store.reviewSnapshotDidChange = { worktreeID, baseRef, snapshot in
+            received.append((worktreeID, baseRef, snapshot))
         }
 
         store.observeCompletedRemoteReviewRefresh(
@@ -30,7 +40,8 @@ struct ReviewLoopStateTests {
 
         #expect(received.count == 1)
         #expect(received.first?.0 == "worktree-1")
-        #expect(received.first?.1 == snapshot)
+        #expect(received.first?.1 == "main")
+        #expect(received.first?.2 == snapshot)
     }
 
     @Test func inFlightActionRejectsConcurrentReviewActions() {

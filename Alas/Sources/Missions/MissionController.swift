@@ -146,12 +146,13 @@ final class MissionController {
         await reconcileReadinessAtStartup()
     }
 
-    func observeReview(worktreeId: String, snapshot: ReviewLoopSnapshot) async {
+    func observeReview(worktreeId: String, baseRef: String, snapshot: ReviewLoopSnapshot) async {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
             for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
                 guard let leg = aggregate.primaryLeg else { continue }
+                guard leg.baseRef == baseRef else { continue }
                 guard let currentWorktree = environment.worktreeAtDestination(
                     leg.projectId,
                     leg.destinationPath
@@ -341,7 +342,11 @@ final class MissionController {
                 }
                 if let worktreeID = leg.worktreeId,
                    let snapshot {
-                    await observeReview(worktreeId: worktreeID, snapshot: snapshot)
+                    await observeReview(
+                        worktreeId: worktreeID,
+                        baseRef: leg.baseRef,
+                        snapshot: snapshot
+                    )
                 }
             }
         } catch {

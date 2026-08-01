@@ -23,7 +23,7 @@ final class RightPaneStore {
     weak var appState: AppState?
 
     @ObservationIgnored
-    var reviewSnapshotDidChange: ((String, ReviewLoopSnapshot) -> Void)?
+    var reviewSnapshotDidChange: ((String, String, ReviewLoopSnapshot) -> Void)?
 
     private let git: GitService
 
@@ -297,7 +297,8 @@ final class RightPaneStore {
         worktreeId: String,
         snapshot: ReviewLoopSnapshot
     ) {
-        reviewSnapshotDidChange?(worktreeId, snapshot)
+        guard let baseBranch = states[worktreeId]?.reviewLoop.currentBaseBranch else { return }
+        reviewSnapshotDidChange?(worktreeId, baseBranch, snapshot)
     }
 
     func reviewSnapshot(worktreeId: String, baseBranch: String) -> ReviewLoopSnapshot? {

@@ -85,6 +85,7 @@ struct MissionReadinessEvaluatorTests {
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: Self.reviewSnapshot(state: .open)
         )
         let linked = try #require(try await fake.persistence.aggregate(id: Self.missionID))
@@ -95,6 +96,7 @@ struct MissionReadinessEvaluatorTests {
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: Self.reviewSnapshot(state: .merged)
         )
         let ready = try #require(try await fake.persistence.aggregate(id: Self.missionID))
@@ -109,11 +111,13 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.load()
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: Self.reviewSnapshot(state: .open)
         )
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: Self.reviewSnapshot(state: .merged, number: 92)
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
@@ -128,6 +132,22 @@ struct MissionReadinessEvaluatorTests {
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
+    @Test func liveReviewIgnoresASnapshotFromAnotherBase() async throws {
+        let fake = try MissionLifecycleFake()
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "release",
             snapshot: Self.reviewSnapshot(state: .merged)
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
@@ -171,6 +191,7 @@ struct MissionReadinessEvaluatorTests {
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: missingOpenReview
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
@@ -194,6 +215,7 @@ struct MissionReadinessEvaluatorTests {
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: unrelatedVisibleReview
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
@@ -305,6 +327,7 @@ struct MissionReadinessEvaluatorTests {
 
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
+            baseRef: "origin/main",
             snapshot: Self.reviewSnapshot(state: .merged)
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
