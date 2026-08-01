@@ -1176,12 +1176,17 @@ final class AppState {
             else { return nil }
             let persistedID = leg.worktreeId ?? ""
             let disappearedWorktree = disappeared.contains(persistedID)
+            let destinationBranch = missionWorktreeAtDestination(
+                projectID: leg.projectId,
+                destinationPath: leg.destinationPath
+            )?.branch
             let replacementBranch = beforeIds.contains(persistedID)
-                && missionWorktreeAtDestination(
-                    projectID: leg.projectId,
-                    destinationPath: leg.destinationPath
-                )?.branch != leg.branch
-            guard disappearedWorktree || replacementBranch else { return nil }
+                && destinationBranch != leg.branch
+            let confirmedUnavailableAfterRefresh = aggregate.mission.state == .running
+                && projectsManager.worktreeDiscoverySucceeded(projectId: leg.projectId)
+                && destinationBranch != leg.branch
+            guard disappearedWorktree || replacementBranch || confirmedUnavailableAfterRefresh
+            else { return nil }
             return aggregate.mission.id
         })
         for missionID in missingMissionIDs {
