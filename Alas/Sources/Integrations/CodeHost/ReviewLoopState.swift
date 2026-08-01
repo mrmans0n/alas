@@ -43,32 +43,12 @@ final class ReviewLoopState {
     var currentBaseBranch: String { baseBranch }
 
     func updateBaseBranch(_ branch: String) {
+        guard branch != baseBranch else { return }
         baseBranch = branch
-        if let current = snapshot?.local {
-            let local = ReviewLoopLocalState(
-                branchName: current.branchName,
-                headSHA: current.headSHA,
-                baseBranch: branch,
-                hasWorkingTreeChanges: current.hasWorkingTreeChanges,
-                hasStagedChanges: current.hasStagedChanges,
-                aheadCommitCount: current.aheadCommitCount,
-                hasUpstream: current.hasUpstream,
-                upstreamRemoteName: current.upstreamRemoteName,
-                upstreamBranchName: current.upstreamBranchName,
-                headRemoteOwner: current.headRemoteOwner,
-                upstreamAheadCommitCount: current.upstreamAheadCommitCount,
-                needsPush: current.needsPush
-            )
-            snapshot = ReviewLoopSnapshot(
-                local: local,
-                remote: snapshot?.remote,
-                reviewRequest: snapshot?.reviewRequest,
-                providerAvailable: snapshot?.providerAvailable ?? false,
-                providerAuthenticated: snapshot?.providerAuthenticated ?? false,
-                providerCapabilities: snapshot?.providerCapabilities ?? .readOnly,
-                errorMessage: snapshot?.errorMessage
-            )
-        }
+        refreshGeneration += 1
+        isRefreshing = false
+        snapshot = nil
+        lastError = nil
     }
 
     func beginAction(_ action: ReviewReadinessActionKind) -> Bool {

@@ -297,8 +297,7 @@ final class RightPaneStore {
         worktreeId: String,
         snapshot: ReviewLoopSnapshot
     ) {
-        guard let baseBranch = states[worktreeId]?.reviewLoop.currentBaseBranch else { return }
-        reviewSnapshotDidChange?(worktreeId, baseBranch, snapshot)
+        reviewSnapshotDidChange?(worktreeId, snapshot.local.baseBranch, snapshot)
     }
 
     func reviewSnapshot(worktreeId: String, baseBranch: String) -> ReviewLoopSnapshot? {

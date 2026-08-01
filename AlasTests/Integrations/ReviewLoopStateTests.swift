@@ -16,7 +16,7 @@ struct ReviewLoopStateTests {
             status: .clean,
             lastActivity: Date()
         )
-        _ = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        let pane = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
         let remote = Self.makeRemote()
         let request = Self.makeReviewRequest(remote: remote, checks: [])
         let snapshot = ReviewLoopSnapshot(
@@ -32,6 +32,7 @@ struct ReviewLoopStateTests {
         store.reviewSnapshotDidChange = { worktreeID, baseRef, snapshot in
             received.append((worktreeID, baseRef, snapshot))
         }
+        pane.reviewLoop.updateBaseBranch("release")
 
         store.observeCompletedRemoteReviewRefresh(
             worktreeId: "worktree-1",
@@ -42,6 +43,24 @@ struct ReviewLoopStateTests {
         #expect(received.first?.0 == "worktree-1")
         #expect(received.first?.1 == "main")
         #expect(received.first?.2 == snapshot)
+    }
+
+    @Test func baseChangeInvalidatesAnInFlightRefresh() {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop-base-change"),
+            baseBranch: "main"
+        )
+        let stale = state.beginLocalRefresh(local: Self.makeLocal(baseBranch: "main"))
+
+        state.updateBaseBranch("release")
+        state.finishLocalRefresh(
+            stale,
+            preservingRemoteWith: Self.makeLocal(baseBranch: "main")
+        )
+
+        #expect(state.currentBaseBranch == "release")
+        #expect(state.snapshot == nil)
+        #expect(!state.isRefreshing)
     }
 
     @Test func inFlightActionRejectsConcurrentReviewActions() {

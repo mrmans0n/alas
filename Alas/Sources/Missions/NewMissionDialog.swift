@@ -166,7 +166,10 @@ final class NewMissionDialogModel {
             configuredDefault: configuredBase
         )
         baseIsUserOwned = false
-        branch = generatedBranch(projectID: projectId, issue: resolution.snapshot)
+        branch = availableBranch(
+            seededBy: generatedBranch(projectID: projectId, issue: resolution.snapshot),
+            occupied: discoveredBranches
+        )
         branchIsUserOwned = false
         prompt = MissionPromptBuilder.build(snapshot: resolution.snapshot)
         agentId = agentOptions.first?.id ?? ""
@@ -216,6 +219,9 @@ final class NewMissionDialogModel {
                     configuredDefault: nextSeededBase
                 )
                 base = preferred
+            }
+            if updatesBranch, !branchIsUserOwned {
+                branch = availableBranch(seededBy: nextSeededBranch, occupied: discovered)
             }
         } catch {
             guard projectGeneration == generation, projectId == candidateID else { return }
@@ -280,14 +286,7 @@ final class NewMissionDialogModel {
 
     func prepareDuplicateCreation() -> Bool {
         guard existingMissionID != nil, let original = duplicateBranch else { return false }
-        let occupied = Set(branches)
-        var suffix = 2
-        var candidate = "\(original)-\(suffix)"
-        while occupied.contains(candidate) {
-            suffix += 1
-            candidate = "\(original)-\(suffix)"
-        }
-        branch = candidate
+        branch = availableBranch(seededBy: original, occupied: branches + [original])
         branchIsUserOwned = false
         existingMissionID = nil
         errorMessage = nil
@@ -337,6 +336,18 @@ final class NewMissionDialogModel {
             title: issue.title,
             prefix: environment.configuredBranchPrefix(projectID)
         )
+    }
+
+    private func availableBranch(seededBy seed: String, occupied: [String]) -> String {
+        let occupied = Set(occupied)
+        guard occupied.contains(seed) else { return seed }
+        var suffix = 2
+        var candidate = "\(seed)-\(suffix)"
+        while occupied.contains(candidate) {
+            suffix += 1
+            candidate = "\(seed)-\(suffix)"
+        }
+        return candidate
     }
 }
 

@@ -253,6 +253,24 @@ struct NewMissionDialogTests {
         #expect(fake.openedMissionIDs == [existing])
     }
 
+    @Test("generated branch skips branches retained by an earlier Mission")
+    func generatedBranchSkipsExistingMissionArtifacts() async {
+        let seed = MissionBranchName.make(
+            issueNumber: 1842,
+            title: "Fix offline sync conflicts",
+            prefix: "feature/"
+        )
+        let fake = NewMissionDialogFake(
+            branchesByProject: ["alas": ["origin/main", "main", seed, "\(seed)-2"]]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+
+        await model.resolve()
+
+        #expect(model.branch == "\(seed)-3")
+    }
+
     @Test("duplicate can be created only with an explicit override")
     func duplicateCanCreateAnotherMission() async {
         let fake = NewMissionDialogFake(duplicateMissionID: .init(rawValue: "existing-mission"))
