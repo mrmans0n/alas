@@ -261,6 +261,26 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func linkedReviewRefreshRejectsARetargetedReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let retargeted = try #require(Self.reviewSnapshot(
+            state: .merged,
+            baseBranch: "release"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { _, _ in retargeted }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshLinkedReview(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func sourceIssueStateDoesNotChangeMissionReadiness() async throws {
         let refreshed = MissionFixtures.issue(title: "Fresh issue title", capturedAt: 250)
         var closed = refreshed
@@ -424,6 +444,21 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
             discoverReviewRequest: { _, _, _, _, _ in historical }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
+    @Test func startupIgnoresAClosedUnmergedReviewWithoutLinkingIt() async throws {
+        let closed = try #require(Self.reviewSnapshot(state: .closed).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
+            discoverReviewRequest: { _, _, _, _, _ in closed }
         )
         await fake.controller.load()
 
@@ -630,7 +665,8 @@ struct MissionReadinessEvaluatorTests {
         number: Int = 91,
         branch: String = "fix/parser-crash",
         headSHA: String = "abc123",
-        headOwner: String? = nil
+        headOwner: String? = nil,
+        baseBranch: String = "main"
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -648,7 +684,7 @@ struct MissionReadinessEvaluatorTests {
             state: state,
             isDraft: false,
             headRefName: branch,
-            baseRefName: "main",
+            baseRefName: baseBranch,
             headSHA: headSHA,
             reviewDecision: .approved,
             mergeState: .clean,

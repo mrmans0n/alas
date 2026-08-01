@@ -190,7 +190,7 @@ final class MissionController {
                     continue
                 }
                 let identity = Self.reviewIdentity(for: request)
-                guard request.headRefName == leg.branch else { continue }
+                guard Self.review(request, matches: leg) else { continue }
                 if let linked = aggregate.primaryLeg?.reviewIdentity, linked != identity {
                     continue
                 }
@@ -285,7 +285,8 @@ final class MissionController {
             guard let aggregate = try await persistence.aggregate(id: id),
                   let leg = aggregate.primaryLeg,
                   let identity = leg.reviewIdentity,
-                  let request = await linkedReviewRequest(identity, leg.projectId)
+                  let request = await linkedReviewRequest(identity, leg.projectId),
+                  Self.review(request, matches: leg)
             else { return }
             await apply(
                 signal: .review(state: request.state, identity: identity),
@@ -405,7 +406,9 @@ final class MissionController {
                        snapshot.local.headRemoteOwner
                    ),
                    request.headRefName == leg.branch,
-                   request.headSHA == snapshot.local.headSHA {
+                   request.headSHA == snapshot.local.headSHA,
+                   request.state == .merged,
+                   Self.review(request, matches: leg) {
                     await apply(
                         signal: .review(
                             state: request.state,
@@ -611,6 +614,15 @@ final class MissionController {
             number: request.number,
             url: request.url
         )
+    }
+
+    private static func review(_ request: ReviewRequest, matches leg: MissionLeg) -> Bool {
+        let remotePrefix = "\(request.remote.remoteName)/"
+        let expectedBase = leg.baseRef.hasPrefix(remotePrefix)
+            ? String(leg.baseRef.dropFirst(remotePrefix.count))
+            : leg.baseRef
+        return request.headRefName == leg.branch
+            && request.baseRefName == expectedBase
     }
 
     private func replace(_ aggregate: MissionAggregate) {
