@@ -69,8 +69,8 @@ enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {
             }
         }
         for status in [403, 404] where output.range(
-            of: "\\b\(status)\\b",
-            options: .regularExpression
+            of: "\\b\(status)\\s+(?:Forbidden|Not\\s+Found)\\b",
+            options: [.regularExpression, .caseInsensitive]
         ) != nil {
             return status
         }
