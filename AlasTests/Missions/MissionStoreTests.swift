@@ -107,6 +107,36 @@ struct MissionStoreTests {
         #expect(loaded.events.last?.id == "attention")
     }
 
+    @Test("leg events advance mission activity time")
+    func legEventsAdvanceMissionActivityTime() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+        var leg = try #require(aggregate.primaryLeg)
+        leg.reviewIdentity = MissionReviewIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 91,
+            url: URL(string: "https://github.com/acme/alas/pull/91")!
+        )
+
+        try store.updateLeg(
+            leg,
+            event: MissionFixtures.event(
+                id: "review-linked",
+                missionID: aggregate.mission.id,
+                legID: leg.id,
+                kind: .reviewLinked,
+                createdAt: 200
+            )
+        )
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.mission.updatedAt == Date(timeIntervalSince1970: 200))
+        #expect(loaded.events.last?.id == "review-linked")
+    }
+
     @Test("replaces a refreshed issue snapshot and records the refresh")
     func replacesIssueSnapshot() throws {
         let store = try MissionStore(path: temporaryPath())

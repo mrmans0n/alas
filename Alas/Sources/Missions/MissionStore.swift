@@ -179,7 +179,13 @@ final class MissionStore {
                 leg.missionID.rawValue,
             ])
             guard changed == 1 else { throw Error.missionNotFound }
-            if let event { try insertEvent(event) }
+            if let event {
+                try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
+                    event.createdAt.timeIntervalSince1970,
+                    leg.missionID.rawValue,
+                ])
+                try insertEvent(event)
+            }
         }
     }
 
