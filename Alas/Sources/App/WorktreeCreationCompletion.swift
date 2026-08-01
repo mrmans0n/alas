@@ -11,6 +11,7 @@ enum WorktreeCreationCompletion {
         maxPolls: Int = 1_200,
         operationState: () -> WorktreeOperationState?,
         worktree: () -> Worktree?,
+        reconcile: @MainActor () async -> Void = {},
         sleep: @Sendable () async -> Void = {
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -20,6 +21,10 @@ enum WorktreeCreationCompletion {
 
             switch operationState() {
             case .createFailed(_, let message, _, _):
+                await reconcile()
+                if operationState() == nil, let reconciledWorktree = worktree() {
+                    return .success(reconciledWorktree)
+                }
                 return .failure(.init(message: message))
             case .creating:
                 break

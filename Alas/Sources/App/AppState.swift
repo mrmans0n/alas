@@ -1742,7 +1742,8 @@ final class AppState {
         return await WorktreeCreationCompletion.wait(
             id: id,
             operationState: { self.projectsManager.operationState(for: id) },
-            worktree: { self.worktree(withId: id) }
+            worktree: { self.worktree(withId: id) },
+            reconcile: { _ = try? await self.refreshProjectWorktrees(projectId: projectId) }
         )
     }
 

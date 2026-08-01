@@ -47,6 +47,31 @@ struct AppStateCreateWorktreeCompletionTests {
     }
 
     @Test
+    func waiterReconcilesAWorktreeCreatedBeforeRefreshFailed() async {
+        var state: WorktreeOperationState? = .createFailed(
+            projectId: "project",
+            message: "connection lost",
+            base: "main",
+            ggWorktreeMode: .inherit
+        )
+        var reconciled: Worktree?
+
+        let result = await WorktreeCreationCompletion.wait(
+            id: Self.worktree.id,
+            maxPolls: 1,
+            operationState: { state },
+            worktree: { reconciled },
+            reconcile: {
+                reconciled = Self.worktree
+                state = nil
+            },
+            sleep: {}
+        )
+
+        #expect(result == .success(Self.worktree))
+    }
+
+    @Test
     func waiterRetriesWhenTheOptimisticRowIsTemporarilyMissing() async {
         var states: [WorktreeOperationState?] = [nil, nil]
         var worktrees: [Worktree?] = [nil, Self.worktree]
