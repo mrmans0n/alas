@@ -37,25 +37,27 @@ final class MissionStore {
         return Int((rows.first?["version"] as? Int64) ?? 0)
     }
 
-    func insert(_ aggregate: MissionAggregate) throws {
+    func insert(_ aggregate: MissionAggregate, allowDuplicate: Bool = false) throws {
         try validate(aggregate)
         try immediateTransaction {
-            let identity = aggregate.issue.identity
-            let duplicate = try db.query("""
-            SELECT missions.id
-            FROM missions
-            JOIN mission_issue_sources ON mission_issue_sources.mission_id = missions.id
-            WHERE provider = ? AND host = ? AND repository_slug = ? AND issue_number = ?
-              AND state != ?
-            LIMIT 1
-            """, bindings: [
-                identity.provider.rawValue,
-                identity.host,
-                identity.repositorySlug,
-                identity.number,
-                MissionState.completed.rawValue,
-            ])
-            if !duplicate.isEmpty { throw Error.duplicateActiveIssueIdentity }
+            if !allowDuplicate {
+                let identity = aggregate.issue.identity
+                let duplicate = try db.query("""
+                SELECT missions.id
+                FROM missions
+                JOIN mission_issue_sources ON mission_issue_sources.mission_id = missions.id
+                WHERE provider = ? AND host = ? AND repository_slug = ? AND issue_number = ?
+                  AND state != ?
+                LIMIT 1
+                """, bindings: [
+                    identity.provider.rawValue,
+                    identity.host,
+                    identity.repositorySlug,
+                    identity.number,
+                    MissionState.completed.rawValue,
+                ])
+                if !duplicate.isEmpty { throw Error.duplicateActiveIssueIdentity }
+            }
 
             try insertMission(aggregate.mission)
             try insertIssue(aggregate.issue, missionID: aggregate.mission.id)
@@ -178,6 +180,48 @@ final class MissionStore {
             ])
             guard changed == 1 else { throw Error.missionNotFound }
             if let event { try insertEvent(event) }
+        }
+    }
+
+    func updateSetup(
+        id: MissionID,
+        leg: MissionLeg,
+        state: MissionState,
+        checkpoint: MissionSetupCheckpoint,
+        attentionReason: String?,
+        event: MissionEvent
+    ) throws {
+        try validate(event: event, for: id)
+        guard leg.missionID == id else { throw Error.malformedRecord }
+        try immediateTransaction {
+            try requireMission(id)
+            let changed = try db.execChanges("""
+            UPDATE mission_legs
+            SET worktree_id = ?, agent_id = ?, acp_session_id = ?,
+                pending_initial_prompt = ?, review_identity = ?
+            WHERE id = ? AND mission_id = ?
+            """, bindings: [
+                leg.worktreeId,
+                leg.agentId,
+                leg.acpSessionId,
+                leg.pendingInitialPrompt,
+                try leg.reviewIdentity.map(encoder.encode),
+                leg.id.rawValue,
+                leg.missionID.rawValue,
+            ])
+            guard changed == 1 else { throw Error.missionNotFound }
+            try db.exec("""
+            UPDATE missions
+            SET state = ?, setup_checkpoint = ?, attention_reason = ?, updated_at = ?
+            WHERE id = ?
+            """, bindings: [
+                state.rawValue,
+                checkpoint.rawValue,
+                attentionReason,
+                event.createdAt.timeIntervalSince1970,
+                id.rawValue,
+            ])
+            try insertEvent(event)
         }
     }
 

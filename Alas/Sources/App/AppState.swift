@@ -494,6 +494,10 @@ final class AppState {
     @ObservationIgnored
     private let store: any PersistenceStoreProtocol
     @ObservationIgnored
+    private let missionPersistence: MissionPersistence
+    @ObservationIgnored
+    private(set) lazy var missions = makeMissionController()
+    @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
@@ -511,12 +515,14 @@ final class AppState {
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
+        missionPersistence: MissionPersistence = MissionPersistence(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) }
     ) {
         self.store = store
+        self.missionPersistence = missionPersistence
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
@@ -597,6 +603,57 @@ final class AppState {
             await GGAvailability.shared.probe()
             self?.rightPaneStore.reevaluateGGGates()
         }
+    }
+
+    private func makeMissionController() -> MissionController {
+        MissionController(environment: .init(
+            persistence: missionPersistence,
+            now: { Date() },
+            makeID: { UUID().uuidString },
+            worktreeAtDestination: { [weak self] projectID, destinationPath in
+                guard let self else { return nil }
+                let targetPath = URL(fileURLWithPath: destinationPath).standardizedFileURL.path
+                return self.projectsManager.worktrees(projectId: projectID).first {
+                    $0.path.standardizedFileURL.path == targetPath
+                }
+            },
+            createWorktree: { [weak self] leg in
+                guard let self else {
+                    return .failure(.init(message: "Alas is no longer available."))
+                }
+                return await self.createWorktreeAndWait(
+                    projectId: leg.projectId,
+                    base: leg.baseRef,
+                    branch: leg.branch,
+                    destination: URL(fileURLWithPath: leg.destinationPath),
+                    runStartup: true
+                )
+            },
+            startACP: { [weak self] leg, worktree in
+                guard let self else {
+                    return .failure(.init(message: "Alas is no longer available."))
+                }
+                guard let sessionID = leg.acpSessionId else {
+                    return .failure(.init(message: "The Mission ACP session was not reserved."))
+                }
+                guard let prompt = leg.pendingInitialPrompt else {
+                    return .failure(.init(message: "The Mission initial prompt is unavailable."))
+                }
+                do {
+                    let startedID = try await self.startACPSession(
+                        worktree: worktree,
+                        sessionID: sessionID,
+                        agentID: leg.agentId,
+                        promptID: leg.initialPromptId,
+                        prompt: prompt
+                    )
+                    return .success(startedID)
+                } catch {
+                    return .failure(.init(message: error.localizedDescription))
+                }
+            },
+            notifyChanged: { _ in }
+        ))
     }
 
     /// All worktree IDs currently known to the projects manager (including

@@ -22,7 +22,9 @@ actor MissionPersistence {
         _ = try openedStore()
     }
 
-    func insert(_ aggregate: MissionAggregate) throws { try openedStore().insert(aggregate) }
+    func insert(_ aggregate: MissionAggregate, allowDuplicate: Bool = false) throws {
+        try openedStore().insert(aggregate, allowDuplicate: allowDuplicate)
+    }
     func aggregate(id: MissionID) throws -> MissionAggregate? { try openedStore().aggregate(id: id) }
     func list(includeCompleted: Bool) throws -> [MissionAggregate] { try openedStore().list(includeCompleted: includeCompleted) }
     func list(states: Set<MissionState>) throws -> [MissionAggregate] { try openedStore().list(states: states) }
@@ -46,6 +48,24 @@ actor MissionPersistence {
 
     func updateLeg(_ leg: MissionLeg, event: MissionEvent?) throws {
         try openedStore().updateLeg(leg, event: event)
+    }
+
+    func updateSetup(
+        id: MissionID,
+        leg: MissionLeg,
+        state: MissionState,
+        checkpoint: MissionSetupCheckpoint,
+        attentionReason: String?,
+        event: MissionEvent
+    ) throws {
+        try openedStore().updateSetup(
+            id: id,
+            leg: leg,
+            state: state,
+            checkpoint: checkpoint,
+            attentionReason: attentionReason,
+            event: event
+        )
     }
 
     func replaceIssueSnapshot(
