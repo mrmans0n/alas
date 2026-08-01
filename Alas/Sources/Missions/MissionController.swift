@@ -402,15 +402,14 @@ final class MissionController {
                     continue
                 }
                 guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath) else {
-                    if aggregate.mission.setupCheckpoint == .running,
-                       worktreeDiscoverySucceeded(leg.projectId) {
+                    if worktreeDiscoverySucceeded(leg.projectId) {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
                     await refreshLinkedReview(aggregate.mission.id)
                     continue
                 }
                 guard worktree.branch == leg.branch else {
-                    if aggregate.mission.setupCheckpoint == .running {
+                    if worktreeDiscoverySucceeded(leg.projectId) {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
                     await refreshLinkedReview(aggregate.mission.id)

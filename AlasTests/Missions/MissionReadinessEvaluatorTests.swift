@@ -634,6 +634,22 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
+    @Test func startupResetsALaterCheckpointWhenItsWorktreeIsMissing() async throws {
+        var failedAgent = Self.runningAggregate()
+        failedAgent.mission.state = .needsAttention
+        failedAgent.mission.setupCheckpoint = .startingAgent
+        failedAgent.mission.attentionReason = "ACP setup failed."
+        let fake = try MissionLifecycleFake(aggregate: failedAgent, worktreeAvailable: false)
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+    }
+
     @Test func startupRejectsAWorktreeOnTheWrongBranch() async throws {
         let fake = try MissionLifecycleFake(worktreeBranch: "unrelated-branch")
         await fake.controller.load()
@@ -643,6 +659,25 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+    }
+
+    @Test func startupResetsALaterCheckpointForAReplacementBranch() async throws {
+        var failedAgent = Self.runningAggregate()
+        failedAgent.mission.state = .needsAttention
+        failedAgent.mission.setupCheckpoint = .startingAgent
+        failedAgent.mission.attentionReason = "ACP setup failed."
+        let fake = try MissionLifecycleFake(
+            aggregate: failedAgent,
+            worktreeBranch: "unrelated-branch"
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test func startupRefreshesALinkedReviewWhenDestinationHasAReplacementBranch() async throws {
