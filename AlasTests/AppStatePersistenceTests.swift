@@ -230,6 +230,8 @@ struct AppStatePersistenceTests {
         #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path) == false)
         #expect(state.tabs.tabs(forWorktree: worktree.id).count == 1)
         #expect(state.selectedWorktreeId == worktree.id)
+        let aggregate = try #require(try await persistence.aggregate(id: MissionID(rawValue: "mission-1")))
+        #expect(aggregate.mission.state == .running)
     }
 
     @Test func startupMissionReconciliationLoadsMergedReviewBeforePaneCreation() async throws {

@@ -171,6 +171,37 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func mergedLinkedReviewMustMatchTheCurrentHeadCommit() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let staleReview = try #require(Self.reviewSnapshot(
+            state: .merged,
+            headSHA: "reviewed123"
+        ).reviewRequest)
+        let current = Self.reviewSnapshot(state: .open, headSHA: "current456")
+        let snapshot = ReviewLoopSnapshot(
+            local: current.local,
+            remote: current.remote,
+            reviewRequest: staleReview,
+            providerAvailable: current.providerAvailable,
+            providerAuthenticated: current.providerAuthenticated,
+            providerCapabilities: current.providerCapabilities,
+            errorMessage: current.errorMessage
+        )
+        let fake = try MissionLifecycleFake(aggregate: linked)
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: snapshot
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func liveReviewIgnoresAReplacementWorktreeOnAnotherBranch() async throws {
         let fake = try MissionLifecycleFake(worktreeBranch: "unrelated-branch")
         await fake.controller.load()
@@ -217,7 +248,21 @@ struct MissionReadinessEvaluatorTests {
     }
 
     @Test func archiveIgnoresAReplacementWorktreeOnAnotherBranch() async throws {
-        let fake = try MissionLifecycleFake(worktreeBranch: "unrelated-branch")
+        let fake = try MissionLifecycleFake(
+            worktreeBranch: "unrelated-branch",
+            worktreeArchived: { _, _ in true }
+        )
+        await fake.controller.load()
+
+        await fake.controller.recordArchive(worktreeId: "worktree-1")
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.events.last?.kind != .ready)
+    }
+
+    @Test func archiveSignalIsIgnoredAfterTheWorktreeIsRestored() async throws {
+        let fake = try MissionLifecycleFake(worktreeArchived: { _, _ in false })
         await fake.controller.load()
 
         await fake.controller.recordArchive(worktreeId: "worktree-1")
@@ -543,7 +588,10 @@ struct MissionReadinessEvaluatorTests {
         var creating = Self.runningAggregate()
         creating.mission.state = .creating
         creating.mission.setupCheckpoint = .running
-        let fake = try MissionLifecycleFake(aggregate: creating)
+        let fake = try MissionLifecycleFake(
+            aggregate: creating,
+            worktreeArchived: { _, _ in true }
+        )
         await fake.controller.load()
 
         await fake.controller.recordArchive(worktreeId: "worktree-1")

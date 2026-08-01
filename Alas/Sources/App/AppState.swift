@@ -2708,9 +2708,12 @@ final class AppState {
                 guard let self else { return }
                 if let missionArchiveRecorder = self.missionArchiveRecorder {
                     await missionArchiveRecorder(worktree.id)
-                } else {
-                    await self.missions.recordArchive(worktreeId: worktree.id)
                 }
+                guard self.projectsManager.isWorktreeHidden(
+                    projectId: worktree.projectId,
+                    path: worktree.path
+                ) else { return }
+                await self.missions.recordArchive(worktreeId: worktree.id)
                 self.finishArchivingWorktree(
                     worktree,
                     removedIndex: removedIndex

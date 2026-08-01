@@ -199,6 +199,9 @@ final class MissionController {
                 }
                 let identity = Self.reviewIdentity(for: request)
                 guard Self.review(request, matches: leg) else { continue }
+                guard request.state != .merged
+                    || (!snapshot.local.headSHA.isEmpty && request.headSHA == snapshot.local.headSHA)
+                else { continue }
                 if let linked = aggregate.primaryLeg?.reviewIdentity,
                    linked != identity,
                    !replacesClosedReview {
@@ -253,7 +256,8 @@ final class MissionController {
                           leg.projectId,
                           leg.destinationPath
                       ), currentWorktree.id == worktreeId,
-                      currentWorktree.branch == leg.branch
+                      currentWorktree.branch == leg.branch,
+                      worktreeArchived(leg.projectId, leg.destinationPath)
                 else { continue }
                 await apply(signal: .worktreeArchived, to: aggregate.mission.id)
             }
