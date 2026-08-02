@@ -1232,6 +1232,31 @@ struct GitHubCLIProviderTests {
         #expect(request.title == "My fork")
     }
 
+    @Test func prListMatchesHeadOwnerIgnoringCase() throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(
+            """
+            [
+              {
+                "number": 42,
+                "title": "My fork",
+                "url": "https://github.com/mrmans0n/alas/pull/42",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRepositoryOwner": { "login": "myorg" },
+                "baseRefName": "main",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN"
+              }
+            ]
+            """,
+            remote: Self.remote,
+            headOwner: "MyOrg"
+        ))
+
+        #expect(request.number == 42)
+    }
+
     @Test func prListFiltersByHeadSHAAmongMatchingOwners() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """

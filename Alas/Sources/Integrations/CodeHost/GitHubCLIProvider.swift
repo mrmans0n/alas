@@ -1400,7 +1400,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         let normalizedHeadSHA = normalizedOptionalString(headSHA)
         let item = items.first { item in
             let ownerMatches = headOwner?.isEmpty != false
-                || item.headRepositoryOwner?.login == headOwner
+                || item.headRepositoryOwner?.login.caseInsensitiveCompare(headOwner ?? "") == .orderedSame
             let shaMatches = normalizedHeadSHA == nil
                 || normalizedOptionalString(item.headRefOid) == normalizedHeadSHA
             return ownerMatches && shaMatches
