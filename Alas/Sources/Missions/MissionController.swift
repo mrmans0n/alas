@@ -588,9 +588,10 @@ final class MissionController {
                               !currentTip.isEmpty,
                               linked.headSHA == currentTip
                         else { return }
+                        await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                        return
                     }
                     await applyReview(linked, identity: identity, to: aggregate.mission.id)
-                    return
                 }
                 if linked.state == .closed {
                     await applyReview(linked, identity: identity, to: aggregate.mission.id)
