@@ -750,12 +750,21 @@ final class AppState {
             self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID, baseBranch: baseRef)
         }, startupReviewSnapshot: { [weak self] worktree, baseRef in
             guard let self else { return nil }
+            let paneBaseRef: String
+            if let aggregate = missions.aggregates.first(where: { aggregate in
+                aggregate.mission.state != .completed
+                    && aggregate.primaryLeg?.worktreeId == worktree.id
+            }) {
+                paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
+            } else {
+                paneBaseRef = baseRef
+            }
             if let missionStartupReviewSnapshot = self.missionStartupReviewSnapshot {
-                return await missionStartupReviewSnapshot(worktree, baseRef)
+                return await missionStartupReviewSnapshot(worktree, paneBaseRef)
             }
             return await self.rightPaneStore.startupReviewSnapshot(
                 for: worktree,
-                baseBranch: baseRef,
+                baseBranch: paneBaseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
         }, discoverReviewRequest: { [weak self] projectID, issueIdentity, branch, baseRef, headSHA, headOwner in

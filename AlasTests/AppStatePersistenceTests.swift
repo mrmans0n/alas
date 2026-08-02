@@ -492,16 +492,38 @@ struct AppStatePersistenceTests {
     }
 
     @Test func startupMissionReconciliationLoadsMergedReviewBeforePaneCreation() async throws {
-        let project = Self.project
-        let worktree = Self.worktree
-        let persistence = try Self.makeMissionPersistence()
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("startup-mission-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        #expect(try await Process.git(["init"], cwd: repository).exitCode == 0)
+        #expect(try await Process.git([
+            "remote", "add", "upstream", "git@github.com:acme/alas.git",
+        ], cwd: repository).exitCode == 0)
+        let project = ProjectConfig(
+            id: Self.project.id,
+            name: Self.project.name,
+            path: repository.path,
+            color: Self.project.color,
+            addedAt: Self.project.addedAt
+        )
+        let worktree = Worktree(
+            id: Self.worktree.id,
+            projectId: Self.worktree.projectId,
+            name: Self.worktree.name,
+            branch: Self.worktree.branch,
+            path: repository,
+            status: Self.worktree.status,
+            lastActivity: Self.worktree.lastActivity
+        )
+        let persistence = try Self.makeMissionPersistence(worktree: worktree)
         var requestedWorktreeIDs: [String] = []
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
             missionPersistence: persistence,
             missionStartupReviewSnapshot: { worktree, baseRef in
                 requestedWorktreeIDs.append(worktree.id)
-                #expect(baseRef == "origin/main")
+                #expect(baseRef == "upstream/main")
                 return Self.mergedReviewSnapshot()
             },
             missionBranchTipOverride: { projectID, branch in
@@ -568,13 +590,28 @@ struct AppStatePersistenceTests {
         lastActivity: Date(timeIntervalSince1970: 100)
     )
 
-    private static func makeMissionPersistence() throws -> MissionPersistence {
+    private static func makeMissionPersistence(worktree: Worktree = worktree) throws -> MissionPersistence {
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = .running
         aggregate.mission.setupCheckpoint = .running
-        aggregate.legs[0].worktreeId = worktree.id
-        aggregate.legs[0].acpSessionId = "session-1"
-        aggregate.legs[0].pendingInitialPrompt = nil
+        let leg = aggregate.legs[0]
+        aggregate.legs[0] = MissionLeg(
+            id: leg.id,
+            missionID: leg.missionID,
+            ordinal: leg.ordinal,
+            projectId: leg.projectId,
+            baseRef: leg.baseRef,
+            baseRemoteName: leg.baseRemoteName,
+            branch: leg.branch,
+            destinationPath: worktree.path.path,
+            worktreeId: worktree.id,
+            worktreeCreationEpoch: leg.worktreeCreationEpoch,
+            agentId: leg.agentId,
+            acpSessionId: "session-1",
+            initialPromptId: leg.initialPromptId,
+            pendingInitialPrompt: nil,
+            reviewIdentity: leg.reviewIdentity
+        )
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("app-state-mission-\(UUID().uuidString).sqlite")
             .path
