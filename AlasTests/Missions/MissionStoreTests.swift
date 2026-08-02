@@ -160,6 +160,7 @@ struct MissionStoreTests {
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
         #expect(loaded.issue == refreshed)
+        #expect(loaded.mission.title == refreshed.title)
         #expect(loaded.events.last?.kind == .sourceRefreshed)
     }
 

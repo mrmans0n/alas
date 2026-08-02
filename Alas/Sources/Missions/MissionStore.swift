@@ -250,7 +250,8 @@ final class MissionStore {
             WHERE mission_id = ?
             """, bindings: issueBindings(snapshot) + [missionID.rawValue])
             guard changed == 1 else { throw Error.malformedRecord }
-            try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
+            try db.exec("UPDATE missions SET title = ?, updated_at = ? WHERE id = ?", bindings: [
+                snapshot.title,
                 event.createdAt.timeIntervalSince1970,
                 missionID.rawValue,
             ])
