@@ -73,7 +73,8 @@ struct MissionSidebarTests {
         let needsAttention = MissionSidebarRow(aggregate: Self.mission(id: "attention", state: .needsAttention))
         let ready = MissionSidebarRow(aggregate: Self.mission(id: "ready", state: .readyToComplete))
 
-        #expect(creating.providerAbbreviation == "GH")
+        #expect(creating.providerName == "GitHub")
+        #expect(creating.providerIconName == "github")
         #expect(creating.issueNumber == "#42")
         #expect(creating.status == .creating("Creating worktree"))
         #expect(running.status == .running)

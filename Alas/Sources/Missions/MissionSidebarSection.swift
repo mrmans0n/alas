@@ -89,7 +89,8 @@ struct MissionSidebarRow: Equatable, Identifiable {
 
     let id: MissionID
     let title: String
-    let providerAbbreviation: String
+    let providerName: String
+    let providerIconName: String
     let issueNumber: String
     let repositorySlug: String
     let updatedAt: Date
@@ -99,7 +100,8 @@ struct MissionSidebarRow: Equatable, Identifiable {
     init(aggregate: MissionAggregate, knownWorktreeIds _: Set<String> = []) {
         id = aggregate.mission.id
         title = aggregate.mission.title
-        providerAbbreviation = aggregate.issue.identity.provider.missionSidebarAbbreviation
+        providerName = aggregate.issue.identity.provider.displayName
+        providerIconName = aggregate.issue.identity.provider.iconName
         issueNumber = "#\(aggregate.issue.identity.number)"
         repositorySlug = aggregate.issue.identity.repositorySlug
         updatedAt = aggregate.mission.updatedAt
@@ -117,7 +119,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
     }
 
     var helpText: String {
-        let prefix = "\(providerAbbreviation) \(repositorySlug) \(issueNumber)"
+        let prefix = "\(providerName) \(repositorySlug) \(issueNumber)"
         if isNavigationEnabled {
             return "\(prefix) · \(status.title)"
         }
@@ -278,9 +280,9 @@ private struct MissionSidebarRowView: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(row.providerAbbreviation)
-                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                            .foregroundColor(theme.color("fg-muted"))
+                        Icon(name: row.providerIconName, size: 11, color: theme.color("fg-muted"))
+                            .frame(width: 13, height: 13)
+                            .accessibilityLabel(row.providerName)
                         Text(row.issueNumber)
                             .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                             .foregroundColor(theme.color("fg-faint"))
@@ -326,17 +328,6 @@ private struct MissionSidebarRowView: View {
             theme.color("warning")
         case .completed:
             theme.color("fg-faint")
-        }
-    }
-}
-
-private extension CodeHostKind {
-    var missionSidebarAbbreviation: String {
-        switch self {
-        case .github:
-            "GH"
-        case .gitlab:
-            "GL"
         }
     }
 }
