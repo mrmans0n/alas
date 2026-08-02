@@ -100,6 +100,25 @@ struct MissionIssueResolverTests {
         }
     }
 
+    @Test func redirectedFullURLSelectsTheCloneThatCompletedTheProbe() async throws {
+        let provider = FakeIssueProvider(
+            unavailablePaths: [Self.cloneA.path],
+            canonicalRepositorySlug: "openai/renamed-alas",
+            acceptedRepositorySlugs: ["mrmans0n/alas"]
+        )
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA, Self.cloneB] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:openai/renamed-alas.git")] },
+            providers: .init([provider])
+        ))
+
+        let resolved = try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+
+        #expect(resolved.candidateProjectIds == [Self.cloneA.id, Self.cloneB.id])
+        #expect(resolved.selectedProjectId == Self.cloneB.id)
+    }
+
     @Test func resolverReportsMissingCLIAndAuthenticationBeforeFetching() async {
         let missingCLI = MissionIssueResolver(environment: Self.environment(provider: FakeIssueProvider(available: false)))
         await #expect(throws: CodeHostProviderError.cliMissing("gh")) {

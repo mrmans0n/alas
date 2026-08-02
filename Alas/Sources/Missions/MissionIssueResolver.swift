@@ -150,7 +150,7 @@ struct MissionIssueResolver {
                         )
                         continue
                     }
-                    let selectedMatch = canonicalMatches.first { $0.project.id == selectedID }
+                    let selectedMatch = canonicalMatches.first { $0.project.id == entry.project.id }
                         ?? canonicalMatches[0]
                     var candidateProjectIDs: [String] = []
                     for match in canonicalMatches where !candidateProjectIDs.contains(match.project.id) {
