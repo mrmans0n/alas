@@ -186,7 +186,12 @@ struct MissionReadinessEvaluatorTests {
     }
 
     @Test func firstDiscoveredReviewIdentityRemainsLinked() async throws {
-        let fake = try MissionLifecycleFake()
+        let linkedReview = try #require(Self.reviewSnapshot(state: .open).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? linkedReview : nil
+            }
+        )
         await fake.controller.load()
         await fake.controller.observeReview(
             worktreeId: "worktree-1",
@@ -214,6 +219,26 @@ struct MissionReadinessEvaluatorTests {
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? closedLinkedReview : nil
             }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged, number: 92)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveReviewReplacesAnUnavailableLinkedReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { _, _, _ in nil }
         )
         await fake.controller.load()
 
@@ -713,7 +738,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
-                #expect(headOwner == nil)
+                #expect(headOwner == "acme")
                 return request
             },
             branchTip: { projectID, branch in
@@ -737,10 +762,11 @@ struct MissionReadinessEvaluatorTests {
             worktreeAvailable: false,
             discoverReviewRequest: { _, _, _, _, headSHA, headOwner in
                 #expect(headSHA == "abc123")
-                #expect(headOwner == nil)
+                #expect(headOwner == "acme-fork")
                 return request
             },
-            branchTip: { _, _ in "abc123" }
+            branchTip: { _, _ in "abc123" },
+            branchOwner: { _, _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -754,8 +780,12 @@ struct MissionReadinessEvaluatorTests {
     @Test func worktreeRemovalRefreshDiscoversMergedReviewBeforeBranchDeletion() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, _ in request },
-            branchTip: { _, _ in "abc123" }
+            discoverReviewRequest: { _, _, _, _, _, headOwner in
+                #expect(headOwner == "acme-fork")
+                return request
+            },
+            branchTip: { _, _ in "abc123" },
+            branchOwner: { _, _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -889,6 +919,28 @@ struct MissionReadinessEvaluatorTests {
             worktreeId: "worktree-1",
             baseRef: "origin/main",
             snapshot: retargetedSnapshot
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveRefreshReplacesAnUnavailableLinkedReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            linkedReviewRequest: { _, _, _ in nil }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshotWithoutRequest()
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
@@ -1401,6 +1453,9 @@ private final class MissionLifecycleFake {
         discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _, _ in nil },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in "abc123" },
+        branchOwner: @escaping MissionBranchOwner = { _, _, identity, _ in
+            identity.repositorySlug.split(separator: "/").dropLast().joined(separator: "/")
+        },
         createWorktree: ((MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>)? = nil
     ) throws {
         let path = FileManager.default.temporaryDirectory
@@ -1459,6 +1514,7 @@ private final class MissionLifecycleFake {
             },
             linkedReviewRequest: linkedReviewRequest,
             branchTip: branchTip,
+            branchOwner: branchOwner,
             projectExists: projectExists,
             worktreeDiscoverySucceeded: worktreeDiscoverySucceeded,
             worktreeArchived: worktreeArchived,

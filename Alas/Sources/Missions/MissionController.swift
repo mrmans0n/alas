@@ -31,6 +31,13 @@ typealias MissionBranchTip = @MainActor (
     _ branch: String
 ) async -> String?
 
+typealias MissionBranchOwner = @MainActor (
+    _ projectID: String,
+    _ branch: String,
+    _ issueIdentity: MissionIssueIdentity,
+    _ baseRef: String
+) async -> String?
+
 @Observable
 @MainActor
 final class MissionController {
@@ -47,6 +54,8 @@ final class MissionController {
     private let linkedReviewRequest: MissionLinkedReviewRequest
     @ObservationIgnored
     private let branchTip: MissionBranchTip
+    @ObservationIgnored
+    private let branchOwner: MissionBranchOwner
     @ObservationIgnored
     private let projectExists: @MainActor (String) -> Bool
     @ObservationIgnored
@@ -96,6 +105,7 @@ final class MissionController {
         },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in nil },
+        branchOwner: @escaping MissionBranchOwner = { _, _, _, _ in nil },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
@@ -109,6 +119,7 @@ final class MissionController {
         self.issueRefresh = issueRefresh
         self.linkedReviewRequest = linkedReviewRequest
         self.branchTip = branchTip
+        self.branchOwner = branchOwner
         self.projectExists = projectExists
         self.worktreeDiscoverySucceeded = worktreeDiscoverySucceeded
         self.worktreeArchived = worktreeArchived
@@ -210,6 +221,9 @@ final class MissionController {
                         } else {
                             request = refreshed
                         }
+                    } else if let visible = snapshot.reviewRequest {
+                        request = visible
+                        replacesLinkedReview = true
                     } else {
                         continue
                     }
@@ -259,19 +273,19 @@ final class MissionController {
                 else { continue }
                 let replacesLinkedReview: Bool
                 if let linked = leg.reviewIdentity {
-                    guard let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
-                          Self.review(refreshed, matches: linked)
-                    else { continue }
-                    let matchesCurrentHead = snapshot.local.headSHA.isEmpty
-                        || refreshed.headSHA == snapshot.local.headSHA
-                    guard refreshed.state == .closed
-                        || !Self.review(
-                            refreshed,
-                            matches: leg,
-                            issueIdentity: aggregate.issue.identity
-                        )
-                        || !matchesCurrentHead
-                    else { continue }
+                    if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
+                       Self.review(refreshed, matches: linked) {
+                        let matchesCurrentHead = snapshot.local.headSHA.isEmpty
+                            || refreshed.headSHA == snapshot.local.headSHA
+                        guard refreshed.state == .closed
+                            || !Self.review(
+                                refreshed,
+                                matches: leg,
+                                issueIdentity: aggregate.issue.identity
+                            )
+                            || !matchesCurrentHead
+                        else { continue }
+                    }
                     replacesLinkedReview = true
                 } else {
                     replacesLinkedReview = false
@@ -611,11 +625,18 @@ final class MissionController {
         }
         guard let currentTip,
               !currentTip.isEmpty,
+              let headOwner = await branchOwner(
+                  leg.projectId,
+                  leg.branch,
+                  aggregate.issue.identity,
+                  leg.baseRef
+              ),
+              !headOwner.isEmpty,
               let request = await discoverMergedReview(
                   for: leg,
                   issueIdentity: aggregate.issue.identity,
                   headSHA: currentTip,
-                  headOwner: nil
+                  headOwner: headOwner
               )
         else { return }
         await applyReview(

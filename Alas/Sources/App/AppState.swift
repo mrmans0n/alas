@@ -724,6 +724,13 @@ final class AppState {
                 return await missionBranchTipOverride(projectID, branch)
             }
             return await self.missionBranchTip(projectID: projectID, branch: branch)
+        }, branchOwner: { [weak self] projectID, branch, issueIdentity, baseRef in
+            await self?.missionBranchOwner(
+                projectID: projectID,
+                branch: branch,
+                issueIdentity: issueIdentity,
+                baseRef: baseRef
+            )
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
         }, worktreeDiscoverySucceeded: { [weak self] projectID in
@@ -1036,6 +1043,47 @@ final class AppState {
         guard result?.exitCode == 0 else { return nil }
         let tip = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return tip.isEmpty ? nil : tip
+    }
+
+    private func missionBranchOwner(
+        projectID: String,
+        branch: String,
+        issueIdentity: MissionIssueIdentity,
+        baseRef: String
+    ) async -> String? {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
+        else { return nil }
+        let cwd = URL(fileURLWithPath: project.path)
+        guard let remotes = try? await GitService().remotes(worktreePath: cwd) else { return nil }
+        let upstream = try? await Process.git(
+            ["for-each-ref", "--format=%(upstream:remotename)", "refs/heads/\(branch)"],
+            cwd: cwd
+        )
+        let remoteName = upstream?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return Self.missionBranchOwner(
+            identity: issueIdentity,
+            baseRef: baseRef,
+            branchRemoteName: remoteName,
+            remotes: remotes
+        )
+    }
+
+    static func missionBranchOwner(
+        identity: MissionIssueIdentity,
+        baseRef: String,
+        branchRemoteName: String,
+        remotes: [GitRemote]
+    ) -> String? {
+        let repository = identity.repositorySlug.split(separator: "/").last.map(String.init) ?? ""
+        let branchRemote = remotes
+            .filter { $0.name == branchRemoteName }
+            .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) }
+            .first { candidate in
+                candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
+                    && candidate.repository.caseInsensitiveCompare(repository) == .orderedSame
+            }
+        return branchRemote?.owner
+            ?? missionReviewRemote(identity: identity, baseRef: baseRef, remotes: remotes)?.owner
     }
 
     func reconcileDeletedMissionWorktree(_ worktreeID: String) async {
