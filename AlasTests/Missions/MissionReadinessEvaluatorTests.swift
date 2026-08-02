@@ -763,9 +763,15 @@ struct MissionReadinessEvaluatorTests {
         missing.mission.state = .needsAttention
         missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
         missing.legs[0].worktreeLineageID = "original-lineage"
+        let replacementReview = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        var discoveryCalls = 0
         let fake = try MissionLifecycleFake(
             aggregate: missing,
-            worktreeLineageID: "replacement-lineage"
+            worktreeLineageID: "replacement-lineage",
+            discoverReviewRequest: { _, _, _, _, _, _ in
+                discoveryCalls += 1
+                return replacementReview
+            }
         )
         await fake.controller.load()
 
@@ -776,6 +782,7 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
         #expect(aggregate.events.last?.kind != .retryStarted)
+        #expect(discoveryCalls == 0)
     }
 
     @Test func reappearedWorktreeResumesPendingAgentSetup() async throws {
@@ -1588,13 +1595,15 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
-    @Test func startupRefreshesALinkedReviewWhenDestinationHasAReplacementBranch() async throws {
+    @Test func startupDoesNotRefreshLinkedReviewFromAReplacementBranch() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
+        var linkedReviewCalls = 0
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeBranch: "unrelated-branch",
             linkedReviewRequest: { identity, projectID, _ in
+                linkedReviewCalls += 1
                 guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
@@ -1604,8 +1613,9 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+        #expect(linkedReviewCalls == 0)
     }
 
     @Test func startupDoesNotArchiveAReplacementWorktreeOnTheWrongBranch() async throws {
