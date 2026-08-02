@@ -856,13 +856,10 @@ final class AppState {
 
     private func resolvedMissionWorktree(for aggregate: MissionAggregate) -> Worktree? {
         guard let leg = aggregate.primaryLeg else { return nil }
-        let worktrees = projectsManager.worktrees(projectId: leg.projectId)
-        let destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
-        let candidate = leg.worktreeId
-            .flatMap { worktreeID in worktrees.first { $0.id == worktreeID } }
-            ?? worktrees.first {
-                $0.path.standardizedFileURL.path == destinationPath
-            }
+        let candidate = missionWorktreeAtDestination(
+            projectID: leg.projectId,
+            destinationPath: leg.destinationPath
+        )
         return missionWorktree(candidate, for: aggregate)
     }
 

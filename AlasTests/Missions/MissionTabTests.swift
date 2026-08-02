@@ -98,6 +98,30 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
     }
 
+    @Test func openMissionPresentsRecoveryForAFailedOptimisticWorktree() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        fixture.state.projectsManager.setOperationState(
+            id: fixture.worktree.id,
+            state: .createFailed(
+                projectId: fixture.worktree.projectId,
+                message: "branch exists",
+                base: "origin/main",
+                ggWorktreeMode: .off
+            )
+        )
+        await fixture.state.missions.load()
+
+        let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
+
+        #expect(try result.get() == .mission(MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        )))
+        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
+        #expect(fixture.state.tabs.activeTab(forWorktree: fixture.worktree.id) == nil)
+    }
+
     @Test func completedMissionDoesNotBindToAWorktreeOwnedByAnotherActiveMission() async throws {
         let fixture = try MissionNavigationFixture(
             hidden: false,
