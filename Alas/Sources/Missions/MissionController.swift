@@ -771,6 +771,7 @@ final class MissionController {
 
     private func publish(id: MissionID) async throws {
         if let aggregate = try await persistence.aggregate(id: id) {
+            environment.notifyChanged(aggregate)
             replace(aggregate)
         }
     }

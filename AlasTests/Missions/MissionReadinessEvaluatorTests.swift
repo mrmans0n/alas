@@ -452,6 +452,7 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.issue == closed)
         #expect(aggregate.mission.state == .running)
+        #expect(fake.notifications.last?.issue.title == "Fresh issue title")
     }
 
     @Test func providerRefreshFailureRetainsSnapshotAndPersistsError() async throws {
@@ -1060,6 +1061,7 @@ private final class MissionLifecycleFake {
 
     var issueRefreshCalls: [IssueRefreshCall] { recorder.issueRefreshCalls }
     var externalOperations: [String] { recorder.externalOperations }
+    var notifications: [MissionAggregate] { recorder.notifications }
 
     init(
         aggregate: MissionAggregate = MissionReadinessEvaluatorTests.runningAggregate(),
@@ -1126,7 +1128,7 @@ private final class MissionLifecycleFake {
                     recorder.externalOperations.append("startACP")
                     return .failure(.init(message: "Unexpected ACP startup."))
                 },
-                notifyChanged: { _ in }
+                notifyChanged: { recorder.notifications.append($0) }
             ),
             issueRefresh: { identity, projectID in
                 recorder.issueRefreshCalls.append(.init(identity: identity, projectID: projectID))
@@ -1148,6 +1150,7 @@ private final class MissionLifecycleFake {
 private final class MissionLifecycleRecorder {
     var issueRefreshCalls: [IssueRefreshCall] = []
     var externalOperations: [String] = []
+    var notifications: [MissionAggregate] = []
 }
 
 @MainActor
