@@ -46,7 +46,8 @@ final class MissionStore {
                 SELECT missions.id
                 FROM missions
                 JOIN mission_issue_sources ON mission_issue_sources.mission_id = missions.id
-                WHERE provider = ? AND host = ? AND repository_slug = ? AND issue_number = ?
+                WHERE provider = ? AND host = ? COLLATE NOCASE
+                  AND repository_slug = ? COLLATE NOCASE AND issue_number = ?
                   AND state != ?
                 LIMIT 1
                 """, bindings: [
@@ -121,7 +122,8 @@ final class MissionStore {
         SELECT missions.id
         FROM missions
         JOIN mission_issue_sources ON mission_issue_sources.mission_id = missions.id
-        WHERE provider = ? AND host = ? AND repository_slug = ? AND issue_number = ?
+        WHERE provider = ? AND host = ? COLLATE NOCASE
+          AND repository_slug = ? COLLATE NOCASE AND issue_number = ?
           AND state != ?
         ORDER BY updated_at DESC, missions.id ASC
         LIMIT 1
@@ -239,9 +241,11 @@ final class MissionStore {
         try validate(event: event, for: missionID)
         try immediateTransaction {
             try requireMission(missionID)
-            guard try issueIdentity(missionID: missionID) == snapshot.identity else {
+            let storedIdentity = try issueIdentity(missionID: missionID)
+            guard Self.sameIssue(storedIdentity, snapshot.identity) else {
                 throw Error.issueIdentityChanged
             }
+            let snapshot = Self.snapshot(snapshot, preserving: storedIdentity)
             let changed = try db.execChanges("""
             UPDATE mission_issue_sources
             SET provider = ?, host = ?, repository_slug = ?, issue_number = ?,
@@ -451,6 +455,31 @@ final class MissionStore {
               let number = row["issue_number"] as? Int64
         else { throw Error.malformedRecord }
         return .init(provider: provider, host: host, repositorySlug: repositorySlug, number: Int(number))
+    }
+
+    private static func sameIssue(_ lhs: MissionIssueIdentity, _ rhs: MissionIssueIdentity) -> Bool {
+        lhs.provider == rhs.provider
+            && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
+            && lhs.repositorySlug.caseInsensitiveCompare(rhs.repositorySlug) == .orderedSame
+            && lhs.number == rhs.number
+    }
+
+    private static func snapshot(
+        _ snapshot: MissionIssueSnapshot,
+        preserving identity: MissionIssueIdentity
+    ) -> MissionIssueSnapshot {
+        MissionIssueSnapshot(
+            identity: identity,
+            canonicalURL: snapshot.canonicalURL,
+            title: snapshot.title,
+            body: snapshot.body,
+            state: snapshot.state,
+            labels: snapshot.labels,
+            assignees: snapshot.assignees,
+            providerUpdatedAt: snapshot.providerUpdatedAt,
+            capturedAt: snapshot.capturedAt,
+            refreshError: snapshot.refreshError
+        )
     }
 
     private func insertMission(_ mission: MissionRecord) throws {

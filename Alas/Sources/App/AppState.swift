@@ -925,11 +925,7 @@ final class AppState {
         guard await provider.isAuthenticated(remote: remote, cwd: cwd) else {
             throw CodeHostProviderError.unauthenticated(remote.host)
         }
-        let snapshot = try await provider.issue(remote: remote, number: identity.number, cwd: cwd)
-        guard snapshot.identity == identity else {
-            throw CodeHostProviderError.malformedOutput("The provider returned a different issue.")
-        }
-        return snapshot
+        return try await provider.issue(remote: remote, number: identity.number, cwd: cwd)
     }
 
     private func refreshMissionReview(

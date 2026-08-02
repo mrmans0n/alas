@@ -62,6 +62,34 @@ struct MissionStoreTests {
         }
     }
 
+    @Test("rejects a duplicate issue identity with different repository casing")
+    func rejectsDuplicateIssueIdentityIgnoringRepositoryCase() throws {
+        let store = try MissionStore(path: temporaryPath())
+        try store.insert(MissionFixtures.creatingMission(id: "mission-1"))
+        let issue = MissionFixtures.issue()
+        let differentlyCasedIssue = MissionIssueSnapshot(
+            identity: .init(
+                provider: issue.identity.provider,
+                host: "GitHub.com",
+                repositorySlug: "Acme/Alas",
+                number: issue.identity.number
+            ),
+            canonicalURL: issue.canonicalURL,
+            title: issue.title,
+            body: issue.body,
+            state: issue.state,
+            labels: issue.labels,
+            assignees: issue.assignees,
+            providerUpdatedAt: issue.providerUpdatedAt,
+            capturedAt: issue.capturedAt,
+            refreshError: issue.refreshError
+        )
+
+        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+            try store.insert(MissionFixtures.creatingMission(id: "mission-2", issue: differentlyCasedIssue))
+        }
+    }
+
     @Test("completed mission does not block reuse of its issue identity")
     func completedMissionDoesNotBlockSameIssueIdentity() throws {
         let store = try MissionStore(path: temporaryPath())
@@ -162,6 +190,46 @@ struct MissionStoreTests {
         #expect(loaded.issue == refreshed)
         #expect(loaded.mission.title == refreshed.title)
         #expect(loaded.events.last?.kind == .sourceRefreshed)
+    }
+
+    @Test("refreshes through repository casing changes while preserving the stored identity")
+    func refreshPreservesIdentityAcrossRepositoryCasingChanges() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+        let issue = MissionFixtures.issue(title: "Fresh title", capturedAt: 150)
+        let differentlyCasedIssue = MissionIssueSnapshot(
+            identity: .init(
+                provider: issue.identity.provider,
+                host: "GitHub.com",
+                repositorySlug: "Acme/Alas",
+                number: issue.identity.number
+            ),
+            canonicalURL: issue.canonicalURL,
+            title: issue.title,
+            body: issue.body,
+            state: issue.state,
+            labels: issue.labels,
+            assignees: issue.assignees,
+            providerUpdatedAt: issue.providerUpdatedAt,
+            capturedAt: issue.capturedAt,
+            refreshError: issue.refreshError
+        )
+
+        try store.replaceIssueSnapshot(
+            missionID: aggregate.mission.id,
+            snapshot: differentlyCasedIssue,
+            event: MissionFixtures.event(
+                id: "casing-refresh",
+                missionID: aggregate.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 150
+            )
+        )
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.issue.identity == aggregate.issue.identity)
+        #expect(loaded.issue.title == "Fresh title")
     }
 
     @Test("refresh-error write keeps a success committed after the failure read")
