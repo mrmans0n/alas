@@ -7,9 +7,7 @@ enum MissionBaseReference {
         localBranchNames: Set<String> = []
     ) -> String? {
         guard !localBranchNames.contains(baseRef) else { return nil }
-        guard let separator = baseRef.firstIndex(of: "/") else { return nil }
-        let candidate = String(baseRef[..<separator])
-        return knownRemoteNames.contains(candidate) ? candidate : nil
+        return longestRemotePrefix(in: baseRef, knownRemoteNames: knownRemoteNames)
     }
 
     static func resolveLegacyRemoteName(
@@ -21,7 +19,9 @@ enum MissionBaseReference {
         guard let separator = baseRef.firstIndex(of: "/") else { return "" }
         let candidate = String(baseRef[..<separator])
         if localBranchNames.contains(baseRef) { return "" }
-        if knownRemoteNames.contains(candidate) { return candidate }
+        if let remoteName = longestRemotePrefix(in: baseRef, knownRemoteNames: knownRemoteNames) {
+            return remoteName
+        }
         if knownRemoteNames.contains(where: { branchNames.contains("\($0)/\(baseRef)") }) {
             return ""
         }
@@ -31,6 +31,15 @@ enum MissionBaseReference {
             return candidate
         }
         return nil
+    }
+
+    private static func longestRemotePrefix(
+        in baseRef: String,
+        knownRemoteNames: Set<String>
+    ) -> String? {
+        knownRemoteNames
+            .filter { baseRef.hasPrefix("\($0)/") }
+            .max { $0.count < $1.count }
     }
 
     static func branchName(
