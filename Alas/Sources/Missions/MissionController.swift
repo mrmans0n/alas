@@ -188,16 +188,20 @@ final class MissionController {
                 else { continue }
                 guard snapshot.local.branchName == leg.branch else { continue }
                 let request: ReviewRequest
-                var replacesClosedReview = false
+                var replacesLinkedReview = false
                 if let linked = leg.reviewIdentity {
                     if let visible = snapshot.reviewRequest,
                        Self.reviewIdentity(for: visible) == linked {
                         request = visible
                     } else if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef) {
-                        if refreshed.state == .closed,
-                           let visible = snapshot.reviewRequest {
+                        let matchesCurrentHead = snapshot.local.headSHA.isEmpty
+                            || refreshed.headSHA == snapshot.local.headSHA
+                        if let visible = snapshot.reviewRequest,
+                           refreshed.state == .closed
+                           || !Self.review(refreshed, matches: leg)
+                           || !matchesCurrentHead {
                             request = visible
-                            replacesClosedReview = true
+                            replacesLinkedReview = true
                         } else {
                             request = refreshed
                         }
@@ -216,14 +220,14 @@ final class MissionController {
                 else { continue }
                 if let linked = aggregate.primaryLeg?.reviewIdentity,
                    linked != identity,
-                   !replacesClosedReview {
+                   !replacesLinkedReview {
                     continue
                 }
                 await applyReview(
                     request,
                     identity: identity,
                     to: aggregate.mission.id,
-                    replaceReviewIdentity: replacesClosedReview
+                    replaceReviewIdentity: replacesLinkedReview
                 )
             }
         } catch {

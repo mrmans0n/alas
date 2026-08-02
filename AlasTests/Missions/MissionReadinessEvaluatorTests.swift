@@ -196,6 +196,52 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func retargetedOpenReviewCanBeReplacedByAVisibleOpenReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let retargeted = try #require(Self.reviewSnapshot(state: .open, baseBranch: "release").reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? retargeted : nil
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .open, number: 92)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func staleOpenReviewCanBeReplacedByAVisibleOpenReviewAtTheCurrentHead() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let stale = try #require(Self.reviewSnapshot(state: .open, headSHA: "historical123").reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? stale : nil
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .open, number: 92)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
     @Test func mergedLinkedReviewMustMatchTheCurrentHeadCommit() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
