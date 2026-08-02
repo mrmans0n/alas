@@ -289,6 +289,19 @@ struct AppStatePersistenceTests {
         #expect(baseRef == "release/1.0")
     }
 
+    @Test func missionPaneCallbackUsesThePersistedBaseRef() {
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.legs[0].worktreeId = "worktree-1"
+
+        let baseRef = AppState.missionCallbackBaseRef(
+            worktreeID: "worktree-1",
+            paneBaseRef: "upstream/main",
+            aggregates: [aggregate]
+        )
+
+        #expect(baseRef == "origin/main")
+    }
+
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
         let state = AppState(store: FailingStore()) { title, message in

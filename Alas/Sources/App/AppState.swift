@@ -606,9 +606,15 @@ final class AppState {
         rightPaneStore.appState = self
         rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, baseRef, snapshot in
             Task { @MainActor [weak self] in
-                await self?.missions.refreshReviewSnapshot(
+                guard let self else { return }
+                let missionBaseRef = Self.missionCallbackBaseRef(
+                    worktreeID: worktreeID,
+                    paneBaseRef: baseRef,
+                    aggregates: missions.aggregates
+                )
+                await missions.refreshReviewSnapshot(
                     worktreeId: worktreeID,
-                    baseRef: baseRef,
+                    baseRef: missionBaseRef,
                     snapshot: snapshot
                 )
             }
@@ -954,6 +960,17 @@ final class AppState {
             remotes: remotes
         ) else { return baseRef }
         return "\(currentRemote.remoteName)/\(branchName)"
+    }
+
+    static func missionCallbackBaseRef(
+        worktreeID: String,
+        paneBaseRef: String,
+        aggregates: [MissionAggregate]
+    ) -> String {
+        aggregates.first { aggregate in
+            aggregate.mission.state != .completed
+                && aggregate.primaryLeg?.worktreeId == worktreeID
+        }?.primaryLeg?.baseRef ?? paneBaseRef
     }
 
     func restoreDefaultRightPaneBaseAfterMission(
