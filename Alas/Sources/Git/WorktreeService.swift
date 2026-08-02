@@ -48,7 +48,7 @@ struct WorktreeService {
             absentLockedPaths: absentLockedPaths
         )
         if let host {
-            trees = await Self.fillingRemoteLastActivity(trees, host: host)
+            trees = await Self.fillingRemoteMetadata(trees, host: host)
         }
         return trees
     }
@@ -133,8 +133,25 @@ struct WorktreeService {
         TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)).map(Date.init(timeIntervalSince1970:))
     }
 
-    private static func fillingRemoteLastActivity(_ trees: [Worktree], host: String) async -> [Worktree] {
-        await withTaskGroup(of: (Int, Date?).self) { group in
+    static func remoteCreationDate(fromEpochOutput output: String) -> Date? {
+        guard let seconds = TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)),
+              seconds > 0
+        else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func remoteCreationDateCommand(path: String) -> String {
+        let dotGit = URL(fileURLWithPath: path).appendingPathComponent(".git").path
+        return "f=\(SSHCommand.shellQuote(dotGit)); "
+            + "if b=$(stat -c %W -- \"$f\" 2>/dev/null); then "
+            + "[ \"$b\" -gt 0 ] || b=$(stat -c %Z -- \"$f\") || exit 1; "
+            + "else b=$(stat -f %B \"$f\") || exit 1; "
+            + "[ \"$b\" -gt 0 ] || b=$(stat -f %c \"$f\") || exit 1; fi; "
+            + "printf '%s\\n' \"$b\""
+    }
+
+    private static func fillingRemoteMetadata(_ trees: [Worktree], host: String) async -> [Worktree] {
+        await withTaskGroup(of: (Int, Date?, Date?).self) { group in
             for (index, tree) in trees.enumerated() {
                 group.addTask {
                     let invocation = GitInvocation.build(
@@ -142,17 +159,30 @@ struct WorktreeService {
                         cwd: tree.path,
                         host: host
                     )
-                    let result = try? await Process.run(
+                    async let activityResult: ProcessResult? = try? await Process.run(
                         invocation.executable,
                         args: invocation.args,
                         cwd: invocation.cwd,
                         env: invocation.env
                     )
-                    return (index, result.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil })
+                    async let creationResult: ProcessResult? = try? await RemoteExec.run(
+                        host: host,
+                        cwd: nil,
+                        command: remoteCreationDateCommand(path: tree.path.path)
+                    )
+                    let (activity, creation) = await (activityResult, creationResult)
+                    return (
+                        index,
+                        activity.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil },
+                        creation.flatMap { $0.exitCode == 0 ? remoteCreationDate(fromEpochOutput: $0.stdout) : nil }
+                    )
                 }
             }
             var trees = trees
-            for await (index, date) in group where date != nil { trees[index].lastActivity = date! }
+            for await (index, lastActivity, createdAt) in group {
+                if let lastActivity { trees[index].lastActivity = lastActivity }
+                if let createdAt { trees[index].createdAt = createdAt }
+            }
             return trees
         }
     }

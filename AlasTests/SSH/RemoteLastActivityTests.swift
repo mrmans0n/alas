@@ -10,4 +10,18 @@ struct RemoteLastActivityTests {
         #expect(WorktreeService.date(fromEpochOutput: "bad") == nil)
         #expect(WorktreeService.date(fromEpochOutput: "") == nil)
     }
+
+    @Test func parsesOnlyPositiveRemoteCreationEpochs() {
+        #expect(WorktreeService.remoteCreationDate(fromEpochOutput: "1752249500\n") == Date(timeIntervalSince1970: 1_752_249_500))
+        #expect(WorktreeService.remoteCreationDate(fromEpochOutput: "0\n") == nil)
+        #expect(WorktreeService.remoteCreationDate(fromEpochOutput: "bad") == nil)
+    }
+
+    @Test func remoteCreationProbeUsesTheWorktreeGitFileAndPortableStat() {
+        let command = WorktreeService.remoteCreationDateCommand(path: "/srv/alas/work tree")
+
+        #expect(command.contains("/srv/alas/work tree/.git"))
+        #expect(command.contains("stat -c %W"))
+        #expect(command.contains("stat -f %B"))
+    }
 }
