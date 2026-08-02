@@ -205,7 +205,11 @@ final class MissionController {
                     if let visible = snapshot.reviewRequest,
                        Self.review(visible, matches: linked) {
                         request = visible
-                    } else if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef) {
+                    } else if let refreshed = await linkedReviewRequest(
+                        linked,
+                        leg.projectId,
+                        Self.baseBranch(for: leg)
+                    ) {
                         let matchesCurrentHead = snapshot.local.headSHA.isEmpty
                             || refreshed.headSHA == snapshot.local.headSHA
                         if let visible = snapshot.reviewRequest,
@@ -376,7 +380,7 @@ final class MissionController {
             guard let aggregate = try await persistence.aggregate(id: id),
                   let leg = aggregate.primaryLeg,
                   let identity = leg.reviewIdentity,
-                  let request = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
+                  let request = await linkedReviewRequest(identity, leg.projectId, Self.baseBranch(for: leg)),
                   Self.review(request, matches: leg, issueIdentity: aggregate.issue.identity)
             else { return }
             if request.state == .merged {
@@ -568,7 +572,7 @@ final class MissionController {
                   leg.projectId,
                   issueIdentity,
                   leg.branch,
-                  leg.baseRef,
+                  Self.baseBranch(for: leg),
                   headSHA,
                   headOwner
               ),
@@ -585,7 +589,7 @@ final class MissionController {
         let currentTip = await branchTip(leg.projectId, leg.branch)
         var replacesLinkedReview = false
         if let identity = leg.reviewIdentity {
-            if let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
+            if let linked = await linkedReviewRequest(identity, leg.projectId, Self.baseBranch(for: leg)),
                Self.review(linked, matches: identity) {
                 let matchesCurrentTip: Bool
                 if let currentTip, !currentTip.isEmpty {
@@ -918,13 +922,22 @@ final class MissionController {
     ) -> Bool {
         let expectedBase = MissionBaseReference.branchName(
             leg.baseRef,
-            currentRemoteName: request.remote.remoteName
+            currentRemoteName: request.remote.remoteName,
+            persistedRemoteName: leg.baseRemoteName
         )
         return request.provider == issueIdentity.provider
             && request.remote.host.caseInsensitiveCompare(issueIdentity.host) == .orderedSame
             && request.remote.repositorySlug.caseInsensitiveCompare(issueIdentity.repositorySlug) == .orderedSame
             && request.headRefName == leg.branch
             && request.baseRefName == expectedBase
+    }
+
+    private static func baseBranch(for leg: MissionLeg) -> String {
+        MissionBaseReference.branchName(
+            leg.baseRef,
+            currentRemoteName: "",
+            persistedRemoteName: leg.baseRemoteName
+        )
     }
 
     private func replace(_ aggregate: MissionAggregate) {

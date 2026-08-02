@@ -1,8 +1,18 @@
 import Foundation
 
 enum MissionBaseReference {
-    static func branchName(_ baseRef: String, currentRemoteName: String) -> String {
-        let remoteNames = [currentRemoteName, "origin"]
+    static func remoteName(in baseRef: String, knownRemoteNames: Set<String>) -> String? {
+        guard let separator = baseRef.firstIndex(of: "/") else { return nil }
+        let candidate = String(baseRef[..<separator])
+        return knownRemoteNames.contains(candidate) ? candidate : nil
+    }
+
+    static func branchName(
+        _ baseRef: String,
+        currentRemoteName: String,
+        persistedRemoteName: String?
+    ) -> String {
+        let remoteNames = [persistedRemoteName, currentRemoteName].compactMap { $0 }
         for remoteName in remoteNames where !remoteName.isEmpty {
             let prefix = "\(remoteName)/"
             if baseRef.hasPrefix(prefix) {
@@ -106,6 +116,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
     let ordinal: Int
     let projectId: String
     let baseRef: String
+    let baseRemoteName: String?
     let branch: String
     let destinationPath: String
     var worktreeId: String?
@@ -114,6 +125,38 @@ struct MissionLeg: Codable, Equatable, Sendable {
     let initialPromptId: UUID
     var pendingInitialPrompt: String?
     var reviewIdentity: MissionReviewIdentity?
+
+    init(
+        id: MissionLegID,
+        missionID: MissionID,
+        ordinal: Int,
+        projectId: String,
+        baseRef: String,
+        baseRemoteName: String? = nil,
+        branch: String,
+        destinationPath: String,
+        worktreeId: String?,
+        agentId: String,
+        acpSessionId: String?,
+        initialPromptId: UUID,
+        pendingInitialPrompt: String?,
+        reviewIdentity: MissionReviewIdentity?
+    ) {
+        self.id = id
+        self.missionID = missionID
+        self.ordinal = ordinal
+        self.projectId = projectId
+        self.baseRef = baseRef
+        self.baseRemoteName = baseRemoteName
+        self.branch = branch
+        self.destinationPath = destinationPath
+        self.worktreeId = worktreeId
+        self.agentId = agentId
+        self.acpSessionId = acpSessionId
+        self.initialPromptId = initialPromptId
+        self.pendingInitialPrompt = pendingInitialPrompt
+        self.reviewIdentity = reviewIdentity
+    }
 }
 
 struct MissionEvent: Codable, Equatable, Sendable {
@@ -141,9 +184,32 @@ struct MissionDraft: Equatable, Sendable {
     let issue: MissionIssueSnapshot
     let projectId: String
     let baseRef: String
+    let baseRemoteName: String?
     let branch: String
     let destinationPath: String
     let agentId: String
     let initialPromptId: UUID
     let initialPrompt: String
+
+    init(
+        issue: MissionIssueSnapshot,
+        projectId: String,
+        baseRef: String,
+        baseRemoteName: String? = nil,
+        branch: String,
+        destinationPath: String,
+        agentId: String,
+        initialPromptId: UUID,
+        initialPrompt: String
+    ) {
+        self.issue = issue
+        self.projectId = projectId
+        self.baseRef = baseRef
+        self.baseRemoteName = baseRemoteName
+        self.branch = branch
+        self.destinationPath = destinationPath
+        self.agentId = agentId
+        self.initialPromptId = initialPromptId
+        self.initialPrompt = initialPrompt
+    }
 }

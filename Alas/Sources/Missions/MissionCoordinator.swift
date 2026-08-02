@@ -76,6 +76,7 @@ final class MissionCoordinator {
                 ordinal: 0,
                 projectId: draft.projectId,
                 baseRef: draft.baseRef,
+                baseRemoteName: draft.baseRemoteName,
                 branch: draft.branch,
                 destinationPath: draft.destinationPath,
                 worktreeId: nil,

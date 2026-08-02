@@ -465,12 +465,16 @@ struct NewMissionDialogTests {
 
     @Test("create returns only after the durable Mission insertion succeeds")
     func successfulCreateBuildsDraftAndReturnsDurableID() async throws {
-        let fake = NewMissionDialogFake()
+        let fake = NewMissionDialogFake(
+            configuredBases: ["alas": "upstream/main"],
+            branchesByProject: ["alas": ["upstream/main", "main"]],
+            remoteNamesByProject: ["alas": ["upstream"]]
+        )
         let model = NewMissionDialogModel(environment: fake.environment)
         let actions = NewMissionDialogActions(model: model, dismiss: {})
         model.reference = "#1842"
         await model.resolve()
-        actions.base.wrappedValue = "  origin/main  "
+        actions.base.wrappedValue = "  upstream/main  "
         actions.branch.wrappedValue = "  feature/1842-custom  "
         model.prompt = "Custom prompt"
 
@@ -481,7 +485,8 @@ struct NewMissionDialogTests {
         #expect(fake.missionWasDurableBeforeCreateReturned)
         #expect(draft.issue.identity.number == 1842)
         #expect(draft.projectId == "alas")
-        #expect(draft.baseRef == "origin/main")
+        #expect(draft.baseRef == "upstream/main")
+        #expect(draft.baseRemoteName == "upstream")
         #expect(draft.branch == "feature/1842-custom")
         #expect(draft.destinationPath == "/tmp/worktrees/alas/feature-1842-custom")
         #expect(draft.agentId == "codex")

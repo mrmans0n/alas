@@ -46,17 +46,28 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionBaseReferenceNormalizesOnlyKnownRemoteAliases() {
+        #expect(MissionBaseReference.remoteName(
+            in: "upstream/main",
+            knownRemoteNames: ["origin", "upstream"]
+        ) == "upstream")
+        #expect(MissionBaseReference.remoteName(
+            in: "release/1.0",
+            knownRemoteNames: ["origin", "upstream"]
+        ) == nil)
         #expect(MissionBaseReference.branchName(
             "origin/main",
-            currentRemoteName: "upstream"
+            currentRemoteName: "upstream",
+            persistedRemoteName: "origin"
         ) == "main")
         #expect(MissionBaseReference.branchName(
             "upstream/feature/release",
-            currentRemoteName: "upstream"
+            currentRemoteName: "canonical",
+            persistedRemoteName: "upstream"
         ) == "feature/release")
         #expect(MissionBaseReference.branchName(
             "release/1.0",
-            currentRemoteName: "upstream"
+            currentRemoteName: "upstream",
+            persistedRemoteName: nil
         ) == "release/1.0")
     }
 

@@ -10,7 +10,7 @@ final class MissionStore {
         case invalidEvent
     }
 
-    static let targetSchemaVersion = 1
+    static let targetSchemaVersion = 2
 
     let path: String
     let db: SQLiteDatabase
@@ -334,6 +334,7 @@ final class MissionStore {
         try db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         let current = try currentSchemaVersion()
         if current < 1 { try migrateToV1() }
+        if current < 2 { try migrateToV2() }
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -410,6 +411,15 @@ final class MissionStore {
         try db.exec("CREATE INDEX IF NOT EXISTS mission_legs_project_idx ON mission_legs(project_id)")
         try db.exec("CREATE INDEX IF NOT EXISTS mission_legs_worktree_idx ON mission_legs(worktree_id)")
         try db.exec("CREATE INDEX IF NOT EXISTS mission_events_mission_created_idx ON mission_events(mission_id, created_at)")
+    }
+
+    private func migrateToV2() throws {
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN base_remote_name TEXT")
+        try db.exec("""
+        UPDATE mission_legs
+        SET base_remote_name = 'origin'
+        WHERE base_ref LIKE 'origin/%'
+        """)
     }
 
     private func immediateTransaction<T>(_ work: () throws -> T) throws -> T {
@@ -532,16 +542,17 @@ final class MissionStore {
     private func insertLeg(_ leg: MissionLeg) throws {
         try db.exec("""
         INSERT INTO mission_legs (
-            id, mission_id, ordinal, project_id, base_ref, branch, destination_path,
+            id, mission_id, ordinal, project_id, base_ref, base_remote_name, branch, destination_path,
             worktree_id, agent_id, acp_session_id, initial_prompt_id,
             pending_initial_prompt, review_identity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, bindings: [
             leg.id.rawValue,
             leg.missionID.rawValue,
             leg.ordinal,
             leg.projectId,
             leg.baseRef,
+            leg.baseRemoteName,
             leg.branch,
             leg.destinationPath,
             leg.worktreeId,
@@ -642,6 +653,7 @@ final class MissionStore {
             ordinal: Int(ordinal),
             projectId: row["project_id"] as? String ?? "",
             baseRef: row["base_ref"] as? String ?? "",
+            baseRemoteName: row["base_remote_name"] as? String,
             branch: row["branch"] as? String ?? "",
             destinationPath: row["destination_path"] as? String ?? "",
             worktreeId: row["worktree_id"] as? String,

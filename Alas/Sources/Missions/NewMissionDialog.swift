@@ -262,6 +262,10 @@ final class NewMissionDialogModel {
             return nil
         }
         let normalizedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseRemoteName = MissionBaseReference.remoteName(
+            in: normalizedBase,
+            knownRemoteNames: remoteNames
+        )
         let normalizedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
         if allowDuplicate,
            duplicateBranch?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedBranch {
@@ -277,6 +281,7 @@ final class NewMissionDialogModel {
                 issue: issue,
                 projectId: projectId,
                 baseRef: normalizedBase,
+                baseRemoteName: baseRemoteName,
                 branch: normalizedBranch,
                 destinationPath: availableDestination(projectID: projectId, branch: normalizedBranch).path,
                 agentId: agentId,

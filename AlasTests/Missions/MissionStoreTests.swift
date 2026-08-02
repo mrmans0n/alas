@@ -10,6 +10,24 @@ struct MissionStoreTests {
             .path
     }
 
+    @Test("migrates persisted origin aliases to the explicit base remote column")
+    func migratesPersistedOriginAlias() throws {
+        let path = temporaryPath()
+        let v1 = try SQLiteDatabase(path: path)
+        try v1.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        try v1.exec("INSERT INTO schema_version (version) VALUES (1)")
+        try v1.exec("CREATE TABLE mission_legs (id TEXT PRIMARY KEY, base_ref TEXT NOT NULL)")
+        try v1.exec("INSERT INTO mission_legs (id, base_ref) VALUES ('leg-1', 'origin/main')")
+
+        let migrated = try MissionStore(path: path)
+        let row = try #require(try migrated.db.query(
+            "SELECT base_remote_name FROM mission_legs WHERE id = 'leg-1'"
+        ).first)
+
+        #expect(try migrated.currentSchemaVersion() == MissionStore.targetSchemaVersion)
+        #expect(row["base_remote_name"] as? String == "origin")
+    }
+
     @Test("creates schema and persists ordered events across reopen")
     func persistsAggregateAndOrderedEventsAcrossReopen() throws {
         let path = temporaryPath()
@@ -38,6 +56,7 @@ struct MissionStoreTests {
         let loaded = try #require(try reopened.aggregate(id: aggregate.mission.id))
         #expect(loaded.mission.state == .running)
         #expect(loaded.mission.setupCheckpoint == .running)
+        #expect(loaded.primaryLeg?.baseRemoteName == "origin")
         #expect(loaded.events.map(\.id) == ["mission-1-event-1", "event-2"])
     }
 

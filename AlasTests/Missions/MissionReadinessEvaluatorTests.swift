@@ -449,7 +449,7 @@ struct MissionReadinessEvaluatorTests {
             linkedReviewRequest: { identity, projectID, baseRef in
                 guard identity == Self.reviewIdentity,
                       projectID == "project-1",
-                      baseRef == "origin/main"
+                      baseRef == "main"
                 else { return nil }
                 return Self.reviewSnapshot(state: .merged).reviewRequest
             }
@@ -512,15 +512,22 @@ struct MissionReadinessEvaluatorTests {
     }
 
     @Test func linkedReviewRefreshAcceptsPersistedBaseAfterRemoteRename() async throws {
-        var linked = Self.runningAggregate()
+        var linked = Self.runningAggregate(
+            baseRef: "upstream/main",
+            baseRemoteName: "upstream"
+        )
         linked.legs[0].reviewIdentity = Self.reviewIdentity
         let merged = try #require(Self.reviewSnapshot(
             state: .merged,
-            remoteName: "upstream"
+            remoteName: "canonical"
         ).reviewRequest)
+        var requestedBaseBranch: String?
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            linkedReviewRequest: { _, _, _ in merged },
+            linkedReviewRequest: { _, _, baseBranch in
+                requestedBaseBranch = baseBranch
+                return merged
+            },
             branchTip: { _, _ in "abc123" }
         )
         await fake.controller.load()
@@ -530,6 +537,7 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+        #expect(requestedBaseBranch == "main")
     }
 
     @Test func linkedReviewRefreshRejectsRetargetedSlashContainingBase() async throws {
@@ -748,7 +756,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "origin/main")
+                #expect(baseRef == "main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
@@ -810,7 +818,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "origin/main")
+                #expect(baseRef == "main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme")
                 return request
@@ -1264,7 +1272,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "origin/main")
+                #expect(baseRef == "main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
@@ -1552,8 +1560,14 @@ struct MissionReadinessEvaluatorTests {
         #expect(fake.externalOperations.isEmpty)
     }
 
-    fileprivate static func runningAggregate() -> MissionAggregate {
-        var aggregate = MissionFixtures.creatingMission()
+    fileprivate static func runningAggregate(
+        baseRef: String = "origin/main",
+        baseRemoteName: String? = "origin"
+    ) -> MissionAggregate {
+        var aggregate = MissionFixtures.creatingMission(
+            baseRef: baseRef,
+            baseRemoteName: baseRemoteName
+        )
         aggregate.mission.state = .running
         aggregate.mission.setupCheckpoint = .running
         aggregate.legs[0].worktreeId = "worktree-1"

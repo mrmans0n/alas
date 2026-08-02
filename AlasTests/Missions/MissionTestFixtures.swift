@@ -30,7 +30,9 @@ enum MissionFixtures {
     static func creatingMission(
         id: String = "mission-1",
         issue: MissionIssueSnapshot = issue(),
-        createdAt: TimeInterval = 100
+        createdAt: TimeInterval = 100,
+        baseRef: String = "origin/main",
+        baseRemoteName: String? = "origin"
     ) -> MissionAggregate {
         let missionID = MissionID(rawValue: id)
         let legID = MissionLegID(rawValue: "\(id)-leg-1")
@@ -47,18 +49,30 @@ enum MissionFixtures {
                 completedAt: nil
             ),
             issue: issue,
-            legs: [leg(id: legID, missionID: missionID)],
+            legs: [leg(
+                id: legID,
+                missionID: missionID,
+                baseRef: baseRef,
+                baseRemoteName: baseRemoteName
+            )],
             events: [event(id: "\(id)-event-1", missionID: missionID, legID: legID, kind: .created)]
         )
     }
 
-    static func leg(id: MissionLegID, missionID: MissionID, ordinal: Int = 0) -> MissionLeg {
+    static func leg(
+        id: MissionLegID,
+        missionID: MissionID,
+        ordinal: Int = 0,
+        baseRef: String = "origin/main",
+        baseRemoteName: String? = "origin"
+    ) -> MissionLeg {
         .init(
             id: id,
             missionID: missionID,
             ordinal: ordinal,
             projectId: "project-1",
-            baseRef: "origin/main",
+            baseRef: baseRef,
+            baseRemoteName: baseRemoteName,
             branch: "fix/parser-crash",
             destinationPath: "/tmp/alas-mission",
             worktreeId: nil,

@@ -9,6 +9,7 @@ struct MissionCoordinatorTests {
         issue: MissionFixtures.issue(),
         projectId: "project-1",
         baseRef: "origin/main",
+        baseRemoteName: "origin",
         branch: "fix/parser-crash",
         destinationPath: "/tmp/alas-mission",
         agentId: "codex",
@@ -34,6 +35,7 @@ struct MissionCoordinatorTests {
         ])
         #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.primaryLeg?.baseRemoteName == "origin")
     }
 
     @Test("Mission is durable before Git starts")

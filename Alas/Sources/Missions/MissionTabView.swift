@@ -264,7 +264,7 @@ struct MissionTabPresentation: Equatable {
         guard let request = snapshot?.reviewRequest,
               request.provider == identity.provider,
               request.remote.host.caseInsensitiveCompare(identity.host) == .orderedSame,
-              request.remote.repositorySlug == identity.repositorySlug,
+              request.remote.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame,
               request.number == identity.number
         else { return base }
         let state: String

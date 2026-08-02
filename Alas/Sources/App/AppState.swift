@@ -996,15 +996,11 @@ final class AppState {
                 await provider.isAvailable(cwd: cwd),
                 await provider.isAuthenticated(remote: remote, cwd: cwd)
             else { return nil }
-            let baseBranch = MissionBaseReference.branchName(
-                baseRef,
-                currentRemoteName: remote.remoteName
-            )
             let request = try await provider.missionReviewRequest(
                 remote: remote,
                 branch: branch,
                 headOwner: headOwner,
-                baseBranch: baseBranch,
+                baseBranch: baseRef,
                 headSHA: headSHA,
                 cwd: cwd
             )
@@ -2305,6 +2301,7 @@ final class AppState {
             issue: draft.issue,
             projectId: draft.projectId,
             baseRef: draft.baseRef,
+            baseRemoteName: draft.baseRemoteName,
             branch: draft.branch,
             destinationPath: availableDestination.path,
             agentId: draft.agentId,

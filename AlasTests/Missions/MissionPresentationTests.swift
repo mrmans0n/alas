@@ -116,6 +116,26 @@ struct MissionPresentationTests {
         #expect(presentation.reviewDestination == aggregate.primaryLeg?.reviewIdentity?.url)
     }
 
+    @Test func linkedReviewUsesRemoteStateAcrossRepositoryCasingChanges() {
+        var aggregate = Self.runningAggregate()
+        aggregate.legs[0].reviewIdentity = .init(
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            repositorySlug: "Platform/Alas",
+            number: 17,
+            url: URL(string: "https://gitlab.example.com/Platform/Alas/-/merge_requests/17")!
+        )
+
+        let presentation = MissionTabPresentation(
+            aggregate: aggregate,
+            worktree: Self.worktree,
+            reviewSnapshot: Self.reviewSnapshot(provider: .gitlab, number: 17, state: .merged),
+            availableACPAgentIDs: ["codex"]
+        )
+
+        #expect(presentation.reviewCopy == "MR !17 · Merged")
+    }
+
     @Test func readyMissionExplainsWhyCompletionIsAvailable() {
         var aggregate = Self.runningAggregate()
         aggregate.mission.state = .readyToComplete
