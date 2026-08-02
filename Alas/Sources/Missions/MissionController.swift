@@ -199,7 +199,11 @@ final class MissionController {
                             || refreshed.headSHA == snapshot.local.headSHA
                         if let visible = snapshot.reviewRequest,
                            refreshed.state == .closed
-                           || !Self.review(refreshed, matches: leg)
+                           || !Self.review(
+                               refreshed,
+                               matches: leg,
+                               issueIdentity: aggregate.issue.identity
+                           )
                            || !matchesCurrentHead {
                             request = visible
                             replacesLinkedReview = true
@@ -215,7 +219,11 @@ final class MissionController {
                     continue
                 }
                 let identity = Self.reviewIdentity(for: request)
-                guard Self.review(request, matches: leg) else { continue }
+                guard Self.review(
+                    request,
+                    matches: leg,
+                    issueIdentity: aggregate.issue.identity
+                ) else { continue }
                 guard request.state != .merged
                     || (!snapshot.local.headSHA.isEmpty && request.headSHA == snapshot.local.headSHA)
                 else { continue }
@@ -257,7 +265,11 @@ final class MissionController {
                     let matchesCurrentHead = snapshot.local.headSHA.isEmpty
                         || refreshed.headSHA == snapshot.local.headSHA
                     guard refreshed.state == .closed
-                        || !Self.review(refreshed, matches: leg)
+                        || !Self.review(
+                            refreshed,
+                            matches: leg,
+                            issueIdentity: aggregate.issue.identity
+                        )
                         || !matchesCurrentHead
                     else { continue }
                     replacesLinkedReview = true
@@ -369,7 +381,7 @@ final class MissionController {
                   let leg = aggregate.primaryLeg,
                   let identity = leg.reviewIdentity,
                   let request = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
-                  Self.review(request, matches: leg)
+                  Self.review(request, matches: leg, issueIdentity: aggregate.issue.identity)
             else { return }
             if request.state == .merged {
                 guard let currentTip = await branchTip(leg.projectId, leg.branch),
@@ -509,7 +521,8 @@ final class MissionController {
         let visibleBlocksDiscovery = snapshot.reviewRequest.map { request in
             let matchesCurrentHead = snapshot.local.headSHA.isEmpty
                 || request.headSHA == snapshot.local.headSHA
-            return Self.review(request, matches: leg) && matchesCurrentHead
+            return Self.review(request, matches: leg, issueIdentity: issueIdentity)
+                && matchesCurrentHead
         } ?? false
         guard !visibleBlocksDiscovery,
               snapshot.local.branchName == leg.branch,
@@ -541,7 +554,7 @@ final class MissionController {
               request.headRefName == leg.branch,
               request.headSHA == headSHA,
               request.state == .merged,
-              Self.review(request, matches: leg)
+              Self.review(request, matches: leg, issueIdentity: issueIdentity)
         else { return nil }
         return request
     }
@@ -561,7 +574,7 @@ final class MissionController {
                 matchesCurrentTip = true
             }
             if linked.state != .closed,
-               Self.review(linked, matches: leg),
+               Self.review(linked, matches: leg, issueIdentity: aggregate.issue.identity),
                matchesCurrentTip {
                 if linked.state == .merged {
                     guard let currentTip,
@@ -661,7 +674,8 @@ final class MissionController {
                       let currentTip = await branchTip(leg.projectId, leg.branch),
                       !currentTip.isEmpty
                 else { return false }
-                return request.headSHA == currentTip && Self.review(request, matches: leg)
+                return request.headSHA == currentTip
+                    && Self.review(request, matches: leg, issueIdentity: aggregate.issue.identity)
             }
         )
     }
@@ -854,12 +868,19 @@ final class MissionController {
         )
     }
 
-    private static func review(_ request: ReviewRequest, matches leg: MissionLeg) -> Bool {
+    private static func review(
+        _ request: ReviewRequest,
+        matches leg: MissionLeg,
+        issueIdentity: MissionIssueIdentity
+    ) -> Bool {
         let remotePrefix = "\(request.remote.remoteName)/"
         let expectedBase = leg.baseRef.hasPrefix(remotePrefix)
             ? String(leg.baseRef.dropFirst(remotePrefix.count))
             : leg.baseRef
-        return request.headRefName == leg.branch
+        return request.provider == issueIdentity.provider
+            && request.remote.host.caseInsensitiveCompare(issueIdentity.host) == .orderedSame
+            && request.remote.repositorySlug.caseInsensitiveCompare(issueIdentity.repositorySlug) == .orderedSame
+            && request.headRefName == leg.branch
             && request.baseRefName == expectedBase
     }
 

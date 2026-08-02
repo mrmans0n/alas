@@ -153,6 +153,21 @@ struct MissionReadinessEvaluatorTests {
         #expect(ready.events.last?.kind == .ready)
     }
 
+    @Test func liveReviewIgnoresReviewFromAnotherRepository() async throws {
+        let fake = try MissionLifecycleFake()
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged, repository: "other")
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
     @Test func firstDiscoveredReviewIdentityRemainsLinked() async throws {
         let fake = try MissionLifecycleFake()
         await fake.controller.load()
@@ -1158,15 +1173,16 @@ struct MissionReadinessEvaluatorTests {
         headSHA: String = "abc123",
         localHeadSHA: String? = nil,
         headOwner: String? = nil,
-        baseBranch: String = "main"
+        baseBranch: String = "main",
+        repository: String = "alas"
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
             host: "github.com",
             owner: "acme",
-            repository: "alas",
+            repository: repository,
             remoteName: "origin",
-            webURL: URL(string: "https://github.com/acme/alas")!
+            webURL: URL(string: "https://github.com/acme/\(repository)")!
         )
         let request = ReviewRequest(
             remote: remote,
