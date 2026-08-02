@@ -10,14 +10,14 @@ struct MissionStoreTests {
             .path
     }
 
-    @Test("migrates persisted origin aliases to the explicit base remote column")
-    func migratesPersistedOriginAlias() throws {
+    @Test("migrates v1 base refs without guessing their remote identity")
+    func migratesLegacyBaseRefWithoutGuessingRemoteIdentity() throws {
         let path = temporaryPath()
         let v1 = try SQLiteDatabase(path: path)
         try v1.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
         try v1.exec("INSERT INTO schema_version (version) VALUES (1)")
         try v1.exec("CREATE TABLE mission_legs (id TEXT PRIMARY KEY, base_ref TEXT NOT NULL)")
-        try v1.exec("INSERT INTO mission_legs (id, base_ref) VALUES ('leg-1', 'origin/main')")
+        try v1.exec("INSERT INTO mission_legs (id, base_ref) VALUES ('leg-1', 'upstream/main')")
 
         let migrated = try MissionStore(path: path)
         let row = try #require(try migrated.db.query(
@@ -25,7 +25,7 @@ struct MissionStoreTests {
         ).first)
 
         #expect(try migrated.currentSchemaVersion() == MissionStore.targetSchemaVersion)
-        #expect(row["base_remote_name"] as? String == "origin")
+        #expect(row["base_remote_name"] as? String == nil)
     }
 
     @Test("creates schema and persists ordered events across reopen")

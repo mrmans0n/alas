@@ -281,7 +281,7 @@ final class NewMissionDialogModel {
                 issue: issue,
                 projectId: projectId,
                 baseRef: normalizedBase,
-                baseRemoteName: baseRemoteName,
+                baseRemoteName: baseRemoteName ?? "",
                 branch: normalizedBranch,
                 destinationPath: availableDestination(projectID: projectId, branch: normalizedBranch).path,
                 agentId: agentId,

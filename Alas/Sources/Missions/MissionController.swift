@@ -38,6 +38,11 @@ typealias MissionBranchOwner = @MainActor (
     _ baseRef: String
 ) async -> String?
 
+typealias MissionLegacyBaseRemoteResolver = @MainActor (
+    _ projectID: String,
+    _ baseRef: String
+) async -> String?
+
 @Observable
 @MainActor
 final class MissionController {
@@ -133,6 +138,24 @@ final class MissionController {
         do {
             aggregates = Self.sorted(try await persistence.list(includeCompleted: true))
             loadError = nil
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    func resolveLegacyBaseRemoteNames(using resolver: MissionLegacyBaseRemoteResolver) async {
+        do {
+            var didChange = false
+            for aggregate in try await persistence.list(includeCompleted: true) {
+                guard var leg = aggregate.primaryLeg,
+                      leg.baseRemoteName == nil,
+                      let resolvedRemoteName = await resolver(leg.projectId, leg.baseRef)
+                else { continue }
+                leg.baseRemoteName = resolvedRemoteName
+                try await persistence.updateLeg(leg, event: nil)
+                didChange = true
+            }
+            if didChange { await load() }
         } catch {
             loadError = error.localizedDescription
         }

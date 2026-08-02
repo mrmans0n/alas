@@ -7,6 +7,26 @@ enum MissionBaseReference {
         return knownRemoteNames.contains(candidate) ? candidate : nil
     }
 
+    static func resolveLegacyRemoteName(
+        in baseRef: String,
+        knownRemoteNames: Set<String>,
+        branchNames: Set<String>
+    ) -> String? {
+        guard let separator = baseRef.firstIndex(of: "/") else { return "" }
+        let candidate = String(baseRef[..<separator])
+        if knownRemoteNames.contains(candidate) { return candidate }
+        if branchNames.contains(baseRef)
+            || knownRemoteNames.contains(where: { branchNames.contains("\($0)/\(baseRef)") }) {
+            return ""
+        }
+        let branch = String(baseRef[baseRef.index(after: separator)...])
+        if branchNames.contains(branch)
+            || knownRemoteNames.contains(where: { branchNames.contains("\($0)/\(branch)") }) {
+            return candidate
+        }
+        return nil
+    }
+
     static func branchName(
         _ baseRef: String,
         persistedRemoteName: String?
@@ -113,7 +133,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
     let ordinal: Int
     let projectId: String
     let baseRef: String
-    let baseRemoteName: String?
+    var baseRemoteName: String?
     let branch: String
     let destinationPath: String
     var worktreeId: String?

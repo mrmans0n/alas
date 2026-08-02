@@ -168,10 +168,11 @@ final class MissionStore {
         try immediateTransaction {
             let changed = try db.execChanges("""
             UPDATE mission_legs
-            SET worktree_id = ?, agent_id = ?, acp_session_id = ?,
+            SET base_remote_name = ?, worktree_id = ?, agent_id = ?, acp_session_id = ?,
                 pending_initial_prompt = ?, review_identity = ?
             WHERE id = ? AND mission_id = ?
             """, bindings: [
+                leg.baseRemoteName,
                 leg.worktreeId,
                 leg.agentId,
                 leg.acpSessionId,
@@ -205,10 +206,11 @@ final class MissionStore {
             try requireMission(id)
             let changed = try db.execChanges("""
             UPDATE mission_legs
-            SET worktree_id = ?, agent_id = ?, acp_session_id = ?,
+            SET base_remote_name = ?, worktree_id = ?, agent_id = ?, acp_session_id = ?,
                 pending_initial_prompt = ?, review_identity = ?
             WHERE id = ? AND mission_id = ?
             """, bindings: [
+                leg.baseRemoteName,
                 leg.worktreeId,
                 leg.agentId,
                 leg.acpSessionId,
@@ -415,11 +417,6 @@ final class MissionStore {
 
     private func migrateToV2() throws {
         try db.exec("ALTER TABLE mission_legs ADD COLUMN base_remote_name TEXT")
-        try db.exec("""
-        UPDATE mission_legs
-        SET base_remote_name = 'origin'
-        WHERE base_ref LIKE 'origin/%'
-        """)
     }
 
     private func immediateTransaction<T>(_ work: () throws -> T) throws -> T {

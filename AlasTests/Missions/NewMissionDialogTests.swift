@@ -493,6 +493,22 @@ struct NewMissionDialogTests {
         #expect(draft.initialPrompt == "Custom prompt")
     }
 
+    @Test("create records an unqualified slash base explicitly")
+    func createRecordsUnqualifiedSlashBaseExplicitly() async throws {
+        let fake = NewMissionDialogFake()
+        let model = NewMissionDialogModel(environment: fake.environment)
+        let actions = NewMissionDialogActions(model: model, dismiss: {})
+        model.reference = "#1842"
+        await model.resolve()
+        actions.base.wrappedValue = "release/1.0"
+
+        _ = await model.create(allowDuplicate: false)
+        let draft = try #require(fake.createdDrafts.first)
+
+        #expect(draft.baseRef == "release/1.0")
+        #expect(draft.baseRemoteName == "")
+    }
+
     @Test("the sheet dismisses only after durable Mission insertion succeeds")
     func successfulCreateActionDismissesAfterDurableInsertion() async {
         let fake = NewMissionDialogFake(suspendCreation: true)

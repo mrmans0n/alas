@@ -540,6 +540,35 @@ struct MissionReadinessEvaluatorTests {
         #expect(requestedBaseBranch == "main")
     }
 
+    @Test func legacyBaseAliasIsResolvedBeforeReviewRefresh() async throws {
+        var linked = Self.runningAggregate(
+            baseRef: "upstream/main",
+            baseRemoteName: nil
+        )
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let merged = try #require(Self.reviewSnapshot(
+            state: .merged,
+            remoteName: "canonical"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { _, _, _ in merged },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.resolveLegacyBaseRemoteNames { projectID, baseRef in
+            #expect(projectID == "project-1")
+            #expect(baseRef == "upstream/main")
+            return "upstream"
+        }
+        await fake.controller.refreshLinkedReview(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.primaryLeg?.baseRemoteName == "upstream")
+        #expect(aggregate.mission.state == .readyToComplete)
+    }
+
     @Test func linkedReviewRefreshRejectsRetargetedSlashContainingBase() async throws {
         var linked = Self.runningAggregate()
         let originalLeg = linked.legs[0]

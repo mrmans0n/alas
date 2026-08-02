@@ -768,8 +768,33 @@ final class AppState {
 
     func reconcileMissionsForStartup() async {
         await missions.load()
+        await missions.resolveLegacyBaseRemoteNames { [weak self] projectID, baseRef in
+            await self?.resolveLegacyMissionBaseRemoteName(projectID: projectID, baseRef: baseRef)
+        }
         await missions.reconcileInterrupted()
         presentMissingMissionRecoveryIfNeeded()
+    }
+
+    private func resolveLegacyMissionBaseRemoteName(
+        projectID: String,
+        baseRef: String
+    ) async -> String? {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID }) else {
+            return nil
+        }
+        let path = URL(fileURLWithPath: project.path)
+        do {
+            let git = GitService()
+            let remotes = try await git.remotes(worktreePath: path)
+            let branches = try await git.branches(at: path)
+            return MissionBaseReference.resolveLegacyRemoteName(
+                in: baseRef,
+                knownRemoteNames: Set(remotes.map(\.name)),
+                branchNames: Set(branches)
+            )
+        } catch {
+            return nil
+        }
     }
 
     @discardableResult
