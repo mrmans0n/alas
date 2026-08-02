@@ -10,7 +10,7 @@ final class MissionStore {
         case invalidEvent
     }
 
-    static let targetSchemaVersion = 2
+    static let targetSchemaVersion = 3
 
     let path: String
     let db: SQLiteDatabase
@@ -168,12 +168,13 @@ final class MissionStore {
         try immediateTransaction {
             let changed = try db.execChanges("""
             UPDATE mission_legs
-            SET base_remote_name = ?, worktree_id = ?, agent_id = ?, acp_session_id = ?,
+            SET base_remote_name = ?, worktree_id = ?, worktree_creation_epoch = ?, agent_id = ?, acp_session_id = ?,
                 pending_initial_prompt = ?, review_identity = ?
             WHERE id = ? AND mission_id = ?
             """, bindings: [
                 leg.baseRemoteName,
                 leg.worktreeId,
+                leg.worktreeCreationEpoch,
                 leg.agentId,
                 leg.acpSessionId,
                 leg.pendingInitialPrompt,
@@ -206,12 +207,13 @@ final class MissionStore {
             try requireMission(id)
             let changed = try db.execChanges("""
             UPDATE mission_legs
-            SET base_remote_name = ?, worktree_id = ?, agent_id = ?, acp_session_id = ?,
+            SET base_remote_name = ?, worktree_id = ?, worktree_creation_epoch = ?, agent_id = ?, acp_session_id = ?,
                 pending_initial_prompt = ?, review_identity = ?
             WHERE id = ? AND mission_id = ?
             """, bindings: [
                 leg.baseRemoteName,
                 leg.worktreeId,
+                leg.worktreeCreationEpoch,
                 leg.agentId,
                 leg.acpSessionId,
                 leg.pendingInitialPrompt,
@@ -314,10 +316,23 @@ final class MissionStore {
         }
     }
 
-    func complete(id: MissionID, at: Date, event: MissionEvent) throws {
+    func complete(id: MissionID, leg: MissionLeg? = nil, at: Date, event: MissionEvent) throws {
         try validate(event: event, for: id)
+        if let leg, leg.missionID != id { throw Error.malformedRecord }
         try immediateTransaction {
             try requireMission(id)
+            if let leg {
+                let changed = try db.execChanges("""
+                UPDATE mission_legs
+                SET worktree_creation_epoch = ?
+                WHERE id = ? AND mission_id = ?
+                """, bindings: [
+                    leg.worktreeCreationEpoch,
+                    leg.id.rawValue,
+                    id.rawValue,
+                ])
+                guard changed == 1 else { throw Error.missionNotFound }
+            }
             try db.exec("""
             UPDATE missions
             SET state = ?, attention_reason = NULL, updated_at = ?, completed_at = ?
@@ -341,6 +356,10 @@ final class MissionStore {
         }
         if current < 2 {
             try migrate(to: 2, migrateToV2)
+            current = 2
+        }
+        if current < 3 {
+            try migrate(to: 3, migrateToV3)
         }
     }
 
@@ -428,6 +447,10 @@ final class MissionStore {
 
     private func migrateToV2() throws {
         try db.exec("ALTER TABLE mission_legs ADD COLUMN base_remote_name TEXT")
+    }
+
+    private func migrateToV3() throws {
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN worktree_creation_epoch INTEGER")
     }
 
     private func immediateTransaction<T>(_ work: () throws -> T) throws -> T {
@@ -551,9 +574,9 @@ final class MissionStore {
         try db.exec("""
         INSERT INTO mission_legs (
             id, mission_id, ordinal, project_id, base_ref, base_remote_name, branch, destination_path,
-            worktree_id, agent_id, acp_session_id, initial_prompt_id,
+            worktree_id, worktree_creation_epoch, agent_id, acp_session_id, initial_prompt_id,
             pending_initial_prompt, review_identity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, bindings: [
             leg.id.rawValue,
             leg.missionID.rawValue,
@@ -564,6 +587,7 @@ final class MissionStore {
             leg.branch,
             leg.destinationPath,
             leg.worktreeId,
+            leg.worktreeCreationEpoch,
             leg.agentId,
             leg.acpSessionId,
             leg.initialPromptId.uuidString,
@@ -665,6 +689,7 @@ final class MissionStore {
             branch: row["branch"] as? String ?? "",
             destinationPath: row["destination_path"] as? String ?? "",
             worktreeId: row["worktree_id"] as? String,
+            worktreeCreationEpoch: row["worktree_creation_epoch"] as? Int64,
             agentId: row["agent_id"] as? String ?? "",
             acpSessionId: row["acp_session_id"] as? String,
             initialPromptId: initialPromptID,

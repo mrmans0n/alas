@@ -195,11 +195,25 @@ struct MissionTabTests {
             hidden: false,
             includeWorktree: true,
             worktreeCreatedAt: 200,
-            missionState: .completed
+            missionState: .completed,
+            persistedWorktreeCreationEpoch: 100
         )
         await fixture.state.missions.load()
 
         #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
+    }
+
+    @Test func completedMissionBindsUsingCreationIdentityAcrossClockSkew() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            worktreeCreatedAt: 200,
+            missionState: .completed,
+            persistedWorktreeCreationEpoch: 200
+        )
+        await fixture.state.missions.load()
+
+        #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == fixture.worktree)
     }
 
     @Test func openMissionPresentsRecoveryForAReplacementBranch() async throws {
@@ -231,7 +245,7 @@ struct MissionTabTests {
         )
         #expect(pane.baseBranch == "global-main")
 
-        fixture.state.openMissionChanges(
+        await fixture.state.openMissionChanges(
             worktree: fixture.worktree,
             missionID: fixture.aggregate.mission.id
         )
@@ -611,7 +625,8 @@ private struct MissionNavigationFixture {
         setupCheckpoint: MissionSetupCheckpoint = .running,
         attentionReason: String? = nil,
         competingMissionState: MissionState? = nil,
-        competingMissionBranch: String = "fix/parser-crash"
+        competingMissionBranch: String = "fix/parser-crash",
+        persistedWorktreeCreationEpoch: Int64? = nil
     ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
@@ -623,6 +638,8 @@ private struct MissionNavigationFixture {
         aggregate.mission.setupCheckpoint = setupCheckpoint
         aggregate.mission.attentionReason = attentionReason
         aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].worktreeCreationEpoch = persistedWorktreeCreationEpoch
+            ?? (aggregate.mission.state == .completed ? Int64(worktreeCreatedAt) : nil)
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
         let persistence = MissionPersistence(path: databaseURL.path)

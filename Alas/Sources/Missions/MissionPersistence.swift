@@ -96,7 +96,7 @@ actor MissionPersistence {
         try openedStore().markReady(id: id, reviewIdentity: reviewIdentity, event: event)
     }
 
-    func complete(id: MissionID, at: Date, event: MissionEvent) throws {
-        try openedStore().complete(id: id, at: at, event: event)
+    func complete(id: MissionID, leg: MissionLeg? = nil, at: Date, event: MissionEvent) throws {
+        try openedStore().complete(id: id, leg: leg, at: at, event: event)
     }
 }

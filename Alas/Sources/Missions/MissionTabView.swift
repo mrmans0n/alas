@@ -354,14 +354,7 @@ struct MissionTabView: View {
                   let worktree = state.missionWorktree(worktree, for: aggregate),
                   !worktreeIsArchived
             else { return }
-            _ = state.rightPaneStore.state(
-                for: worktree,
-                baseBranch: MissionTabContext.baseBranch(
-                    for: aggregate,
-                    fallback: state.config.worktrees.baseBranch
-                ),
-                comparisonMode: state.config.changes.comparisonMode
-            )
+            await state.activateMissionRightPane(worktree: worktree, aggregate: aggregate)
         }
         .onDisappear {
             guard let aggregate = state.missions.aggregate(id: tabState.missionID),
@@ -376,14 +369,7 @@ struct MissionTabView: View {
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
         let worktree = state.missionWorktree(worktree, for: aggregate)
-        let rightPane = worktree.flatMap { worktree in
-            aggregate.primaryLeg.flatMap { leg in
-                state.rightPaneStore.activeState(
-                    worktreeId: worktree.id,
-                    baseBranch: leg.baseRef
-                )
-            }
-        }
+        let rightPane = worktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
@@ -481,7 +467,7 @@ struct MissionTabView: View {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
               let worktree = state.missionWorktree(worktree, for: aggregate)
         else { return }
-        state.openMissionChanges(worktree: worktree, missionID: tabState.missionID)
+        Task { await state.openMissionChanges(worktree: worktree, missionID: tabState.missionID) }
     }
 
     private func refresh() {

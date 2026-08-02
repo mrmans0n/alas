@@ -41,6 +41,12 @@ enum MissionBaseReference {
     }
 }
 
+enum MissionWorktreeIdentity {
+    static func creationEpoch(_ date: Date) -> Int64 {
+        Int64(date.timeIntervalSince1970.rounded(.down))
+    }
+}
+
 struct MissionID: RawRepresentable, Codable, Hashable, Sendable {
     let rawValue: String
 }
@@ -138,6 +144,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
     let branch: String
     let destinationPath: String
     var worktreeId: String?
+    var worktreeCreationEpoch: Int64?
     var agentId: String
     var acpSessionId: String?
     let initialPromptId: UUID
@@ -154,6 +161,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
         branch: String,
         destinationPath: String,
         worktreeId: String?,
+        worktreeCreationEpoch: Int64? = nil,
         agentId: String,
         acpSessionId: String?,
         initialPromptId: UUID,
@@ -169,6 +177,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
         self.branch = branch
         self.destinationPath = destinationPath
         self.worktreeId = worktreeId
+        self.worktreeCreationEpoch = worktreeCreationEpoch
         self.agentId = agentId
         self.acpSessionId = acpSessionId
         self.initialPromptId = initialPromptId

@@ -452,6 +452,18 @@ final class MissionController {
                 guard let aggregate = try await persistence.aggregate(id: id),
                       [.running, .needsAttention, .readyToComplete].contains(aggregate.mission.state)
                 else { return }
+                var leg = aggregate.primaryLeg
+                if var currentLeg = leg,
+                   let worktree = environment.worktreeAtDestination(
+                       currentLeg.projectId,
+                       currentLeg.destinationPath
+                   ), worktree.id == currentLeg.worktreeId,
+                   worktree.branch == currentLeg.branch,
+                   worktree.path.standardizedFileURL.path
+                   == URL(fileURLWithPath: currentLeg.destinationPath).standardizedFileURL.path {
+                    currentLeg.worktreeCreationEpoch = MissionWorktreeIdentity.creationEpoch(worktree.createdAt)
+                    leg = currentLeg
+                }
                 let now = environment.now()
                 let event = MissionEvent(
                     id: environment.makeID(),
@@ -461,7 +473,7 @@ final class MissionController {
                     message: "Mission completed.",
                     createdAt: now
                 )
-                try await persistence.complete(id: id, at: now, event: event)
+                try await persistence.complete(id: id, leg: leg, at: now, event: event)
                 try await publish(id: id)
                 loadError = nil
             } catch {

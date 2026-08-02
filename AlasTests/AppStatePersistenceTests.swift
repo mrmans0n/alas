@@ -253,6 +253,42 @@ struct AppStatePersistenceTests {
         #expect(owner == "acme")
     }
 
+    @Test func missionPaneBaseRefRequalifiesAStaleRemoteAlias() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let baseRef = AppState.missionPaneBaseRef(
+            identity: identity,
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
+        )
+
+        #expect(baseRef == "upstream/main")
+    }
+
+    @Test func missionPaneBaseRefPreservesAnUnqualifiedSlashBranch() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let baseRef = AppState.missionPaneBaseRef(
+            identity: identity,
+            baseRef: "release/1.0",
+            persistedRemoteName: "",
+            remotes: [GitRemote(name: "release", url: "git@github.com:acme/alas.git")]
+        )
+
+        #expect(baseRef == "release/1.0")
+    }
+
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
         let state = AppState(store: FailingStore()) { title, message in

@@ -834,7 +834,7 @@ final class AppState {
         return tab
     }
 
-    func openMissionChanges(worktree: Worktree, missionID: MissionID) {
+    func openMissionChanges(worktree: Worktree, missionID: MissionID) async {
         guard let aggregate = missions.aggregate(id: missionID),
               let leg = aggregate.primaryLeg,
               missionWorktree(worktree, for: aggregate)?.id == worktree.id
@@ -845,7 +845,8 @@ final class AppState {
         ) else { return }
 
         focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        let rightPane = missionRightPaneState(for: worktree, baseRef: leg.baseRef)
+        let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
+        let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
         rightPane.activeTab = .changes
         if !config.rightPaneVisible {
             config.rightPaneVisible = true
@@ -862,11 +863,12 @@ final class AppState {
         let worktree = resolvedMissionWorktree(for: aggregate)
         if let worktree,
            !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
-            let rightPane = missionRightPaneState(for: worktree, baseRef: leg.baseRef)
+            let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
+            let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
             await rightPane.refresh(forceReviewLoopRemote: true)
             if let snapshot = rightPaneStore.reviewSnapshot(
                 worktreeId: worktree.id,
-                baseBranch: leg.baseRef
+                baseBranch: paneBaseRef
             ) {
                 await missions.discoverMergedReview(
                     worktreeId: worktree.id,
@@ -893,8 +895,9 @@ final class AppState {
     func missionWorktree(_ candidate: Worktree?, for aggregate: MissionAggregate) -> Worktree? {
         guard let candidate = MissionTabContext.worktree(candidate, for: aggregate) else { return nil }
         guard aggregate.mission.state == .completed else { return candidate }
-        guard let completedAt = aggregate.mission.completedAt,
-              candidate.createdAt <= completedAt
+        guard let leg = aggregate.primaryLeg,
+              let persistedCreationEpoch = leg.worktreeCreationEpoch,
+              MissionWorktreeIdentity.creationEpoch(candidate.createdAt) == persistedCreationEpoch
         else { return nil }
         let candidatePath = candidate.path.standardizedFileURL.path
         let ownedByALaterMission = missions.aggregates.contains { other in
@@ -915,6 +918,42 @@ final class AppState {
             baseBranch: baseRef,
             comparisonMode: config.changes.comparisonMode
         )
+    }
+
+    func activateMissionRightPane(worktree: Worktree, aggregate: MissionAggregate) async {
+        let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
+        _ = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
+    }
+
+    private func missionPaneBaseRef(for aggregate: MissionAggregate, worktree: Worktree) async -> String {
+        guard let leg = aggregate.primaryLeg,
+              let remotes = try? await GitService().remotes(worktreePath: worktree.path)
+        else { return aggregate.primaryLeg?.baseRef ?? config.worktrees.baseBranch }
+        return Self.missionPaneBaseRef(
+            identity: aggregate.issue.identity,
+            baseRef: leg.baseRef,
+            persistedRemoteName: leg.baseRemoteName,
+            remotes: remotes
+        )
+    }
+
+    static func missionPaneBaseRef(
+        identity: MissionIssueIdentity,
+        baseRef: String,
+        persistedRemoteName: String?,
+        remotes: [GitRemote]
+    ) -> String {
+        guard let persistedRemoteName, !persistedRemoteName.isEmpty else { return baseRef }
+        let branchName = MissionBaseReference.branchName(
+            baseRef,
+            persistedRemoteName: persistedRemoteName
+        )
+        guard let currentRemote = missionReviewRemote(
+            identity: identity,
+            baseRef: baseRef,
+            remotes: remotes
+        ) else { return baseRef }
+        return "\(currentRemote.remoteName)/\(branchName)"
     }
 
     func restoreDefaultRightPaneBaseAfterMission(
