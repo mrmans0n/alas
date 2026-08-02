@@ -829,7 +829,28 @@ struct MissionReadinessEvaluatorTests {
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
-            }
+            },
+            branchOwner: { _, _, _, _ in "acme-fork" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
+    @Test func startupPrefersEffectivePushOwnerOverSnapshotTrackingOwner() async throws {
+        let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let trackingSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme")
+        let fake = try MissionLifecycleFake(
+            reviewSnapshot: { _, _ in trackingSnapshot },
+            discoverReviewRequest: { _, _, _, _, _, headOwner in
+                #expect(headOwner == "acme-fork")
+                return request
+            },
+            branchOwner: { _, _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -1345,7 +1366,8 @@ struct MissionReadinessEvaluatorTests {
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
-            }
+            },
+            branchOwner: { _, _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 

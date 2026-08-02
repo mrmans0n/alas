@@ -584,16 +584,16 @@ final class MissionController {
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
         guard snapshot.local.branchName == leg.branch else { return nil }
-        let headOwner: String?
-        if let snapshotOwner = snapshot.local.headRemoteOwner, !snapshotOwner.isEmpty {
-            headOwner = snapshotOwner
+        let resolvedOwner = await branchOwner(
+            leg.projectId,
+            leg.branch,
+            issueIdentity,
+            leg.baseRef
+        )
+        let headOwner = if let resolvedOwner, !resolvedOwner.isEmpty {
+            resolvedOwner
         } else {
-            headOwner = await branchOwner(
-                leg.projectId,
-                leg.branch,
-                issueIdentity,
-                leg.baseRef
-            )
+            snapshot.local.headRemoteOwner
         }
         guard let headOwner,
               !headOwner.isEmpty,
