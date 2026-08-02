@@ -583,29 +583,29 @@ final class MissionController {
         let currentTip = await branchTip(leg.projectId, leg.branch)
         var replacesLinkedReview = false
         if let identity = leg.reviewIdentity {
-            guard let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
-                  Self.review(linked, matches: identity)
-            else { return }
-            let matchesCurrentTip: Bool
-            if let currentTip, !currentTip.isEmpty {
-                matchesCurrentTip = linked.headSHA == currentTip
-            } else {
-                matchesCurrentTip = true
-            }
-            if linked.state != .closed,
-               Self.review(linked, matches: leg, issueIdentity: aggregate.issue.identity),
-               matchesCurrentTip {
-                if linked.state == .merged {
-                    guard let currentTip,
-                          !currentTip.isEmpty,
-                          linked.headSHA == currentTip
-                    else { return }
+            if let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
+               Self.review(linked, matches: identity) {
+                let matchesCurrentTip: Bool
+                if let currentTip, !currentTip.isEmpty {
+                    matchesCurrentTip = linked.headSHA == currentTip
+                } else {
+                    matchesCurrentTip = true
                 }
-                await applyReview(linked, identity: identity, to: aggregate.mission.id)
-                return
-            }
-            if linked.state == .closed {
-                await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                if linked.state != .closed,
+                   Self.review(linked, matches: leg, issueIdentity: aggregate.issue.identity),
+                   matchesCurrentTip {
+                    if linked.state == .merged {
+                        guard let currentTip,
+                              !currentTip.isEmpty,
+                              linked.headSHA == currentTip
+                        else { return }
+                    }
+                    await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                    return
+                }
+                if linked.state == .closed {
+                    await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                }
             }
             replacesLinkedReview = true
         }
