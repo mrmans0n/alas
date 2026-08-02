@@ -413,7 +413,6 @@ struct MissionTabView: View {
                     onCompleteMission: { completionConfirmationPresented = true }
                 )
             }
-            .frame(maxWidth: 820, alignment: .leading)
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
@@ -609,6 +608,7 @@ private struct MissionLegSection: View {
             .buttonStyle(.bordered)
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-2"))
         .overlay {
             RoundedRectangle(cornerRadius: 9)
@@ -665,6 +665,7 @@ private struct MissionIssueContextSection: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-0"))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -694,6 +695,7 @@ private struct MissionActivitySection: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
