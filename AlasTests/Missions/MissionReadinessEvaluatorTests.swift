@@ -1005,6 +1005,23 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
+    @Test func startupPreservesWorktreeCreationFailureWhenNoArtifactExists() async throws {
+        var failed = MissionFixtures.creatingMission()
+        failed.mission.state = .needsAttention
+        failed.mission.setupCheckpoint = .creatingWorktree
+        failed.mission.attentionReason = "branch exists retry later"
+        failed.legs[0].worktreeId = "worktree-1"
+        let fake = try MissionLifecycleFake(aggregate: failed, worktreeAvailable: false)
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
+        #expect(aggregate.mission.attentionReason == "branch exists retry later")
+    }
+
     @Test func startupResetsALaterCheckpointWhenItsWorktreeIsMissing() async throws {
         var failedAgent = Self.runningAggregate()
         failedAgent.mission.state = .needsAttention

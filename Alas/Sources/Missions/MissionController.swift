@@ -459,7 +459,8 @@ final class MissionController {
             let active = try await persistence.list(includeCompleted: false)
             for aggregate in active {
                 guard let leg = aggregate.primaryLeg,
-                      aggregate.mission.state != .creating
+                      aggregate.mission.state != .creating,
+                      aggregate.mission.setupCheckpoint != .creatingWorktree
                 else { continue }
                 if !projectExists(leg.projectId) {
                     await recordMissingWorktree(aggregate.mission.id, projectRemoved: true)
