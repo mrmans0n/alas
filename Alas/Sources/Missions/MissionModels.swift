@@ -1,7 +1,12 @@
 import Foundation
 
 enum MissionBaseReference {
-    static func remoteName(in baseRef: String, knownRemoteNames: Set<String>) -> String? {
+    static func remoteName(
+        in baseRef: String,
+        knownRemoteNames: Set<String>,
+        localBranchNames: Set<String> = []
+    ) -> String? {
+        guard !localBranchNames.contains(baseRef) else { return nil }
         guard let separator = baseRef.firstIndex(of: "/") else { return nil }
         let candidate = String(baseRef[..<separator])
         return knownRemoteNames.contains(candidate) ? candidate : nil

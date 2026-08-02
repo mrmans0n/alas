@@ -495,7 +495,11 @@ struct NewMissionDialogTests {
 
     @Test("create records an unqualified slash base explicitly")
     func createRecordsUnqualifiedSlashBaseExplicitly() async throws {
-        let fake = NewMissionDialogFake()
+        let fake = NewMissionDialogFake(
+            branchesByProject: ["alas": ["release/1.0", "release/main"]],
+            remoteNamesByProject: ["alas": ["origin", "release"]],
+            localBranchNamesByProject: ["alas": ["release/1.0"]]
+        )
         let model = NewMissionDialogModel(environment: fake.environment)
         let actions = NewMissionDialogActions(model: model, dismiss: {})
         model.reference = "#1842"
@@ -569,6 +573,7 @@ private final class NewMissionDialogFake {
     let configuredPrefixes: [String: String]
     let branchesByProject: [String: [String]]
     let remoteNamesByProject: [String: Set<String>]
+    let localBranchNamesByProject: [String: Set<String>]
     let agents: [AgentDefinition]
     let suspendResolution: Bool
     let suspendBranches: Bool
@@ -598,6 +603,7 @@ private final class NewMissionDialogFake {
         configuredPrefixes: [String: String] = ["alas": "feature/"],
         branchesByProject: [String: [String]] = ["alas": ["origin/main", "main"]],
         remoteNamesByProject: [String: Set<String>] = ["alas": ["origin"]],
+        localBranchNamesByProject: [String: Set<String>] = ["alas": ["main"]],
         agents: [AgentDefinition] = [NewMissionDialogTests.agent(id: "codex")],
         duplicateMissionID: MissionID? = nil,
         createError: (any Error)? = nil,
@@ -615,6 +621,7 @@ private final class NewMissionDialogFake {
         self.configuredPrefixes = configuredPrefixes
         self.branchesByProject = branchesByProject
         self.remoteNamesByProject = remoteNamesByProject
+        self.localBranchNamesByProject = localBranchNamesByProject
         self.agents = agents
         self.duplicateMissionID = duplicateMissionID
         self.createError = createError
@@ -672,7 +679,8 @@ private final class NewMissionDialogFake {
                 if let branchError { throw branchError }
                 return NewMissionDialogModel.BranchInventory(
                     names: branchesByProject[projectID] ?? [],
-                    remoteNames: remoteNamesByProject[projectID] ?? []
+                    remoteNames: remoteNamesByProject[projectID] ?? [],
+                    localBranchNames: localBranchNamesByProject[projectID] ?? []
                 )
             },
             configuredBase: { [self] projectID in

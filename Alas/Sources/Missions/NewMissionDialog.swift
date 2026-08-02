@@ -12,6 +12,7 @@ final class NewMissionDialogModel {
     struct BranchInventory {
         let names: [String]
         let remoteNames: Set<String>
+        let localBranchNames: Set<String>
     }
 
     enum Phase: Equatable {
@@ -50,6 +51,7 @@ final class NewMissionDialogModel {
     private(set) var isLoadingBranches = false
     private(set) var branchErrorMessage: String?
     private var remoteNames: Set<String> = []
+    private var localBranchNames: Set<String> = []
 
     struct Environment {
         let resolveIssue: (String) async throws -> ResolvedMissionIssue
@@ -165,7 +167,7 @@ final class NewMissionDialogModel {
             branchInventory = try await environment.branches(resolution.selectedProjectId)
             branchLoadError = nil
         } catch {
-            branchInventory = BranchInventory(names: [], remoteNames: [])
+            branchInventory = BranchInventory(names: [], remoteNames: [], localBranchNames: [])
             branchLoadError = error.localizedDescription
         }
         guard acceptsResolution(generation: generation, input: input) else { return }
@@ -175,6 +177,7 @@ final class NewMissionDialogModel {
         projectId = resolution.selectedProjectId
         branches = branchInventory.names
         remoteNames = branchInventory.remoteNames
+        localBranchNames = branchInventory.localBranchNames
         branchErrorMessage = branchLoadError
         isLoadingBranches = false
 
@@ -227,6 +230,7 @@ final class NewMissionDialogModel {
 
         branches = []
         remoteNames = []
+        localBranchNames = []
         branchErrorMessage = nil
         isLoadingBranches = true
         do {
@@ -234,6 +238,7 @@ final class NewMissionDialogModel {
             guard projectGeneration == generation, projectId == candidateID else { return }
             branches = inventory.names
             remoteNames = inventory.remoteNames
+            localBranchNames = inventory.localBranchNames
             if updatesBase, !baseIsUserOwned {
                 let preferred = NewWorktreeDialog.preferredBaseBranch(
                     availableBranches: inventory.names,
@@ -264,7 +269,8 @@ final class NewMissionDialogModel {
         let normalizedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseRemoteName = MissionBaseReference.remoteName(
             in: normalizedBase,
-            knownRemoteNames: remoteNames
+            knownRemoteNames: remoteNames,
+            localBranchNames: localBranchNames
         )
         let normalizedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
         if allowDuplicate,
@@ -377,6 +383,7 @@ final class NewMissionDialogModel {
         prompt = ""
         branches = []
         remoteNames = []
+        localBranchNames = []
         isLoadingBranches = false
         errorMessage = nil
         branchErrorMessage = nil
@@ -745,10 +752,12 @@ extension NewMissionDialogModel.Environment {
                 let path = URL(fileURLWithPath: project.path)
                 let git = GitService()
                 let branches = try await git.branches(at: path)
+                let localBranches = try await git.localBranches(at: path)
                 let remotes = try await git.remotes(worktreePath: path)
                 return NewMissionDialogModel.BranchInventory(
                     names: branches,
-                    remoteNames: Set(remotes.map(\.name))
+                    remoteNames: Set(remotes.map(\.name)),
+                    localBranchNames: Set(localBranches)
                 )
             },
             configuredBase: { [weak state] _ in state?.config.worktrees.baseBranch ?? "main" },
