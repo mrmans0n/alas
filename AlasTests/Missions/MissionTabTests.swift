@@ -398,6 +398,7 @@ struct MissionTabTests {
 
     @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
 
         await fixture.state.reconcileMissionsForStartup()
 
@@ -418,6 +419,16 @@ struct MissionTabTests {
         )
         #expect(presentation.worktreeRecovery == .recreateMissing)
         #expect(presentation.actions.recoverWorktree)
+    }
+
+    @Test func startupDoesNotOpenMissingMissionFromAnInactiveSpace() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+
+        await fixture.state.reconcileMissionsForStartup()
+
+        #expect(fixture.state.spacesManager.activeSpaceId == "other-space")
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.selectedWorktreeId == nil)
     }
 
     @Test func missionDetailRendersStoredHeaderCaptureAndLegFields() async throws {

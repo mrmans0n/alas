@@ -1410,10 +1410,12 @@ final class AppState {
     }
 
     private func presentMissingMissionRecoveryIfNeeded() {
+        let activeProjectIDs = Set(activeSpaceProjects.map(\.id))
         guard missingMissionTab == nil,
               let aggregate = missions.aggregates.first(where: {
                   $0.mission.state == .needsAttention
                       && $0.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+                      && $0.primaryLeg.map { activeProjectIDs.contains($0.projectId) } == true
               }),
               let leg = aggregate.primaryLeg,
               projects.contains(where: { $0.id == leg.projectId })
