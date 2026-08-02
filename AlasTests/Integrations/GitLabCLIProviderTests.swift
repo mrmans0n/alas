@@ -974,6 +974,61 @@ struct GitLabCLIProviderTests {
         #expect(await runner.commands.first?.args.contains("--all") == true)
     }
 
+    @Test func missionReviewRequestPrefersMergedMergeRequestOverClosedMatch() async throws {
+        let listOutput = """
+        [
+          {
+            "iid": 43,
+            "title": "Closed replacement",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "closed",
+            "draft": false,
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "sha": "head123",
+            "merge_status": "cannot_be_merged",
+            "detailed_merge_status": "not_open"
+          },
+          {
+            "iid": 42,
+            "title": "Merged change",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "merged",
+            "draft": false,
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "sha": "head123",
+            "merge_status": "can_be_merged",
+            "detailed_merge_status": "mergeable"
+          }
+        ]
+        """
+        let mergedViewOutput = Self.mrViewOutput.replacingOccurrences(
+            of: #""state": "opened""#,
+            with: #""state": "merged""#
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: listOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: mergedViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+
+        let request = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            headSHA: "head123",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(request?.state == .merged)
+        #expect(await runner.commands[1].args.contains("42"))
+    }
+
     @Test func reviewDiffUsesMRDiffCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),

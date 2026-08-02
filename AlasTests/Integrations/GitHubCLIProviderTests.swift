@@ -350,6 +350,56 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands.first?.args.contains("open") == false)
     }
 
+    @Test func missionReviewRequestPrefersMergedPullRequestOverClosedMatch() async throws {
+        let listOutput = """
+        [
+          {
+            "number": 43,
+            "title": "Closed replacement",
+            "url": "https://github.com/mrmans0n/alas/pull/43",
+            "state": "CLOSED",
+            "isDraft": false,
+            "headRefName": "feature/github-provider",
+            "headRefOid": "head-sha-42",
+            "baseRefName": "main",
+            "baseRefOid": "base-sha-42",
+            "reviewDecision": "",
+            "mergeStateStatus": "UNKNOWN"
+          },
+          {
+            "number": 42,
+            "title": "Merged change",
+            "url": "https://github.com/mrmans0n/alas/pull/42",
+            "state": "MERGED",
+            "isDraft": false,
+            "headRefName": "feature/github-provider",
+            "headRefOid": "head-sha-42",
+            "baseRefName": "main",
+            "baseRefOid": "base-sha-42",
+            "reviewDecision": "APPROVED",
+            "mergeStateStatus": "UNKNOWN"
+          }
+        ]
+        """
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: listOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            headSHA: "head-sha-42",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(request?.state == .merged)
+    }
+
     @Test func currentReviewRequestEnrichesMergeQueueMetadata() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),

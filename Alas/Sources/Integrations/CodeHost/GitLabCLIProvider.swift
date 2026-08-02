@@ -135,7 +135,8 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             remote: remote,
             headOwner: headOwner,
             headSHA: headSHA,
-            sourceProjectPathsByID: sourceProjectPathsByID
+            sourceProjectPathsByID: sourceProjectPathsByID,
+            preferMerged: includeAllStates
         ) else {
             return nil
         }
@@ -1237,38 +1238,35 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         remote: CodeHostRemote,
         headOwner: String?,
         headSHA: String? = nil,
-        sourceProjectPathsByID: [Int: String] = [:]
+        sourceProjectPathsByID: [Int: String] = [:],
+        preferMerged: Bool = false
     ) throws -> ReviewRequest? {
         let decodedItems = try decodeMRList(json)
         let normalizedHeadSHA = normalizedOptionalString(headSHA)
         let items = decodedItems.filter { item in
             normalizedHeadSHA == nil || normalizedOptionalString(item.sha) == normalizedHeadSHA
         }
-
-        guard let item = items.first else {
-            return nil
-        }
+        var matchingItems = items
 
         if let headOwner = headOwner?.trimmingCharacters(in: .whitespacesAndNewlines), !headOwner.isEmpty {
             let itemsWithSourceProject = items.filter { $0.sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) != nil }
             if !itemsWithSourceProject.isEmpty {
-                guard let item = itemsWithSourceProject.first(where: {
+                matchingItems = itemsWithSourceProject.filter {
                     $0.matchesSourceProjectOwner(headOwner, sourceProjectPathsByID: sourceProjectPathsByID)
-                }) else {
+                }
+                guard !matchingItems.isEmpty else {
                     return nil
                 }
-                return try reviewRequest(
-                    from: item,
-                    remote: remote,
-                    context: "glab mr list",
-                    sourceProjectPathsByID: sourceProjectPathsByID
-                )
-            }
-
-            guard items.count == 1 else {
+            } else if items.count != 1 {
                 return nil
             }
         }
+
+        let item = preferMerged
+            ? matchingItems.first(where: { $0.state.caseInsensitiveCompare("merged") == .orderedSame })
+                ?? matchingItems.first
+            : matchingItems.first
+        guard let item else { return nil }
 
         return try reviewRequest(
             from: item,

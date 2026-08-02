@@ -356,7 +356,8 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             result.stdout,
             remote: remote,
             headOwner: headOwner,
-            headSHA: headSHA
+            headSHA: headSHA,
+            preferMerged: state == "all"
         ) else {
             return nil
         }
@@ -1387,7 +1388,8 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         _ json: String,
         remote: CodeHostRemote,
         headOwner: String? = nil,
-        headSHA: String? = nil
+        headSHA: String? = nil,
+        preferMerged: Bool = false
     ) throws -> ReviewRequest? {
         let data = Data(json.utf8)
         let items: [PRListItem]
@@ -1398,13 +1400,17 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         }
 
         let normalizedHeadSHA = normalizedOptionalString(headSHA)
-        let item = items.first { item in
+        let matchingItems = items.filter { item in
             let ownerMatches = headOwner?.isEmpty != false
                 || item.headRepositoryOwner?.login.caseInsensitiveCompare(headOwner ?? "") == .orderedSame
             let shaMatches = normalizedHeadSHA == nil
                 || normalizedOptionalString(item.headRefOid) == normalizedHeadSHA
             return ownerMatches && shaMatches
         }
+        let item = preferMerged
+            ? matchingItems.first(where: { $0.state.caseInsensitiveCompare("merged") == .orderedSame })
+                ?? matchingItems.first
+            : matchingItems.first
         guard let item else {
             return nil
         }
