@@ -1072,9 +1072,16 @@ final class AppState {
         remotes: [GitRemote]
     ) -> String? {
         let repository = identity.repositorySlug.split(separator: "/").last.map(String.init) ?? ""
-        let branchRemote = remotes
-            .filter { $0.name == branchRemoteName }
-            .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) }
+        let namedBranchRemotes = remotes.filter { $0.name == branchRemoteName }
+        let branchRemotes = namedBranchRemotes.filter { $0.direction == .push }
+            + namedBranchRemotes.filter { $0.direction == .fetch }
+        let branchRemote = branchRemotes
+            .compactMap { remote in
+                CodeHostRemoteDetector.detect(
+                    from: [GitRemote(name: remote.name, url: remote.url)],
+                    matching: identity.provider
+                )
+            }
             .first { candidate in
                 candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
                     && candidate.repository.caseInsensitiveCompare(repository) == .orderedSame
