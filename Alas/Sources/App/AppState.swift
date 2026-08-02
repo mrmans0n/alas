@@ -1071,7 +1071,6 @@ final class AppState {
         branchRemoteName: String,
         remotes: [GitRemote]
     ) -> String? {
-        let repository = identity.repositorySlug.split(separator: "/").last.map(String.init) ?? ""
         let branchRemotes: [GitRemote]
         if branchRemoteName.isEmpty {
             branchRemotes = remotes.filter { $0.name == "origin" && $0.direction == .push }
@@ -1092,7 +1091,6 @@ final class AppState {
             }
             .first { candidate in
                 candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
-                    && candidate.repository.caseInsensitiveCompare(repository) == .orderedSame
             }
         return branchRemote?.owner
             ?? missionReviewRemote(identity: identity, baseRef: baseRef, remotes: remotes)?.owner

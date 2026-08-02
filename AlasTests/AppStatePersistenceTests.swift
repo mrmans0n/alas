@@ -86,6 +86,28 @@ struct AppStatePersistenceTests {
         #expect(owner == "nacho")
     }
 
+    @Test func missionBranchOwnerAcceptsRenamedForkTrackingRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/renamed-alas.git"),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "fork",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemotePushURL() {
         let identity = MissionIssueIdentity(
             provider: .github,
