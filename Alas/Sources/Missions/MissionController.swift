@@ -247,8 +247,13 @@ final class MissionController {
                 let replacesLinkedReview: Bool
                 if let linked = leg.reviewIdentity {
                     guard let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
-                          Self.reviewIdentity(for: refreshed) == linked,
-                          refreshed.state == .closed || !Self.review(refreshed, matches: leg)
+                          Self.reviewIdentity(for: refreshed) == linked
+                    else { continue }
+                    let matchesCurrentHead = snapshot.local.headSHA.isEmpty
+                        || refreshed.headSHA == snapshot.local.headSHA
+                    guard refreshed.state == .closed
+                        || !Self.review(refreshed, matches: leg)
+                        || !matchesCurrentHead
                     else { continue }
                     replacesLinkedReview = true
                 } else {
@@ -486,8 +491,12 @@ final class MissionController {
         for leg: MissionLeg,
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
-        let visibleMatchesMission = snapshot.reviewRequest.map { Self.review($0, matches: leg) } ?? false
-        guard !visibleMatchesMission,
+        let visibleBlocksDiscovery = snapshot.reviewRequest.map { request in
+            let matchesCurrentHead = snapshot.local.headSHA.isEmpty
+                || request.headSHA == snapshot.local.headSHA
+            return Self.review(request, matches: leg) && matchesCurrentHead
+        } ?? false
+        guard !visibleBlocksDiscovery,
               snapshot.local.branchName == leg.branch,
               let request = await discoverMergedReview(
                   for: leg,
@@ -521,14 +530,23 @@ final class MissionController {
 
     private func refreshReviewWithoutWorktree(for aggregate: MissionAggregate) async {
         guard let leg = aggregate.primaryLeg else { return }
+        let currentTip = await branchTip(leg.projectId, leg.branch)
         var replacesLinkedReview = false
         if let identity = leg.reviewIdentity {
             guard let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
                   Self.reviewIdentity(for: linked) == identity
             else { return }
-            if linked.state != .closed, Self.review(linked, matches: leg) {
+            let matchesCurrentTip: Bool
+            if let currentTip, !currentTip.isEmpty {
+                matchesCurrentTip = linked.headSHA == currentTip
+            } else {
+                matchesCurrentTip = true
+            }
+            if linked.state != .closed,
+               Self.review(linked, matches: leg),
+               matchesCurrentTip {
                 if linked.state == .merged {
-                    guard let currentTip = await branchTip(leg.projectId, leg.branch),
+                    guard let currentTip,
                           !currentTip.isEmpty,
                           linked.headSHA == currentTip
                     else { return }
@@ -541,7 +559,8 @@ final class MissionController {
             }
             replacesLinkedReview = true
         }
-        guard let currentTip = await branchTip(leg.projectId, leg.branch),
+        guard let currentTip,
+              !currentTip.isEmpty,
               let request = await discoverMergedReview(
                   for: leg,
                   headSHA: currentTip,

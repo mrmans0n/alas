@@ -743,6 +743,59 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func missingWorktreeRefreshReplacesAnOpenReviewAtAStaleHead() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let stale = try #require(Self.reviewSnapshot(state: .open, headSHA: "historical123").reviewRequest)
+        let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            worktreeAvailable: false,
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? stale : nil
+            },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshReviewWithoutWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveRefreshReplacesAnOpenReviewAtAStaleHead() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let staleSnapshot = Self.reviewSnapshot(
+            state: .open,
+            headSHA: "historical123",
+            localHeadSHA: "abc123"
+        )
+        let stale = try #require(staleSnapshot.reviewRequest)
+        let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? stale : nil
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: staleSnapshot
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
     @Test func manualRefreshDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")
@@ -1036,6 +1089,7 @@ struct MissionReadinessEvaluatorTests {
         number: Int = 91,
         branch: String = "fix/parser-crash",
         headSHA: String = "abc123",
+        localHeadSHA: String? = nil,
         headOwner: String? = nil,
         baseBranch: String = "main"
     ) -> ReviewLoopSnapshot {
@@ -1065,7 +1119,7 @@ struct MissionReadinessEvaluatorTests {
         return ReviewLoopSnapshot(
             local: ReviewLoopLocalState(
                 branchName: branch,
-                headSHA: headSHA,
+                headSHA: localHeadSHA ?? headSHA,
                 baseBranch: "main",
                 hasWorkingTreeChanges: false,
                 hasStagedChanges: false,
