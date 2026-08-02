@@ -150,14 +150,15 @@ import Foundation
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: root) }
         let marker = root.appendingPathComponent(".git")
-        #expect(fm.createFile(atPath: marker.path, contents: Data("gitdir: /tmp/admin\n".utf8)))
+        try fm.createDirectory(at: marker, withIntermediateDirectories: true)
 
         let original = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+        #expect(UUID(uuidString: original) != nil)
         #expect(fm.createFile(atPath: root.appendingPathComponent("new-file").path, contents: Data()))
         #expect(WorktreeService.localLineageID(forWorktreeAt: root) == original)
 
         try fm.removeItem(at: marker)
-        #expect(fm.createFile(atPath: marker.path, contents: Data("gitdir: /tmp/recreated\n".utf8)))
+        try fm.createDirectory(at: marker, withIntermediateDirectories: true)
         #expect(WorktreeService.localLineageID(forWorktreeAt: root) != original)
     }
 

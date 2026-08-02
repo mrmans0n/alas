@@ -25,13 +25,17 @@ struct RemoteLastActivityTests {
         #expect(command.contains("stat -f %B"))
     }
 
-    @Test func remoteLineageProbeUsesTheWorktreeGitMarkerDeviceAndInode() {
-        let command = WorktreeService.remoteLineageIDCommand(path: "/srv/alas/work tree")
+    @Test func remoteLineageProbePersistsARandomMarkerInTheGitDirectory() {
+        let command = WorktreeService.remoteLineageIDCommand(
+            path: "/srv/alas/work tree",
+            candidateID: "lineage-123"
+        )
 
-        #expect(command.contains("/srv/alas/work tree/.git"))
-        #expect(command.contains("stat -c '%d:%i'"))
-        #expect(command.contains("stat -f '%d:%i'"))
-        #expect(WorktreeService.normalizedLineageID("42:123\n") == "42:123")
+        #expect(command.contains("git -C \"$p\" rev-parse --absolute-git-dir"))
+        #expect(command.contains("alas-worktree-lineage"))
+        #expect(command.contains("set -C"))
+        #expect(command.contains("lineage-123"))
+        #expect(WorktreeService.normalizedLineageID("lineage-123\n") == "lineage-123")
         #expect(WorktreeService.normalizedLineageID("\n") == nil)
     }
 }

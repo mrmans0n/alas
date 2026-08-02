@@ -151,18 +151,38 @@ struct WorktreeService {
     }
 
     static func localLineageID(forWorktreeAt path: URL) -> String? {
-        let marker = path.appendingPathComponent(".git").path
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: marker),
-              let device = attributes[.systemNumber] as? NSNumber,
-              let inode = attributes[.systemFileNumber] as? NSNumber
-        else { return nil }
-        return "\(device.uint64Value):\(inode.uint64Value)"
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
+        let marker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
+        if let existing = try? String(contentsOf: marker, encoding: .utf8),
+           let normalized = normalizedLineageID(existing) {
+            return normalized
+        }
+        let candidate = UUID().uuidString.lowercased()
+        try? Data("\(candidate)\n".utf8).write(to: marker, options: .withoutOverwriting)
+        guard let stored = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
+        return normalizedLineageID(stored)
     }
 
-    static func remoteLineageIDCommand(path: String) -> String {
-        let dotGit = URL(fileURLWithPath: path).appendingPathComponent(".git").path
-        return "f=\(SSHCommand.shellQuote(dotGit)); "
-            + "stat -c '%d:%i' -- \"$f\" 2>/dev/null || stat -f '%d:%i' \"$f\""
+    private static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
+        let dotGit = path.appendingPathComponent(".git")
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) else { return nil }
+        if isDirectory.boolValue { return dotGit }
+        guard let contents = try? String(contentsOf: dotGit, encoding: .utf8),
+              contents.hasPrefix("gitdir:")
+        else { return nil }
+        let rawPath = contents.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else { return nil }
+        return URL(fileURLWithPath: rawPath, relativeTo: path).standardizedFileURL
+    }
+
+    static func remoteLineageIDCommand(path: String, candidateID: String = UUID().uuidString.lowercased()) -> String {
+        "p=\(SSHCommand.shellQuote(path)); c=\(SSHCommand.shellQuote(candidateID)); "
+            + "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 1; "
+            + "f=\"$d/alas-worktree-lineage\"; "
+            + "if [ ! -s \"$f\" ]; then "
+            + "(umask 077; set -C; printf '%s\\n' \"$c\" > \"$f\") 2>/dev/null || true; fi; "
+            + "head -n 1 \"$f\""
     }
 
     private static func fillingRemoteMetadata(_ trees: [Worktree], host: String) async -> [Worktree] {

@@ -15,7 +15,7 @@ struct Worktree: Identifiable, Equatable, Codable {
     var status: WorktreeStatus
     var lastActivity: Date
     var createdAt: Date
-    /// Stable identity of this concrete Git worktree registration when discovery can provide one.
+    /// Random identity persisted inside this concrete worktree's Git administrative directory.
     var lineageID: String?
     var addedLines: Int = 0
     var deletedLines: Int = 0
