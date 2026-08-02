@@ -57,12 +57,20 @@ struct AppStatePersistenceTests {
         #expect(MissionBaseReference.resolveLegacyRemoteName(
             in: "upstream/main",
             knownRemoteNames: ["canonical"],
+            localBranchNames: ["main"],
             branchNames: ["main", "canonical/main"]
         ) == "upstream")
         #expect(MissionBaseReference.resolveLegacyRemoteName(
             in: "release/1.0",
             knownRemoteNames: ["origin"],
+            localBranchNames: [],
             branchNames: ["origin/release/1.0"]
+        ) == "")
+        #expect(MissionBaseReference.resolveLegacyRemoteName(
+            in: "release/1.0",
+            knownRemoteNames: ["origin", "release"],
+            localBranchNames: ["release/1.0"],
+            branchNames: ["release/1.0", "origin/release/1.0"]
         ) == "")
         #expect(MissionBaseReference.branchName(
             "origin/main",

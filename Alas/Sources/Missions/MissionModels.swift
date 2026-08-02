@@ -10,17 +10,18 @@ enum MissionBaseReference {
     static func resolveLegacyRemoteName(
         in baseRef: String,
         knownRemoteNames: Set<String>,
+        localBranchNames: Set<String>,
         branchNames: Set<String>
     ) -> String? {
         guard let separator = baseRef.firstIndex(of: "/") else { return "" }
         let candidate = String(baseRef[..<separator])
+        if localBranchNames.contains(baseRef) { return "" }
         if knownRemoteNames.contains(candidate) { return candidate }
-        if branchNames.contains(baseRef)
-            || knownRemoteNames.contains(where: { branchNames.contains("\($0)/\(baseRef)") }) {
+        if knownRemoteNames.contains(where: { branchNames.contains("\($0)/\(baseRef)") }) {
             return ""
         }
         let branch = String(baseRef[baseRef.index(after: separator)...])
-        if branchNames.contains(branch)
+        if localBranchNames.contains(branch)
             || knownRemoteNames.contains(where: { branchNames.contains("\($0)/\(branch)") }) {
             return candidate
         }

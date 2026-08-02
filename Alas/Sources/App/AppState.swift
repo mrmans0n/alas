@@ -786,10 +786,12 @@ final class AppState {
         do {
             let git = GitService()
             let remotes = try await git.remotes(worktreePath: path)
+            let localBranches = try await git.localBranches(at: path)
             let branches = try await git.branches(at: path)
             return MissionBaseReference.resolveLegacyRemoteName(
                 in: baseRef,
                 knownRemoteNames: Set(remotes.map(\.name)),
+                localBranchNames: Set(localBranches),
                 branchNames: Set(branches)
             )
         } catch {
