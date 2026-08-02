@@ -219,8 +219,9 @@ final class MissionController {
                    !replacesClosedReview {
                     continue
                 }
-                await apply(
-                    signal: .review(state: request.state, identity: identity),
+                await applyReview(
+                    request,
+                    identity: identity,
                     to: aggregate.mission.id,
                     replaceReviewIdentity: replacesClosedReview
                 )
@@ -254,11 +255,9 @@ final class MissionController {
                     replacesClosedReview = false
                 }
                 guard let request = await discoverMergedReview(for: leg, snapshot: snapshot) else { continue }
-                await apply(
-                    signal: .review(
-                        state: request.state,
-                        identity: Self.reviewIdentity(for: request)
-                    ),
+                await applyReview(
+                    request,
+                    identity: Self.reviewIdentity(for: request),
                     to: aggregate.mission.id,
                     replaceReviewIdentity: replacesClosedReview
                 )
@@ -281,7 +280,7 @@ final class MissionController {
                       currentWorktree.branch == leg.branch,
                       worktreeArchived(leg.projectId, leg.destinationPath)
                 else { continue }
-                await apply(signal: .worktreeArchived, to: aggregate.mission.id)
+                await applyArchive(to: aggregate.mission.id)
             }
         } catch {
             loadError = error.localizedDescription
@@ -359,10 +358,7 @@ final class MissionController {
                       request.headSHA == currentTip
                 else { return }
             }
-            await apply(
-                signal: .review(state: request.state, identity: identity),
-                to: id
-            )
+            await applyReview(request, identity: identity, to: id)
         } catch {
             loadError = error.localizedDescription
         }
@@ -454,7 +450,7 @@ final class MissionController {
                 }
                 await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
                 if worktreeArchived(leg.projectId, leg.destinationPath) {
-                    await apply(signal: .worktreeArchived, to: aggregate.mission.id)
+                    await applyArchive(to: aggregate.mission.id)
                     continue
                 }
                 let snapshot: ReviewLoopSnapshot?
@@ -537,16 +533,10 @@ final class MissionController {
                           linked.headSHA == currentTip
                     else { return }
                 }
-                await apply(
-                    signal: .review(state: linked.state, identity: identity),
-                    to: aggregate.mission.id
-                )
+                await applyReview(linked, identity: identity, to: aggregate.mission.id)
                 return
             }
-            await apply(
-                signal: .review(state: linked.state, identity: identity),
-                to: aggregate.mission.id
-            )
+            await applyReview(linked, identity: identity, to: aggregate.mission.id)
             replacesClosedReview = true
         }
         guard let currentTip = await branchTip(leg.projectId, leg.branch),
@@ -556,11 +546,9 @@ final class MissionController {
                   headOwner: nil
               )
         else { return }
-        await apply(
-            signal: .review(
-                state: request.state,
-                identity: Self.reviewIdentity(for: request)
-            ),
+        await applyReview(
+            request,
+            identity: Self.reviewIdentity(for: request),
             to: aggregate.mission.id,
             replaceReviewIdentity: replacesClosedReview
         )
@@ -616,10 +604,52 @@ final class MissionController {
         }
     }
 
+    private func applyReview(
+        _ request: ReviewRequest,
+        identity: MissionReviewIdentity,
+        to id: MissionID,
+        replaceReviewIdentity: Bool = false
+    ) async {
+        await apply(
+            signal: .review(state: request.state, identity: identity),
+            to: id,
+            replaceReviewIdentity: replaceReviewIdentity,
+            validate: { [weak self] aggregate in
+                guard request.state == .merged else { return true }
+                guard let self,
+                      let leg = aggregate.primaryLeg,
+                      let currentTip = await branchTip(leg.projectId, leg.branch),
+                      !currentTip.isEmpty
+                else { return false }
+                return request.headSHA == currentTip && Self.review(request, matches: leg)
+            }
+        )
+    }
+
+    private func applyArchive(to id: MissionID) async {
+        await apply(
+            signal: .worktreeArchived,
+            to: id,
+            validate: { [weak self] aggregate in
+                guard let self,
+                      let leg = aggregate.primaryLeg,
+                      let currentWorktree = environment.worktreeAtDestination(
+                          leg.projectId,
+                          leg.destinationPath
+                      ),
+                      currentWorktree.id == leg.worktreeId,
+                      currentWorktree.branch == leg.branch
+                else { return false }
+                return worktreeArchived(leg.projectId, leg.destinationPath)
+            }
+        )
+    }
+
     private func apply(
         signal: MissionReadinessSignal,
         to id: MissionID,
-        replaceReviewIdentity: Bool = false
+        replaceReviewIdentity: Bool = false,
+        validate: @escaping @MainActor (MissionAggregate) async -> Bool = { _ in true }
     ) async {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
@@ -633,6 +663,7 @@ final class MissionController {
                     else { return }
                     aggregate = settled
                 }
+                guard await validate(aggregate) else { return }
                 let decision = MissionReadinessEvaluator.evaluate(
                     currentState: aggregate.mission.state,
                     signal: signal

@@ -272,6 +272,21 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == nil)
     }
 
+    @Test func liveReviewRevalidatesTheMergedCommitAgainstTheCurrentBranchTip() async throws {
+        let fake = try MissionLifecycleFake(branchTip: { _, _ in "newer456" })
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged, headSHA: "abc123")
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
     @Test func archiveIgnoresAReplacementWorktreeOnAnotherBranch() async throws {
         let fake = try MissionLifecycleFake(
             worktreeBranch: "unrelated-branch",
@@ -293,6 +308,22 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.recordArchive(worktreeId: "worktree-1")
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.events.last?.kind != .ready)
+    }
+
+    @Test func archiveStateIsRecheckedInsideTheLifecycleMutation() async throws {
+        var checks = 0
+        let fake = try MissionLifecycleFake(worktreeArchived: { _, _ in
+            checks += 1
+            return checks == 1
+        })
+        await fake.controller.load()
+
+        await fake.controller.recordArchive(worktreeId: "worktree-1")
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(checks == 2)
         #expect(aggregate.mission.state == .running)
         #expect(aggregate.events.last?.kind != .ready)
     }
