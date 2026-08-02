@@ -759,11 +759,26 @@ struct MissionReadinessEvaluatorTests {
         )
         await fake.controller.load()
 
-        await fake.controller.refreshReviewBeforeWorktreeRemoval("worktree-1")
+        let canDeleteBranch = await fake.controller.refreshReviewBeforeWorktreeRemoval("worktree-1")
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
+        #expect(canDeleteBranch)
         #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
+    @Test func worktreeRemovalRefreshRetainsBranchWhenReviewDiscoveryIsInconclusive() async throws {
+        let fake = try MissionLifecycleFake(
+            discoverReviewRequest: { _, _, _, _, _, _ in nil },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        let canDeleteBranch = await fake.controller.refreshReviewBeforeWorktreeRemoval("worktree-1")
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(!canDeleteBranch)
+        #expect(aggregate.mission.state == .running)
     }
 
     @Test func manualRefreshDiscoversAMergedReplacementWhenTheWorktreeIsMissing() async throws {

@@ -316,6 +316,24 @@ struct NewMissionDialogTests {
         #expect(fake.openedMissionIDs == [existing])
     }
 
+    @Test("duplicate identity comparison ignores host and repository casing")
+    func duplicateIdentityComparisonIgnoresRepositoryCase() {
+        let stored = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 1842
+        )
+        let resolved = MissionIssueIdentity(
+            provider: .github,
+            host: "GitHub.com",
+            repositorySlug: "Acme/Alas",
+            number: 1842
+        )
+
+        #expect(stored == resolved)
+    }
+
     @Test("generated branch skips branches retained by an earlier Mission")
     func generatedBranchSkipsExistingMissionArtifacts() async {
         let seed = MissionBranchName.make(

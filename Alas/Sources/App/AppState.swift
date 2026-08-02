@@ -5198,12 +5198,12 @@ final class AppState {
         force: Bool,
         removedIndex: Int
     ) async {
-        await missions.refreshReviewBeforeWorktreeRemoval(worktree.id)
+        let missionAllowsBranchDeletion = await missions.refreshReviewBeforeWorktreeRemoval(worktree.id)
         do {
             try await Self.performRemoveWorktree(
                 repoPath: repoPath,
                 worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
+                deleteBranchIfMerged: deleteBranchIfMerged && missionAllowsBranchDeletion,
                 force: force
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {

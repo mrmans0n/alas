@@ -45,6 +45,13 @@ struct MissionIssueIdentity: Codable, Equatable, Sendable {
     let host: String
     let repositorySlug: String
     let number: Int
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.provider == rhs.provider
+            && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
+            && lhs.repositorySlug.caseInsensitiveCompare(rhs.repositorySlug) == .orderedSame
+            && lhs.number == rhs.number
+    }
 }
 
 struct MissionIssueSnapshot: Codable, Equatable, Sendable {

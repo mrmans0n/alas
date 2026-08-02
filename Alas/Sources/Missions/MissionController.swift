@@ -404,15 +404,21 @@ final class MissionController {
         }
     }
 
-    func refreshReviewBeforeWorktreeRemoval(_ worktreeID: String) async {
+    func refreshReviewBeforeWorktreeRemoval(_ worktreeID: String) async -> Bool {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
-            for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeID {
+            let matching = active.filter { $0.primaryLeg?.worktreeId == worktreeID }
+            for aggregate in matching {
                 await refreshReviewWithoutWorktree(for: aggregate)
+                guard let refreshed = try await persistence.aggregate(id: aggregate.mission.id),
+                      refreshed.mission.state == .readyToComplete
+                else { return false }
             }
+            return true
         } catch {
             loadError = error.localizedDescription
+            return false
         }
     }
 
