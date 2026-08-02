@@ -126,6 +126,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         let sourceProjectPathsByID = try await sourceProjectPathsByID(
             fromMRListJSON: result.stdout,
             headOwner: headOwner,
+            headSHA: headSHA,
             remote: remote,
             cwd: cwd
         )
@@ -1148,6 +1149,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     private func sourceProjectPathsByID(
         fromMRListJSON json: String,
         headOwner: String?,
+        headSHA: String?,
         remote: CodeHostRemote,
         cwd: URL
     ) async throws -> [Int: String] {
@@ -1155,7 +1157,10 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             return [:]
         }
 
-        let items = try Self.decodeMRList(json)
+        let normalizedHeadSHA = Self.normalizedOptionalString(headSHA)
+        let items = try Self.decodeMRList(json).filter { item in
+            normalizedHeadSHA == nil || Self.normalizedOptionalString(item.sha) == normalizedHeadSHA
+        }
         var pathsByID: [Int: String] = [:]
         let idsToResolve = Set(items.compactMap { item -> Int? in
             guard item.sourceProjectNamespace(sourceProjectPathsByID: [:]) == nil else {

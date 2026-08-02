@@ -1614,6 +1614,25 @@ struct GitLabCLIProviderTests {
         ))
     }
 
+    @Test func missionReviewRequestSkipsUnrelatedSourceProjectsBeforeResolution() async throws {
+        let runner = SHAFilteringRunner()
+
+        let request = try? await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: "nacho",
+            baseBranch: "origin/main",
+            headSHA: "matching-sha",
+            cwd: Self.cwd
+        )
+        let commands = await runner.commands
+
+        #expect(request?.number == 43)
+        #expect(request?.headSHA == "matching-sha")
+        #expect(commands.contains { $0.starts(with: ["api", "projects/1001"]) } == false)
+        #expect(commands.contains { $0.starts(with: ["api", "projects/1002"]) })
+    }
+
     @Test func currentReviewRequestResolvesSingleSourceProjectIDBeforeFiltering() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.singleSourceProjectIDMRListOutput, stderr: ""),
@@ -3100,5 +3119,79 @@ struct GitLabCLIProviderTests {
             }
             return results.removeFirst()
         }
+    }
+
+    private actor SHAFilteringRunner: CodeHostCommandRunning {
+        private(set) var commands: [[String]] = []
+
+        func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+            _ = executable
+            _ = cwd
+            _ = stdin
+            commands.append(args)
+            if args.starts(with: ["mr", "list"]) {
+                return ProcessResult(exitCode: 0, stdout: Self.listOutput, stderr: "")
+            }
+            if args.starts(with: ["api", "projects/1001"]) {
+                return ProcessResult(exitCode: 1, stdout: "", stderr: "project unavailable")
+            }
+            if args.starts(with: ["api", "projects/1002"]) {
+                return ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"nacho/alas"}"#, stderr: "")
+            }
+            if args.starts(with: ["mr", "view", "43"]) {
+                return ProcessResult(exitCode: 0, stdout: Self.viewOutput, stderr: "")
+            }
+            if args.starts(with: ["mr", "note", "list"]) {
+                return ProcessResult(exitCode: 0, stdout: "[]", stderr: "")
+            }
+            if args.starts(with: ["api", "user"]) {
+                return ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: "")
+            }
+            if args.starts(with: ["ci", "get"]) {
+                return ProcessResult(exitCode: 0, stdout: #"{"id":1,"status":"success","jobs":[]}"#, stderr: "")
+            }
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
+        }
+
+        private static let listOutput = """
+        [
+          {
+            "iid": 42,
+            "title": "Unrelated stale MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "opened",
+            "draft": false,
+            "sha": "stale-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_id": 1001
+          },
+          {
+            "iid": 43,
+            "title": "Matching merged MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_id": 1002
+          }
+        ]
+        """
+
+        private static let viewOutput = """
+        {
+          "iid": 43,
+          "title": "Matching merged MR",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+          "state": "merged",
+          "draft": false,
+          "sha": "matching-sha",
+          "source_branch": "feature/gitlab-provider",
+          "target_branch": "main",
+          "source_project_path_with_namespace": "nacho/alas"
+        }
+        """
     }
 }
