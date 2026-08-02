@@ -163,6 +163,7 @@ private final class MissionIntegrationHarness {
         issue: MissionFixtures.issue(),
         projectId: "project-1",
         baseRef: "origin/main",
+        baseRemoteName: "origin",
         branch: "fix/parser-crash",
         destinationPath: "/tmp/alas-mission",
         agentId: "codex",
@@ -176,7 +177,8 @@ private final class MissionIntegrationHarness {
         branch: "fix/parser-crash",
         path: URL(fileURLWithPath: "/tmp/alas-mission"),
         status: .clean,
-        lastActivity: Date(timeIntervalSince1970: 100)
+        lastActivity: Date(timeIntervalSince1970: 100),
+        lineageID: "device:inode"
     )
 
     private let path: String
@@ -354,6 +356,7 @@ private final class MissionIntegrationHarness {
             issueRefresh: { identity, projectID in
                 try await recorder.refreshIssue(identity: identity, projectID: projectID)
             },
+            branchTip: { _, _ in "abc123" },
             projectExists: { $0 == "project-1" },
             worktreeArchived: { _, _ in false },
             reviewSnapshot: { _, _ in nil },
@@ -366,6 +369,7 @@ private final class MissionIntegrationHarness {
         aggregate.mission.state = .running
         aggregate.mission.setupCheckpoint = .running
         aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].worktreeLineageID = "device:inode"
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
         return aggregate

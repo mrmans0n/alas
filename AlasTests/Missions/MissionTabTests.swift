@@ -26,6 +26,25 @@ struct MissionTabTests {
         #expect(!decoded.supportsSystemOpenActions)
     }
 
+    @Test func rightPaneActivationKeyChangesWhenArchivedVisibilityChanges() {
+        let visible = MissionTabContext.rightPaneActivationKey(
+            worktreeID: "worktree-1",
+            branch: "fix/parser-crash",
+            baseRef: "origin/main",
+            comparisonMode: "auto",
+            worktreeArchived: false
+        )
+        let archived = MissionTabContext.rightPaneActivationKey(
+            worktreeID: "worktree-1",
+            branch: "fix/parser-crash",
+            baseRef: "origin/main",
+            comparisonMode: "auto",
+            worktreeArchived: true
+        )
+
+        #expect(visible != archived)
+    }
+
     @Test func tabsFileSkipsUnknownCasesWithoutDroppingMissionTabs() throws {
         let mission = Tab.mission(MissionTabState(
             missionID: MissionID(rawValue: "mission-1"),
@@ -513,7 +532,8 @@ struct MissionTabTests {
             branch: "fix/parser-crash",
             path: URL(fileURLWithPath: "/tmp/alas-mission"),
             status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 100)
+            lastActivity: Date(timeIntervalSince1970: 100),
+            lineageID: "device:inode"
         )
         var openedMissionIDs: [MissionID] = []
         var notifications: [MissionAggregate] = []

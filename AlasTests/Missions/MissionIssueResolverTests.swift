@@ -62,6 +62,44 @@ struct MissionIssueResolverTests {
         #expect(resolved.selectedProjectId == Self.cloneB.id)
     }
 
+    @Test func redirectedFullURLResolvesAgainstTheConfiguredCanonicalRemote() async throws {
+        let provider = FakeIssueProvider(
+            canonicalRepositorySlug: "openai/renamed-alas",
+            acceptedRepositorySlugs: ["mrmans0n/alas"]
+        )
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:openai/renamed-alas.git")] },
+            providers: .init([provider])
+        ))
+
+        let resolved = try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+
+        #expect(resolved.remote.repositorySlug == "openai/renamed-alas")
+        #expect(resolved.snapshot.identity.repositorySlug == "openai/renamed-alas")
+        #expect(resolved.selectedProjectId == Self.cloneA.id)
+    }
+
+    @Test func redirectedFullURLRejectsAnUnconfiguredCanonicalRepository() async {
+        let provider = FakeIssueProvider(
+            canonicalRepositorySlug: "unrelated/project",
+            acceptedRepositorySlugs: ["mrmans0n/alas"]
+        )
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:openai/renamed-alas.git")] },
+            providers: .init([provider])
+        ))
+
+        await #expect(throws: CodeHostProviderError.malformedOutput(
+            "The redirected issue repository does not match a configured project."
+        )) {
+            try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+        }
+    }
+
     @Test func resolverReportsMissingCLIAndAuthenticationBeforeFetching() async {
         let missingCLI = MissionIssueResolver(environment: Self.environment(provider: FakeIssueProvider(available: false)))
         await #expect(throws: CodeHostProviderError.cliMissing("gh")) {
@@ -127,10 +165,20 @@ struct MissionIssueResolverTests {
         var authenticated = true
         var unavailablePaths: Set<String> = []
         var missingRepositorySlugs: Set<String> = []
+        var canonicalRepositorySlug: String?
+        var acceptedRepositorySlugs: Set<String> = []
 
         func isAvailable(cwd: URL) async -> Bool { available && !unavailablePaths.contains(cwd.path) }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { authenticated }
         func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+            if !acceptedRepositorySlugs.isEmpty,
+               !acceptedRepositorySlugs.contains(remote.repositorySlug) {
+                throw CodeHostIssueProviderError.notFound(
+                    provider: remote.kind,
+                    repositorySlug: remote.repositorySlug,
+                    number: number
+                )
+            }
             if missingRepositorySlugs.contains(remote.repositorySlug) {
                 throw CodeHostIssueProviderError.notFound(
                     provider: remote.kind,
@@ -138,9 +186,10 @@ struct MissionIssueResolverTests {
                     number: number
                 )
             }
+            let canonicalRepositorySlug = canonicalRepositorySlug ?? remote.repositorySlug
             return MissionIssueSnapshot(
-                identity: .init(provider: remote.kind, host: remote.host, repositorySlug: remote.repositorySlug, number: number),
-                canonicalURL: URL(string: "https://\(remote.host)/\(remote.repositorySlug)/issues/\(number)")!,
+                identity: .init(provider: remote.kind, host: remote.host, repositorySlug: canonicalRepositorySlug, number: number),
+                canonicalURL: URL(string: "https://\(remote.host)/\(canonicalRepositorySlug)/issues/\(number)")!,
                 title: "Fix parser crash",
                 body: "Issue body.",
                 state: .open,

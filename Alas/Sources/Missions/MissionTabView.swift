@@ -305,6 +305,16 @@ enum MissionTabContext {
     static func baseBranch(for aggregate: MissionAggregate, fallback: String) -> String {
         aggregate.primaryLeg?.baseRef ?? fallback
     }
+
+    static func rightPaneActivationKey(
+        worktreeID: String,
+        branch: String,
+        baseRef: String,
+        comparisonMode: String,
+        worktreeArchived: Bool
+    ) -> String {
+        "\(worktreeID)\u{0000}\(branch)\u{0000}\(baseRef)\u{0000}\(comparisonMode)\u{0000}\(worktreeArchived)"
+    }
 }
 
 struct MissionTabView: View {
@@ -437,7 +447,13 @@ struct MissionTabView: View {
             for: aggregate,
             fallback: state.config.worktrees.baseBranch
         )
-        return "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(baseRef)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
+        return MissionTabContext.rightPaneActivationKey(
+            worktreeID: worktree.id,
+            branch: worktree.branch,
+            baseRef: baseRef,
+            comparisonMode: state.config.changes.comparisonMode.rawValue,
+            worktreeArchived: worktreeIsArchived
+        )
     }
 
     private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {

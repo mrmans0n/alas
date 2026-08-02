@@ -16,7 +16,8 @@ enum WorktreeCreationCompletion {
             try? await Task.sleep(for: .milliseconds(250))
         }
     ) async -> Result<Worktree, WorktreeCreationFailure> {
-        for _ in 0..<maxPolls {
+        var remainingInactivePolls = maxPolls
+        while remainingInactivePolls > 0 {
             let reconciledWorktree = worktree()
 
             switch operationState() {
@@ -27,7 +28,8 @@ enum WorktreeCreationCompletion {
                 }
                 return .failure(.init(message: message))
             case .creating:
-                break
+                await sleep()
+                continue
             case .deleting, .deleteFailed:
                 return .failure(.init(message: "Worktree creation was interrupted."))
             case nil:
@@ -36,6 +38,7 @@ enum WorktreeCreationCompletion {
                 }
             }
 
+            remainingInactivePolls -= 1
             await sleep()
         }
 

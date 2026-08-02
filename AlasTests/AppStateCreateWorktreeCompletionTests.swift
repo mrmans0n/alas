@@ -115,4 +115,20 @@ struct AppStateCreateWorktreeCompletionTests {
         #expect(result == .failure(.init(message: "Timed out waiting for worktree creation.")))
         #expect(sleeps == 2)
     }
+
+    @Test
+    func waiterDoesNotTimeOutWhileCreationRemainsActive() async {
+        var states: [WorktreeOperationState?] = [.creating, .creating, nil]
+        var worktrees: [Worktree?] = [nil, nil, Self.worktree]
+
+        let result = await WorktreeCreationCompletion.wait(
+            id: Self.worktree.id,
+            maxPolls: 1,
+            operationState: { states.removeFirst() },
+            worktree: { worktrees.removeFirst() },
+            sleep: {}
+        )
+
+        #expect(result == .success(Self.worktree))
+    }
 }

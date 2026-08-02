@@ -74,34 +74,93 @@ struct MissionIssueResolver {
             throw lastError ?? CodeHostProviderError.malformedOutput("The selected project has no supported code host remote.")
 
         case .url(let kind, let host, let slug, let number):
-            var matches: [(project: ProjectConfig, remote: CodeHostRemote)] = []
+            var projectRemotes: [(project: ProjectConfig, remotes: [CodeHostRemote])] = []
             for project in environment.projects() {
                 guard let remotes = try? await environment.remotes(project) else {
                     continue
                 }
-                if let remote = CodeHostRemoteDetector.detectAllMatching(remotes, kind: kind)
-                    .first(where: { Self.matches(remote: $0, kind: kind, host: host, slug: slug) }) {
-                    matches.append((project, remote))
+                let detected = CodeHostRemoteDetector.detectAllMatching(remotes, kind: kind)
+                if !detected.isEmpty {
+                    projectRemotes.append((project, detected))
                 }
             }
-            guard !matches.isEmpty else {
+
+            let exactMatches = projectRemotes.compactMap { entry -> (project: ProjectConfig, remote: CodeHostRemote)? in
+                guard let remote = entry.remotes.first(where: {
+                    Self.matches(remote: $0, kind: kind, host: host, slug: slug)
+                }) else { return nil }
+                return (entry.project, remote)
+            }
+            if !exactMatches.isEmpty {
+                return try await resolve(
+                    number: number,
+                    matches: exactMatches,
+                    preferredProjectID: environment.selectedProjectId()
+                )
+            }
+
+            let sameHostProjects = projectRemotes.filter { entry in
+                entry.remotes.contains { remote in
+                    remote.host.caseInsensitiveCompare(host) == .orderedSame
+                }
+            }
+            guard !sameHostProjects.isEmpty else {
                 throw CodeHostProviderError.malformedOutput("No configured project matches this issue repository.")
             }
+
             let selectedID = environment.selectedProjectId()
-            let preferred = matches.first { $0.project.id == selectedID }
-            let orderedMatches = preferred.map { preferred in
-                [preferred] + matches.filter { $0.project.id != preferred.project.id }
-            } ?? matches
-            let candidateProjectIDs = matches.map(\.project.id)
+            let preferred = sameHostProjects.first { $0.project.id == selectedID }
+            let orderedProjects = preferred.map { preferred in
+                [preferred] + sameHostProjects.filter { $0.project.id != preferred.project.id }
+            } ?? sameHostProjects
             var lastError: Error?
-            for match in orderedMatches {
+            for entry in orderedProjects {
+                guard let authenticationRemote = entry.remotes.first(where: {
+                    $0.host.caseInsensitiveCompare(host) == .orderedSame
+                }), let probeRemote = Self.redirectProbeRemote(
+                    kind: kind,
+                    host: host,
+                    slug: slug,
+                    remoteName: authenticationRemote.remoteName
+                ) else { continue }
                 do {
-                    return try await resolve(
+                    let probed = try await resolve(
                         number: number,
-                        remote: match.remote,
-                        candidates: candidateProjectIDs,
-                        selectedProjectId: match.project.id,
-                        cwd: match.project.path
+                        remote: probeRemote,
+                        candidates: [],
+                        selectedProjectId: entry.project.id,
+                        cwd: entry.project.path
+                    )
+                    let canonicalMatches = projectRemotes.flatMap { candidate in
+                        candidate.remotes.compactMap { remote -> (project: ProjectConfig, remote: CodeHostRemote)? in
+                            guard Self.matches(
+                                remote: remote,
+                                kind: probed.snapshot.identity.provider,
+                                host: probed.snapshot.identity.host,
+                                slug: probed.snapshot.identity.repositorySlug
+                            ) else { return nil }
+                            return (candidate.project, remote)
+                        }
+                    }
+                    guard probed.snapshot.identity.number == number,
+                          !canonicalMatches.isEmpty
+                    else {
+                        lastError = CodeHostProviderError.malformedOutput(
+                            "The redirected issue repository does not match a configured project."
+                        )
+                        continue
+                    }
+                    let selectedMatch = canonicalMatches.first { $0.project.id == selectedID }
+                        ?? canonicalMatches[0]
+                    var candidateProjectIDs: [String] = []
+                    for match in canonicalMatches where !candidateProjectIDs.contains(match.project.id) {
+                        candidateProjectIDs.append(match.project.id)
+                    }
+                    return ResolvedMissionIssue(
+                        snapshot: probed.snapshot,
+                        remote: selectedMatch.remote,
+                        candidateProjectIds: candidateProjectIDs,
+                        selectedProjectId: selectedMatch.project.id
                     )
                 } catch {
                     lastError = error
@@ -122,8 +181,56 @@ struct MissionIssueResolver {
         return ResolvedMissionIssue(snapshot: snapshot, remote: remote, candidateProjectIds: candidates, selectedProjectId: selectedProjectId)
     }
 
+    private func resolve(
+        number: Int,
+        matches: [(project: ProjectConfig, remote: CodeHostRemote)],
+        preferredProjectID: String?
+    ) async throws -> ResolvedMissionIssue {
+        let preferred = matches.first { $0.project.id == preferredProjectID }
+        let orderedMatches = preferred.map { preferred in
+            [preferred] + matches.filter { $0.project.id != preferred.project.id }
+        } ?? matches
+        let candidateProjectIDs = matches.map(\.project.id)
+        var lastError: Error?
+        for match in orderedMatches {
+            do {
+                return try await resolve(
+                    number: number,
+                    remote: match.remote,
+                    candidates: candidateProjectIDs,
+                    selectedProjectId: match.project.id,
+                    cwd: match.project.path
+                )
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError ?? CodeHostProviderError.malformedOutput("No configured project can resolve this issue.")
+    }
+
     private static func matches(remote: CodeHostRemote, kind: CodeHostKind, host: String, slug: String) -> Bool {
         remote.kind == kind && remote.host.caseInsensitiveCompare(host) == .orderedSame && remote.repositorySlug.caseInsensitiveCompare(slug) == .orderedSame
+    }
+
+    private static func redirectProbeRemote(
+        kind: CodeHostKind,
+        host: String,
+        slug: String,
+        remoteName: String
+    ) -> CodeHostRemote? {
+        let parts = slug.split(separator: "/").map(String.init)
+        guard parts.count >= 2,
+              let repository = parts.last,
+              let webURL = URL(string: "https://\(host)/\(slug)")
+        else { return nil }
+        return CodeHostRemote(
+            kind: kind,
+            host: host,
+            owner: parts.dropLast().joined(separator: "/"),
+            repository: repository,
+            remoteName: remoteName,
+            webURL: webURL
+        )
     }
 
     private static func candidateRemotes(
