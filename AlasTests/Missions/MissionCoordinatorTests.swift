@@ -183,6 +183,30 @@ struct MissionCoordinatorTests {
         #expect(recovered.primaryLeg?.pendingInitialPrompt != nil)
     }
 
+    @Test("recreate retry restores a matching worktree that reappeared")
+    func recreateRetryRestoresReappearedWorktree() async throws {
+        var missing = MissionFixtures.creatingMission()
+        missing.mission.state = .needsAttention
+        missing.mission.setupCheckpoint = .running
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].worktreeId = "worktree-1"
+        missing.legs[0].acpSessionId = "session-1"
+        missing.legs[0].pendingInitialPrompt = nil
+        let fake = MissionCoordinatorFake(existing: [missing])
+        let controller = MissionController(environment: fake.environment)
+
+        await controller.retry(missing.mission.id)
+        let recovered = try #require(try await fake.persistence.aggregate(id: missing.mission.id))
+
+        #expect(fake.createWorktreeCalls == 0)
+        #expect(fake.startACPCalls == 0)
+        #expect(recovered.mission.state == .running)
+        #expect(recovered.mission.setupCheckpoint == .running)
+        #expect(recovered.primaryLeg?.worktreeId == "worktree-1")
+        #expect(recovered.primaryLeg?.acpSessionId == "session-1")
+        #expect(recovered.primaryLeg?.pendingInitialPrompt == nil)
+    }
+
     @Test("agent replacement is persisted before retrying the agent checkpoint")
     func agentReplacementIsPersistedBeforeRetry() async throws {
         let fake = MissionCoordinatorFake(agentResult: .failure(.init(message: "Install Codex")))

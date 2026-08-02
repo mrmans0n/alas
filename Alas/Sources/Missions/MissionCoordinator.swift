@@ -137,7 +137,14 @@ final class MissionCoordinator {
             return
         }
         var retryLeg = aggregate.primaryLeg
-        if recreateWorktree {
+        var shouldRecreateWorktree = recreateWorktree
+        if recreateWorktree,
+           let leg = retryLeg,
+           let existing = environment.worktreeAtDestination(leg.projectId, leg.destinationPath),
+           canReuseExistingWorktree(existing, for: leg) {
+            shouldRecreateWorktree = false
+        }
+        if shouldRecreateWorktree {
             guard var leg = retryLeg else { return }
             leg.worktreeId = nil
             // ACP sessions are worktree-scoped. A replacement worktree gets a
@@ -148,7 +155,7 @@ final class MissionCoordinator {
             }
             retryLeg = leg
         }
-        let checkpoint: MissionSetupCheckpoint = recreateWorktree
+        let checkpoint: MissionSetupCheckpoint = shouldRecreateWorktree
             ? .creatingWorktree
             : aggregate.mission.setupCheckpoint
         let now = environment.now()
