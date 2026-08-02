@@ -168,6 +168,23 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == nil)
     }
 
+    @Test func liveReviewMatchesLinkedIdentityIgnoringRepositoryCase() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let fake = try MissionLifecycleFake(aggregate: linked)
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged, owner: "Acme", repository: "Alas")
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func firstDiscoveredReviewIdentityRemainsLinked() async throws {
         let fake = try MissionLifecycleFake()
         await fake.controller.load()
@@ -772,6 +789,29 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func missingWorktreeRefreshMatchesLinkedIdentityIgnoringRepositoryCase() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let merged = try #require(Self.reviewSnapshot(
+            state: .merged,
+            owner: "Acme",
+            repository: "Alas"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            worktreeAvailable: false,
+            linkedReviewRequest: { _, _, _ in merged },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshReviewWithoutWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func manualRefreshDiscoversAMergedReplacementForARetargetedOpenReview() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
@@ -807,6 +847,35 @@ struct MissionReadinessEvaluatorTests {
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? retargeted : nil
             }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: retargetedSnapshot
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveRefreshMatchesLinkedIdentityIgnoringRepositoryCase() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let retargetedSnapshot = Self.reviewSnapshot(state: .open, baseBranch: "release")
+        let retargeted = try #require(Self.reviewSnapshot(
+            state: .open,
+            baseBranch: "release",
+            owner: "Acme",
+            repository: "Alas"
+        ).reviewRequest)
+        let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            linkedReviewRequest: { _, _, _ in retargeted }
         )
         await fake.controller.load()
 
@@ -1206,15 +1275,16 @@ struct MissionReadinessEvaluatorTests {
         localHeadSHA: String? = nil,
         headOwner: String? = nil,
         baseBranch: String = "main",
+        owner: String = "acme",
         repository: String = "alas"
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
             host: "github.com",
-            owner: "acme",
+            owner: owner,
             repository: repository,
             remoteName: "origin",
-            webURL: URL(string: "https://github.com/acme/\(repository)")!
+            webURL: URL(string: "https://github.com/\(owner)/\(repository)")!
         )
         let request = ReviewRequest(
             remote: remote,

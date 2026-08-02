@@ -192,7 +192,7 @@ final class MissionController {
                 var replacesLinkedReview = false
                 if let linked = leg.reviewIdentity {
                     if let visible = snapshot.reviewRequest,
-                       Self.reviewIdentity(for: visible) == linked {
+                       Self.review(visible, matches: linked) {
                         request = visible
                     } else if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef) {
                         let matchesCurrentHead = snapshot.local.headSHA.isEmpty
@@ -228,7 +228,7 @@ final class MissionController {
                     || (!snapshot.local.headSHA.isEmpty && request.headSHA == snapshot.local.headSHA)
                 else { continue }
                 if let linked = aggregate.primaryLeg?.reviewIdentity,
-                   linked != identity,
+                   !Self.sameReviewIdentity(linked, identity),
                    !replacesLinkedReview {
                     continue
                 }
@@ -260,7 +260,7 @@ final class MissionController {
                 let replacesLinkedReview: Bool
                 if let linked = leg.reviewIdentity {
                     guard let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
-                          Self.reviewIdentity(for: refreshed) == linked
+                          Self.review(refreshed, matches: linked)
                     else { continue }
                     let matchesCurrentHead = snapshot.local.headSHA.isEmpty
                         || refreshed.headSHA == snapshot.local.headSHA
@@ -578,7 +578,7 @@ final class MissionController {
         var replacesLinkedReview = false
         if let identity = leg.reviewIdentity {
             guard let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
-                  Self.reviewIdentity(for: linked) == identity
+                  Self.review(linked, matches: identity)
             else { return }
             let matchesCurrentTip: Bool
             if let currentTip, !currentTip.isEmpty {
@@ -879,6 +879,20 @@ final class MissionController {
             number: request.number,
             url: request.url
         )
+    }
+
+    private static func review(_ request: ReviewRequest, matches identity: MissionReviewIdentity) -> Bool {
+        sameReviewIdentity(reviewIdentity(for: request), identity)
+    }
+
+    private static func sameReviewIdentity(
+        _ lhs: MissionReviewIdentity,
+        _ rhs: MissionReviewIdentity
+    ) -> Bool {
+        lhs.provider == rhs.provider
+            && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
+            && lhs.repositorySlug.caseInsensitiveCompare(rhs.repositorySlug) == .orderedSame
+            && lhs.number == rhs.number
     }
 
     private static func review(
