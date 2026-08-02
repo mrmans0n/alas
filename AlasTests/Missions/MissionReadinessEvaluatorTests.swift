@@ -734,6 +734,21 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func worktreeRemovalRefreshDiscoversMergedReviewBeforeBranchDeletion() async throws {
+        let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            discoverReviewRequest: { _, _, _, _, _, _ in request },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshReviewBeforeWorktreeRemoval("worktree-1")
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func manualRefreshDiscoversAMergedReplacementWhenTheWorktreeIsMissing() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity

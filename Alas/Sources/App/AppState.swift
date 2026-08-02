@@ -5202,6 +5202,7 @@ final class AppState {
         force: Bool,
         removedIndex: Int
     ) async {
+        await missions.refreshReviewBeforeWorktreeRemoval(worktree.id)
         do {
             try await Self.performRemoveWorktree(
                 repoPath: repoPath,
