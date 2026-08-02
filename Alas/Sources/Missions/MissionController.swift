@@ -271,25 +271,7 @@ final class MissionController {
                       ), currentWorktree.id == worktreeId,
                       currentWorktree.branch == leg.branch
                 else { continue }
-                let replacesLinkedReview: Bool
-                if let linked = leg.reviewIdentity {
-                    if let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
-                       Self.review(refreshed, matches: linked) {
-                        let matchesCurrentHead = snapshot.local.headSHA.isEmpty
-                            || refreshed.headSHA == snapshot.local.headSHA
-                        guard refreshed.state == .closed
-                            || !Self.review(
-                                refreshed,
-                                matches: leg,
-                                issueIdentity: aggregate.issue.identity
-                            )
-                            || !matchesCurrentHead
-                        else { continue }
-                    }
-                    replacesLinkedReview = true
-                } else {
-                    replacesLinkedReview = false
-                }
+                let replacesLinkedReview = leg.reviewIdentity != nil
                 guard let request = await discoverMergedReview(
                     for: leg,
                     issueIdentity: aggregate.issue.identity,
@@ -551,14 +533,7 @@ final class MissionController {
         issueIdentity: MissionIssueIdentity,
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
-        let visibleBlocksDiscovery = snapshot.reviewRequest.map { request in
-            let matchesCurrentHead = snapshot.local.headSHA.isEmpty
-                || request.headSHA == snapshot.local.headSHA
-            return Self.review(request, matches: leg, issueIdentity: issueIdentity)
-                && matchesCurrentHead
-        } ?? false
-        guard !visibleBlocksDiscovery,
-              snapshot.local.branchName == leg.branch,
+        guard snapshot.local.branchName == leg.branch,
               let request = await discoverMergedReview(
                   for: leg,
                   issueIdentity: issueIdentity,

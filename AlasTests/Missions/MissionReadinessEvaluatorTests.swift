@@ -706,6 +706,23 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func startupDiscoversAMergedReviewAlongsideMatchingOpenReview() async throws {
+        let openSnapshot = Self.reviewSnapshot(state: .open)
+        let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            reviewSnapshot: { _, _ in nil },
+            startupReviewSnapshot: { _, _ in openSnapshot },
+            discoverReviewRequest: { _, _, _, _, _, _ in merged }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
     @Test func startupDiscoversAMergedReplacementForAClosedLinkedReview() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
@@ -941,6 +958,25 @@ struct MissionReadinessEvaluatorTests {
             worktreeId: "worktree-1",
             baseRef: "origin/main",
             snapshot: Self.reviewSnapshotWithoutRequest()
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveRefreshDiscoversAMergedReviewAlongsideMatchingOpenReview() async throws {
+        let openSnapshot = Self.reviewSnapshot(state: .open)
+        let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            discoverReviewRequest: { _, _, _, _, _, _ in merged }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshReviewSnapshot(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: openSnapshot
         )
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
