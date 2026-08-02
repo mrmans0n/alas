@@ -94,10 +94,27 @@ struct ACPSessionManagerTests {
             payload: try ACPMessageCodec.encode(consumed),
             createdAt: 1
         )
+        for index in 1..<100 {
+            let message = ACPMessage.user(
+                id: UUID(),
+                text: "later message \(index)",
+                attachments: []
+            )
+            try store.appendMessage(
+                sessionId: sessionID,
+                id: "later-\(index)",
+                kind: message.kind,
+                seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message),
+                createdAt: Int64(index + 1)
+            )
+        }
 
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = try #require(manager.placeholderSession(id: sessionID))
         await manager.hydrateIfNeeded(id: sessionID)
+
+        #expect(session.transcript.messages.count == ACPTranscript.tailWindow)
 
         #expect(await manager.enqueuePrompt(id: promptID, text: "Investigate.", into: sessionID))
         #expect(session.queue.isEmpty)

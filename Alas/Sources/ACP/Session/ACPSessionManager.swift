@@ -3754,7 +3754,13 @@ extension ACPSessionManager {
         source: ACPDelegatedPromptSource,
         into sessionId: ACPSession.ID
     ) async -> Bool {
-        guard let session = sessions[sessionId] else { return false }
+        guard var session = sessions[sessionId] else { return false }
+        guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
+            return true
+        }
+        await awaitBackfill(id: sessionId)
+        guard let currentSession = sessions[sessionId] else { return false }
+        session = currentSession
         guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
             return true
         }
@@ -3785,11 +3791,17 @@ extension ACPSessionManager {
         text: String,
         into sessionId: ACPSession.ID
     ) async -> Bool {
-        guard let session = sessions[sessionId] else { return false }
+        guard var session = sessions[sessionId] else { return false }
         let source = ACPDelegatedPromptSource(
             sessionId: "mission:\(sessionId)",
             messageId: id.uuidString
         )
+        guard !session.queue.contains(where: {
+            $0.id == id || $0.delegatedSource?.messageId == source.messageId
+        }) else { return true }
+        await awaitBackfill(id: sessionId)
+        guard let currentSession = sessions[sessionId] else { return false }
+        session = currentSession
         guard !session.queue.contains(where: {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
         }) else { return true }
