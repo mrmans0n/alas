@@ -524,9 +524,29 @@ final class MissionController {
 
     private func refreshReviewWithoutWorktree(for aggregate: MissionAggregate) async {
         guard let leg = aggregate.primaryLeg else { return }
-        if leg.reviewIdentity != nil {
-            await refreshLinkedReview(aggregate.mission.id)
-            return
+        var replacesClosedReview = false
+        if let identity = leg.reviewIdentity {
+            guard let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
+                  Self.review(linked, matches: leg)
+            else { return }
+            if linked.state != .closed {
+                if linked.state == .merged {
+                    guard let currentTip = await branchTip(leg.projectId, leg.branch),
+                          !currentTip.isEmpty,
+                          linked.headSHA == currentTip
+                    else { return }
+                }
+                await apply(
+                    signal: .review(state: linked.state, identity: identity),
+                    to: aggregate.mission.id
+                )
+                return
+            }
+            await apply(
+                signal: .review(state: linked.state, identity: identity),
+                to: aggregate.mission.id
+            )
+            replacesClosedReview = true
         }
         guard let currentTip = await branchTip(leg.projectId, leg.branch),
               let request = await discoverMergedReview(
@@ -540,7 +560,8 @@ final class MissionController {
                 state: request.state,
                 identity: Self.reviewIdentity(for: request)
             ),
-            to: aggregate.mission.id
+            to: aggregate.mission.id,
+            replaceReviewIdentity: replacesClosedReview
         )
     }
 
