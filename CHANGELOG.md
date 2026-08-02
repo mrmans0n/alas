@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.10] - 2026-08-02
+
+### 🏗️ Internal
+
+- Publish patch release from the current `0.13.10` version line.
+
 ## [0.13.9] - 2026-07-31
 
 ### ✨ Features
