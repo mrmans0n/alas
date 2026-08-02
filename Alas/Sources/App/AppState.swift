@@ -1528,15 +1528,18 @@ final class AppState {
             else { return nil }
             let persistedID = leg.worktreeId ?? ""
             let disappearedWorktree = disappeared.contains(persistedID)
-            let destinationBranch = missionWorktreeAtDestination(
+            let destinationWorktree = missionWorktreeAtDestination(
                 projectID: leg.projectId,
                 destinationPath: leg.destinationPath
-            )?.branch
+            )
+            let destinationMatches = destinationWorktree?.branch == leg.branch
+                && leg.worktreeLineageID != nil
+                && destinationWorktree?.lineageID == leg.worktreeLineageID
             let replacementBranch = beforeIds.contains(persistedID)
-                && destinationBranch != leg.branch
+                && !destinationMatches
             let confirmedUnavailableAfterRefresh = [.running, .needsAttention].contains(aggregate.mission.state)
                 && projectsManager.worktreeDiscoverySucceeded(projectId: leg.projectId)
-                && destinationBranch != leg.branch
+                && !destinationMatches
             guard disappearedWorktree || replacementBranch || confirmedUnavailableAfterRefresh
             else { return nil }
             return aggregate.mission.id
@@ -1552,7 +1555,11 @@ final class AppState {
                   missionWorktreeAtDestination(
                       projectID: leg.projectId,
                       destinationPath: leg.destinationPath
-                  )?.branch == leg.branch
+                  ).map({ worktree in
+                      worktree.branch == leg.branch
+                          && leg.worktreeLineageID != nil
+                          && worktree.lineageID == leg.worktreeLineageID
+                  }) == true
             else { return nil }
             return aggregate.mission.id
         })

@@ -404,6 +404,23 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.events.last?.kind != .ready)
     }
 
+    @Test func archiveIgnoresAReplacementWorktreeWithTheSameBranch() async throws {
+        var running = Self.runningAggregate()
+        running.legs[0].worktreeLineageID = "original-lineage"
+        let fake = try MissionLifecycleFake(
+            aggregate: running,
+            worktreeLineageID: "replacement-lineage",
+            worktreeArchived: { _, _ in true }
+        )
+        await fake.controller.load()
+
+        await fake.controller.recordArchive(worktreeId: "worktree-1")
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.events.last?.kind != .ready)
+    }
+
     @Test func archiveSignalIsIgnoredAfterTheWorktreeIsRestored() async throws {
         let fake = try MissionLifecycleFake(worktreeArchived: { _, _ in false })
         await fake.controller.load()
@@ -1578,6 +1595,24 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.events.last?.kind == .completed)
         #expect(fake.issueRefreshCalls.isEmpty)
         #expect(fake.externalOperations.isEmpty)
+    }
+
+    @Test func completionPreservesOriginalLineageWhenOnlyAReplacementExists() async throws {
+        var missing = Self.runningAggregate()
+        missing.mission.state = .needsAttention
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].worktreeLineageID = "original-lineage"
+        let fake = try MissionLifecycleFake(
+            aggregate: missing,
+            worktreeLineageID: "replacement-lineage"
+        )
+        await fake.controller.load()
+
+        await fake.controller.complete(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .completed)
+        #expect(aggregate.primaryLeg?.worktreeLineageID == "original-lineage")
     }
 
     @Test(arguments: [MissionState.needsAttention, .readyToComplete])

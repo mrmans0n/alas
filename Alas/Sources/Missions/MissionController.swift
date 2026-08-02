@@ -460,7 +460,9 @@ final class MissionController {
                    ), worktree.id == currentLeg.worktreeId,
                    worktree.branch == currentLeg.branch,
                    worktree.path.standardizedFileURL.path
-                   == URL(fileURLWithPath: currentLeg.destinationPath).standardizedFileURL.path {
+                   == URL(fileURLWithPath: currentLeg.destinationPath).standardizedFileURL.path,
+                   currentLeg.worktreeLineageID == nil
+                   || currentLeg.worktreeLineageID == worktree.lineageID {
                     currentLeg.worktreeLineageID = worktree.lineageID
                     leg = currentLeg
                 }
@@ -771,7 +773,9 @@ final class MissionController {
                           leg.destinationPath
                       ),
                       currentWorktree.id == leg.worktreeId,
-                      currentWorktree.branch == leg.branch
+                      currentWorktree.branch == leg.branch,
+                      let worktreeLineageID = leg.worktreeLineageID,
+                      currentWorktree.lineageID == worktreeLineageID
                 else { return false }
                 return worktreeArchived(leg.projectId, leg.destinationPath)
             }

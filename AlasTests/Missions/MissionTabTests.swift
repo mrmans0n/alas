@@ -340,6 +340,26 @@ struct MissionTabTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
+    @Test func topologyCleanupDetectsAReplacementLineageOnTheSameBranch() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        let beforeIds: Set<String> = [fixture.worktree.id]
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId
+        )
+        var replacement = fixture.worktree
+        replacement.lineageID = "replacement-lineage"
+        fixture.state.projectsManager.insertOptimisticWorktree(replacement)
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: beforeIds)
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+    }
+
     @Test func topologyCleanupReconcilesMissingMissionAfterDiscoveryRecovers() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()
