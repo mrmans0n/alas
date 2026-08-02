@@ -1082,33 +1082,75 @@ final class AppState {
         else { return nil }
         let cwd = URL(fileURLWithPath: project.path)
         guard let remotes = try? await GitService().remotes(worktreePath: cwd) else { return nil }
-        let upstream = try? await Process.git(
-            ["for-each-ref", "--format=%(upstream:remotename)", "refs/heads/\(branch)"],
+        let branchPushRemote = try? await Process.git(
+            ["config", "--get", "branch.\(branch).pushRemote"],
             cwd: cwd
         )
-        let remoteName = upstream?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let branchPushRemoteName = branchPushRemote?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let defaultPushRemoteName: String
+        if branchPushRemoteName.isEmpty {
+            let defaultPushRemote = try? await Process.git(
+                ["config", "--get", "remote.pushDefault"],
+                cwd: cwd
+            )
+            defaultPushRemoteName = defaultPushRemote?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        } else {
+            defaultPushRemoteName = ""
+        }
+        let branchRemoteName: String
+        if branchPushRemoteName.isEmpty, defaultPushRemoteName.isEmpty {
+            let upstream = try? await Process.git(
+                ["for-each-ref", "--format=%(upstream:remotename)", "refs/heads/\(branch)"],
+                cwd: cwd
+            )
+            branchRemoteName = upstream?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        } else {
+            branchRemoteName = ""
+        }
+        let pushRemoteName = Self.effectiveMissionPushRemote(
+            branchPushRemoteName: branchPushRemoteName,
+            defaultPushRemoteName: defaultPushRemoteName,
+            branchRemoteName: branchRemoteName
+        )
         return Self.missionBranchOwner(
             identity: issueIdentity,
             baseRef: baseRef,
-            branchRemoteName: remoteName,
+            branchRemoteName: branchRemoteName,
+            pushRemoteName: pushRemoteName,
             remotes: remotes
         )
+    }
+
+    static func effectiveMissionPushRemote(
+        branchPushRemoteName: String,
+        defaultPushRemoteName: String,
+        branchRemoteName: String
+    ) -> String {
+        [branchPushRemoteName, defaultPushRemoteName, branchRemoteName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? ""
     }
 
     static func missionBranchOwner(
         identity: MissionIssueIdentity,
         baseRef: String,
         branchRemoteName: String,
+        pushRemoteName: String = "",
         remotes: [GitRemote]
     ) -> String? {
+        let effectiveRemoteName = effectiveMissionPushRemote(
+            branchPushRemoteName: pushRemoteName,
+            defaultPushRemoteName: "",
+            branchRemoteName: branchRemoteName
+        )
         let branchRemotes: [GitRemote]
-        if branchRemoteName.isEmpty {
+        if effectiveRemoteName.isEmpty {
             branchRemotes = remotes.filter { $0.name == "origin" && $0.direction == .push }
                 + remotes.filter { $0.name == "origin" && $0.direction == .fetch }
                 + remotes.filter { $0.name != "origin" && $0.direction == .push }
                 + remotes.filter { $0.name != "origin" && $0.direction == .fetch }
         } else {
-            let namedBranchRemotes = remotes.filter { $0.name == branchRemoteName }
+            let namedBranchRemotes = remotes.filter { $0.name == effectiveRemoteName }
             branchRemotes = namedBranchRemotes.filter { $0.direction == .push }
                 + namedBranchRemotes.filter { $0.direction == .fetch }
         }

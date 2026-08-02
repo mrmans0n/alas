@@ -127,6 +127,47 @@ struct AppStatePersistenceTests {
         #expect(owner == "nacho")
     }
 
+    @Test func missionBranchOwnerPrefersTheConfiguredPushRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "upstream/main",
+            branchRemoteName: "upstream",
+            pushRemoteName: "fork",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
+    @Test func effectiveMissionPushRemoteUsesGitPrecedence() {
+        #expect(AppState.effectiveMissionPushRemote(
+            branchPushRemoteName: "fork",
+            defaultPushRemoteName: "personal",
+            branchRemoteName: "upstream"
+        ) == "fork")
+        #expect(AppState.effectiveMissionPushRemote(
+            branchPushRemoteName: "",
+            defaultPushRemoteName: "personal",
+            branchRemoteName: "upstream"
+        ) == "personal")
+        #expect(AppState.effectiveMissionPushRemote(
+            branchPushRemoteName: "",
+            defaultPushRemoteName: "",
+            branchRemoteName: "upstream"
+        ) == "upstream")
+    }
+
     @Test func missionBranchOwnerAcceptsRenamedForkTrackingRemote() {
         let identity = MissionIssueIdentity(
             provider: .github,
