@@ -480,6 +480,37 @@ struct MissionCoordinatorTests {
         #expect(recovered.mission.setupCheckpoint == .running)
     }
 
+    @Test("agent startup failure after prompt consumption does not leave the initial prompt retryable")
+    func agentStartupFailureAfterPromptConsumptionClearsPromptBeforeRecovery() async throws {
+        let fake = MissionCoordinatorFake()
+        fake.startACPOverride = { leg, _ in
+            .failure(.init(
+                message: "Install Codex",
+                consumedInitialPrompt: leg.pendingInitialPrompt != nil
+            ))
+        }
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let id = try await coordinator.create(Self.draft)
+        let failed = await fake.waitUntilSettled(id)
+
+        #expect(fake.startACPCalls == 1)
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
+        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.setupCheckpoint == .startingAgent)
+        #expect(failed.mission.attentionReason == "Install Codex")
+        #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
+
+        fake.startACPOverride = nil
+        await coordinator.retry(id: id)
+        let recovered = try #require(try await fake.persistence.aggregate(id: id))
+
+        #expect(fake.startACPCalls == 1)
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
+        #expect(recovered.mission.state == .running)
+        #expect(recovered.mission.setupCheckpoint == .running)
+    }
+
     @Test("agent replacement keeps the started session after prompt consumption")
     func agentReplacementKeepsStartedSessionAfterPromptConsumption() async throws {
         let fake = MissionCoordinatorFake()

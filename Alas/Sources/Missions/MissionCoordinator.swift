@@ -4,6 +4,12 @@ import Foundation
 final class MissionCoordinator {
     struct MissionOperationFailure: Error, Equatable, Sendable {
         let message: String
+        var consumedInitialPrompt = false
+
+        init(message: String, consumedInitialPrompt: Bool = false) {
+            self.message = message
+            self.consumedInitialPrompt = consumedInitialPrompt
+        }
     }
 
     struct Environment {
@@ -426,6 +432,9 @@ final class MissionCoordinator {
                 return false
             }
         case .failure(let failure):
+            if failure.consumedInitialPrompt {
+                leg.pendingInitialPrompt = nil
+            }
             await persistFailure(
                 aggregate: aggregate,
                 leg: leg,

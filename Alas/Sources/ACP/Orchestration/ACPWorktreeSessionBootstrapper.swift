@@ -17,6 +17,7 @@ enum ACPBootstrapReadyState: Equatable, Sendable {
 
 struct ACPWorktreeSessionBootstrapError: LocalizedError {
     let message: String
+    var consumedInitialPrompt = false
 
     var errorDescription: String? { message }
 }
@@ -87,7 +88,7 @@ final class ACPWorktreeSessionBootstrapper {
         case .ready:
             return request.sessionID
         case .needsSetup(let reason), .needsAuthentication(let reason), .failed(let reason):
-            throw ACPWorktreeSessionBootstrapError(message: reason)
+            throw ACPWorktreeSessionBootstrapError(message: reason, consumedInitialPrompt: true)
         }
     }
 }

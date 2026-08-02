@@ -644,10 +644,12 @@ private struct MissionIssueContextSection: View {
                     .buttonStyle(.borderless)
                     .disabled(!presentation.actions.refresh)
             }
-            Text(presentation.issueBody)
-                .font(.body)
-                .foregroundStyle(theme.color("fg"))
-                .textSelection(.enabled)
+            ACPMarkdownText(
+                raw: presentation.issueBody,
+                typography: .init(fontFamily: "", fontSize: 12)
+            )
+            .foregroundStyle(theme.color("fg"))
+            .textSelection(.enabled)
             if !presentation.labels.isEmpty {
                 Text(presentation.labels.joined(separator: " · "))
                     .font(.caption)

@@ -704,6 +704,12 @@ final class AppState {
                     )
                     return .success(startedID)
                 } catch {
+                    if let bootstrapError = error as? ACPWorktreeSessionBootstrapError {
+                        return .failure(MissionCoordinator.MissionOperationFailure(
+                            message: bootstrapError.message,
+                            consumedInitialPrompt: bootstrapError.consumedInitialPrompt
+                        ))
+                    }
                     return .failure(.init(message: error.localizedDescription))
                 }
             },

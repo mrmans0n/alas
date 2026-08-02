@@ -104,6 +104,7 @@ struct ACPWorktreeSessionBootstrapperTests {
                 Issue.record("Expected ACP bootstrap to fail")
             } catch let error as ACPWorktreeSessionBootstrapError {
                 #expect(error.message == expectedMessage)
+                #expect(error.consumedInitialPrompt)
             } catch {
                 Issue.record("Expected ACPWorktreeSessionBootstrapError, got \(error)")
             }
