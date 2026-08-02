@@ -304,8 +304,17 @@ final class MissionCoordinator {
             }
         }
 
+        guard let worktreeLineageID = worktree.lineageID else {
+            await persistFailure(
+                aggregate: aggregate,
+                leg: leg,
+                checkpoint: .creatingWorktree,
+                message: "Could not establish a durable identity for the Mission worktree. Retry this Mission."
+            )
+            return false
+        }
         leg.worktreeId = worktree.id
-        leg.worktreeLineageID = worktree.lineageID
+        leg.worktreeLineageID = worktreeLineageID
         let now = environment.now()
         let checkpointEvent = event(
             missionID: aggregate.mission.id,

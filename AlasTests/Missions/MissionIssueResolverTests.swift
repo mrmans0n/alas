@@ -89,6 +89,24 @@ struct MissionIssueResolverTests {
         #expect(resolved.snapshot.identity.provider == .github)
     }
 
+    @Test func shortReferenceContinuesFromForkToUpstreamRemote() async throws {
+        let provider = FakeIssueProvider(missingRepositorySlugs: ["nacho/alas"])
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [
+                GitRemote(name: "origin", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:mrmans0n/alas.git"),
+            ] },
+            providers: .init([provider])
+        ))
+
+        let resolved = try await resolver.resolve("#1842")
+
+        #expect(resolved.remote.remoteName == "upstream")
+        #expect(resolved.snapshot.identity.repositorySlug == "mrmans0n/alas")
+    }
+
     private static func environment(provider: FakeIssueProvider) -> MissionIssueResolver.Environment {
         .init(
             projects: { [cloneA] },
@@ -108,11 +126,19 @@ struct MissionIssueResolverTests {
         var available = true
         var authenticated = true
         var unavailablePaths: Set<String> = []
+        var missingRepositorySlugs: Set<String> = []
 
         func isAvailable(cwd: URL) async -> Bool { available && !unavailablePaths.contains(cwd.path) }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { authenticated }
         func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
-            MissionIssueSnapshot(
+            if missingRepositorySlugs.contains(remote.repositorySlug) {
+                throw CodeHostIssueProviderError.notFound(
+                    provider: remote.kind,
+                    repositorySlug: remote.repositorySlug,
+                    number: number
+                )
+            }
+            return MissionIssueSnapshot(
                 identity: .init(provider: remote.kind, host: remote.host, repositorySlug: remote.repositorySlug, number: number),
                 canonicalURL: URL(string: "https://\(remote.host)/\(remote.repositorySlug)/issues/\(number)")!,
                 title: "Fix parser crash",

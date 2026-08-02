@@ -130,15 +130,22 @@ struct MissionIssueResolver {
         _ remotes: [GitRemote],
         supportedKinds: Set<CodeHostKind>
     ) -> [CodeHostRemote] {
+        var candidates: [CodeHostRemote] = []
         if let detected = CodeHostRemoteDetector.detect(
             from: remotes,
             supportedKinds: supportedKinds
         ) {
-            return [detected]
+            candidates.append(detected)
         }
-        return supportedKinds.sorted(by: { $0.rawValue < $1.rawValue }).compactMap { kind in
-            CodeHostRemoteDetector.detect(from: remotes, matching: kind)
+        for remote in remotes {
+            for kind in supportedKinds.sorted(by: { $0.rawValue < $1.rawValue }) {
+                guard let detected = CodeHostRemoteDetector.detect(from: [remote], matching: kind),
+                      !candidates.contains(detected)
+                else { continue }
+                candidates.append(detected)
+            }
         }
+        return candidates
     }
 }
 

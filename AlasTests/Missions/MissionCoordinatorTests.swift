@@ -82,6 +82,24 @@ struct MissionCoordinatorTests {
         #expect(aggregate.primaryLeg?.pendingInitialPrompt == Self.draft.initialPrompt)
     }
 
+    @Test("missing durable worktree lineage stops before ACP")
+    func missingWorktreeLineageDoesNotStartACP() async throws {
+        var worktree = MissionCoordinatorFake().worktree
+        worktree.lineageID = nil
+        let fake = MissionCoordinatorFake(worktreeResult: .success(worktree))
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let id = try await coordinator.create(Self.draft)
+        let aggregate = await fake.waitUntilSettled(id)
+
+        #expect(fake.createWorktreeCalls == 1)
+        #expect(fake.startACPCalls == 0)
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
+        #expect(aggregate.mission.attentionReason == "Could not establish a durable identity for the Mission worktree. Retry this Mission.")
+        #expect(aggregate.primaryLeg?.worktreeLineageID == nil)
+    }
+
     @Test("new Mission creation does not adopt an unrelated existing destination")
     func newMissionCreationDoesNotAdoptExistingDestination() async throws {
         let fake = MissionCoordinatorFake()
@@ -304,7 +322,8 @@ struct MissionCoordinatorTests {
             branch: "fix/parser-crash",
             path: URL(fileURLWithPath: Self.draft.destinationPath),
             status: .running,
-            lastActivity: .now
+            lastActivity: .now,
+            lineageID: "optimistic-worktree-lineage"
         )
         state.projectsManager.insertOptimisticWorktree(failed)
         state.projectsManager.setOperationState(
@@ -366,7 +385,8 @@ struct MissionCoordinatorTests {
             branch: "fix/parser-crash",
             path: URL(fileURLWithPath: Self.draft.destinationPath),
             status: .dirty,
-            lastActivity: .now
+            lastActivity: .now,
+            lineageID: "retained-worktree-lineage"
         )
         state.projectsManager.insertOptimisticWorktree(retained)
         state.projectsManager.setOperationState(
