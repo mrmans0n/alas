@@ -9,15 +9,12 @@ enum MissionBaseReference {
 
     static func branchName(
         _ baseRef: String,
-        currentRemoteName: String,
         persistedRemoteName: String?
     ) -> String {
-        let remoteNames = [persistedRemoteName, currentRemoteName].compactMap { $0 }
-        for remoteName in remoteNames where !remoteName.isEmpty {
-            let prefix = "\(remoteName)/"
-            if baseRef.hasPrefix(prefix) {
-                return String(baseRef.dropFirst(prefix.count))
-            }
+        guard let persistedRemoteName, !persistedRemoteName.isEmpty else { return baseRef }
+        let prefix = "\(persistedRemoteName)/"
+        if baseRef.hasPrefix(prefix) {
+            return String(baseRef.dropFirst(prefix.count))
         }
         return baseRef
     }

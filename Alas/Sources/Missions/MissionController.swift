@@ -922,7 +922,6 @@ final class MissionController {
     ) -> Bool {
         let expectedBase = MissionBaseReference.branchName(
             leg.baseRef,
-            currentRemoteName: request.remote.remoteName,
             persistedRemoteName: leg.baseRemoteName
         )
         return request.provider == issueIdentity.provider
@@ -935,7 +934,6 @@ final class MissionController {
     private static func baseBranch(for leg: MissionLeg) -> String {
         MissionBaseReference.branchName(
             leg.baseRef,
-            currentRemoteName: "",
             persistedRemoteName: leg.baseRemoteName
         )
     }

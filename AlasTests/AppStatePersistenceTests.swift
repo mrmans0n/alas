@@ -56,17 +56,14 @@ struct AppStatePersistenceTests {
         ) == nil)
         #expect(MissionBaseReference.branchName(
             "origin/main",
-            currentRemoteName: "upstream",
             persistedRemoteName: "origin"
         ) == "main")
         #expect(MissionBaseReference.branchName(
             "upstream/feature/release",
-            currentRemoteName: "canonical",
             persistedRemoteName: "upstream"
         ) == "feature/release")
         #expect(MissionBaseReference.branchName(
             "release/1.0",
-            currentRemoteName: "upstream",
             persistedRemoteName: nil
         ) == "release/1.0")
     }

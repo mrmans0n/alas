@@ -560,7 +560,8 @@ struct MissionReadinessEvaluatorTests {
         )
         let retargeted = try #require(Self.reviewSnapshot(
             state: .merged,
-            baseBranch: "1.0"
+            baseBranch: "1.0",
+            remoteName: "release"
         ).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
