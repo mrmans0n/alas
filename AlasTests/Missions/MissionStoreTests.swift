@@ -28,6 +28,24 @@ struct MissionStoreTests {
         #expect(row["base_remote_name"] as? String == nil)
     }
 
+    @Test("rolls back schema changes when the version update fails")
+    func migrationSchemaAndVersionAreAtomic() throws {
+        let path = temporaryPath()
+        let v1 = try SQLiteDatabase(path: path)
+        try v1.exec("CREATE TABLE schema_version (version INTEGER NOT NULL CHECK(version = 1))")
+        try v1.exec("INSERT INTO schema_version (version) VALUES (1)")
+        try v1.exec("CREATE TABLE mission_legs (id TEXT PRIMARY KEY, base_ref TEXT NOT NULL)")
+
+        #expect(throws: (any Error).self) {
+            _ = try MissionStore(path: path)
+        }
+
+        let columns = try v1.query("PRAGMA table_info(mission_legs)")
+            .compactMap { $0["name"] as? String }
+        #expect(!columns.contains("base_remote_name"))
+        #expect(try v1.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 1)
+    }
+
     @Test("creates schema and persists ordered events across reopen")
     func persistsAggregateAndOrderedEventsAcrossReopen() throws {
         let path = temporaryPath()

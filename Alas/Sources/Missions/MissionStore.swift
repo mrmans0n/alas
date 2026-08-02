@@ -334,13 +334,24 @@ final class MissionStore {
 
     private func migrate() throws {
         try db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-        let current = try currentSchemaVersion()
-        if current < 1 { try migrateToV1() }
-        if current < 2 { try migrateToV2() }
-        if current == 0 {
-            try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
-        } else if current < Self.targetSchemaVersion {
-            try db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(Self.targetSchemaVersion)])
+        var current = try currentSchemaVersion()
+        if current < 1 {
+            try migrate(to: 1, migrateToV1)
+            current = 1
+        }
+        if current < 2 {
+            try migrate(to: 2, migrateToV2)
+        }
+    }
+
+    private func migrate(to version: Int, _ changes: () throws -> Void) throws {
+        try immediateTransaction {
+            try changes()
+            if try currentSchemaVersion() == 0 {
+                try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(version)])
+            } else {
+                try db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(version)])
+            }
         }
     }
 

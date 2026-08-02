@@ -47,6 +47,21 @@ struct MissionIssueResolverTests {
         #expect(resolved.selectedProjectId == Self.cloneB.id)
     }
 
+    @Test func fullURLContinuesPastAPreferredCloneWhoseProviderIsUnavailable() async throws {
+        let provider = FakeIssueProvider(unavailablePaths: [Self.cloneA.path])
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA, Self.cloneB] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")] },
+            providers: .init([provider])
+        ))
+
+        let resolved = try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+
+        #expect(resolved.candidateProjectIds == [Self.cloneA.id, Self.cloneB.id])
+        #expect(resolved.selectedProjectId == Self.cloneB.id)
+    }
+
     @Test func resolverReportsMissingCLIAndAuthenticationBeforeFetching() async {
         let missingCLI = MissionIssueResolver(environment: Self.environment(provider: FakeIssueProvider(available: false)))
         await #expect(throws: CodeHostProviderError.cliMissing("gh")) {
@@ -92,8 +107,9 @@ struct MissionIssueResolverTests {
         let executable = "gh"
         var available = true
         var authenticated = true
+        var unavailablePaths: Set<String> = []
 
-        func isAvailable(cwd: URL) async -> Bool { available }
+        func isAvailable(cwd: URL) async -> Bool { available && !unavailablePaths.contains(cwd.path) }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { authenticated }
         func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
             MissionIssueSnapshot(

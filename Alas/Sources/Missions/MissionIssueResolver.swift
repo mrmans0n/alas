@@ -88,14 +88,26 @@ struct MissionIssueResolver {
                 throw CodeHostProviderError.malformedOutput("No configured project matches this issue repository.")
             }
             let selectedID = environment.selectedProjectId()
-            let preferred = matches.first { $0.project.id == selectedID } ?? matches[0]
-            return try await resolve(
-                number: number,
-                remote: preferred.remote,
-                candidates: matches.map(\.project.id),
-                selectedProjectId: preferred.project.id,
-                cwd: preferred.project.path
-            )
+            let preferred = matches.first { $0.project.id == selectedID }
+            let orderedMatches = preferred.map { preferred in
+                [preferred] + matches.filter { $0.project.id != preferred.project.id }
+            } ?? matches
+            let candidateProjectIDs = matches.map(\.project.id)
+            var lastError: Error?
+            for match in orderedMatches {
+                do {
+                    return try await resolve(
+                        number: number,
+                        remote: match.remote,
+                        candidates: candidateProjectIDs,
+                        selectedProjectId: match.project.id,
+                        cwd: match.project.path
+                    )
+                } catch {
+                    lastError = error
+                }
+            }
+            throw lastError ?? CodeHostProviderError.malformedOutput("No configured project can resolve this issue.")
         }
     }
 
