@@ -177,12 +177,18 @@ final class MissionController {
                    aggregate.mission.state == .needsAttention,
                    aggregate.mission.setupCheckpoint == .startingAgent,
                    var leg = aggregate.primaryLeg {
-                    if leg.agentId != agentId, leg.pendingInitialPrompt != nil {
+                    if leg.agentId != agentId {
                         leg.agentId = agentId
                         // ACP sessions retain their original agent identity. A replacement
                         // therefore needs a fresh, durable session ID instead of mutating
                         // the prior session or accidentally hydrating it for the new agent.
                         leg.acpSessionId = environment.makeID()
+                        // A prompt consumed by the prior session cannot be transferred by
+                        // its durable receipt. Explicit replacement starts a new delegation,
+                        // so restore issue-derived input for the replacement session.
+                        if leg.pendingInitialPrompt == nil {
+                            leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
+                        }
                         try await persistence.updateLeg(leg, event: nil)
                         aggregate.legs = [leg]
                         environment.notifyChanged(aggregate)

@@ -511,8 +511,8 @@ struct MissionCoordinatorTests {
         #expect(recovered.mission.setupCheckpoint == .running)
     }
 
-    @Test("agent replacement keeps the started session after prompt consumption")
-    func agentReplacementKeepsStartedSessionAfterPromptConsumption() async throws {
+    @Test("agent replacement starts a fresh delegation after prompt consumption")
+    func agentReplacementStartsFreshDelegationAfterPromptConsumption() async throws {
         let fake = MissionCoordinatorFake()
         fake.idValues = [
             "mission",
@@ -533,9 +533,11 @@ struct MissionCoordinatorTests {
         let recovered = try #require(try await fake.persistence.aggregate(id: id))
 
         #expect(fake.startACPCalls == 2)
-        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
-        #expect(recovered.primaryLeg?.agentId == "codex")
-        #expect(recovered.primaryLeg?.acpSessionId == "started-session")
+        #expect(fake.startedAgentIDs == ["codex", "claude"])
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId, Self.draft.initialPromptId])
+        #expect(recovered.primaryLeg?.agentId == "claude")
+        #expect(recovered.primaryLeg?.acpSessionId != "started-session")
+        #expect(recovered.primaryLeg?.pendingInitialPrompt == nil)
         #expect(recovered.mission.state == .running)
     }
 
