@@ -103,7 +103,8 @@ struct MissionTabTests {
             hidden: false,
             includeWorktree: true,
             missionState: .completed,
-            competingMissionState: .running
+            competingMissionState: .running,
+            competingMissionBranch: "replacement-branch"
         )
         await fixture.state.missions.load()
 
@@ -509,7 +510,8 @@ private struct MissionNavigationFixture {
         missionState: MissionState? = nil,
         setupCheckpoint: MissionSetupCheckpoint = .running,
         attentionReason: String? = nil,
-        competingMissionState: MissionState? = nil
+        competingMissionState: MissionState? = nil,
+        competingMissionBranch: String = "fix/parser-crash"
     ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
@@ -534,6 +536,22 @@ private struct MissionNavigationFixture {
             competitor.mission.completedAt = competingMissionState == .completed
                 ? Date(timeIntervalSince1970: 300)
                 : nil
+            let originalLeg = competitor.legs[0]
+            competitor.legs[0] = MissionLeg(
+                id: originalLeg.id,
+                missionID: originalLeg.missionID,
+                ordinal: originalLeg.ordinal,
+                projectId: originalLeg.projectId,
+                baseRef: originalLeg.baseRef,
+                branch: competingMissionBranch,
+                destinationPath: originalLeg.destinationPath,
+                worktreeId: originalLeg.worktreeId,
+                agentId: originalLeg.agentId,
+                acpSessionId: originalLeg.acpSessionId,
+                initialPromptId: originalLeg.initialPromptId,
+                pendingInitialPrompt: originalLeg.pendingInitialPrompt,
+                reviewIdentity: originalLeg.reviewIdentity
+            )
             competitor.legs[0].worktreeId = "worktree-1"
             competitor.legs[0].acpSessionId = "session-2"
             competitor.legs[0].pendingInitialPrompt = nil

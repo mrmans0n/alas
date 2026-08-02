@@ -231,11 +231,7 @@ struct WorktreeService {
         return await withTaskGroup(of: String?.self) { group in
             for path in lockedPaths {
                 group.addTask {
-                    do {
-                        return try await RemoteFileAccess.mtime(host: host, path: path) == nil ? path : nil
-                    } catch {
-                        return nil
-                    }
+                    await RemoteFileAccess.existence(host: host, path: path) == .missing ? path : nil
                 }
             }
             var absent: Set<String> = []
@@ -270,9 +266,19 @@ struct WorktreeService {
                cwd: repoPath
            ),
            registration.exitCode == 0 {
+            let lockedDestinationIsMissing: Bool
+            if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+                lockedDestinationIsMissing = await RemoteFileAccess.existence(
+                    host: host,
+                    path: destination.path
+                ) == .missing
+            } else {
+                lockedDestinationIsMissing = !FileManager.default.fileExists(atPath: destination.path)
+            }
             staleRegistration = Self.staleRegistration(
                 registration.stdout,
-                destination: destination
+                destination: destination,
+                lockedDestinationIsMissing: lockedDestinationIsMissing
             )
         }
 
@@ -341,14 +347,15 @@ struct WorktreeService {
         return makeWorktree(destination: destination, branch: branch, projectId: projectId)
     }
 
-    private enum StaleWorktreeRegistration {
+    enum StaleWorktreeRegistration {
         case prunable
         case locked
     }
 
-    private static func staleRegistration(
+    static func staleRegistration(
         _ porcelain: String,
-        destination: URL
+        destination: URL,
+        lockedDestinationIsMissing: Bool
     ) -> StaleWorktreeRegistration? {
         func canonicalPath(_ url: URL) -> String {
             url.deletingLastPathComponent()
@@ -367,9 +374,7 @@ struct WorktreeService {
                   canonicalPath(URL(fileURLWithPath: currentPath)) == destinationPath
             else { return nil }
             if currentPrunable { return .prunable }
-            if currentLocked,
-               !destination.isRemoteAlasPath,
-               !FileManager.default.fileExists(atPath: destination.path) {
+            if currentLocked, lockedDestinationIsMissing {
                 return .locked
             }
             return nil

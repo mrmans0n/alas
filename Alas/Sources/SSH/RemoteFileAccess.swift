@@ -15,6 +15,12 @@ enum RemoteFileAccessError: Error, Equatable {
     case saveConflict(RemoteSaveConflict)
 }
 
+enum RemotePathExistence: Equatable {
+    case exists
+    case missing
+    case unknown
+}
+
 enum RemoteSaveConflict: Equatable {
     case changed
     case deleted
@@ -278,6 +284,32 @@ enum RemoteFileAccess {
             }
         }
         return try await mtimeViaExec(host: host, path: path)
+    }
+
+    static func existence(host: String, path: String) async -> RemotePathExistence {
+        if await helperIsInstalled(host: host) {
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.stat(paths: [path])
+                guard let entry = result.entries.first else { return .unknown }
+                return entry.exists ? .exists : .missing
+            } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
+                return .unknown
+            } catch {
+                // Fall through to the exec probe when the helper transport is unavailable.
+            }
+        }
+        let quotedPath = SSHCommand.shellQuote(path)
+        let command = "p=\(quotedPath); if [ -e \"$p\" ] || [ -L \"$p\" ]; then printf exists; else printf missing; fi"
+        guard let result = try? await RemoteExec.run(host: host, cwd: nil, command: command),
+              !RemoteExec.isConnectionFailure(exitCode: result.exitCode),
+              result.exitCode == 0
+        else { return .unknown }
+        switch result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "exists": return .exists
+        case "missing": return .missing
+        default: return .unknown
+        }
     }
 
     private static func mtimeViaExec(host: String, path: String) async throws -> Date? {

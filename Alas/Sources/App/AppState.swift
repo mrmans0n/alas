@@ -858,8 +858,7 @@ final class AppState {
             guard other.mission.id != aggregate.mission.id,
                   other.mission.createdAt > aggregate.mission.createdAt,
                   let leg = other.primaryLeg,
-                  leg.projectId == candidate.projectId,
-                  leg.branch == candidate.branch
+                  leg.projectId == candidate.projectId
             else { return false }
             return leg.worktreeId == candidate.id
                 || URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path == candidatePath

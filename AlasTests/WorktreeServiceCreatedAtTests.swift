@@ -82,6 +82,27 @@ import Foundation
         #expect(parsed.map(\.branch) == ["main"])
     }
 
+    @Test func remoteMissingLockedRegistrationIsEligibleForRecovery() {
+        let destination = URL(fileURLWithPath: "/srv/alas/worktrees/missing")
+        let porcelain = """
+        worktree \(destination.path)
+        branch refs/heads/feature/missing
+        locked
+
+        """
+
+        #expect(WorktreeService.staleRegistration(
+            porcelain,
+            destination: destination,
+            lockedDestinationIsMissing: true
+        ) == .locked)
+        #expect(WorktreeService.staleRegistration(
+            porcelain,
+            destination: destination,
+            lockedDestinationIsMissing: false
+        ) == nil)
+    }
+
     @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")
