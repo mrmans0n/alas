@@ -123,6 +123,25 @@ struct ACPWorktreeSessionBootstrapperTests {
         #expect(fake.promptIDs == [Self.promptID])
         #expect(fake.attachCalls == 1)
     }
+
+    @Test("retry after prompt delivery reattaches without enqueueing it again")
+    func retryAfterPromptDeliveryReattachesWithoutEnqueueingAgain() async throws {
+        let fake = BootstrapFake(sessionExists: true, queuedPromptIDs: [Self.promptID])
+        let bootstrapper = ACPWorktreeSessionBootstrapper(environment: fake.environment)
+        let request = ACPWorktreeSessionRequest(
+            worktreeId: Self.request.worktreeId,
+            sessionID: Self.request.sessionID,
+            agentId: Self.request.agentId,
+            promptID: Self.request.promptID,
+            prompt: nil
+        )
+
+        #expect(try await bootstrapper.start(request) == request.sessionID)
+        #expect(fake.prepareCalls == 1)
+        #expect(fake.enqueueCalls == 0)
+        #expect(fake.promptIDs == [Self.promptID])
+        #expect(fake.attachCalls == 1)
+    }
 }
 
 @MainActor

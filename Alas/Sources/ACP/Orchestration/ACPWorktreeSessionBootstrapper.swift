@@ -5,7 +5,7 @@ struct ACPWorktreeSessionRequest: Equatable, Sendable {
     let sessionID: ACPSession.ID
     let agentId: String
     let promptID: UUID
-    let prompt: String
+    let prompt: String?
 }
 
 enum ACPBootstrapReadyState: Equatable, Sendable {
@@ -74,13 +74,15 @@ final class ACPWorktreeSessionBootstrapper {
             throw ACPWorktreeSessionBootstrapError(message: error.localizedDescription)
         }
 
-        guard await environment.enqueuePrompt(
-            request.worktreeId,
-            request.sessionID,
-            request.promptID,
-            request.prompt
-        ) else {
-            throw ACPWorktreeSessionBootstrapError(message: "Could not queue initial prompt.")
+        if let prompt = request.prompt {
+            guard await environment.enqueuePrompt(
+                request.worktreeId,
+                request.sessionID,
+                request.promptID,
+                prompt
+            ) else {
+                throw ACPWorktreeSessionBootstrapError(message: "Could not queue initial prompt.")
+            }
         }
 
         await environment.attach(request.worktreeId, request.sessionID, !sessionAlreadyExists)
@@ -88,7 +90,10 @@ final class ACPWorktreeSessionBootstrapper {
         case .ready:
             return request.sessionID
         case .needsSetup(let reason), .needsAuthentication(let reason), .failed(let reason):
-            throw ACPWorktreeSessionBootstrapError(message: reason, consumedInitialPrompt: true)
+            throw ACPWorktreeSessionBootstrapError(
+                message: reason,
+                consumedInitialPrompt: request.prompt != nil
+            )
         }
     }
 }

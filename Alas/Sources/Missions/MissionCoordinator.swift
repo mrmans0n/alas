@@ -396,10 +396,6 @@ final class MissionCoordinator {
             }
         }
 
-        if leg.pendingInitialPrompt == nil {
-            return await settleRunning(aggregate)
-        }
-
         switch await environment.startACP(leg, worktree) {
         case .success:
             leg.pendingInitialPrompt = nil

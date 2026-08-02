@@ -691,16 +691,13 @@ final class AppState {
                 guard let sessionID = leg.acpSessionId else {
                     return .failure(.init(message: "The Mission ACP session was not reserved."))
                 }
-                guard let prompt = leg.pendingInitialPrompt else {
-                    return .failure(.init(message: "The Mission initial prompt is unavailable."))
-                }
                 do {
                     let startedID = try await self.startACPSession(
                         worktree: worktree,
                         sessionID: sessionID,
                         agentID: leg.agentId,
                         promptID: leg.initialPromptId,
-                        prompt: prompt
+                        prompt: leg.pendingInitialPrompt
                     )
                     return .success(startedID)
                 } catch {
@@ -6234,7 +6231,7 @@ final class AppState {
         sessionID: ACPSession.ID,
         agentID: String,
         promptID: UUID,
-        prompt: String
+        prompt: String?
     ) async throws -> ACPSession.ID {
         guard let manager = acpManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")

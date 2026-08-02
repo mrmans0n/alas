@@ -474,7 +474,7 @@ struct MissionCoordinatorTests {
         await coordinator.retry(id: id)
         let recovered = try #require(try await fake.persistence.aggregate(id: id))
 
-        #expect(fake.startACPCalls == 1)
+        #expect(fake.startACPCalls == 2)
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
         #expect(recovered.mission.state == .running)
         #expect(recovered.mission.setupCheckpoint == .running)
@@ -505,7 +505,7 @@ struct MissionCoordinatorTests {
         await coordinator.retry(id: id)
         let recovered = try #require(try await fake.persistence.aggregate(id: id))
 
-        #expect(fake.startACPCalls == 1)
+        #expect(fake.startACPCalls == 2)
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
         #expect(recovered.mission.state == .running)
         #expect(recovered.mission.setupCheckpoint == .running)
@@ -532,7 +532,8 @@ struct MissionCoordinatorTests {
         await controller.retry(id, agentId: "claude")
         let recovered = try #require(try await fake.persistence.aggregate(id: id))
 
-        #expect(fake.startACPCalls == 1)
+        #expect(fake.startACPCalls == 2)
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
         #expect(recovered.primaryLeg?.agentId == "codex")
         #expect(recovered.primaryLeg?.acpSessionId == "started-session")
         #expect(recovered.mission.state == .running)
