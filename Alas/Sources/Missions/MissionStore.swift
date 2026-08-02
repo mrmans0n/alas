@@ -10,7 +10,7 @@ final class MissionStore {
         case invalidEvent
     }
 
-    static let targetSchemaVersion = 4
+    static let targetSchemaVersion = 3
 
     let path: String
     let db: SQLiteDatabase
@@ -168,14 +168,13 @@ final class MissionStore {
         try immediateTransaction {
             let changed = try db.execChanges("""
             UPDATE mission_legs
-            SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, worktree_creation_epoch = ?, agent_id = ?, acp_session_id = ?,
+            SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, agent_id = ?, acp_session_id = ?,
                 pending_initial_prompt = ?, review_identity = ?
             WHERE id = ? AND mission_id = ?
             """, bindings: [
                 leg.baseRemoteName,
                 leg.worktreeId,
                 leg.worktreeLineageID,
-                leg.worktreeCreationEpoch,
                 leg.agentId,
                 leg.acpSessionId,
                 leg.pendingInitialPrompt,
@@ -208,14 +207,13 @@ final class MissionStore {
             try requireMission(id)
             let changed = try db.execChanges("""
             UPDATE mission_legs
-            SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, worktree_creation_epoch = ?, agent_id = ?, acp_session_id = ?,
+            SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, agent_id = ?, acp_session_id = ?,
                 pending_initial_prompt = ?, review_identity = ?
             WHERE id = ? AND mission_id = ?
             """, bindings: [
                 leg.baseRemoteName,
                 leg.worktreeId,
                 leg.worktreeLineageID,
-                leg.worktreeCreationEpoch,
                 leg.agentId,
                 leg.acpSessionId,
                 leg.pendingInitialPrompt,
@@ -326,11 +324,10 @@ final class MissionStore {
             if let leg {
                 let changed = try db.execChanges("""
                 UPDATE mission_legs
-                SET worktree_lineage_id = ?, worktree_creation_epoch = ?
+                SET worktree_lineage_id = ?
                 WHERE id = ? AND mission_id = ?
                 """, bindings: [
                     leg.worktreeLineageID,
-                    leg.worktreeCreationEpoch,
                     leg.id.rawValue,
                     id.rawValue,
                 ])
@@ -363,10 +360,6 @@ final class MissionStore {
         }
         if current < 3 {
             try migrate(to: 3, migrateToV3)
-            current = 3
-        }
-        if current < 4 {
-            try migrate(to: 4, migrateToV4)
         }
     }
 
@@ -457,10 +450,6 @@ final class MissionStore {
     }
 
     private func migrateToV3() throws {
-        try db.exec("ALTER TABLE mission_legs ADD COLUMN worktree_creation_epoch INTEGER")
-    }
-
-    private func migrateToV4() throws {
         try db.exec("ALTER TABLE mission_legs ADD COLUMN worktree_lineage_id TEXT")
     }
 
@@ -585,9 +574,9 @@ final class MissionStore {
         try db.exec("""
         INSERT INTO mission_legs (
             id, mission_id, ordinal, project_id, base_ref, base_remote_name, branch, destination_path,
-            worktree_id, worktree_lineage_id, worktree_creation_epoch, agent_id, acp_session_id, initial_prompt_id,
+            worktree_id, worktree_lineage_id, agent_id, acp_session_id, initial_prompt_id,
             pending_initial_prompt, review_identity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, bindings: [
             leg.id.rawValue,
             leg.missionID.rawValue,
@@ -599,7 +588,6 @@ final class MissionStore {
             leg.destinationPath,
             leg.worktreeId,
             leg.worktreeLineageID,
-            leg.worktreeCreationEpoch,
             leg.agentId,
             leg.acpSessionId,
             leg.initialPromptId.uuidString,
@@ -702,7 +690,6 @@ final class MissionStore {
             destinationPath: row["destination_path"] as? String ?? "",
             worktreeId: row["worktree_id"] as? String,
             worktreeLineageID: row["worktree_lineage_id"] as? String,
-            worktreeCreationEpoch: row["worktree_creation_epoch"] as? Int64,
             agentId: row["agent_id"] as? String ?? "",
             acpSessionId: row["acp_session_id"] as? String,
             initialPromptId: initialPromptID,

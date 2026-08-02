@@ -21,11 +21,12 @@ struct MissionStoreTests {
 
         let migrated = try MissionStore(path: path)
         let row = try #require(try migrated.db.query(
-            "SELECT base_remote_name FROM mission_legs WHERE id = 'leg-1'"
+            "SELECT base_remote_name, worktree_lineage_id FROM mission_legs WHERE id = 'leg-1'"
         ).first)
 
         #expect(try migrated.currentSchemaVersion() == MissionStore.targetSchemaVersion)
         #expect(row["base_remote_name"] as? String == nil)
+        #expect(row["worktree_lineage_id"] as? String == nil)
     }
 
     @Test("rolls back schema changes when the version update fails")
@@ -43,6 +44,7 @@ struct MissionStoreTests {
         let columns = try v1.query("PRAGMA table_info(mission_legs)")
             .compactMap { $0["name"] as? String }
         #expect(!columns.contains("base_remote_name"))
+        #expect(!columns.contains("worktree_lineage_id"))
         #expect(try v1.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 1)
     }
 

@@ -139,8 +139,6 @@ struct MissionLeg: Codable, Equatable, Sendable {
     let destinationPath: String
     var worktreeId: String?
     var worktreeLineageID: String?
-    /// Legacy identity retained for databases created before stable worktree markers were persisted.
-    var worktreeCreationEpoch: Int64?
     var agentId: String
     var acpSessionId: String?
     let initialPromptId: UUID
@@ -158,7 +156,6 @@ struct MissionLeg: Codable, Equatable, Sendable {
         destinationPath: String,
         worktreeId: String?,
         worktreeLineageID: String? = nil,
-        worktreeCreationEpoch: Int64? = nil,
         agentId: String,
         acpSessionId: String?,
         initialPromptId: UUID,
@@ -175,7 +172,6 @@ struct MissionLeg: Codable, Equatable, Sendable {
         self.destinationPath = destinationPath
         self.worktreeId = worktreeId
         self.worktreeLineageID = worktreeLineageID
-        self.worktreeCreationEpoch = worktreeCreationEpoch
         self.agentId = agentId
         self.acpSessionId = acpSessionId
         self.initialPromptId = initialPromptId
