@@ -548,6 +548,46 @@ struct GitLabCLIProviderTests {
         #expect(request.headRepositorySlug == "nacho/alas")
     }
 
+    @Test func mrListMatchesTheCompleteSourceProjectParentNamespace() throws {
+        let output = """
+        [
+          {
+            "iid": 42,
+            "title": "Nested subgroup MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "group/team/alas"
+          },
+          {
+            "iid": 43,
+            "title": "Exact namespace MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "opened",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "group/alas"
+          }
+        ]
+        """
+
+        let request = try #require(try GitLabCLIProvider.parseMRList(
+            output,
+            remote: Self.remote,
+            headOwner: "group",
+            headSHA: "matching-sha",
+            preferMerged: true
+        ))
+
+        #expect(request.number == 43)
+        #expect(request.headRepositoryOwner == "group")
+    }
+
     @Test func mrListReturnsNilWhenHeadOwnerMetadataDoesNotMatch() throws {
         let output = """
         [

@@ -1950,10 +1950,12 @@ private struct MRListItem: Decodable {
     }
 
     func matchesSourceProjectOwner(_ headOwner: String, sourceProjectPathsByID: [Int: String]) -> Bool {
-        guard let sourceProjectNamespace = sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) else {
+        guard let sourceProjectPath = sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) else {
             return false
         }
-        return sourceProjectNamespace == headOwner || sourceProjectNamespace.hasPrefix("\(headOwner)/")
+        let components = sourceProjectPath.split(separator: "/")
+        guard components.count > 1 else { return false }
+        return components.dropLast().joined(separator: "/") == headOwner
     }
 
     private enum CodingKeys: String, CodingKey {
