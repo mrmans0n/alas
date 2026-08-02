@@ -717,6 +717,32 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func liveRefreshDiscoversAMergedReplacementForARetargetedOpenReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let retargetedSnapshot = Self.reviewSnapshot(state: .open, baseBranch: "release")
+        let retargeted = try #require(retargetedSnapshot.reviewRequest)
+        let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? retargeted : nil
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: retargetedSnapshot
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
     @Test func manualRefreshDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")

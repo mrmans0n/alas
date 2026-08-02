@@ -244,22 +244,22 @@ final class MissionController {
                       ), currentWorktree.id == worktreeId,
                       currentWorktree.branch == leg.branch
                 else { continue }
-                let replacesClosedReview: Bool
+                let replacesLinkedReview: Bool
                 if let linked = leg.reviewIdentity {
                     guard let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
-                          refreshed.state == .closed,
-                          Self.reviewIdentity(for: refreshed) == linked
+                          Self.reviewIdentity(for: refreshed) == linked,
+                          refreshed.state == .closed || !Self.review(refreshed, matches: leg)
                     else { continue }
-                    replacesClosedReview = true
+                    replacesLinkedReview = true
                 } else {
-                    replacesClosedReview = false
+                    replacesLinkedReview = false
                 }
                 guard let request = await discoverMergedReview(for: leg, snapshot: snapshot) else { continue }
                 await applyReview(
                     request,
                     identity: Self.reviewIdentity(for: request),
                     to: aggregate.mission.id,
-                    replaceReviewIdentity: replacesClosedReview
+                    replaceReviewIdentity: replacesLinkedReview
                 )
             }
         } catch {
@@ -486,7 +486,8 @@ final class MissionController {
         for leg: MissionLeg,
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
-        guard snapshot.reviewRequest == nil,
+        let visibleMatchesMission = snapshot.reviewRequest.map { Self.review($0, matches: leg) } ?? false
+        guard !visibleMatchesMission,
               snapshot.local.branchName == leg.branch,
               let request = await discoverMergedReview(
                   for: leg,
