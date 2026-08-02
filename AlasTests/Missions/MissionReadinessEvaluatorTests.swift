@@ -630,8 +630,9 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { _, _ in currentSnapshot },
-            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
+            discoverReviewRequest: { projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
+                #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
@@ -656,7 +657,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? closed : nil
             }
@@ -674,8 +675,9 @@ struct MissionReadinessEvaluatorTests {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
             worktreeAvailable: false,
-            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
+            discoverReviewRequest: { projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
+                #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
@@ -701,7 +703,7 @@ struct MissionReadinessEvaluatorTests {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, headSHA, headOwner in
+            discoverReviewRequest: { _, _, _, _, headSHA, headOwner in
                 #expect(headSHA == "abc123")
                 #expect(headOwner == nil)
                 return request
@@ -725,7 +727,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? closed : nil
             },
@@ -748,7 +750,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? retargeted : nil
             },
@@ -771,7 +773,7 @@ struct MissionReadinessEvaluatorTests {
         let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? retargeted : nil
             }
@@ -797,7 +799,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? stale : nil
             },
@@ -824,7 +826,7 @@ struct MissionReadinessEvaluatorTests {
         let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? stale : nil
             }
@@ -845,7 +847,7 @@ struct MissionReadinessEvaluatorTests {
     @Test func snapshotRefreshDiscoversAMergedReviewThatIsNoLongerOpen() async throws {
         let replacement = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _ in replacement }
+            discoverReviewRequest: { _, _, _, _, _, _ in replacement }
         )
         await fake.controller.load()
 
@@ -864,8 +866,9 @@ struct MissionReadinessEvaluatorTests {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
+            discoverReviewRequest: { projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
+                #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
@@ -893,7 +896,7 @@ struct MissionReadinessEvaluatorTests {
         ).reviewRequest)
         let fake = try MissionLifecycleFake(
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _, _ in historical }
+            discoverReviewRequest: { _, _, _, _, _, _ in historical }
         )
         await fake.controller.load()
 
@@ -908,7 +911,7 @@ struct MissionReadinessEvaluatorTests {
         let closed = try #require(Self.reviewSnapshot(state: .closed).reviewRequest)
         let fake = try MissionLifecycleFake(
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _, _ in closed }
+            discoverReviewRequest: { _, _, _, _, _, _ in closed }
         )
         await fake.controller.load()
 
@@ -1242,7 +1245,7 @@ private final class MissionLifecycleFake {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _, _ in nil },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in "abc123" },
         createWorktree: ((MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>)? = nil

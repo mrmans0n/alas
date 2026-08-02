@@ -514,6 +514,8 @@ final class AppState {
     @ObservationIgnored
     private let missionStartupReviewSnapshot: MissionStartupReviewSnapshot?
     @ObservationIgnored
+    private let missionBranchTipOverride: MissionBranchTip?
+    @ObservationIgnored
     private let missionArchiveRecorder: MissionArchiveRecorder?
     @ObservationIgnored
     private(set) lazy var missions = makeMissionController()
@@ -541,6 +543,7 @@ final class AppState {
         terminalSessionOpener: TerminalSessionOpener? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
+        missionBranchTipOverride: MissionBranchTip? = nil,
         missionArchiveRecorder: MissionArchiveRecorder? = nil
     ) {
         self.store = store
@@ -554,6 +557,7 @@ final class AppState {
         self.terminalSessionOpener = terminalSessionOpener
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
+        self.missionBranchTipOverride = missionBranchTipOverride
         self.missionArchiveRecorder = missionArchiveRecorder
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
@@ -715,7 +719,11 @@ final class AppState {
         }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
             await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
         }, branchTip: { [weak self] projectID, branch in
-            await self?.missionBranchTip(projectID: projectID, branch: branch)
+            guard let self else { return nil }
+            if let missionBranchTipOverride = self.missionBranchTipOverride {
+                return await missionBranchTipOverride(projectID, branch)
+            }
+            return await self.missionBranchTip(projectID: projectID, branch: branch)
         }, projectExists: { [weak self] projectID in
             self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
         }, worktreeDiscoverySucceeded: { [weak self] projectID in
@@ -737,9 +745,10 @@ final class AppState {
                 baseBranch: baseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
-        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA, headOwner in
+        }, discoverReviewRequest: { [weak self] projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
             await self?.discoverMissionReview(
                 projectID: projectID,
+                issueIdentity: issueIdentity,
                 branch: branch,
                 baseRef: baseRef,
                 headSHA: headSHA,
@@ -967,6 +976,7 @@ final class AppState {
 
     private func discoverMissionReview(
         projectID: String,
+        issueIdentity: MissionIssueIdentity,
         branch: String,
         baseRef: String,
         headSHA: String,
@@ -977,17 +987,12 @@ final class AppState {
         let cwd = URL(fileURLWithPath: project.path)
         do {
             let remotes = try await GitService().remotes(worktreePath: cwd)
-            let registry = CodeHostProviderRegistry.live()
-            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-                forBaseBranch: baseRef,
+            guard let remote = Self.missionReviewRemote(
+                identity: issueIdentity,
+                baseRef: baseRef,
                 remotes: remotes
-            )
-            guard let remote = CodeHostRemoteDetector.detect(
-                from: remotes,
-                supportedKinds: registry.supportedKinds,
-                preferredRemoteName: preferredRemoteName
             ),
-                let provider = registry.provider(for: remote.kind),
+                let provider = CodeHostProviderRegistry.live().provider(for: issueIdentity.provider),
                 await provider.isAvailable(cwd: cwd),
                 await provider.isAuthenticated(remote: remote, cwd: cwd)
             else { return nil }
@@ -1004,6 +1009,25 @@ final class AppState {
         } catch {
             return nil
         }
+    }
+
+    static func missionReviewRemote(
+        identity: MissionIssueIdentity,
+        baseRef: String,
+        remotes: [GitRemote]
+    ) -> CodeHostRemote? {
+        let matchingRemotes = remotes
+            .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) }
+            .filter { candidate in
+                candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
+                    && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
+            }
+        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+            forBaseBranch: baseRef,
+            remotes: remotes
+        )
+        return matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
+            ?? matchingRemotes.first
     }
 
     private func missionBranchTip(projectID: String, branch: String) async -> String? {

@@ -45,6 +45,25 @@ struct AppStatePersistenceTests {
         }
     }
 
+    @Test func missionReviewRemoteUsesPersistedProviderForEnterpriseHost() throws {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.example.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let remote = try #require(AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "origin/main",
+            remotes: [GitRemote(name: "origin", url: "git@github.example.com:acme/alas.git")]
+        ))
+
+        #expect(remote.kind == .github)
+        #expect(remote.host == identity.host)
+        #expect(remote.repositorySlug == identity.repositorySlug)
+    }
+
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
         let state = AppState(store: FailingStore()) { title, message in
@@ -236,6 +255,7 @@ struct AppStatePersistenceTests {
 
     @Test func startupMissionReconciliationLoadsMergedReviewBeforePaneCreation() async throws {
         let project = Self.project
+        let worktree = Self.worktree
         let persistence = try Self.makeMissionPersistence()
         var requestedWorktreeIDs: [String] = []
         let state = AppState(
@@ -245,9 +265,13 @@ struct AppStatePersistenceTests {
                 requestedWorktreeIDs.append(worktree.id)
                 #expect(baseRef == "origin/main")
                 return Self.mergedReviewSnapshot()
+            },
+            missionBranchTipOverride: { projectID, branch in
+                #expect(projectID == project.id)
+                #expect(branch == worktree.branch)
+                return "abc123"
             }
         )
-        let worktree = Self.worktree
         state.projectsManager.insertOptimisticWorktree(worktree)
 
         #expect(state.rightPaneStore.reviewSnapshot(

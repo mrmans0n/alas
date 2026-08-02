@@ -13,6 +13,7 @@ typealias MissionStartupReviewSnapshot = @MainActor (
 
 typealias MissionReviewDiscovery = @MainActor (
     _ projectID: String,
+    _ issueIdentity: MissionIssueIdentity,
     _ branch: String,
     _ baseRef: String,
     _ headSHA: String,
@@ -100,7 +101,7 @@ final class MissionController {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _, _ in nil },
         openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
         persistence = environment.persistence
@@ -263,7 +264,11 @@ final class MissionController {
                 } else {
                     replacesLinkedReview = false
                 }
-                guard let request = await discoverMergedReview(for: leg, snapshot: snapshot) else { continue }
+                guard let request = await discoverMergedReview(
+                    for: leg,
+                    issueIdentity: aggregate.issue.identity,
+                    snapshot: snapshot
+                ) else { continue }
                 await applyReview(
                     request,
                     identity: Self.reviewIdentity(for: request),
@@ -498,6 +503,7 @@ final class MissionController {
 
     private func discoverMergedReview(
         for leg: MissionLeg,
+        issueIdentity: MissionIssueIdentity,
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
         let visibleBlocksDiscovery = snapshot.reviewRequest.map { request in
@@ -509,6 +515,7 @@ final class MissionController {
               snapshot.local.branchName == leg.branch,
               let request = await discoverMergedReview(
                   for: leg,
+                  issueIdentity: issueIdentity,
                   headSHA: snapshot.local.headSHA,
                   headOwner: snapshot.local.headRemoteOwner
               )
@@ -518,12 +525,14 @@ final class MissionController {
 
     private func discoverMergedReview(
         for leg: MissionLeg,
+        issueIdentity: MissionIssueIdentity,
         headSHA: String,
         headOwner: String?
     ) async -> ReviewRequest? {
         guard !headSHA.isEmpty,
               let request = await discoverReviewRequest(
                   leg.projectId,
+                  issueIdentity,
                   leg.branch,
                   leg.baseRef,
                   headSHA,
@@ -572,6 +581,7 @@ final class MissionController {
               !currentTip.isEmpty,
               let request = await discoverMergedReview(
                   for: leg,
+                  issueIdentity: aggregate.issue.identity,
                   headSHA: currentTip,
                   headOwner: nil
               )
