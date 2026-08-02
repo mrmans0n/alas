@@ -328,6 +328,8 @@ struct MissionTabView: View {
                 )
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.color("bg-1"))
         .confirmationDialog(
             "Complete Mission?",
             isPresented: $completionConfirmationPresented,
