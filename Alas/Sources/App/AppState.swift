@@ -1619,8 +1619,7 @@ final class AppState {
         spacesManager.switchToSpace(id: id)
         guard spacesManager.activeSpaceId != previousSpaceId else { return false }
         let selection = resolvedSelectionForActiveSpace()
-        selectedWorktreeId = selection
-        spacesManager.setLastSelectedWorktree(selection)
+        selectWorktree(id: selection)
         scheduleSpacesSave()
         return true
     }
@@ -1684,8 +1683,7 @@ final class AppState {
         guard spacesManager.deleteSpace(id: id) else { return }
         if wasActiveSpace {
             let fallbackSelection = resolvedSelectionForActiveSpaceForStartup()
-            selectedWorktreeId = fallbackSelection
-            spacesManager.setLastSelectedWorktree(fallbackSelection)
+            selectWorktree(id: fallbackSelection)
         }
         saveSpaces()
     }
@@ -1694,6 +1692,9 @@ final class AppState {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
             projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
         } ?? false
+        let wasSelectedMissingMissionProject = missingMissionTab.flatMap { tab in
+            missions.aggregate(id: tab.missionID)?.primaryLeg?.projectId
+        } == projectId
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
@@ -1703,10 +1704,9 @@ final class AppState {
             spacesManager.addProject(projectId, toSpace: spaceId)
             guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
         }
-        if removedFromActiveSpace, wasSelectedProject {
+        if removedFromActiveSpace, wasSelectedProject || wasSelectedMissingMissionProject {
             let selection = resolvedSelectionForActiveSpace()
-            selectedWorktreeId = selection
-            spacesManager.setLastSelectedWorktree(selection)
+            selectWorktree(id: selection)
         }
         saveSpaces()
     }

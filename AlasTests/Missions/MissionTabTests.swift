@@ -98,6 +98,40 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
     }
 
+    @Test func switchingSpacesClearsMissingMissionRecovery() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        #expect(fixture.state.switchToSpace(id: "other-space"))
+
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.selectedWorktreeId == nil)
+    }
+
+    @Test func deletingTheActiveSpaceClearsMissingMissionRecovery() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.deleteSpace(id: "mission-space")
+
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.selectedWorktreeId == nil)
+    }
+
+    @Test func removingTheMissionProjectFromTheActiveSpaceClearsRecovery() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        fixture.state.spacesManager.addProject("project-1", toSpace: "other-space")
+
+        fixture.state.toggleProject(projectId: "project-1", inSpace: "mission-space")
+
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.selectedWorktreeId == nil)
+    }
+
     @Test func openMissionPresentsRecoveryForAFailedOptimisticWorktree() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         fixture.state.projectsManager.setOperationState(
