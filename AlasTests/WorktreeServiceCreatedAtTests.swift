@@ -42,6 +42,24 @@ import Foundation
         #expect(parsed.map(\.branch) == ["main"])
     }
 
+    @Test func parsePorcelainPreservesRemoteLockedWorktreesWithoutLocalPaths() {
+        let porcelain = """
+        worktree /srv/alas/main
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree /srv/alas/worktrees/feature
+        HEAD def456
+        branch refs/heads/feature/locked
+        locked
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1", isRemote: true)
+
+        #expect(parsed.map(\.branch) == ["main", "feature/locked"])
+    }
+
     @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")

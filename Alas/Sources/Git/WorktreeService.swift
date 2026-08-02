@@ -35,8 +35,9 @@ struct WorktreeService {
     func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        var trees = Self.parsePorcelain(result.stdout, projectId: projectId)
-        if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+        let host = RemoteHostRegistry.shared.host(forPath: repoPath.path)
+        var trees = Self.parsePorcelain(result.stdout, projectId: projectId, isRemote: host != nil)
+        if let host {
             trees = await Self.fillingRemoteLastActivity(trees, host: host)
         }
         return trees
@@ -146,7 +147,7 @@ struct WorktreeService {
         }
     }
 
-    static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
+    static func parsePorcelain(_ out: String, projectId: String, isRemote: Bool = false) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
         var currentBranch: String?
@@ -156,6 +157,7 @@ struct WorktreeService {
         func flush() {
             let absentLockedPath = currentPath.map { path in
                 currentLocked
+                    && !isRemote
                     && !path.isRemoteAlasPath
                     && !FileManager.default.fileExists(atPath: path.path)
             } ?? false

@@ -247,7 +247,7 @@ final class MissionController {
                 if let linked = leg.reviewIdentity {
                     guard let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
                           refreshed.state == .closed,
-                          Self.review(refreshed, matches: leg)
+                          Self.reviewIdentity(for: refreshed) == linked
                     else { continue }
                     replacesClosedReview = true
                 } else {
@@ -527,9 +527,10 @@ final class MissionController {
         var replacesClosedReview = false
         if let identity = leg.reviewIdentity {
             guard let linked = await linkedReviewRequest(identity, leg.projectId, leg.baseRef),
-                  Self.review(linked, matches: leg)
+                  Self.reviewIdentity(for: linked) == identity
             else { return }
             if linked.state != .closed {
+                guard Self.review(linked, matches: leg) else { return }
                 if linked.state == .merged {
                     guard let currentTip = await branchTip(leg.projectId, leg.branch),
                           !currentTip.isEmpty,
