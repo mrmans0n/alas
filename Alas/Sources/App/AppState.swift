@@ -602,7 +602,7 @@ final class AppState {
         rightPaneStore.appState = self
         rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, baseRef, snapshot in
             Task { @MainActor [weak self] in
-                await self?.missions.observeReview(
+                await self?.missions.refreshReviewSnapshot(
                     worktreeId: worktreeID,
                     baseRef: baseRef,
                     snapshot: snapshot

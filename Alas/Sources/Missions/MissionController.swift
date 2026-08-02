@@ -272,6 +272,11 @@ final class MissionController {
         }
     }
 
+    func refreshReviewSnapshot(worktreeId: String, baseRef: String, snapshot: ReviewLoopSnapshot) async {
+        await observeReview(worktreeId: worktreeId, baseRef: baseRef, snapshot: snapshot)
+        await discoverMergedReview(worktreeId: worktreeId, baseRef: baseRef, snapshot: snapshot)
+    }
+
     func recordArchive(worktreeId: String) async {
         loadError = nil
         do {

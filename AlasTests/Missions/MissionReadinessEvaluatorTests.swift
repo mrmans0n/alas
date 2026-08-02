@@ -796,6 +796,24 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func snapshotRefreshDiscoversAMergedReviewThatIsNoLongerOpen() async throws {
+        let replacement = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            discoverReviewRequest: { _, _, _, _, _ in replacement }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshReviewSnapshot(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshotWithoutRequest()
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func manualRefreshDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")
