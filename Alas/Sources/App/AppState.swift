@@ -996,6 +996,7 @@ final class AppState {
                 branch: branch,
                 headOwner: headOwner,
                 baseBranch: baseRef,
+                headSHA: headSHA,
                 cwd: cwd
             )
             guard request?.headSHA == headSHA else { return nil }

@@ -311,6 +311,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         branch: String,
         headOwner: String?,
         baseBranch: String,
+        headSHA: String? = nil,
         cwd: URL
     ) async throws -> ReviewRequest? {
         try await reviewRequest(
@@ -318,6 +319,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             branch: branch,
             headOwner: headOwner,
             baseBranch: baseBranch,
+            headSHA: headSHA,
             state: "all",
             cwd: cwd
         )
@@ -328,6 +330,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         branch: String,
         headOwner: String?,
         baseBranch: String,
+        headSHA: String? = nil,
         state: String,
         cwd: URL
     ) async throws -> ReviewRequest? {
@@ -349,7 +352,12 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
         }
 
-        guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
+        guard let request = try Self.parsePRList(
+            result.stdout,
+            remote: remote,
+            headOwner: headOwner,
+            headSHA: headSHA
+        ) else {
             return nil
         }
         let queueMetadata = await mergeQueueMetadata(remote: remote, number: request.number, cwd: cwd)
@@ -1375,7 +1383,12 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         }
     }
 
-    static func parsePRList(_ json: String, remote: CodeHostRemote, headOwner: String? = nil) throws -> ReviewRequest? {
+    static func parsePRList(
+        _ json: String,
+        remote: CodeHostRemote,
+        headOwner: String? = nil,
+        headSHA: String? = nil
+    ) throws -> ReviewRequest? {
         let data = Data(json.utf8)
         let items: [PRListItem]
         do {
@@ -1384,11 +1397,13 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh pr list output")
         }
 
-        let item: PRListItem?
-        if let headOwner, !headOwner.isEmpty {
-            item = items.first { $0.headRepositoryOwner?.login == headOwner }
-        } else {
-            item = items.first
+        let normalizedHeadSHA = normalizedOptionalString(headSHA)
+        let item = items.first { item in
+            let ownerMatches = headOwner?.isEmpty != false
+                || item.headRepositoryOwner?.login == headOwner
+            let shaMatches = normalizedHeadSHA == nil
+                || normalizedOptionalString(item.headRefOid) == normalizedHeadSHA
+            return ownerMatches && shaMatches
         }
         guard let item else {
             return nil

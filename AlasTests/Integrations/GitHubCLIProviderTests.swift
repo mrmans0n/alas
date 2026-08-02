@@ -1232,6 +1232,47 @@ struct GitHubCLIProviderTests {
         #expect(request.title == "My fork")
     }
 
+    @Test func prListFiltersByHeadSHAAmongMatchingOwners() throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(
+            """
+            [
+              {
+                "number": 41,
+                "title": "Newer stale review",
+                "url": "https://github.com/mrmans0n/alas/pull/41",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRefOid": "stale-sha",
+                "headRepositoryOwner": { "login": "nacho" },
+                "baseRefName": "main",
+                "reviewDecision": "REVIEW_REQUIRED",
+                "mergeStateStatus": "CLEAN"
+              },
+              {
+                "number": 42,
+                "title": "Matching merged review",
+                "url": "https://github.com/mrmans0n/alas/pull/42",
+                "state": "MERGED",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRefOid": "matching-sha",
+                "headRepositoryOwner": { "login": "nacho" },
+                "baseRefName": "main",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN"
+              }
+            ]
+            """,
+            remote: Self.remote,
+            headOwner: "nacho",
+            headSHA: "matching-sha"
+        ))
+
+        #expect(request.number == 42)
+        #expect(request.headSHA == "matching-sha")
+    }
+
     @Test func prListReturnsNilWhenHeadOwnerDoesNotMatch() throws {
         let request = try GitHubCLIProvider.parsePRList(
             Self.prListOutput,

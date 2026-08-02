@@ -128,6 +128,7 @@ protocol CodeHostProvider: Sendable {
         branch: String,
         headOwner: String?,
         baseBranch: String,
+        headSHA: String?,
         cwd: URL
     ) async throws -> ReviewRequest?
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest
@@ -258,15 +259,20 @@ extension CodeHostProvider {
         branch: String,
         headOwner: String?,
         baseBranch: String,
+        headSHA: String? = nil,
         cwd: URL
     ) async throws -> ReviewRequest? {
-        try await currentReviewRequest(
+        let request = try await currentReviewRequest(
             remote: remote,
             branch: branch,
             headOwner: headOwner,
             baseBranch: baseBranch,
             cwd: cwd
         )
+        guard let headSHA = headSHA?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !headSHA.isEmpty
+        else { return request }
+        return request?.headSHA == headSHA ? request : nil
     }
 }
 

@@ -79,6 +79,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         branch: String,
         headOwner: String?,
         baseBranch: String,
+        headSHA: String? = nil,
         cwd: URL
     ) async throws -> ReviewRequest? {
         try await reviewRequest(
@@ -86,6 +87,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             branch: branch,
             headOwner: headOwner,
             baseBranch: baseBranch,
+            headSHA: headSHA,
             includeAllStates: true,
             cwd: cwd
         )
@@ -96,6 +98,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         branch: String,
         headOwner: String?,
         baseBranch: String,
+        headSHA: String? = nil,
         includeAllStates: Bool,
         cwd: URL
     ) async throws -> ReviewRequest? {
@@ -130,6 +133,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             result.stdout,
             remote: remote,
             headOwner: headOwner,
+            headSHA: headSHA,
             sourceProjectPathsByID: sourceProjectPathsByID
         ) else {
             return nil
@@ -1228,9 +1232,14 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         _ json: String,
         remote: CodeHostRemote,
         headOwner: String?,
+        headSHA: String? = nil,
         sourceProjectPathsByID: [Int: String] = [:]
     ) throws -> ReviewRequest? {
-        let items = try decodeMRList(json)
+        let decodedItems = try decodeMRList(json)
+        let normalizedHeadSHA = normalizedOptionalString(headSHA)
+        let items = decodedItems.filter { item in
+            normalizedHeadSHA == nil || normalizedOptionalString(item.sha) == normalizedHeadSHA
+        }
 
         guard let item = items.first else {
             return nil

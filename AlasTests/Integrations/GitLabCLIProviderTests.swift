@@ -577,6 +577,45 @@ struct GitLabCLIProviderTests {
         #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
     }
 
+    @Test func mrListFiltersByHeadSHAAmongMatchingOwners() throws {
+        let output = """
+        [
+          {
+            "iid": 41,
+            "title": "Newer stale review",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/41",
+            "state": "opened",
+            "draft": false,
+            "sha": "stale-sha",
+            "source_branch": "fix-ci",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "nacho/alas"
+          },
+          {
+            "iid": 42,
+            "title": "Matching merged review",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "fix-ci",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "nacho/alas"
+          }
+        ]
+        """
+
+        let request = try #require(try GitLabCLIProvider.parseMRList(
+            output,
+            remote: Self.remote,
+            headOwner: "nacho",
+            headSHA: "matching-sha"
+        ))
+
+        #expect(request.number == 42)
+        #expect(request.headSHA == "matching-sha")
+    }
+
     @Test func mrListReturnsNilForAmbiguousHeadOwnerWithoutSourceProjectMetadata() throws {
         let output = """
         [
