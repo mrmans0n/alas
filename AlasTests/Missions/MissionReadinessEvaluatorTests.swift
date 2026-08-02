@@ -1028,6 +1028,58 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
     }
 
+    @Test func liveRefreshResolvesMissingHeadOwnerBeforeDiscovery() async throws {
+        let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            discoverReviewRequest: { _, _, _, _, _, headOwner in
+                #expect(headOwner == "enterprise-fork")
+                return merged
+            },
+            branchOwner: { projectID, branch, identity, baseRef in
+                #expect(projectID == "project-1")
+                #expect(branch == "fix/parser-crash")
+                #expect(identity == MissionFixtures.issue().identity)
+                #expect(baseRef == "origin/main")
+                return "enterprise-fork"
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshotWithoutRequest()
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveRefreshSkipsDiscoveryWhenHeadOwnerCannotBeResolved() async throws {
+        var discoveryCalls = 0
+        let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            discoverReviewRequest: { _, _, _, _, _, _ in
+                discoveryCalls += 1
+                return merged
+            },
+            branchOwner: { _, _, _, _ in nil }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshotWithoutRequest()
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(discoveryCalls == 0)
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
     @Test func liveRefreshDiscoversAMergedReviewAlongsideMatchingOpenReview() async throws {
         let openSnapshot = Self.reviewSnapshot(state: .open)
         let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)

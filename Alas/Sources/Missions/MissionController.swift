@@ -533,12 +533,25 @@ final class MissionController {
         issueIdentity: MissionIssueIdentity,
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
-        guard snapshot.local.branchName == leg.branch,
+        guard snapshot.local.branchName == leg.branch else { return nil }
+        let headOwner: String?
+        if let snapshotOwner = snapshot.local.headRemoteOwner, !snapshotOwner.isEmpty {
+            headOwner = snapshotOwner
+        } else {
+            headOwner = await branchOwner(
+                leg.projectId,
+                leg.branch,
+                issueIdentity,
+                leg.baseRef
+            )
+        }
+        guard let headOwner,
+              !headOwner.isEmpty,
               let request = await discoverMergedReview(
                   for: leg,
                   issueIdentity: issueIdentity,
                   headSHA: snapshot.local.headSHA,
-                  headOwner: snapshot.local.headRemoteOwner
+                  headOwner: headOwner
               )
         else { return nil }
         return request
