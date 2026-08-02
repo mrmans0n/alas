@@ -893,6 +893,9 @@ final class AppState {
     func missionWorktree(_ candidate: Worktree?, for aggregate: MissionAggregate) -> Worktree? {
         guard let candidate = MissionTabContext.worktree(candidate, for: aggregate) else { return nil }
         guard aggregate.mission.state == .completed else { return candidate }
+        guard let completedAt = aggregate.mission.completedAt,
+              candidate.createdAt <= completedAt
+        else { return nil }
         let candidatePath = candidate.path.standardizedFileURL.path
         let ownedByALaterMission = missions.aggregates.contains { other in
             guard other.mission.id != aggregate.mission.id,

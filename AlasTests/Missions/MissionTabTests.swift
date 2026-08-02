@@ -190,6 +190,18 @@ struct MissionTabTests {
         #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
     }
 
+    @Test func completedMissionDoesNotBindToAWorktreeRecreatedAfterCompletion() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            worktreeCreatedAt: 200,
+            missionState: .completed
+        )
+        await fixture.state.missions.load()
+
+        #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
+    }
+
     @Test func openMissionPresentsRecoveryForAReplacementBranch() async throws {
         let fixture = try MissionNavigationFixture(
             hidden: false,
@@ -594,6 +606,7 @@ private struct MissionNavigationFixture {
         includeProject: Bool = true,
         includeWorktree: Bool,
         worktreeBranch: String = "fix/parser-crash",
+        worktreeCreatedAt: TimeInterval = 100,
         missionState: MissionState? = nil,
         setupCheckpoint: MissionSetupCheckpoint = .running,
         attentionReason: String? = nil,
@@ -604,6 +617,9 @@ private struct MissionNavigationFixture {
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = missionState ?? (hidden ? .readyToComplete : .running)
+        aggregate.mission.completedAt = aggregate.mission.state == .completed
+            ? Date(timeIntervalSince1970: 150)
+            : nil
         aggregate.mission.setupCheckpoint = setupCheckpoint
         aggregate.mission.attentionReason = attentionReason
         aggregate.legs[0].worktreeId = "worktree-1"
@@ -652,7 +668,8 @@ private struct MissionNavigationFixture {
             branch: worktreeBranch,
             path: URL(fileURLWithPath: "/tmp/alas-mission"),
             status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 100)
+            lastActivity: Date(timeIntervalSince1970: worktreeCreatedAt),
+            createdAt: Date(timeIntervalSince1970: worktreeCreatedAt)
         )
         let project = ProjectConfig(
             id: "project-1",
