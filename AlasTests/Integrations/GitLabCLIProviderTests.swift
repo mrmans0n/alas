@@ -1614,7 +1614,7 @@ struct GitLabCLIProviderTests {
         ))
     }
 
-    @Test func missionReviewRequestSkipsUnrelatedSourceProjectsBeforeResolution() async throws {
+    @Test func missionReviewRequestSkipsInaccessibleSameSHASourceProjects() async throws {
         let runner = SHAFilteringRunner()
 
         let request = try? await GitLabCLIProvider(runner: runner).missionReviewRequest(
@@ -1629,7 +1629,7 @@ struct GitLabCLIProviderTests {
 
         #expect(request?.number == 43)
         #expect(request?.headSHA == "matching-sha")
-        #expect(commands.contains { $0.starts(with: ["api", "projects/1001"]) } == false)
+        #expect(commands.contains { $0.starts(with: ["api", "projects/1001"]) })
         #expect(commands.contains { $0.starts(with: ["api", "projects/1002"]) })
     }
 
@@ -3161,7 +3161,7 @@ struct GitLabCLIProviderTests {
             "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
             "state": "opened",
             "draft": false,
-            "sha": "stale-sha",
+            "sha": "matching-sha",
             "source_branch": "feature/gitlab-provider",
             "target_branch": "main",
             "source_project_id": 1001

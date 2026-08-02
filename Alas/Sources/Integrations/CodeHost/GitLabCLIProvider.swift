@@ -1170,15 +1170,14 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         })
 
         for id in idsToResolve.sorted() {
-            let result = try await runner.run(
+            guard let result = try? await runner.run(
                 "glab",
                 args: ["api", "projects/\(id)", "--hostname", remote.host, "--output", "json"],
                 cwd: cwd
-            )
-            guard result.exitCode == 0 else {
-                throw CodeHostProviderError.commandFailed(command: "glab api projects/\(id)", stderr: result.stderr)
-            }
-            pathsByID[id] = try Self.parseProjectPath(result.stdout)
+            ), result.exitCode == 0,
+                let path = try? Self.parseProjectPath(result.stdout)
+            else { continue }
+            pathsByID[id] = path
         }
 
         return pathsByID
