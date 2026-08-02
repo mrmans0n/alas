@@ -108,6 +108,28 @@ struct AppStatePersistenceTests {
         #expect(owner == "nacho")
     }
 
+    @Test func missionBranchOwnerPrefersOriginPushURLWithoutTrackingRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
     @Test func missionBranchOwnerFallsBackToTheBaseRemote() {
         let identity = MissionIssueIdentity(
             provider: .github,
