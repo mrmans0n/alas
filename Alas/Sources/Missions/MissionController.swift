@@ -219,7 +219,9 @@ final class MissionController {
                     leg.projectId,
                     leg.destinationPath
                 ), currentWorktree.id == worktreeId,
-                    currentWorktree.branch == leg.branch
+                    currentWorktree.branch == leg.branch,
+                    let worktreeLineageID = leg.worktreeLineageID,
+                    currentWorktree.lineageID == worktreeLineageID
                 else { continue }
                 guard snapshot.local.branchName == leg.branch else { continue }
                 let request: ReviewRequest
@@ -296,7 +298,9 @@ final class MissionController {
                           leg.projectId,
                           leg.destinationPath
                       ), currentWorktree.id == worktreeId,
-                      currentWorktree.branch == leg.branch
+                      currentWorktree.branch == leg.branch,
+                      let worktreeLineageID = leg.worktreeLineageID,
+                      currentWorktree.lineageID == worktreeLineageID
                 else { continue }
                 let replacesLinkedReview = leg.reviewIdentity != nil
                 guard let request = await discoverMergedReview(

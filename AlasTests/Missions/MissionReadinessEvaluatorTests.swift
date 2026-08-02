@@ -345,6 +345,26 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == nil)
     }
 
+    @Test func liveReviewIgnoresAReplacementWorktreeWithTheSameBranch() async throws {
+        var running = Self.runningAggregate()
+        running.legs[0].worktreeLineageID = "original-lineage"
+        let fake = try MissionLifecycleFake(
+            aggregate: running,
+            worktreeLineageID: "replacement-lineage"
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshot(state: .merged)
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
+    }
+
     @Test func liveReviewIgnoresASnapshotFromAnotherBase() async throws {
         let fake = try MissionLifecycleFake()
         await fake.controller.load()
@@ -1159,6 +1179,28 @@ struct MissionReadinessEvaluatorTests {
 
         #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
+    @Test func liveDiscoveryIgnoresAReplacementWorktreeWithTheSameBranch() async throws {
+        var running = Self.runningAggregate()
+        running.legs[0].worktreeLineageID = "original-lineage"
+        let replacementReview = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: running,
+            worktreeLineageID: "replacement-lineage",
+            discoverReviewRequest: { _, _, _, _, _, _ in replacementReview }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")
+        )
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == nil)
     }
 
     @Test func liveRefreshReplacesAnUnavailableLinkedReview() async throws {
