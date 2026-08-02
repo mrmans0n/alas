@@ -261,7 +261,10 @@ final class NewMissionDialogModel {
             errorMessage = "Resolve an issue before creating a Mission."
             return nil
         }
-        if allowDuplicate, duplicateBranch == branch {
+        let normalizedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        if allowDuplicate,
+           duplicateBranch?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedBranch {
             errorMessage = "Choose a different branch for the additional Mission."
             phase = .confirmation
             return nil
@@ -273,9 +276,9 @@ final class NewMissionDialogModel {
             let draft = MissionDraft(
                 issue: issue,
                 projectId: projectId,
-                baseRef: base,
-                branch: branch,
-                destinationPath: availableDestination(projectID: projectId, branch: branch).path,
+                baseRef: normalizedBase,
+                branch: normalizedBranch,
+                destinationPath: availableDestination(projectID: projectId, branch: normalizedBranch).path,
                 agentId: agentId,
                 initialPromptId: UUID(),
                 initialPrompt: prompt

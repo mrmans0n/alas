@@ -452,7 +452,8 @@ struct NewMissionDialogTests {
         let actions = NewMissionDialogActions(model: model, dismiss: {})
         model.reference = "#1842"
         await model.resolve()
-        actions.branch.wrappedValue = "feature/1842-custom"
+        actions.base.wrappedValue = "  origin/main  "
+        actions.branch.wrappedValue = "  feature/1842-custom  "
         model.prompt = "Custom prompt"
 
         let result = await model.create(allowDuplicate: false)

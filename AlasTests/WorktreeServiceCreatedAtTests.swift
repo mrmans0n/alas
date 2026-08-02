@@ -60,6 +60,28 @@ import Foundation
         #expect(parsed.map(\.branch) == ["main", "feature/locked"])
     }
 
+    @Test func parsePorcelainOmitsRemoteLockedWorktreesConfirmedAbsent() {
+        let missingPath = "/srv/alas/worktrees/missing"
+        let porcelain = """
+        worktree /srv/alas/main
+        branch refs/heads/main
+
+        worktree \(missingPath)
+        branch refs/heads/feature/missing
+        locked
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(
+            porcelain,
+            projectId: "p1",
+            isRemote: true,
+            absentLockedPaths: [missingPath]
+        )
+
+        #expect(parsed.map(\.branch) == ["main"])
+    }
+
     @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")

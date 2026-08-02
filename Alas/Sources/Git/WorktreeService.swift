@@ -36,7 +36,17 @@ struct WorktreeService {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         let host = RemoteHostRegistry.shared.host(forPath: repoPath.path)
-        var trees = Self.parsePorcelain(result.stdout, projectId: projectId, isRemote: host != nil)
+        let absentLockedPaths = if let host {
+            await Self.absentRemoteLockedPaths(in: result.stdout, host: host)
+        } else {
+            Set<String>()
+        }
+        var trees = Self.parsePorcelain(
+            result.stdout,
+            projectId: projectId,
+            isRemote: host != nil,
+            absentLockedPaths: absentLockedPaths
+        )
         if let host {
             trees = await Self.fillingRemoteLastActivity(trees, host: host)
         }
@@ -147,7 +157,12 @@ struct WorktreeService {
         }
     }
 
-    static func parsePorcelain(_ out: String, projectId: String, isRemote: Bool = false) -> [Worktree] {
+    static func parsePorcelain(
+        _ out: String,
+        projectId: String,
+        isRemote: Bool = false,
+        absentLockedPaths: Set<String> = []
+    ) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
         var currentBranch: String?
@@ -157,9 +172,9 @@ struct WorktreeService {
         func flush() {
             let absentLockedPath = currentPath.map { path in
                 currentLocked
-                    && !isRemote
-                    && !path.isRemoteAlasPath
-                    && !FileManager.default.fileExists(atPath: path.path)
+                    && (isRemote
+                        ? absentLockedPaths.contains(path.standardizedFileURL.path)
+                        : !path.isRemoteAlasPath && !FileManager.default.fileExists(atPath: path.path))
             } ?? false
             if let path = currentPath, !currentPrunable, !absentLockedPath {
                 let branch = currentBranch ?? "(detached)"
@@ -201,6 +216,34 @@ struct WorktreeService {
         }
         flush()
         return result
+    }
+
+    private static func absentRemoteLockedPaths(in porcelain: String, host: String) async -> Set<String> {
+        var lockedPaths: [String] = []
+        var currentPath: String?
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                currentPath = String(line.dropFirst("worktree ".count))
+            } else if line.hasPrefix("locked"), let currentPath {
+                lockedPaths.append(URL(fileURLWithPath: currentPath).standardizedFileURL.path)
+            }
+        }
+        return await withTaskGroup(of: String?.self) { group in
+            for path in lockedPaths {
+                group.addTask {
+                    do {
+                        return try await RemoteFileAccess.mtime(host: host, path: path) == nil ? path : nil
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+            var absent: Set<String> = []
+            for await path in group {
+                if let path { absent.insert(path) }
+            }
+            return absent
+        }
     }
 
     func add(
