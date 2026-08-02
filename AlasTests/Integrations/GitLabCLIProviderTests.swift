@@ -643,6 +643,41 @@ struct GitLabCLIProviderTests {
         #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
     }
 
+    @Test func mrListReturnsNilWhenSHAFilteringLeavesUnverifiableHeadOwner() throws {
+        let output = """
+        [
+          {
+            "iid": 42,
+            "title": "Stale fork MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "closed",
+            "draft": false,
+            "sha": "stale-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main"
+          },
+          {
+            "iid": 43,
+            "title": "Unverifiable merged MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main"
+          }
+        ]
+        """
+
+        #expect(try GitLabCLIProvider.parseMRList(
+            output,
+            remote: Self.remote,
+            headOwner: "nacho",
+            headSHA: "matching-sha",
+            preferMerged: true
+        ) == nil)
+    }
+
     @Test func mrListFiltersByResolvedSourceProjectID() throws {
         let request = try #require(try GitLabCLIProvider.parseMRList(
             Self.duplicateForkMRListOutput,

@@ -1257,7 +1257,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                 guard !matchingItems.isEmpty else {
                     return nil
                 }
-            } else if items.count != 1 {
+            } else {
                 return nil
             }
         }
