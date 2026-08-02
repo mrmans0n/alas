@@ -1688,8 +1688,20 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         else {
             throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")
         }
+        guard case .url(let kind, let host, let repositorySlug, let number) = try MissionIssueInput.parse(url.absoluteString),
+              kind == .gitlab,
+              host.caseInsensitiveCompare(remote.host) == .orderedSame,
+              number == response.iid
+        else {
+            throw CodeHostProviderError.malformedOutput("GitLab issue output has an unexpected canonical URL.")
+        }
         return MissionIssueSnapshot(
-            identity: remote.missionIssueIdentity(number: response.iid),
+            identity: MissionIssueIdentity(
+                provider: kind,
+                host: host,
+                repositorySlug: repositorySlug.lowercased(),
+                number: number
+            ),
             canonicalURL: url,
             title: response.title,
             body: response.description ?? "",

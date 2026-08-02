@@ -148,6 +148,7 @@ final class MissionCoordinator {
         if shouldRecreateWorktree {
             guard var leg = retryLeg else { return }
             leg.worktreeId = nil
+            leg.worktreeLineageID = nil
             // ACP sessions are worktree-scoped. A replacement worktree gets a
             // new durable reservation at the agent checkpoint.
             leg.acpSessionId = nil
@@ -304,6 +305,7 @@ final class MissionCoordinator {
         }
 
         leg.worktreeId = worktree.id
+        leg.worktreeLineageID = worktree.lineageID
         let now = environment.now()
         let checkpointEvent = event(
             missionID: aggregate.mission.id,
@@ -338,7 +340,7 @@ final class MissionCoordinator {
     private func advanceAgent(_ aggregate: MissionAggregate) async -> Bool {
         guard var leg = aggregate.primaryLeg else { return false }
         guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath),
-              worktree.branch == leg.branch
+              canReuseExistingWorktree(worktree, for: leg)
         else {
             await persistFailure(
                 aggregate: aggregate,
@@ -348,8 +350,8 @@ final class MissionCoordinator {
             return false
         }
 
-        if leg.worktreeId != worktree.id {
-            leg.worktreeId = worktree.id
+        if leg.worktreeLineageID == nil {
+            leg.worktreeLineageID = worktree.lineageID
             do {
                 try await environment.persistence.updateLeg(leg, event: nil)
                 await notify(id: aggregate.mission.id)
@@ -433,6 +435,7 @@ final class MissionCoordinator {
             && leg.branch == worktree.branch
             && URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
             == worktree.path.standardizedFileURL.path
+            && (leg.worktreeLineageID == nil || leg.worktreeLineageID == worktree.lineageID)
     }
 
     private func settleRunning(_ aggregate: MissionAggregate) async -> Bool {
@@ -475,6 +478,7 @@ final class MissionCoordinator {
         }
 
         leg.worktreeId = worktree.id
+        leg.worktreeLineageID = worktree.lineageID
         let now = environment.now()
         let checkpointEvent = event(
             missionID: aggregate.mission.id,

@@ -341,6 +341,53 @@ struct MissionStoreTests {
         #expect(loaded.events.map(\.id) == ["mission-1-event-1"])
     }
 
+    @Test("migrates a provider-confirmed repository rename and its linked review")
+    func migratesRepositoryRenameDuringRefresh() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.legs[0].reviewIdentity = MissionReviewIdentity(
+            provider: aggregate.issue.identity.provider,
+            host: aggregate.issue.identity.host,
+            repositorySlug: aggregate.issue.identity.repositorySlug,
+            number: 17,
+            url: URL(string: "https://github.com/acme/alas/pull/17")!
+        )
+        try store.insert(aggregate)
+        let renamed = MissionIssueSnapshot(
+            identity: .init(
+                provider: aggregate.issue.identity.provider,
+                host: aggregate.issue.identity.host,
+                repositorySlug: "acquired/renamed-alas",
+                number: aggregate.issue.identity.number
+            ),
+            canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
+            title: "Fresh after rename",
+            body: aggregate.issue.body,
+            state: aggregate.issue.state,
+            labels: aggregate.issue.labels,
+            assignees: aggregate.issue.assignees,
+            providerUpdatedAt: aggregate.issue.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 150),
+            refreshError: nil
+        )
+
+        try store.replaceIssueSnapshot(
+            missionID: aggregate.mission.id,
+            snapshot: renamed,
+            event: MissionFixtures.event(
+                id: "rename-refresh",
+                missionID: aggregate.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 150
+            )
+        )
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.issue.identity == renamed.identity)
+        #expect(loaded.primaryLeg?.reviewIdentity?.repositorySlug == "acquired/renamed-alas")
+        #expect(loaded.primaryLeg?.reviewIdentity?.number == 17)
+    }
+
     @Test("lists active missions before completed missions")
     func ordersActiveMissionsBeforeCompletedMissions() throws {
         let store = try MissionStore(path: temporaryPath())

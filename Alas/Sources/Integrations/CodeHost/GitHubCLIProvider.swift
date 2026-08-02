@@ -1882,8 +1882,20 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         guard response.pullRequest == nil else {
             throw CodeHostProviderError.malformedOutput("GitHub issue output describes a pull request, not an issue.")
         }
+        guard case .url(let kind, let host, let repositorySlug, let number) = try MissionIssueInput.parse(url.absoluteString),
+              kind == .github,
+              host.caseInsensitiveCompare(remote.host) == .orderedSame,
+              number == response.number
+        else {
+            throw CodeHostProviderError.malformedOutput("GitHub issue output has an unexpected canonical URL.")
+        }
         return MissionIssueSnapshot(
-            identity: remote.missionIssueIdentity(number: response.number),
+            identity: MissionIssueIdentity(
+                provider: kind,
+                host: host,
+                repositorySlug: repositorySlug.lowercased(),
+                number: number
+            ),
             canonicalURL: url,
             title: response.title,
             body: response.body ?? "",

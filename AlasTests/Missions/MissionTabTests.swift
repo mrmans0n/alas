@@ -639,8 +639,7 @@ private struct MissionNavigationFixture {
         aggregate.mission.setupCheckpoint = setupCheckpoint
         aggregate.mission.attentionReason = attentionReason
         aggregate.legs[0].worktreeId = "worktree-1"
-        aggregate.legs[0].worktreeLineageID = persistedWorktreeLineageID
-            ?? (aggregate.mission.state == .completed ? worktreeLineageID : nil)
+        aggregate.legs[0].worktreeLineageID = persistedWorktreeLineageID ?? worktreeLineageID
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
         let persistence = MissionPersistence(path: databaseURL.path)

@@ -35,6 +35,22 @@ struct GitLabCLIProviderTests {
         #expect(issue.state == .open)
     }
 
+    @Test func issueUsesCanonicalURLIdentityAfterRepositoryTransfer() async throws {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "https://gitlab.example.com/platform/mobile/alas/-/issues/77",
+            with: "https://gitlab.example.com/acquired/mobile/renamed-alas/-/issues/77"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(
+            remote: Self.remote,
+            number: 77,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.identity.repositorySlug == "acquired/mobile/renamed-alas")
+    }
+
     @Test func issueClassifiesNotFoundAndPermissionDenied() async {
         let notFoundRunner = FakeRunner(results: [
             ProcessResult(exitCode: 1, stdout: "{\"message\":\"404 Project Not Found\"}", stderr: ""),

@@ -533,6 +533,15 @@ final class MissionController {
                     await refreshReviewWithoutWorktree(for: aggregate)
                     continue
                 }
+                guard let worktreeLineageID = leg.worktreeLineageID,
+                      worktree.lineageID == worktreeLineageID
+                else {
+                    if worktreeDiscoverySucceeded(leg.projectId) {
+                        await recordMissingWorktree(aggregate.mission.id)
+                    }
+                    await refreshReviewWithoutWorktree(for: aggregate)
+                    continue
+                }
                 await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
                 if worktreeArchived(leg.projectId, leg.destinationPath) {
                     await applyArchive(to: aggregate.mission.id)
@@ -688,7 +697,9 @@ final class MissionController {
                           leg.projectId,
                           leg.destinationPath
                       ),
-                      worktree.branch == leg.branch
+                      worktree.branch == leg.branch,
+                      let worktreeLineageID = leg.worktreeLineageID,
+                      worktree.lineageID == worktreeLineageID
                 else { return }
                 if leg.pendingInitialPrompt != nil {
                     try await persistence.updateSetup(

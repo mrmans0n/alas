@@ -246,10 +246,15 @@ final class MissionStore {
         try immediateTransaction {
             try requireMission(missionID)
             let storedIdentity = try issueIdentity(missionID: missionID)
-            guard Self.sameIssue(storedIdentity, snapshot.identity) else {
+            guard Self.sameIssueSource(storedIdentity, snapshot.identity) else {
                 throw Error.issueIdentityChanged
             }
-            let snapshot = Self.snapshot(snapshot, preserving: storedIdentity)
+            let repositoryRenamed = storedIdentity.repositorySlug.caseInsensitiveCompare(
+                snapshot.identity.repositorySlug
+            ) != .orderedSame
+            let snapshot = repositoryRenamed
+                ? snapshot
+                : Self.snapshot(snapshot, preserving: storedIdentity)
             let changed = try db.execChanges("""
             UPDATE mission_issue_sources
             SET provider = ?, host = ?, repository_slug = ?, issue_number = ?,
@@ -258,6 +263,13 @@ final class MissionStore {
             WHERE mission_id = ?
             """, bindings: issueBindings(snapshot) + [missionID.rawValue])
             guard changed == 1 else { throw Error.malformedRecord }
+            if repositoryRenamed {
+                try migrateReviewIdentities(
+                    missionID: missionID,
+                    from: storedIdentity,
+                    to: snapshot.identity
+                )
+            }
             try db.exec("UPDATE missions SET title = ?, updated_at = ? WHERE id = ?", bindings: [
                 snapshot.title,
                 event.createdAt.timeIntervalSince1970,
@@ -503,6 +515,43 @@ final class MissionStore {
             && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
             && lhs.repositorySlug.caseInsensitiveCompare(rhs.repositorySlug) == .orderedSame
             && lhs.number == rhs.number
+    }
+
+    private static func sameIssueSource(_ lhs: MissionIssueIdentity, _ rhs: MissionIssueIdentity) -> Bool {
+        lhs.provider == rhs.provider
+            && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
+            && lhs.number == rhs.number
+    }
+
+    private func migrateReviewIdentities(
+        missionID: MissionID,
+        from oldIdentity: MissionIssueIdentity,
+        to newIdentity: MissionIssueIdentity
+    ) throws {
+        let rows = try db.query(
+            "SELECT id, review_identity FROM mission_legs WHERE mission_id = ?",
+            bindings: [missionID.rawValue]
+        )
+        for row in rows {
+            guard let legID = row["id"] as? String,
+                  let data = row["review_identity"] as? Data,
+                  let review = try? decoder.decode(MissionReviewIdentity.self, from: data),
+                  review.provider == oldIdentity.provider,
+                  review.host.caseInsensitiveCompare(oldIdentity.host) == .orderedSame,
+                  review.repositorySlug.caseInsensitiveCompare(oldIdentity.repositorySlug) == .orderedSame
+            else { continue }
+            let migrated = MissionReviewIdentity(
+                provider: newIdentity.provider,
+                host: newIdentity.host,
+                repositorySlug: newIdentity.repositorySlug,
+                number: review.number,
+                url: review.url
+            )
+            try db.exec(
+                "UPDATE mission_legs SET review_identity = ? WHERE id = ? AND mission_id = ?",
+                bindings: [try encoder.encode(migrated), legID, missionID.rawValue]
+            )
+        }
     }
 
     private static func snapshot(

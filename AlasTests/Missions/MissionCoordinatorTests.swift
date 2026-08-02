@@ -36,6 +36,7 @@ struct MissionCoordinatorTests {
         #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.primaryLeg?.baseRemoteName == "origin")
+        #expect(aggregate.primaryLeg?.worktreeLineageID == fake.worktree.lineageID)
     }
 
     @Test("Mission is durable before Git starts")
@@ -192,6 +193,7 @@ struct MissionCoordinatorTests {
         missing.mission.setupCheckpoint = .running
         missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
         missing.legs[0].worktreeId = "worktree-1"
+        missing.legs[0].worktreeLineageID = "lineage-1"
         missing.legs[0].acpSessionId = "session-1"
         missing.legs[0].pendingInitialPrompt = nil
         let fake = MissionCoordinatorFake(existing: [missing])
@@ -205,6 +207,7 @@ struct MissionCoordinatorTests {
         #expect(recovered.mission.state == .running)
         #expect(recovered.mission.setupCheckpoint == .running)
         #expect(recovered.primaryLeg?.worktreeId == "worktree-1")
+        #expect(recovered.primaryLeg?.worktreeLineageID == "lineage-1")
         #expect(recovered.primaryLeg?.acpSessionId == "session-1")
         #expect(recovered.primaryLeg?.pendingInitialPrompt == nil)
     }
@@ -654,7 +657,8 @@ private final class MissionCoordinatorFake {
         branch: "fix/parser-crash",
         path: URL(fileURLWithPath: "/tmp/alas-mission"),
         status: .clean,
-        lastActivity: Date(timeIntervalSince1970: 100)
+        lastActivity: Date(timeIntervalSince1970: 100),
+        lineageID: "lineage-1"
     )
 
     var worktreeResult: Result<Worktree, WorktreeCreationFailure>

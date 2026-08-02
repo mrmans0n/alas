@@ -76,6 +76,22 @@ struct GitHubCLIProviderTests {
         #expect(issue.identity.repositorySlug == "mrmans0n/alas")
     }
 
+    @Test func issueUsesCanonicalURLIdentityAfterRepositoryRename() async throws {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "https://github.example.com/mrmans0n/alas/issues/1842",
+            with: "https://github.example.com/openai/renamed-alas/issues/1842"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(
+            remote: Self.enterpriseRemote,
+            number: 1842,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.identity.repositorySlug == "openai/renamed-alas")
+    }
+
     @Test func issuePreservesGenericCommandFailureForUnstructuredNotFoundText() async {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 1, stdout: "", stderr: "local cache entry not found"),

@@ -105,6 +105,65 @@ struct AppStatePersistenceTests {
         #expect(remote.repositorySlug == identity.repositorySlug)
     }
 
+    @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
+        let current = try #require(CodeHostRemoteDetector.detect(
+            from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],
+            matching: .github
+        ))
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let query = AppState.missionIssueQueryRemote(identity: identity, candidates: [current])
+
+        #expect(query.repositorySlug == "acme/alas")
+        #expect(query.host == "github.com")
+        #expect(query.remoteName == "origin")
+        #expect(query.webURL == URL(string: "https://github.com/acme/alas"))
+    }
+
+    @Test func missionIssueQueryKeepsAnExactCurrentRemote() throws {
+        let current = try #require(CodeHostRemoteDetector.detect(
+            from: [GitRemote(name: "upstream", url: "git@gitlab.example.com:platform/mobile/alas.git")],
+            matching: .gitlab
+        ))
+        let identity = MissionIssueIdentity(
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            repositorySlug: "platform/mobile/alas",
+            number: 77
+        )
+
+        let query = AppState.missionIssueQueryRemote(identity: identity, candidates: [current])
+
+        #expect(query == current)
+    }
+
+    @Test func startupCanonicalRefreshIsLimitedToSameHostSlugChanges() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        #expect(AppState.missionRepositoryNeedsCanonicalRefresh(
+            identity: identity,
+            remotes: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")]
+        ))
+        #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
+            identity: identity,
+            remotes: [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
+        ))
+        #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
+            identity: identity,
+            remotes: [GitRemote(name: "origin", url: "git@gitlab.com:acquired/renamed-alas.git")]
+        ))
+    }
+
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemote() {
         let identity = MissionIssueIdentity(
             provider: .github,
@@ -514,7 +573,8 @@ struct AppStatePersistenceTests {
             branch: Self.worktree.branch,
             path: repository,
             status: Self.worktree.status,
-            lastActivity: Self.worktree.lastActivity
+            lastActivity: Self.worktree.lastActivity,
+            lineageID: Self.worktree.lineageID
         )
         let persistence = try Self.makeMissionPersistence(worktree: worktree)
         var requestedWorktreeIDs: [String] = []
@@ -577,7 +637,8 @@ struct AppStatePersistenceTests {
         branch: "fix/parser-crash",
         path: URL(fileURLWithPath: "/tmp/alas-mission"),
         status: .clean,
-        lastActivity: Date(timeIntervalSince1970: 100)
+        lastActivity: Date(timeIntervalSince1970: 100),
+        lineageID: "lineage-1"
     )
 
     private static let otherWorktree = Worktree(
@@ -605,7 +666,7 @@ struct AppStatePersistenceTests {
             branch: leg.branch,
             destinationPath: worktree.path.path,
             worktreeId: worktree.id,
-            worktreeLineageID: leg.worktreeLineageID,
+            worktreeLineageID: worktree.lineageID,
             agentId: leg.agentId,
             acpSessionId: "session-1",
             initialPromptId: leg.initialPromptId,

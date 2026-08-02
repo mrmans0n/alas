@@ -707,6 +707,7 @@ struct MissionReadinessEvaluatorTests {
         var missing = Self.runningAggregate()
         missing.mission.state = .needsAttention
         missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].worktreeLineageID = "lineage-1"
         let fake = try MissionLifecycleFake(aggregate: missing)
         await fake.controller.load()
 
@@ -720,11 +721,32 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.events.last?.message == "Mission worktree became available again.")
     }
 
+    @Test func startupDoesNotRestoreAReplacementMissionWorktree() async throws {
+        var missing = Self.runningAggregate()
+        missing.mission.state = .needsAttention
+        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].worktreeLineageID = "original-lineage"
+        let fake = try MissionLifecycleFake(
+            aggregate: missing,
+            worktreeLineageID: "replacement-lineage"
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .running)
+        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.events.last?.kind != .retryStarted)
+    }
+
     @Test func reappearedWorktreeResumesPendingAgentSetup() async throws {
         var missing = Self.runningAggregate()
         missing.mission.state = .needsAttention
         missing.mission.setupCheckpoint = .running
         missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].worktreeLineageID = "lineage-1"
         missing.legs[0].pendingInitialPrompt = "Fix the issue."
         let fake = try MissionLifecycleFake(aggregate: missing)
         await fake.controller.load()
@@ -1695,6 +1717,7 @@ private final class MissionLifecycleFake {
         aggregate: MissionAggregate = MissionReadinessEvaluatorTests.runningAggregate(),
         worktreeAvailable: Bool = true,
         worktreeBranch: String = "fix/parser-crash",
+        worktreeLineageID: String? = "lineage-1",
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("No issue refresh configured.")
         },
@@ -1715,6 +1738,12 @@ private final class MissionLifecycleFake {
             .appendingPathComponent("mission-lifecycle-\(UUID().uuidString).sqlite")
             .path
         let store = try MissionStore(path: path)
+        var aggregate = aggregate
+        if aggregate.mission.state != .completed,
+           aggregate.primaryLeg?.worktreeId != nil,
+           aggregate.primaryLeg?.worktreeLineageID == nil {
+            aggregate.legs[0].worktreeLineageID = worktreeLineageID
+        }
         try store.insert(aggregate)
         persistence = MissionPersistence(path: path)
         let recorder = MissionLifecycleRecorder()
@@ -1745,7 +1774,8 @@ private final class MissionLifecycleFake {
                         branch: worktreeBranch,
                         path: URL(fileURLWithPath: "/tmp/alas-mission"),
                         status: .clean,
-                        lastActivity: Date(timeIntervalSince1970: 100)
+                        lastActivity: Date(timeIntervalSince1970: 100),
+                        lineageID: worktreeLineageID
                     )
                 },
                 createWorktree: { leg in
