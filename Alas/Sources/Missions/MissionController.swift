@@ -916,17 +916,15 @@ final class MissionController {
         matches leg: MissionLeg,
         issueIdentity: MissionIssueIdentity
     ) -> Bool {
-        let persistedBaseParts = leg.baseRef.split(separator: "/", maxSplits: 1)
-        let normalizedPersistedBase = persistedBaseParts.count == 2
-            ? String(persistedBaseParts[1])
-            : leg.baseRef
-        let baseMatches = request.baseRefName == leg.baseRef
-            || request.baseRefName == normalizedPersistedBase
+        let expectedBase = MissionBaseReference.branchName(
+            leg.baseRef,
+            currentRemoteName: request.remote.remoteName
+        )
         return request.provider == issueIdentity.provider
             && request.remote.host.caseInsensitiveCompare(issueIdentity.host) == .orderedSame
             && request.remote.repositorySlug.caseInsensitiveCompare(issueIdentity.repositorySlug) == .orderedSame
             && request.headRefName == leg.branch
-            && baseMatches
+            && request.baseRefName == expectedBase
     }
 
     private func replace(_ aggregate: MissionAggregate) {

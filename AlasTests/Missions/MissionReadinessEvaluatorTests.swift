@@ -532,6 +532,42 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func linkedReviewRefreshRejectsRetargetedSlashContainingBase() async throws {
+        var linked = Self.runningAggregate()
+        let originalLeg = linked.legs[0]
+        linked.legs[0] = MissionLeg(
+            id: originalLeg.id,
+            missionID: originalLeg.missionID,
+            ordinal: originalLeg.ordinal,
+            projectId: originalLeg.projectId,
+            baseRef: "release/1.0",
+            branch: originalLeg.branch,
+            destinationPath: originalLeg.destinationPath,
+            worktreeId: originalLeg.worktreeId,
+            agentId: originalLeg.agentId,
+            acpSessionId: originalLeg.acpSessionId,
+            initialPromptId: originalLeg.initialPromptId,
+            pendingInitialPrompt: originalLeg.pendingInitialPrompt,
+            reviewIdentity: Self.reviewIdentity
+        )
+        let retargeted = try #require(Self.reviewSnapshot(
+            state: .merged,
+            baseBranch: "1.0"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { _, _, _ in retargeted },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshLinkedReview(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func linkedMergedReviewMustMatchThePersistedBranchTip() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity

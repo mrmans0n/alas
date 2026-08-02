@@ -1,5 +1,18 @@
 import Foundation
 
+enum MissionBaseReference {
+    static func branchName(_ baseRef: String, currentRemoteName: String) -> String {
+        let remoteNames = [currentRemoteName, "origin"]
+        for remoteName in remoteNames where !remoteName.isEmpty {
+            let prefix = "\(remoteName)/"
+            if baseRef.hasPrefix(prefix) {
+                return String(baseRef.dropFirst(prefix.count))
+            }
+        }
+        return baseRef
+    }
+}
+
 struct MissionID: RawRepresentable, Codable, Hashable, Sendable {
     let rawValue: String
 }

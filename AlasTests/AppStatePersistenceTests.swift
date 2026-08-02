@@ -45,6 +45,21 @@ struct AppStatePersistenceTests {
         }
     }
 
+    @Test func missionBaseReferenceNormalizesOnlyKnownRemoteAliases() {
+        #expect(MissionBaseReference.branchName(
+            "origin/main",
+            currentRemoteName: "upstream"
+        ) == "main")
+        #expect(MissionBaseReference.branchName(
+            "upstream/feature/release",
+            currentRemoteName: "upstream"
+        ) == "feature/release")
+        #expect(MissionBaseReference.branchName(
+            "release/1.0",
+            currentRemoteName: "upstream"
+        ) == "release/1.0")
+    }
+
     @Test func missionReviewRemoteUsesPersistedProviderForEnterpriseHost() throws {
         let identity = MissionIssueIdentity(
             provider: .github,
