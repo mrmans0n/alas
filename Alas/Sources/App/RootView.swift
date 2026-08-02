@@ -111,6 +111,7 @@ struct RootView: View {
                 onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
             )
         } else {
+            let rightPaneSelection = rightPaneSelectionState
             ThreePaneLayout(
                 sidebarWidth: Binding(
                     get: { state.config.sidebarWidth },
@@ -121,11 +122,11 @@ struct RootView: View {
                     set: { state.config.rightPaneWidth = $0 }
                 ),
                 sidebarVisible: state.config.sidebarVisible,
-                rightVisible: state.config.rightPaneVisible,
+                rightVisible: state.config.rightPaneVisible && rightPaneSelection.showsRightPane,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { centerContent() },
-                right: { rightContent }
+                right: { rightContent(selection: rightPaneSelection) }
             )
         }
     }
@@ -162,13 +163,8 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private var rightContent: some View {
-        let resolver = RightPaneSelectionStateResolver(
-            selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
-        )
-        switch resolver.resolve() {
+    private func rightContent(selection: RightPaneSelectionState) -> some View {
+        switch selection {
         case .empty:
             EmptyView()
         case .active(let wt):
@@ -203,6 +199,14 @@ struct RootView: View {
         case .createFailed(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
         }
+    }
+
+    private var rightPaneSelectionState: RightPaneSelectionState {
+        RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
+        ).resolve()
     }
 
     private func openSettingsWindow() {

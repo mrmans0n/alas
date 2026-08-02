@@ -14,6 +14,7 @@ struct RightPaneSelectionStateResolverTests {
         )
         let result = resolver.resolve()
         #expect(result == .empty)
+        #expect(!result.showsRightPane)
     }
 
     @Test func emptyWhenSelectionIdMissing() {
@@ -26,6 +27,7 @@ struct RightPaneSelectionStateResolverTests {
         )
         let result = resolver.resolve()
         #expect(result == .empty)
+        #expect(!result.showsRightPane)
     }
 
     @Test func activeWhenNoOperationState() {
@@ -41,6 +43,7 @@ struct RightPaneSelectionStateResolverTests {
         let result = resolver.resolve()
         if case .active(let returned) = result {
             #expect(returned.id == wt.id)
+            #expect(result.showsRightPane)
         } else {
             Issue.record("Expected .active, got \(result)")
         }
@@ -60,6 +63,7 @@ struct RightPaneSelectionStateResolverTests {
         let result = resolver.resolve()
         if case .creating(let returned) = result {
             #expect(returned.id == wt.id)
+            #expect(result.showsRightPane)
         } else {
             Issue.record("Expected .creating, got \(result)")
         }
@@ -79,6 +83,7 @@ struct RightPaneSelectionStateResolverTests {
         let result = resolver.resolve()
         if case .deleting(let returned) = result {
             #expect(returned.id == wt.id)
+            #expect(result.showsRightPane)
         } else {
             Issue.record("Expected .deleting, got \(result)")
         }
@@ -106,6 +111,7 @@ struct RightPaneSelectionStateResolverTests {
         let result = resolver.resolve()
         if case .createFailed(let returned) = result {
             #expect(returned.id == wt.id)
+            #expect(result.showsRightPane)
         } else {
             Issue.record("Expected .createFailed, got \(result)")
         }
@@ -125,6 +131,7 @@ struct RightPaneSelectionStateResolverTests {
         let result = resolver.resolve()
         if case .active(let returned) = result {
             #expect(returned.id == wt.id)
+            #expect(result.showsRightPane)
         } else {
             Issue.record("Expected .active, got \(result)")
         }
