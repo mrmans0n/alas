@@ -388,6 +388,49 @@ struct MissionStoreTests {
         #expect(loaded.primaryLeg?.reviewIdentity?.number == 17)
     }
 
+    @Test("rejects a repository rename that collides with another active mission")
+    func rejectsRepositoryRenameWithActiveCanonicalMission() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let legacy = MissionFixtures.creatingMission(id: "legacy-mission")
+        let canonicalIssue = MissionIssueSnapshot(
+            identity: .init(
+                provider: legacy.issue.identity.provider,
+                host: legacy.issue.identity.host,
+                repositorySlug: "acquired/renamed-alas",
+                number: legacy.issue.identity.number
+            ),
+            canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
+            title: "Canonical issue",
+            body: legacy.issue.body,
+            state: legacy.issue.state,
+            labels: legacy.issue.labels,
+            assignees: legacy.issue.assignees,
+            providerUpdatedAt: legacy.issue.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 150),
+            refreshError: nil
+        )
+        let canonical = MissionFixtures.creatingMission(id: "canonical-mission", issue: canonicalIssue)
+        try store.insert(legacy)
+        try store.insert(canonical)
+
+        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+            try store.replaceIssueSnapshot(
+                missionID: legacy.mission.id,
+                snapshot: canonicalIssue,
+                event: MissionFixtures.event(
+                    id: "rename-refresh",
+                    missionID: legacy.mission.id,
+                    kind: .sourceRefreshed,
+                    createdAt: 150
+                )
+            )
+        }
+
+        let loaded = try #require(try store.aggregate(id: legacy.mission.id))
+        #expect(loaded.issue == legacy.issue)
+        #expect(loaded.events.map(\.id) == ["legacy-mission-event-1"])
+    }
+
     @Test("lists active missions before completed missions")
     func ordersActiveMissionsBeforeCompletedMissions() throws {
         let store = try MissionStore(path: temporaryPath())

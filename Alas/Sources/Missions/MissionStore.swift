@@ -252,6 +252,13 @@ final class MissionStore {
             let repositoryRenamed = storedIdentity.repositorySlug.caseInsensitiveCompare(
                 snapshot.identity.repositorySlug
             ) != .orderedSame
+            if repositoryRenamed,
+               try hasActiveIssueIdentityCollision(
+                   missionID: missionID,
+                   identity: snapshot.identity
+               ) {
+                throw Error.duplicateActiveIssueIdentity
+            }
             let snapshot = repositoryRenamed
                 ? snapshot
                 : Self.snapshot(snapshot, preserving: storedIdentity)
@@ -277,6 +284,36 @@ final class MissionStore {
             ])
             try insertEvent(event)
         }
+    }
+
+    private func hasActiveIssueIdentityCollision(
+        missionID: MissionID,
+        identity: MissionIssueIdentity
+    ) throws -> Bool {
+        let rows = try db.query("""
+        SELECT 1
+        FROM missions AS source
+        WHERE source.id = ? AND source.state != ?
+          AND EXISTS (
+            SELECT 1
+            FROM missions AS duplicate
+            JOIN mission_issue_sources AS issue ON issue.mission_id = duplicate.id
+            WHERE duplicate.id != ? AND duplicate.state != ?
+              AND issue.provider = ? AND issue.host = ? COLLATE NOCASE
+              AND issue.repository_slug = ? COLLATE NOCASE AND issue.issue_number = ?
+          )
+        LIMIT 1
+        """, bindings: [
+            missionID.rawValue,
+            MissionState.completed.rawValue,
+            missionID.rawValue,
+            MissionState.completed.rawValue,
+            identity.provider.rawValue,
+            identity.host,
+            identity.repositorySlug,
+            identity.number,
+        ])
+        return !rows.isEmpty
     }
 
     func updateIssueRefreshError(
