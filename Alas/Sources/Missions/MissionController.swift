@@ -236,21 +236,31 @@ final class MissionController {
             let active = try await persistence.list(includeCompleted: false)
             for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
                 guard let leg = aggregate.primaryLeg,
-                      leg.reviewIdentity == nil,
                       leg.baseRef == baseRef,
                       let currentWorktree = environment.worktreeAtDestination(
                           leg.projectId,
                           leg.destinationPath
                       ), currentWorktree.id == worktreeId,
-                      currentWorktree.branch == leg.branch,
-                      let request = await discoverMergedReview(for: leg, snapshot: snapshot)
+                      currentWorktree.branch == leg.branch
                 else { continue }
+                let replacesClosedReview: Bool
+                if let linked = leg.reviewIdentity {
+                    guard let refreshed = await linkedReviewRequest(linked, leg.projectId, leg.baseRef),
+                          refreshed.state == .closed,
+                          Self.review(refreshed, matches: leg)
+                    else { continue }
+                    replacesClosedReview = true
+                } else {
+                    replacesClosedReview = false
+                }
+                guard let request = await discoverMergedReview(for: leg, snapshot: snapshot) else { continue }
                 await apply(
                     signal: .review(
                         state: request.state,
                         identity: Self.reviewIdentity(for: request)
                     ),
-                    to: aggregate.mission.id
+                    to: aggregate.mission.id,
+                    replaceReviewIdentity: replacesClosedReview
                 )
             }
         } catch {
@@ -462,15 +472,12 @@ final class MissionController {
                         snapshot: snapshot
                     )
                 }
-                if leg.reviewIdentity == nil,
-                   let snapshot,
-                   let request = await discoverMergedReview(for: leg, snapshot: snapshot) {
-                    await apply(
-                        signal: .review(
-                            state: request.state,
-                            identity: Self.reviewIdentity(for: request)
-                        ),
-                        to: aggregate.mission.id
+                if let worktreeID = leg.worktreeId,
+                   let snapshot {
+                    await discoverMergedReview(
+                        worktreeId: worktreeID,
+                        baseRef: leg.baseRef,
+                        snapshot: snapshot
                     )
                 }
             }

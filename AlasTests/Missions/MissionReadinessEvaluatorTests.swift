@@ -570,6 +570,28 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func startupDiscoversAMergedReplacementForAClosedLinkedReview() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let closed = try #require(Self.reviewSnapshot(state: .closed).reviewRequest)
+        let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
+            linkedReviewRequest: { identity, _, _ in
+                identity == Self.reviewIdentity ? closed : nil
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 92)
+    }
+
     @Test func startupDiscoversAMergedReviewWhenTheWorktreeIsMissing() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(

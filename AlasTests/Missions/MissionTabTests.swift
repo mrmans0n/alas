@@ -103,7 +103,7 @@ struct MissionTabTests {
             hidden: false,
             includeWorktree: true,
             missionState: .completed,
-            competingActiveMission: true
+            competingMissionState: .running
         )
         await fixture.state.missions.load()
 
@@ -116,6 +116,18 @@ struct MissionTabTests {
         )))
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
         #expect(fixture.state.tabs.activeTab(forWorktree: fixture.worktree.id) == nil)
+        #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
+    }
+
+    @Test func completedMissionDoesNotBindToAWorktreeOwnedByALaterCompletedMission() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            missionState: .completed,
+            competingMissionState: .completed
+        )
+        await fixture.state.missions.load()
+
         #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
     }
 
@@ -497,7 +509,7 @@ private struct MissionNavigationFixture {
         missionState: MissionState? = nil,
         setupCheckpoint: MissionSetupCheckpoint = .running,
         attentionReason: String? = nil,
-        competingActiveMission: Bool = false
+        competingMissionState: MissionState? = nil
     ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
@@ -511,13 +523,17 @@ private struct MissionNavigationFixture {
         let persistence = MissionPersistence(path: databaseURL.path)
         let store = try MissionStore(path: databaseURL.path)
         try store.insert(aggregate)
-        if competingActiveMission {
+        if let competingMissionState {
             var competitor = MissionFixtures.creatingMission(
                 id: "mission-2",
-                issue: MissionFixtures.issue(number: 43)
+                issue: MissionFixtures.issue(number: 43),
+                createdAt: 200
             )
-            competitor.mission.state = .running
+            competitor.mission.state = competingMissionState
             competitor.mission.setupCheckpoint = .running
+            competitor.mission.completedAt = competingMissionState == .completed
+                ? Date(timeIntervalSince1970: 300)
+                : nil
             competitor.legs[0].worktreeId = "worktree-1"
             competitor.legs[0].acpSessionId = "session-2"
             competitor.legs[0].pendingInitialPrompt = nil

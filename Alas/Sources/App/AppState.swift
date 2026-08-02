@@ -854,9 +854,9 @@ final class AppState {
         guard let candidate = MissionTabContext.worktree(candidate, for: aggregate) else { return nil }
         guard aggregate.mission.state == .completed else { return candidate }
         let candidatePath = candidate.path.standardizedFileURL.path
-        let ownedByAnotherActiveMission = missions.aggregates.contains { other in
+        let ownedByALaterMission = missions.aggregates.contains { other in
             guard other.mission.id != aggregate.mission.id,
-                  other.mission.state != .completed,
+                  other.mission.createdAt > aggregate.mission.createdAt,
                   let leg = other.primaryLeg,
                   leg.projectId == candidate.projectId,
                   leg.branch == candidate.branch
@@ -864,7 +864,7 @@ final class AppState {
             return leg.worktreeId == candidate.id
                 || URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path == candidatePath
         }
-        return ownedByAnotherActiveMission ? nil : candidate
+        return ownedByALaterMission ? nil : candidate
     }
 
     private func missionRightPaneState(for worktree: Worktree, baseRef: String) -> RightPaneState {
