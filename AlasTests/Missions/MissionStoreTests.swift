@@ -133,7 +133,7 @@ struct MissionStoreTests {
         let aggregate = MissionFixtures.creatingMission(id: "mission-1")
         try store.insert(aggregate)
         var leg = try #require(aggregate.primaryLeg)
-        leg.worktreeCreationEpoch = 123
+        leg.worktreeLineageID = "device:inode"
         try store.complete(
             id: aggregate.mission.id,
             leg: leg,
@@ -147,7 +147,7 @@ struct MissionStoreTests {
         )
 
         #expect(try store.activeMission(issueIdentity: aggregate.issue.identity) == nil)
-        #expect(try store.aggregate(id: aggregate.mission.id)?.primaryLeg?.worktreeCreationEpoch == 123)
+        #expect(try store.aggregate(id: aggregate.mission.id)?.primaryLeg?.worktreeLineageID == "device:inode")
         try store.insert(MissionFixtures.creatingMission(id: "mission-2"))
         #expect(try store.activeMission(issueIdentity: aggregate.issue.identity)?.mission.id == MissionID(rawValue: "mission-2"))
     }

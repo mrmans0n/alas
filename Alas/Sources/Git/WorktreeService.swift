@@ -150,8 +150,23 @@ struct WorktreeService {
             + "printf '%s\\n' \"$b\""
     }
 
+    static func localLineageID(forWorktreeAt path: URL) -> String? {
+        let marker = path.appendingPathComponent(".git").path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: marker),
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        return "\(device.uint64Value):\(inode.uint64Value)"
+    }
+
+    static func remoteLineageIDCommand(path: String) -> String {
+        let dotGit = URL(fileURLWithPath: path).appendingPathComponent(".git").path
+        return "f=\(SSHCommand.shellQuote(dotGit)); "
+            + "stat -c '%d:%i' -- \"$f\" 2>/dev/null || stat -f '%d:%i' \"$f\""
+    }
+
     private static func fillingRemoteMetadata(_ trees: [Worktree], host: String) async -> [Worktree] {
-        await withTaskGroup(of: (Int, Date?, Date?).self) { group in
+        await withTaskGroup(of: (Int, Date?, Date?, String?).self) { group in
             for (index, tree) in trees.enumerated() {
                 group.addTask {
                     let invocation = GitInvocation.build(
@@ -170,21 +185,34 @@ struct WorktreeService {
                         cwd: nil,
                         command: remoteCreationDateCommand(path: tree.path.path)
                     )
-                    let (activity, creation) = await (activityResult, creationResult)
+                    async let lineageResult: ProcessResult? = try? await RemoteExec.run(
+                        host: host,
+                        cwd: nil,
+                        command: remoteLineageIDCommand(path: tree.path.path)
+                    )
+                    let (activity, creation, lineage) = await (activityResult, creationResult, lineageResult)
                     return (
                         index,
                         activity.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil },
-                        creation.flatMap { $0.exitCode == 0 ? remoteCreationDate(fromEpochOutput: $0.stdout) : nil }
+                        creation.flatMap { $0.exitCode == 0 ? remoteCreationDate(fromEpochOutput: $0.stdout) : nil },
+                        lineage.flatMap { $0.exitCode == 0 ? normalizedLineageID($0.stdout) : nil }
                     )
                 }
             }
             var trees = trees
-            for await (index, lastActivity, createdAt) in group {
+            for await (index, lastActivity, createdAt, lineageID) in group {
                 if let lastActivity { trees[index].lastActivity = lastActivity }
                 if let createdAt { trees[index].createdAt = createdAt }
+                if let lineageID { trees[index].lineageID = lineageID }
             }
             return trees
         }
+    }
+
+    static func normalizedLineageID(_ output: String) -> String? {
+        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return value
     }
 
     static func parsePorcelain(
@@ -221,7 +249,8 @@ struct WorktreeService {
                     isMainWorktree: result.isEmpty,
                     status: .clean,
                     lastActivity: lastActivity,
-                    createdAt: ctime
+                    createdAt: ctime,
+                    lineageID: isRemote ? nil : WorktreeService.localLineageID(forWorktreeAt: path)
                 ))
             }
             currentPath = nil

@@ -461,7 +461,7 @@ final class MissionController {
                    worktree.branch == currentLeg.branch,
                    worktree.path.standardizedFileURL.path
                    == URL(fileURLWithPath: currentLeg.destinationPath).standardizedFileURL.path {
-                    currentLeg.worktreeCreationEpoch = MissionWorktreeIdentity.creationEpoch(worktree.createdAt)
+                    currentLeg.worktreeLineageID = worktree.lineageID
                     leg = currentLeg
                 }
                 let now = environment.now()

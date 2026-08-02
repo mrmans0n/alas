@@ -144,6 +144,23 @@ import Foundation
         #expect(wt.createdAt <= Date().addingTimeInterval(1))
     }
 
+    @Test func localLineageUsesTheStableGitMarkerIdentity() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("alas-lineage-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let marker = root.appendingPathComponent(".git")
+        #expect(fm.createFile(atPath: marker.path, contents: Data("gitdir: /tmp/admin\n".utf8)))
+
+        let original = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+        #expect(fm.createFile(atPath: root.appendingPathComponent("new-file").path, contents: Data()))
+        #expect(WorktreeService.localLineageID(forWorktreeAt: root) == original)
+
+        try fm.removeItem(at: marker)
+        #expect(fm.createFile(atPath: marker.path, contents: Data("gitdir: /tmp/recreated\n".utf8)))
+        #expect(WorktreeService.localLineageID(forWorktreeAt: root) != original)
+    }
+
     @Test func lastActivityFollowsSymbolicHeadToBranchRefMain() throws {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-symref-main-\(UUID().uuidString)")

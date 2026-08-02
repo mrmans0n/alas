@@ -911,8 +911,8 @@ final class AppState {
         guard let candidate = MissionTabContext.worktree(candidate, for: aggregate) else { return nil }
         guard aggregate.mission.state == .completed else { return candidate }
         guard let leg = aggregate.primaryLeg,
-              let persistedCreationEpoch = leg.worktreeCreationEpoch,
-              MissionWorktreeIdentity.creationEpoch(candidate.createdAt) == persistedCreationEpoch
+              let persistedLineageID = leg.worktreeLineageID,
+              candidate.lineageID == persistedLineageID
         else { return nil }
         let candidatePath = candidate.path.standardizedFileURL.path
         let ownedByALaterMission = missions.aggregates.contains { other in

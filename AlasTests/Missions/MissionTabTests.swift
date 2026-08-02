@@ -194,22 +194,22 @@ struct MissionTabTests {
         let fixture = try MissionNavigationFixture(
             hidden: false,
             includeWorktree: true,
-            worktreeCreatedAt: 200,
+            worktreeLineageID: "replacement",
             missionState: .completed,
-            persistedWorktreeCreationEpoch: 100
+            persistedWorktreeLineageID: "original"
         )
         await fixture.state.missions.load()
 
         #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
     }
 
-    @Test func completedMissionBindsUsingCreationIdentityAcrossClockSkew() async throws {
+    @Test func completedMissionBindsUsingStableLineageAcrossTimestampChanges() async throws {
         let fixture = try MissionNavigationFixture(
             hidden: false,
             includeWorktree: true,
             worktreeCreatedAt: 200,
             missionState: .completed,
-            persistedWorktreeCreationEpoch: 200
+            persistedWorktreeLineageID: "device:inode"
         )
         await fixture.state.missions.load()
 
@@ -621,12 +621,13 @@ private struct MissionNavigationFixture {
         includeWorktree: Bool,
         worktreeBranch: String = "fix/parser-crash",
         worktreeCreatedAt: TimeInterval = 100,
+        worktreeLineageID: String = "device:inode",
         missionState: MissionState? = nil,
         setupCheckpoint: MissionSetupCheckpoint = .running,
         attentionReason: String? = nil,
         competingMissionState: MissionState? = nil,
         competingMissionBranch: String = "fix/parser-crash",
-        persistedWorktreeCreationEpoch: Int64? = nil
+        persistedWorktreeLineageID: String? = nil
     ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
@@ -638,8 +639,8 @@ private struct MissionNavigationFixture {
         aggregate.mission.setupCheckpoint = setupCheckpoint
         aggregate.mission.attentionReason = attentionReason
         aggregate.legs[0].worktreeId = "worktree-1"
-        aggregate.legs[0].worktreeCreationEpoch = persistedWorktreeCreationEpoch
-            ?? (aggregate.mission.state == .completed ? Int64(worktreeCreatedAt) : nil)
+        aggregate.legs[0].worktreeLineageID = persistedWorktreeLineageID
+            ?? (aggregate.mission.state == .completed ? worktreeLineageID : nil)
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
         let persistence = MissionPersistence(path: databaseURL.path)
@@ -686,7 +687,8 @@ private struct MissionNavigationFixture {
             path: URL(fileURLWithPath: "/tmp/alas-mission"),
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: worktreeCreatedAt),
-            createdAt: Date(timeIntervalSince1970: worktreeCreatedAt)
+            createdAt: Date(timeIntervalSince1970: worktreeCreatedAt),
+            lineageID: worktreeLineageID
         )
         let project = ProjectConfig(
             id: "project-1",

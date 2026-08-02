@@ -605,6 +605,7 @@ struct AppStatePersistenceTests {
             branch: leg.branch,
             destinationPath: worktree.path.path,
             worktreeId: worktree.id,
+            worktreeLineageID: leg.worktreeLineageID,
             worktreeCreationEpoch: leg.worktreeCreationEpoch,
             agentId: leg.agentId,
             acpSessionId: "session-1",

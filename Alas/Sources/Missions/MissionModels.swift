@@ -41,12 +41,6 @@ enum MissionBaseReference {
     }
 }
 
-enum MissionWorktreeIdentity {
-    static func creationEpoch(_ date: Date) -> Int64 {
-        Int64(date.timeIntervalSince1970.rounded(.down))
-    }
-}
-
 struct MissionID: RawRepresentable, Codable, Hashable, Sendable {
     let rawValue: String
 }
@@ -144,6 +138,8 @@ struct MissionLeg: Codable, Equatable, Sendable {
     let branch: String
     let destinationPath: String
     var worktreeId: String?
+    var worktreeLineageID: String?
+    /// Legacy identity retained for databases created before stable worktree markers were persisted.
     var worktreeCreationEpoch: Int64?
     var agentId: String
     var acpSessionId: String?
@@ -161,6 +157,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
         branch: String,
         destinationPath: String,
         worktreeId: String?,
+        worktreeLineageID: String? = nil,
         worktreeCreationEpoch: Int64? = nil,
         agentId: String,
         acpSessionId: String?,
@@ -177,6 +174,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
         self.branch = branch
         self.destinationPath = destinationPath
         self.worktreeId = worktreeId
+        self.worktreeLineageID = worktreeLineageID
         self.worktreeCreationEpoch = worktreeCreationEpoch
         self.agentId = agentId
         self.acpSessionId = acpSessionId
