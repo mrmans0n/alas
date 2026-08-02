@@ -162,6 +162,24 @@ import Foundation
         #expect(WorktreeService.localLineageID(forWorktreeAt: root) != original)
     }
 
+    @Test func localLineageResolvesRelativeGitdirsFromTheWorktree() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("alas-linked-lineage-\(UUID().uuidString)")
+        let worktree = root.appendingPathComponent("worktree")
+        let admin = root.appendingPathComponent("admin")
+        try fm.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try fm.createDirectory(at: admin, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data("gitdir: ../admin\n".utf8).write(to: worktree.appendingPathComponent(".git"))
+
+        let lineageID = try #require(WorktreeService.localLineageID(forWorktreeAt: worktree))
+
+        let stored = try String(contentsOf: admin.appendingPathComponent("alas-worktree-lineage"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(stored == lineageID)
+        #expect(!fm.fileExists(atPath: root.appendingPathComponent("alas-worktree-lineage").path))
+    }
+
     @Test func lastActivityFollowsSymbolicHeadToBranchRefMain() throws {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-symref-main-\(UUID().uuidString)")

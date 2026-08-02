@@ -173,7 +173,10 @@ struct WorktreeService {
         else { return nil }
         let rawPath = contents.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawPath.isEmpty else { return nil }
-        return URL(fileURLWithPath: rawPath, relativeTo: path).standardizedFileURL
+        if (rawPath as NSString).isAbsolutePath {
+            return URL(fileURLWithPath: rawPath).standardizedFileURL
+        }
+        return path.appendingPathComponent(rawPath).standardizedFileURL
     }
 
     static func remoteLineageIDCommand(path: String, candidateID: String = UUID().uuidString.lowercased()) -> String {
