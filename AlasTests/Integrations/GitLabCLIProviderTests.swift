@@ -1065,6 +1065,32 @@ struct GitLabCLIProviderTests {
         #expect(await runner.commands.first?.args.contains("--all") == true)
     }
 
+    @Test func missionReviewRequestPreservesAnUnqualifiedSlashBaseMatchingTheRemoteName() async throws {
+        let remote = CodeHostRemote(
+            kind: .gitlab,
+            host: Self.remote.host,
+            owner: Self.remote.owner,
+            repository: Self.remote.repository,
+            remoteName: "release",
+            webURL: Self.remote.webURL
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
+        ])
+
+        _ = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: remote,
+            branch: "feature/gitlab-provider",
+            headOwner: nil,
+            baseBranch: "release/1.0",
+            cwd: Self.cwd
+        )
+
+        let args = try #require(await runner.commands.first?.args)
+        let baseIndex = try #require(args.firstIndex(of: "--target-branch"))
+        #expect(args[baseIndex + 1] == "release/1.0")
+    }
+
     @Test func missionReviewRequestPrefersMergedMergeRequestOverClosedMatch() async throws {
         let listOutput = """
         [

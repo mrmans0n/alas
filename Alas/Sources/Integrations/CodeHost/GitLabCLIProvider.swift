@@ -89,6 +89,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             baseBranch: baseBranch,
             headSHA: headSHA,
             includeAllStates: true,
+            normalizeBaseBranch: false,
             cwd: cwd
         )
     }
@@ -100,9 +101,12 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         baseBranch: String,
         headSHA: String? = nil,
         includeAllStates: Bool,
+        normalizeBaseBranch: Bool = true,
         cwd: URL
     ) async throws -> ReviewRequest? {
-        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        let base = normalizeBaseBranch
+            ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+            : baseBranch
         var args = [
             "mr", "list",
             "--source-branch", branch,

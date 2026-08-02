@@ -321,6 +321,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             baseBranch: baseBranch,
             headSHA: headSHA,
             state: "all",
+            normalizeBaseBranch: false,
             cwd: cwd
         )
     }
@@ -332,9 +333,12 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         baseBranch: String,
         headSHA: String? = nil,
         state: String,
+        normalizeBaseBranch: Bool = true,
         cwd: URL
     ) async throws -> ReviewRequest? {
-        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        let base = normalizeBaseBranch
+            ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+            : baseBranch
         let result = try await runner.run(
             "gh",
             args: [

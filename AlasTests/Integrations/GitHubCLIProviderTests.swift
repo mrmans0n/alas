@@ -366,6 +366,32 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands.first?.args.contains("open") == false)
     }
 
+    @Test func missionReviewRequestPreservesAnUnqualifiedSlashBaseMatchingTheRemoteName() async throws {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: Self.remote.host,
+            owner: Self.remote.owner,
+            repository: Self.remote.repository,
+            remoteName: "release",
+            webURL: Self.remote.webURL
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
+        ])
+
+        _ = try await GitHubCLIProvider(runner: runner).missionReviewRequest(
+            remote: remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "release/1.0",
+            cwd: Self.cwd
+        )
+
+        let args = try #require(await runner.commands.first?.args)
+        let baseIndex = try #require(args.firstIndex(of: "--base"))
+        #expect(args[baseIndex + 1] == "release/1.0")
+    }
+
     @Test func missionReviewRequestPrefersMergedPullRequestOverClosedMatch() async throws {
         let listOutput = """
         [
