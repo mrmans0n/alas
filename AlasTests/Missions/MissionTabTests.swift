@@ -289,6 +289,24 @@ struct MissionTabTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
+    @Test func topologyCleanupPreservesAnInitialWorktreeCreationFailure() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: false,
+            missionState: .needsAttention,
+            setupCheckpoint: .creatingWorktree,
+            attentionReason: "Git rejected the branch."
+        )
+        await fixture.state.missions.load()
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [])
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
+        #expect(aggregate.mission.attentionReason == "Git rejected the branch.")
+    }
+
     @Test func directDeletionMarksTheMissionWorktreeMissing() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()

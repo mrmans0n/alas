@@ -1229,6 +1229,7 @@ final class AppState {
         let disappeared = beforeIds.subtracting(afterIds)
         let missingMissionIDs: Set<MissionID> = Set(missions.aggregates.compactMap { aggregate in
             guard let leg = aggregate.primaryLeg,
+                  aggregate.mission.setupCheckpoint != .creatingWorktree,
                   projects.contains(where: { $0.id == leg.projectId })
             else { return nil }
             let persistedID = leg.worktreeId ?? ""
