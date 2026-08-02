@@ -822,6 +822,25 @@ final class TabsManager {
         return tab
     }
 
+    func updateMissionTitle(missionID: MissionID, title: String) {
+        for worktreeID in Array(byWorktree.keys) {
+            guard var file = byWorktree[worktreeID] else { continue }
+            var changed = false
+            for index in file.tabs.indices {
+                guard case .mission(var state) = file.tabs[index],
+                      state.missionID == missionID,
+                      state.title != title
+                else { continue }
+                state.title = title
+                file.tabs[index] = .mission(state)
+                changed = true
+            }
+            guard changed else { continue }
+            byWorktree[worktreeID] = file
+            persist(worktreeID)
+        }
+    }
+
     @discardableResult
     func openOrFocusFileSnapshot(worktreeId: String, relativePath: String, ref: String = "HEAD") -> Tab {
         let state = FileSnapshotTabState(worktreeId: worktreeId, relativePath: relativePath, ref: ref)

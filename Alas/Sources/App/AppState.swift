@@ -697,7 +697,16 @@ final class AppState {
                     return .failure(.init(message: error.localizedDescription))
                 }
             },
-            notifyChanged: { _ in }
+            notifyChanged: { [weak self] aggregate in
+                guard let self else { return }
+                tabs.updateMissionTitle(
+                    missionID: aggregate.mission.id,
+                    title: aggregate.mission.title
+                )
+                if missingMissionTab?.missionID == aggregate.mission.id {
+                    missingMissionTab?.title = aggregate.mission.title
+                }
+            }
         ), issueRefresh: { [weak self] identity, projectID in
             guard let self else {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")

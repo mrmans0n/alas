@@ -283,6 +283,29 @@ struct TabsManagerTests {
         #expect(refreshed.title == "New title")
     }
 
+    @Test func updateMissionTitlePreservesSelectionAndPersistsTheRefresh() {
+        let worktreeId = "tabs-manager-mission-title-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let missionID = MissionID(rawValue: "mission-1")
+        let mission = manager.openOrFocusMission(
+            worktreeId: worktreeId,
+            missionID: missionID,
+            title: "Old title"
+        )
+        let other = manager.appendTerminal(worktreeId: worktreeId, title: "Other", sessionId: "session")
+
+        manager.updateMissionTitle(missionID: missionID, title: "New title")
+
+        #expect(manager.activeTabId(forWorktree: worktreeId) == other.id)
+        #expect(manager.tabs(forWorktree: worktreeId).first(where: { $0.id == mission.id })?.title == "New title")
+
+        let restored = TabsManager()
+        restored.loadAll(worktreeIds: [worktreeId])
+        #expect(restored.activeTabId(forWorktree: worktreeId) == other.id)
+        #expect(restored.tabs(forWorktree: worktreeId).first(where: { $0.id == mission.id })?.title == "New title")
+    }
+
     @Test func openOrFocusMissionMovesStableTabToUpdatedWorktreeIdentity() {
         let firstWorktreeID = "tabs-manager-mission-old-\(UUID().uuidString)"
         let secondWorktreeID = "tabs-manager-mission-new-\(UUID().uuidString)"

@@ -570,6 +570,33 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func startupDiscoversAMergedReviewWhenTheWorktreeIsMissing() async throws {
+        let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            worktreeAvailable: false,
+            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
+                #expect(projectID == "project-1")
+                #expect(branch == "fix/parser-crash")
+                #expect(baseRef == "origin/main")
+                #expect(headSHA == "abc123")
+                #expect(headOwner == nil)
+                return request
+            },
+            branchTip: { projectID, branch in
+                #expect(projectID == "project-1")
+                #expect(branch == "fix/parser-crash")
+                return "abc123"
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.reconcileInterrupted()
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func manualRefreshDiscoversAMergedReviewBeforeItsIdentityWasLinked() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")

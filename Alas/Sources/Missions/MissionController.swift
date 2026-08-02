@@ -423,14 +423,14 @@ final class MissionController {
                     if worktreeDiscoverySucceeded(leg.projectId) {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
-                    await refreshLinkedReview(aggregate.mission.id)
+                    await refreshReviewWithoutWorktree(for: aggregate)
                     continue
                 }
                 guard worktree.branch == leg.branch else {
                     if worktreeDiscoverySucceeded(leg.projectId) {
                         await recordMissingWorktree(aggregate.mission.id)
                     }
-                    await refreshLinkedReview(aggregate.mission.id)
+                    await refreshReviewWithoutWorktree(for: aggregate)
                     continue
                 }
                 await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
@@ -476,20 +476,56 @@ final class MissionController {
     ) async -> ReviewRequest? {
         guard snapshot.reviewRequest == nil,
               snapshot.local.branchName == leg.branch,
-              !snapshot.local.headSHA.isEmpty,
+              let request = await discoverMergedReview(
+                  for: leg,
+                  headSHA: snapshot.local.headSHA,
+                  headOwner: snapshot.local.headRemoteOwner
+              )
+        else { return nil }
+        return request
+    }
+
+    private func discoverMergedReview(
+        for leg: MissionLeg,
+        headSHA: String,
+        headOwner: String?
+    ) async -> ReviewRequest? {
+        guard !headSHA.isEmpty,
               let request = await discoverReviewRequest(
                   leg.projectId,
                   leg.branch,
                   leg.baseRef,
-                  snapshot.local.headSHA,
-                  snapshot.local.headRemoteOwner
+                  headSHA,
+                  headOwner
               ),
               request.headRefName == leg.branch,
-              request.headSHA == snapshot.local.headSHA,
+              request.headSHA == headSHA,
               request.state == .merged,
               Self.review(request, matches: leg)
         else { return nil }
         return request
+    }
+
+    private func refreshReviewWithoutWorktree(for aggregate: MissionAggregate) async {
+        guard let leg = aggregate.primaryLeg else { return }
+        if leg.reviewIdentity != nil {
+            await refreshLinkedReview(aggregate.mission.id)
+            return
+        }
+        guard let currentTip = await branchTip(leg.projectId, leg.branch),
+              let request = await discoverMergedReview(
+                  for: leg,
+                  headSHA: currentTip,
+                  headOwner: nil
+              )
+        else { return }
+        await apply(
+            signal: .review(
+                state: request.state,
+                identity: Self.reviewIdentity(for: request)
+            ),
+            to: aggregate.mission.id
+        )
     }
 
     private func restoreReappearedWorktreeIfNeeded(_ id: MissionID) async {
