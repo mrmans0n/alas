@@ -98,6 +98,27 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
     }
 
+    @Test func completedMissionDoesNotBindToAWorktreeOwnedByAnotherActiveMission() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            missionState: .completed,
+            competingActiveMission: true
+        )
+        await fixture.state.missions.load()
+
+        let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
+
+        #expect(try result.get() == .mission(MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            worktreeId: fixture.worktree.id,
+            title: fixture.aggregate.mission.title
+        )))
+        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
+        #expect(fixture.state.tabs.activeTab(forWorktree: fixture.worktree.id) == nil)
+        #expect(fixture.state.missionWorktree(fixture.worktree, for: fixture.aggregate) == nil)
+    }
+
     @Test func openMissionPresentsRecoveryForAReplacementBranch() async throws {
         let fixture = try MissionNavigationFixture(
             hidden: false,
@@ -475,7 +496,8 @@ private struct MissionNavigationFixture {
         worktreeBranch: String = "fix/parser-crash",
         missionState: MissionState? = nil,
         setupCheckpoint: MissionSetupCheckpoint = .running,
-        attentionReason: String? = nil
+        attentionReason: String? = nil,
+        competingActiveMission: Bool = false
     ) throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-navigation-\(UUID().uuidString).sqlite")
@@ -489,6 +511,18 @@ private struct MissionNavigationFixture {
         let persistence = MissionPersistence(path: databaseURL.path)
         let store = try MissionStore(path: databaseURL.path)
         try store.insert(aggregate)
+        if competingActiveMission {
+            var competitor = MissionFixtures.creatingMission(
+                id: "mission-2",
+                issue: MissionFixtures.issue(number: 43)
+            )
+            competitor.mission.state = .running
+            competitor.mission.setupCheckpoint = .running
+            competitor.legs[0].worktreeId = "worktree-1"
+            competitor.legs[0].acpSessionId = "session-2"
+            competitor.legs[0].pendingInitialPrompt = nil
+            try store.insert(competitor)
+        }
 
         let worktree = Worktree(
             id: "worktree-1",

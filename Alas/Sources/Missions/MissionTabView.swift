@@ -351,7 +351,7 @@ struct MissionTabView: View {
         }
         .task(id: rightPaneActivationKey) {
             guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-                  let worktree = MissionTabContext.worktree(worktree, for: aggregate),
+                  let worktree = state.missionWorktree(worktree, for: aggregate),
                   !worktreeIsArchived
             else { return }
             _ = state.rightPaneStore.state(
@@ -365,7 +365,7 @@ struct MissionTabView: View {
         }
         .onDisappear {
             guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-                  let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+                  let worktree = state.missionWorktree(worktree, for: aggregate)
             else { return }
             state.restoreDefaultRightPaneBaseAfterMission(
                 worktree: worktree,
@@ -375,7 +375,7 @@ struct MissionTabView: View {
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
-        let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+        let worktree = state.missionWorktree(worktree, for: aggregate)
         let rightPane = worktree.flatMap { worktree in
             aggregate.primaryLeg.flatMap { leg in
                 state.rightPaneStore.activeState(
@@ -437,14 +437,14 @@ struct MissionTabView: View {
 
     private var worktreeIsArchived: Bool {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+              let worktree = state.missionWorktree(worktree, for: aggregate)
         else { return false }
         return state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
     }
 
     private var rightPaneActivationKey: String {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+              let worktree = state.missionWorktree(worktree, for: aggregate)
         else { return tabState.id }
         let baseRef = MissionTabContext.baseBranch(
             for: aggregate,
@@ -454,7 +454,7 @@ struct MissionTabView: View {
     }
 
     private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {
-        guard let worktree = MissionTabContext.worktree(worktree, for: aggregate),
+        guard let worktree = state.missionWorktree(worktree, for: aggregate),
               let id = aggregate.primaryLeg?.acpSessionId,
               let manager = state.acpManager(forWorktreeId: worktree.id)
         else { return nil }
@@ -469,7 +469,7 @@ struct MissionTabView: View {
 
     private func openAgent() {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = MissionTabContext.worktree(worktree, for: aggregate),
+              let worktree = state.missionWorktree(worktree, for: aggregate),
               !worktreeIsArchived,
               let sessionID = state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.acpSessionId
         else { return }
@@ -479,7 +479,7 @@ struct MissionTabView: View {
 
     private func openChanges() {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = MissionTabContext.worktree(worktree, for: aggregate)
+              let worktree = state.missionWorktree(worktree, for: aggregate)
         else { return }
         state.openMissionChanges(worktree: worktree, missionID: tabState.missionID)
     }
@@ -494,7 +494,7 @@ struct MissionTabView: View {
 
     private func recoverWorktree() {
         let aggregate = state.missions.aggregate(id: tabState.missionID)
-        guard let worktree = aggregate.flatMap({ MissionTabContext.worktree(worktree, for: $0) }) else {
+        guard let worktree = aggregate.flatMap({ state.missionWorktree(worktree, for: $0) }) else {
             Task { await state.missions.retry(tabState.missionID) }
             return
         }

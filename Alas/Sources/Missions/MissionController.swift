@@ -358,6 +358,15 @@ final class MissionController {
         }
     }
 
+    func refreshReviewWithoutWorktree(_ id: MissionID) async {
+        do {
+            guard let aggregate = try await persistence.aggregate(id: id) else { return }
+            await refreshReviewWithoutWorktree(for: aggregate)
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
     func complete(_ id: MissionID) async {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }

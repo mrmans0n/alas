@@ -764,14 +764,7 @@ final class AppState {
             return .failure(.missionUnavailable(id))
         }
 
-        let worktrees = projectsManager.worktrees(projectId: leg.projectId)
-        let destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
-        let worktree = leg.worktreeId
-            .flatMap { worktreeID in worktrees.first { $0.id == worktreeID } }
-            ?? worktrees.first {
-                $0.path.standardizedFileURL.path == destinationPath
-            }
-        guard let worktree, worktree.branch == leg.branch else {
+        guard let worktree = resolvedMissionWorktree(for: aggregate) else {
             let tab = presentMissingMissionTab(aggregate: aggregate, leg: leg)
             return .success(.mission(tab))
         }
@@ -799,10 +792,9 @@ final class AppState {
     }
 
     func openMissionChanges(worktree: Worktree, missionID: MissionID) {
-        guard let leg = missions.aggregate(id: missionID)?.primaryLeg,
-              leg.projectId == worktree.projectId,
-              leg.worktreeId == nil || leg.worktreeId == worktree.id,
-              leg.branch == worktree.branch
+        guard let aggregate = missions.aggregate(id: missionID),
+              let leg = aggregate.primaryLeg,
+              missionWorktree(worktree, for: aggregate)?.id == worktree.id
         else { return }
         guard !projectsManager.isWorktreeHidden(
             projectId: worktree.projectId,
@@ -824,12 +816,7 @@ final class AppState {
         else { return }
 
         async let issueRefresh: Void = missions.refreshIssue(id)
-        let worktree = projectsManager.worktrees(projectId: leg.projectId).first { candidate in
-            (candidate.id == leg.worktreeId
-                || candidate.path.standardizedFileURL.path
-                == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path)
-                && candidate.branch == leg.branch
-        }
+        let worktree = resolvedMissionWorktree(for: aggregate)
         if let worktree,
            !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
             let rightPane = missionRightPaneState(for: worktree, baseRef: leg.baseRef)
@@ -846,9 +833,38 @@ final class AppState {
             }
             _ = await issueRefresh
         } else {
-            async let reviewRefresh: Void = missions.refreshLinkedReview(id)
+            async let reviewRefresh: Void = missions.refreshReviewWithoutWorktree(id)
             _ = await (issueRefresh, reviewRefresh)
         }
+    }
+
+    private func resolvedMissionWorktree(for aggregate: MissionAggregate) -> Worktree? {
+        guard let leg = aggregate.primaryLeg else { return nil }
+        let worktrees = projectsManager.worktrees(projectId: leg.projectId)
+        let destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+        let candidate = leg.worktreeId
+            .flatMap { worktreeID in worktrees.first { $0.id == worktreeID } }
+            ?? worktrees.first {
+                $0.path.standardizedFileURL.path == destinationPath
+            }
+        return missionWorktree(candidate, for: aggregate)
+    }
+
+    func missionWorktree(_ candidate: Worktree?, for aggregate: MissionAggregate) -> Worktree? {
+        guard let candidate = MissionTabContext.worktree(candidate, for: aggregate) else { return nil }
+        guard aggregate.mission.state == .completed else { return candidate }
+        let candidatePath = candidate.path.standardizedFileURL.path
+        let ownedByAnotherActiveMission = missions.aggregates.contains { other in
+            guard other.mission.id != aggregate.mission.id,
+                  other.mission.state != .completed,
+                  let leg = other.primaryLeg,
+                  leg.projectId == candidate.projectId,
+                  leg.branch == candidate.branch
+            else { return false }
+            return leg.worktreeId == candidate.id
+                || URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path == candidatePath
+        }
+        return ownedByAnotherActiveMission ? nil : candidate
     }
 
     private func missionRightPaneState(for worktree: Worktree, baseRef: String) -> RightPaneState {
