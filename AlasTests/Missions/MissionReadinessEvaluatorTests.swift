@@ -511,6 +511,27 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
     }
 
+    @Test func linkedReviewRefreshAcceptsPersistedBaseAfterRemoteRename() async throws {
+        var linked = Self.runningAggregate()
+        linked.legs[0].reviewIdentity = Self.reviewIdentity
+        let merged = try #require(Self.reviewSnapshot(
+            state: .merged,
+            remoteName: "upstream"
+        ).reviewRequest)
+        let fake = try MissionLifecycleFake(
+            aggregate: linked,
+            linkedReviewRequest: { _, _, _ in merged },
+            branchTip: { _, _ in "abc123" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshLinkedReview(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .readyToComplete)
+        #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
+    }
+
     @Test func linkedMergedReviewMustMatchThePersistedBranchTip() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
@@ -1514,14 +1535,15 @@ struct MissionReadinessEvaluatorTests {
         headOwner: String? = nil,
         baseBranch: String = "main",
         owner: String = "acme",
-        repository: String = "alas"
+        repository: String = "alas",
+        remoteName: String = "origin"
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
             host: "github.com",
             owner: owner,
             repository: repository,
-            remoteName: "origin",
+            remoteName: remoteName,
             webURL: URL(string: "https://github.com/\(owner)/\(repository)")!
         )
         let request = ReviewRequest(
