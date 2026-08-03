@@ -193,6 +193,7 @@ struct ACPMessageList: View {
                 goToNewestButton {
                     session.followsTranscriptTail = true
                     transcript.resetWindowToTail()
+                    onRememberScrollAnchor(nil, nil, true)
                 }
             }
         }
