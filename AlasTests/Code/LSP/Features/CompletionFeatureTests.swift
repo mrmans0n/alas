@@ -44,7 +44,7 @@ struct CompletionFeatureTests {
             }
         )
 
-        textView.completionChangeHandler?()
+        textView.completionChangeHandler?(nil)
         try await waitForCompletionRequest(events: { events })
 
         #expect(events == ["flush", "completion"])

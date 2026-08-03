@@ -97,7 +97,7 @@ struct CodeTextViewCompletionTests {
     @Test func applyCompletionEditsCoalescesCompletionChangeNotification() {
         let textView = makeTextView("let value = op\n")
         var changeCount = 0
-        textView.completionChangeHandler = {
+        textView.completionChangeHandler = { _ in
             changeCount += 1
         }
 
@@ -113,7 +113,7 @@ struct CodeTextViewCompletionTests {
         let textView = makeTextView("let value = open")
         var changeCount = 0
         var selectionChangeCount = 0
-        textView.completionChangeHandler = {
+        textView.completionChangeHandler = { _ in
             changeCount += 1
         }
         textView.completionSelectionChangeHandler = {
@@ -129,9 +129,11 @@ struct CodeTextViewCompletionTests {
     @Test func textEditWithProgrammaticSelectionTriggersOnlyTextChange() {
         let textView = makeTextView()
         var changeCount = 0
+        var editRange: NSRange?
         var selectionChangeCount = 0
-        textView.completionChangeHandler = {
+        textView.completionChangeHandler = { range in
             changeCount += 1
+            editRange = range
         }
         textView.completionSelectionChangeHandler = {
             selectionChangeCount += 1
@@ -141,6 +143,7 @@ struct CodeTextViewCompletionTests {
 
         #expect(textView.string == "()")
         #expect(changeCount == 1)
+        #expect(editRange == NSRange(location: 0, length: 0))
         #expect(selectionChangeCount == 0)
     }
 

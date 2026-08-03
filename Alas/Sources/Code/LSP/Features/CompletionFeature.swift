@@ -66,8 +66,8 @@ final class CompletionFeature {
         textView.completionManualTriggerHandler = { [weak self] in
             self?.triggerManual()
         }
-        textView.completionChangeHandler = { [weak self] in
-            self?.scheduleAutomatic()
+        textView.completionChangeHandler = { [weak self] editRange in
+            self?.scheduleAutomatic(editRange: editRange)
         }
         textView.completionSelectionChangeHandler = { [weak self] in
             self?.cancelAndDismiss()
@@ -104,14 +104,14 @@ final class CompletionFeature {
         startCompletion(trigger: .invoked, triggerCharacter: nil, allowEmptyPrefix: true, allowBufferFallback: true)
     }
 
-    private func scheduleAutomatic() {
+    private func scheduleAutomatic(editRange: NSRange?) {
         guard hasSessionPreconditions() else {
             cancelAndDismiss()
             return
         }
 
         debounceTask?.cancel()
-        invalidateActiveSessionForChange()
+        invalidateActiveSessionForChange(editRange: editRange)
         debounceTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: automaticDebounceNanos)
@@ -489,7 +489,7 @@ final class CompletionFeature {
         suggestionWindow.hide()
     }
 
-    private func invalidateActiveSessionForChange() {
+    private func invalidateActiveSessionForChange(editRange: NSRange?) {
         let previousPrefix = prefix
         requestTask?.cancel()
         requestTask = nil
@@ -503,7 +503,10 @@ final class CompletionFeature {
               ),
               candidateAllowsEmptyPrefix || !updatedPrefix.text.isEmpty,
               previousPrefix?.range.location == updatedPrefix.range.location,
-              textOutsideCandidatePrefixIsUnchanged(in: textView.string, updatedPrefix: updatedPrefix) else {
+              let previousPrefix,
+              let editRange,
+              editRange.location >= previousPrefix.range.location,
+              NSMaxRange(editRange) <= NSMaxRange(previousPrefix.range) else {
             candidates.removeAll()
             candidatePool.removeAll()
             prefix = nil
@@ -528,8 +531,7 @@ final class CompletionFeature {
                 in: textView.string
             )
         }
-        if let previousPrefix,
-           let candidatePrefix,
+        if let candidatePrefix,
            updatedPrefix.range.length < previousPrefix.range.length,
            !candidateItems.isEmpty || candidateAllowsBufferFallback,
            let candidateBufferText {
@@ -580,26 +582,6 @@ final class CompletionFeature {
         } else {
             showPopup()
         }
-    }
-
-    private func textOutsideCandidatePrefixIsUnchanged(
-        in text: String,
-        updatedPrefix: CompletionPrefix
-    ) -> Bool {
-        guard let candidateBufferText,
-              let candidatePrefix else { return false }
-
-        let original = candidateBufferText as NSString
-        let current = text as NSString
-        let start = candidatePrefix.range.location
-        let originalEnd = NSMaxRange(candidatePrefix.range)
-        let currentEnd = NSMaxRange(updatedPrefix.range)
-        guard start >= 0,
-              originalEnd <= original.length,
-              currentEnd <= current.length else { return false }
-
-        return original.substring(to: start) == current.substring(to: start) &&
-            original.substring(from: originalEnd) == current.substring(from: currentEnd)
     }
 
     private func canAcceptCompletion(prefix: CompletionPrefix, in textView: CodeTextView) -> Bool {

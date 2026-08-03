@@ -29,7 +29,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
     var completionManualTriggerHandler: (() -> Void)?
-    var completionChangeHandler: (() -> Void)?
+    var completionChangeHandler: ((NSRange?) -> Void)?
     var completionSelectionChangeHandler: (() -> Void)?
     var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
@@ -47,6 +47,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     private var possibleColumnSelectionDrag: ColumnSelectionDrag?
     private var suppressCompletionChangeNotifications = false
     private var suppressCompletionSelectionNotifications = false
+    private var pendingCompletionEditRange: NSRange?
     private var isApplyingSelectionChange = false
 
     private struct ColumnSelectionDrag {
@@ -276,6 +277,12 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func didChangeText() {
         super.didChangeText()
         notifyCompletionChanged()
+    }
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        let shouldChange = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        if shouldChange { pendingCompletionEditRange = affectedCharRange }
+        return shouldChange
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
@@ -839,8 +846,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     // MARK: - Private helpers
 
     private func notifyCompletionChanged() {
+        let editRange = pendingCompletionEditRange
+        pendingCompletionEditRange = nil
         guard !suppressCompletionChangeNotifications else { return }
-        completionChangeHandler?()
+        completionChangeHandler?(editRange)
     }
 
     private func notifyCompletionSelectionChanged() {
