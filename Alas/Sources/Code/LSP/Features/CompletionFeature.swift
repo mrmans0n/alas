@@ -456,7 +456,6 @@ final class CompletionFeature {
         if let previousPrefix,
            let candidatePrefix,
            updatedPrefix.range.length < previousPrefix.range.length,
-           updatedPrefix.range.length <= candidatePrefix.range.length,
            updatedPrefix.range.length < candidatePrefix.range.length ||
            candidatePoolPrefix != candidatePrefix,
            let candidateBufferText {
