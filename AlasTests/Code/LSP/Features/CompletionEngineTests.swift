@@ -293,6 +293,40 @@ struct CompletionEngineTests {
         #expect(plan.flatMap { apply($0, to: "opeXYZ") } == "openAlphaXYZ")
     }
 
+    @Test("clamps a retained textEdit inside a deleted prefix")
+    func plansRetainedTextEditAfterMultipleBackspaces() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 3),
+                    end: LSPPosition(line: 0, character: 7)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            originalPrefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            in: "opXYZ"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 2, length: 3), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "opXYZ") } == "opopenAlpha")
+    }
+
     @Test("keeps an adjacent additional edit before a grown prefix")
     func plansAdjacentAdditionalEditAtOldCaret() {
         let candidate = CompletionCandidate(
