@@ -170,7 +170,7 @@ enum CompletionEngine {
         let primaryRange: NSRange
         if let textEdit = candidate.textEdit {
             guard let range = nsRange(for: textEdit.range, in: text) else { return nil }
-            if shouldReplacePrefixForCaretInsertion(range: range, replacement: candidate.replacementText, prefix: prefix) {
+            if shouldReplacePrefix(range: range, replacement: candidate.replacementText, prefix: prefix) {
                 primaryRange = prefix.range
             } else {
                 primaryRange = range
@@ -296,15 +296,16 @@ enum CompletionEngine {
         return NSIntersectionRange(lhs, rhs).length > 0
     }
 
-    private static func shouldReplacePrefixForCaretInsertion(
+    private static func shouldReplacePrefix(
         range: NSRange,
         replacement: String,
         prefix: CompletionPrefix
     ) -> Bool {
-        !prefix.text.isEmpty &&
-            range.length == 0 &&
-            range.location == NSMaxRange(prefix.range) &&
-            hasCaseInsensitivePrefix(replacement, prefix.text)
+        guard !prefix.text.isEmpty,
+              hasCaseInsensitivePrefix(replacement, prefix.text) else { return false }
+
+        return (range.length == 0 && range.location == NSMaxRange(prefix.range)) ||
+            (range.location == prefix.range.location && NSMaxRange(range) < NSMaxRange(prefix.range))
     }
 
     static func hasCaseInsensitivePrefix(_ text: String, _ prefix: String) -> Bool {

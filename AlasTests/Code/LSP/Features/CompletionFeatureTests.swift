@@ -90,6 +90,28 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refresh preserves the selected matching candidate")
+    func refreshPreservesSelectedMatchingCandidate() {
+        let textView = makeTextView("a")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingSeedVisibleCandidates(
+            labels: ["alpha", "apple", "apricot"],
+            prefix: CompletionPrefix(text: "a", range: NSRange(location: 0, length: 1)),
+            selection: 1
+        )
+
+        textView.insertText("p", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(feature.testingSnapshot.candidateLabels == ["apple", "apricot"])
+        #expect(feature.testingSnapshot.selection == 0)
+        feature.cancelAndDismiss()
+    }
+
     private func waitForCompletionRequest(events: () -> [String]) async throws {
         let deadline = Date().addingTimeInterval(2)
         while !events().contains("completion"), Date() < deadline {

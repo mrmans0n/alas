@@ -357,6 +357,7 @@ final class CompletionFeature {
             return
         }
 
+        let selectedCandidateID = candidates.indices.contains(selection) ? candidates[selection].id : nil
         candidates.removeAll { candidate in
             let filter = candidate.filterText ?? candidate.label
             return !CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) &&
@@ -364,7 +365,7 @@ final class CompletionFeature {
         }
         isRefreshing = candidates.isEmpty
         prefix = candidates.isEmpty ? nil : updatedPrefix
-        selection = min(max(selection, 0), max(candidates.count - 1, 0))
+        selection = selectedCandidateID.flatMap { id in candidates.firstIndex { $0.id == id } } ?? 0
 
         if candidates.isEmpty {
             closeUI()
