@@ -3,6 +3,14 @@ import SwiftUI
 
 @MainActor
 final class CompletionFeature {
+    private struct CandidateIdentity: Hashable {
+        let label: String
+        let kind: Int?
+        let detail: String?
+        let source: CompletionCandidateSource
+        let editPlan: CompletionEditPlan
+    }
+
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
@@ -342,32 +350,48 @@ final class CompletionFeature {
     ) -> (candidates: [CompletionCandidate], origins: [UUID: CompletionPrefix]) {
         var merged = candidates
         var mergedOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, originPrefix) })
-        for candidate in retained {
-            let plan = CompletionEngine.editPlan(
-                accepting: candidate,
+        var identities = Set(merged.compactMap {
+            candidateIdentity(
+                for: $0,
+                origin: mergedOrigins[$0.id],
                 prefix: prefix,
-                originalPrefix: origins[candidate.id],
-                in: text
+                text: text
             )
-            let isDuplicate = merged.contains {
-                $0.label == candidate.label &&
-                    $0.kind == candidate.kind &&
-                    $0.detail == candidate.detail &&
-                    $0.source == candidate.source &&
-                    plan != nil &&
-                    CompletionEngine.editPlan(
-                        accepting: $0,
-                        prefix: prefix,
-                        originalPrefix: mergedOrigins[$0.id],
-                        in: text
-                    ) == plan
-            }
-            if !isDuplicate {
-                merged.append(candidate)
-                mergedOrigins[candidate.id] = origins[candidate.id]
-            }
+        })
+        for candidate in retained {
+            let identity = candidateIdentity(
+                for: candidate,
+                origin: origins[candidate.id],
+                prefix: prefix,
+                text: text
+            )
+            guard identity.map({ !identities.contains($0) }) ?? true else { continue }
+            merged.append(candidate)
+            mergedOrigins[candidate.id] = origins[candidate.id]
+            if let identity { identities.insert(identity) }
         }
         return (merged, mergedOrigins)
+    }
+
+    private static func candidateIdentity(
+        for candidate: CompletionCandidate,
+        origin: CompletionPrefix?,
+        prefix: CompletionPrefix,
+        text: String
+    ) -> CandidateIdentity? {
+        guard let editPlan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: prefix,
+            originalPrefix: origin,
+            in: text
+        ) else { return nil }
+        return CandidateIdentity(
+            label: candidate.label,
+            kind: candidate.kind,
+            detail: candidate.detail,
+            source: candidate.source,
+            editPlan: editPlan
+        )
     }
 
     private func showPopup() {

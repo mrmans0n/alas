@@ -5,7 +5,7 @@ struct CompletionPrefix: Equatable, Sendable {
     let range: NSRange
 }
 
-enum CompletionCandidateSource: Equatable, Sendable {
+enum CompletionCandidateSource: Hashable, Sendable {
     case lsp
     case buffer
 }
@@ -37,12 +37,12 @@ struct CompletionCandidate: Identifiable, Equatable, Sendable {
     }
 }
 
-struct CompletionTextEdit: Equatable, Sendable {
+struct CompletionTextEdit: Hashable, Sendable {
     let range: NSRange
     let replacementText: String
 }
 
-struct CompletionEditPlan: Equatable, Sendable {
+struct CompletionEditPlan: Hashable, Sendable {
     /// Original-buffer ranges sorted ascending; consumers must apply edits in reverse order.
     let edits: [CompletionTextEdit]
     let finalSelection: NSRange
