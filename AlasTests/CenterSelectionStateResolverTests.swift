@@ -16,6 +16,23 @@ struct CenterSelectionStateResolverTests {
         #expect(result == .empty)
     }
 
+    @Test func globalMissionTakesPrecedenceOverSelectedWorktree() {
+        let project = ProjectConfig.fixture
+        let worktree = Worktree.fixture(projectId: project.id)
+        let manager = ProjectsManager(persistedProjects: [project])
+        manager.insertOptimisticWorktree(worktree)
+        let missionTab = MissionTabState.fixture
+
+        let result = CenterSelectionStateResolver(
+            selectedWorktreeId: worktree.id,
+            projects: [project],
+            projectsManager: manager,
+            activeGlobalMissionTab: missionTab
+        ).resolve()
+
+        #expect(result == .globalMission(missionTab))
+    }
+
     @Test func returnsWorktreeWhenNoOperationState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
@@ -155,4 +172,35 @@ struct CenterSelectionStateResolverTests {
         let result = resolver.resolve()
         #expect(result == .empty)
     }
+}
+
+private extension ProjectConfig {
+    static let fixture = ProjectConfig(
+        id: "project-1",
+        name: "Alas",
+        path: "/tmp/alas",
+        color: "#5fb7c4",
+        addedAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+private extension Worktree {
+    static func fixture(projectId: String = "project-1") -> Worktree {
+        Worktree(
+            id: "worktree-1",
+            projectId: projectId,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/alas"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+    }
+}
+
+private extension MissionTabState {
+    static let fixture = MissionTabState(
+        missionID: MissionID(rawValue: "mission-1"),
+        title: "Fix parser crash"
+    )
 }

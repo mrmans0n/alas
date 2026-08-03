@@ -281,7 +281,7 @@ private struct TabButton: View {
 /// Small isolated view that observes the buffer's `editGeneration` so that
 /// typing in one editor only invalidates this tab's close/dirty dot, not the
 /// whole tab bar.
-private struct TabCloseButton: View {
+struct TabCloseButton: View {
     let dirtyLookup: () -> Bool
     let onClose: () -> Void
     @Environment(\.theme) private var theme

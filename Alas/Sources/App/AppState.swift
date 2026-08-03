@@ -851,7 +851,6 @@ final class AppState {
             return .success(.mission(tab))
         }
 
-        focusGlobalWorktree(id: worktree.id, projectId: leg.projectId)
         let globalTab = globalTabs.openOrFocusMission(
             missionID: id,
             title: aggregate.mission.title
@@ -870,10 +869,10 @@ final class AppState {
             missionID: aggregate.mission.id,
             title: aggregate.mission.title
         )
+        globalTabs.openOrFocusMission(missionID: aggregate.mission.id, title: aggregate.mission.title)
         missingMissionTab = tab
         let worktreeId = leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)"
         missingMissionWorktreeId = worktreeId
-        focusGlobalWorktree(id: worktreeId, projectId: leg.projectId)
         return tab
     }
 
@@ -1839,6 +1838,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
+        globalTabs.clearActiveTab()
         if id != missingMissionWorktreeId {
             missingMissionTab = nil
             missingMissionWorktreeId = nil

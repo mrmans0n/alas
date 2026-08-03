@@ -95,6 +95,12 @@ final class GlobalTabsManager {
         try? persist()
     }
 
+    func clearActiveTab() {
+        guard activeTabId != nil else { return }
+        activeTabId = nil
+        try? persist()
+    }
+
     func updateMissionTitle(missionID: MissionID, title: String) {
         guard let index = tabs.firstIndex(where: { tab in
             guard case .mission(let state) = tab else { return false }

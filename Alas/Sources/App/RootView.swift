@@ -122,7 +122,9 @@ struct RootView: View {
                     set: { state.config.rightPaneWidth = $0 }
                 ),
                 sidebarVisible: state.config.sidebarVisible,
-                rightVisible: state.config.rightPaneVisible && rightPaneSelection.showsRightPane,
+                rightVisible: state.config.rightPaneVisible
+                    && rightPaneSelection.showsRightPane
+                    && state.globalTabs.activeMissionTab() == nil,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { centerContent() },
@@ -219,9 +221,25 @@ struct RootView: View {
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
             projectsManager: state.projectsManager,
+            activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
             allowsHiddenSelectedWorktree: allowsHiddenSelectedWorktreeForMission
         )
         switch resolver.resolve() {
+        case .globalMission(let tabState):
+            VStack(spacing: 0) {
+                GlobalMissionTabBarView(
+                    tabs: state.globalTabs.tabs,
+                    activeId: tabState.id,
+                    onActivate: { state.globalTabs.activate(tabId: $0) },
+                    onClose: { state.globalTabs.close(tabId: $0) },
+                    onRevealSidebar: {
+                        state.config.sidebarVisible = true
+                        state.saveConfig()
+                    },
+                    sidebarHidden: !state.config.sidebarVisible
+                )
+                MissionTabView(state: state, worktree: nil, tabState: tabState)
+            }
         case .worktree(let wt):
             CenterPaneView(
                 state: state,
@@ -354,6 +372,101 @@ struct RootView: View {
                 )
             }
         )
+    }
+}
+
+private struct GlobalMissionTabBarView: View {
+    let tabs: [GlobalTab]
+    let activeId: TabID?
+    let onActivate: (TabID) -> Void
+    let onClose: (TabID) -> Void
+    let onRevealSidebar: () -> Void
+    let sidebarHidden: Bool
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if sidebarHidden {
+                TrafficLights()
+                    .padding(.leading, 12)
+                    .padding(.trailing, 10)
+                Button(action: onRevealSidebar) {
+                    Icon(name: "sidebar.left", size: 14)
+                        .frame(width: 28, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show sidebar")
+                    .padding(.trailing, 8)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(tabs) { tab in
+                        GlobalMissionTabButton(
+                            tab: tab,
+                            active: tab.id == activeId,
+                            onActivate: { onActivate(tab.id) },
+                            onClose: { onClose(tab.id) }
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: 34, alignment: .leading)
+            .windowDragHandle()
+        }
+        .frame(height: 34)
+        .background(theme.color("bg-0"))
+        .overlay(
+            Rectangle()
+                .fill(theme.color("border"))
+                .frame(height: 1),
+            alignment: .bottom
+        )
+    }
+}
+
+private struct GlobalMissionTabButton: View {
+    let tab: GlobalTab
+    let active: Bool
+    let onActivate: () -> Void
+    let onClose: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: onActivate) {
+            HStack(spacing: 6) {
+                Icon(name: "sparkles", size: 11, color: active ? theme.color("accent") : theme.color("fg-dim"))
+                    .frame(width: 12, height: 12)
+                Text(title)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 220, alignment: .leading)
+                TabCloseButton(dirtyLookup: { false }, onClose: onClose)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .background(active ? theme.color("bg-1") : .clear)
+            .overlay(
+                Rectangle()
+                    .fill(active ? theme.color("accent") : .clear)
+                    .frame(height: 2),
+                alignment: .bottom
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Close") { onClose() }
+        }
+    }
+
+    private var title: String {
+        switch tab {
+        case .mission(let state):
+            state.title
+        }
     }
 }
 

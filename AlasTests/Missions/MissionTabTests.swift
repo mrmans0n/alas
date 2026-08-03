@@ -64,15 +64,15 @@ struct MissionTabTests {
         #expect(decoded.activeTabId == mission.id)
     }
 
-    @Test func openMissionSwitchesSpaceAndOpensPrimaryLegTab() async throws {
+    @Test func openMissionOpensGlobalTabWithoutSwitchingSpace() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()
 
         let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
 
         let tab = try result.get()
-        #expect(fixture.state.spacesManager.activeSpaceId == "mission-space")
-        #expect(fixture.state.selectedWorktreeId == "worktree-1")
+        #expect(fixture.state.spacesManager.activeSpaceId == "other-space")
+        #expect(fixture.state.selectedWorktreeId == nil)
         #expect(fixture.state.globalTabs.activeTabId == tab.id)
         #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
         #expect(tab == .mission(MissionTabState(
@@ -88,7 +88,7 @@ struct MissionTabTests {
         let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
 
         _ = try result.get()
-        #expect(fixture.state.selectedWorktreeId == "worktree-1")
+        #expect(fixture.state.selectedWorktreeId == nil)
         #expect(fixture.state.projectsManager.isWorktreeHidden(
             projectId: "project-1",
             path: fixture.worktree.path
@@ -110,7 +110,8 @@ struct MissionTabTests {
             missionID: fixture.aggregate.mission.id,
             title: fixture.aggregate.mission.title
         ))
-        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        #expect(fixture.state.selectedWorktreeId == nil)
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
     }
 
     @Test func switchingSpacesClearsMissingMissionRecovery() async throws {
@@ -118,7 +119,7 @@ struct MissionTabTests {
         await fixture.state.missions.load()
         _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
 
-        #expect(fixture.state.switchToSpace(id: "other-space"))
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
 
         #expect(fixture.state.missingMissionTab == nil)
         #expect(fixture.state.selectedWorktreeId == nil)
@@ -127,6 +128,7 @@ struct MissionTabTests {
     @Test func deletingTheActiveSpaceClearsMissingMissionRecovery() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
         await fixture.state.missions.load()
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
         _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
 
         fixture.state.deleteSpace(id: "mission-space")
@@ -138,6 +140,7 @@ struct MissionTabTests {
     @Test func removingTheMissionProjectFromTheActiveSpaceClearsRecovery() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
         await fixture.state.missions.load()
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
         _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
         fixture.state.spacesManager.addProject("project-1", toSpace: "other-space")
 
@@ -268,7 +271,10 @@ struct MissionTabTests {
     @Test func leavingMissionRestoresTheDefaultRightPaneBase() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()
-        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        await fixture.state.openMissionChanges(
+            worktree: fixture.worktree,
+            missionID: fixture.aggregate.mission.id
+        )
         fixture.state.config.worktrees.baseBranch = "global-main"
         let missionBase = try #require(fixture.aggregate.primaryLeg?.baseRef)
         let pane = fixture.state.rightPaneStore.state(
@@ -285,7 +291,10 @@ struct MissionTabTests {
     @Test func leavingMissionRestoresDefaultWhenResolvedBaseDiffersFromPersistedBase() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()
-        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        await fixture.state.openMissionChanges(
+            worktree: fixture.worktree,
+            missionID: fixture.aggregate.mission.id
+        )
         fixture.state.config.worktrees.baseBranch = "origin/main"
         let pane = fixture.state.rightPaneStore.state(
             for: fixture.worktree,
@@ -309,7 +318,8 @@ struct MissionTabTests {
             title: fixture.aggregate.mission.title
         )))
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
-        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        #expect(fixture.state.selectedWorktreeId == nil)
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
     }
 
     @Test func selectedMissionRetainsMissingWorktreeRecoveryPresentation() async throws {
@@ -323,8 +333,9 @@ struct MissionTabTests {
         )
         await fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
 
-        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
-        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.selectedWorktreeId == nil)
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
         #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.mission.setupCheckpoint == .running)
@@ -480,7 +491,8 @@ struct MissionTabTests {
             missionID: fixture.aggregate.mission.id,
             title: fixture.aggregate.mission.title
         ))
-        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        #expect(fixture.state.selectedWorktreeId == nil)
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
             worktree: nil,

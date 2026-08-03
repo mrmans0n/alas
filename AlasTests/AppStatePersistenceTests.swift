@@ -197,6 +197,43 @@ struct AppStatePersistenceTests {
         ))
     }
 
+    @Test func openMissionDoesNotChangeSelectedWorktree() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectedWorktreeId = fixture.otherWorktree.id
+        await fixture.state.missions.load()
+
+        let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
+
+        #expect(try result.get() == .mission(MissionTabState.fixture))
+        #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+    }
+
+    @Test func selectingWorktreeClearsActiveGlobalMissionWithoutClosingIt() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+
+        #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.globalTabs.tabs == [.mission(.fixture)])
+    }
+
+    @Test func reloadTabsPreservesGlobalMissionWhenWorktreeIsMissing() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: false)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        fixture.state.reloadTabs()
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).isEmpty)
+    }
+
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemote() {
         let identity = MissionIssueIdentity(
             provider: .github,
@@ -780,6 +817,86 @@ struct AppStatePersistenceTests {
             errorMessage: nil
         )
     }
+}
+
+@MainActor
+private struct MissionGlobalNavigationFixture {
+    let aggregate: MissionAggregate
+    let worktree: Worktree
+    let otherWorktree: Worktree
+    let state: AppState
+
+    init(includeWorktree: Bool) throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-global-navigation-\(UUID().uuidString).sqlite")
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].pendingInitialPrompt = nil
+        let store = try MissionStore(path: databaseURL.path)
+        try store.insert(aggregate)
+
+        let project = ProjectConfig(
+            id: "project-1",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let worktree = Worktree(
+            id: "worktree-1",
+            projectId: project.id,
+            name: "fix/parser-crash",
+            branch: "fix/parser-crash",
+            path: URL(fileURLWithPath: "/tmp/alas-mission"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0),
+            lineageID: aggregate.legs[0].worktreeLineageID
+        )
+        let otherWorktree = Worktree(
+            id: "worktree-2",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/alas"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let appState = AppState(
+            store: NavigationStore(projectsFile: ProjectsFile(projects: [project])),
+            missionPersistence: MissionPersistence(path: databaseURL.path),
+            globalTabs: GlobalTabsManager(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mission-global-navigation-\(UUID().uuidString).json")
+            )
+        )
+        if includeWorktree {
+            appState.projectsManager.insertOptimisticWorktree(worktree)
+        }
+        appState.projectsManager.insertOptimisticWorktree(otherWorktree)
+
+        self.aggregate = aggregate
+        self.worktree = worktree
+        self.otherWorktree = otherWorktree
+        self.state = appState
+    }
+
+    private struct NavigationStore: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == ProjectsFile.self ? projectsFile as? T : nil
+        }
+    }
+}
+
+private extension MissionTabState {
+    static let fixture = MissionTabState(
+        missionID: MissionID(rawValue: "mission-1"),
+        title: "Fix parser crash"
+    )
 }
 
 @MainActor
