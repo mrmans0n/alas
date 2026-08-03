@@ -141,18 +141,22 @@ struct CompletionFeatureTests {
         )
         feature.testingSeedVisibleCandidates(
             labels: ["count", "copy"],
-            prefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0))
+            prefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0)),
+            memberAccessOnly: true
         )
 
         textView.insertText("c", replacementRange: NSRange(location: NSNotFound, length: 0))
         feature.testingPresent(
             items: [
-                .testing(label: "count", sortText: "001", filterText: nil),
-                .testing(label: "copy", sortText: "002", filterText: nil)
+                .testing(label: "count", kind: 10, sortText: "001", filterText: nil),
+                .testing(label: "copy", kind: 2, sortText: "002", filterText: nil),
+                .testing(label: "case", kind: 14, sortText: "003", filterText: nil)
             ],
             prefix: CompletionPrefix(text: "c", range: NSRange(location: 4, length: 1)),
             bufferText: "foo.c"
         )
+
+        #expect(feature.testingSnapshot.candidateLabels == ["count", "copy"])
         textView.deleteBackward(nil)
 
         #expect(textView.string == "foo.")

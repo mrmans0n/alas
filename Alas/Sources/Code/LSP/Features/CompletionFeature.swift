@@ -238,12 +238,14 @@ final class CompletionFeature {
         allowBufferFallback: Bool,
         memberAccessOnly: Bool
     ) {
+        let retainedMemberAccessOnly = candidateMemberAccessOnly || memberAccessOnly
+        let retainedBufferFallback = allowBufferFallback && !retainedMemberAccessOnly
         let next = Self.candidates(
             items: items,
             prefix: prefix,
             bufferText: bufferText,
-            allowBufferFallback: allowBufferFallback,
-            memberAccessOnly: memberAccessOnly
+            allowBufferFallback: retainedBufferFallback,
+            memberAccessOnly: retainedMemberAccessOnly
         )
 
         guard !next.isEmpty else {
@@ -266,8 +268,8 @@ final class CompletionFeature {
         candidatePrefix = prefix
         candidateBufferText = bufferText
         candidateItems = items
-        candidateAllowsBufferFallback = allowBufferFallback
-        candidateMemberAccessOnly = memberAccessOnly
+        candidateAllowsBufferFallback = retainedBufferFallback
+        candidateMemberAccessOnly = retainedMemberAccessOnly
         candidateAllowsEmptyPrefix = candidateAllowsEmptyPrefix || allowEmptyPrefix
         isRefreshing = false
         selection = selectedCandidate.flatMap { selected in
@@ -527,7 +529,8 @@ extension CompletionFeature {
     func testingSeedVisibleCandidates(
         labels: [String],
         prefix: CompletionPrefix,
-        selection: Int = 0
+        selection: Int = 0,
+        memberAccessOnly: Bool = false
     ) {
         candidates = labels.map { label in
             CompletionCandidate(
@@ -547,6 +550,7 @@ extension CompletionFeature {
         self.prefix = prefix
         candidatePrefix = prefix
         candidateBufferText = textView?.string
+        candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
         isRefreshing = false
