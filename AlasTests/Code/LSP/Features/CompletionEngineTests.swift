@@ -259,6 +259,40 @@ struct CompletionEngineTests {
         #expect(plan.flatMap { apply($0, to: "openXYZ") } == "openAlpha")
     }
 
+    @Test("keeps a retained primary edit start before a grown prefix")
+    func plansRetainedPrimaryEditStartingAtOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "car",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "car",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 4),
+                    end: LSPPosition(line: 0, character: 7)
+                ),
+                newText: "car"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "c", range: NSRange(location: 4, length: 1)),
+            originalPrefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0)),
+            in: "foo.cBar"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 4, length: 4), replacementText: "car")
+        ])
+        #expect(plan.flatMap { apply($0, to: "foo.cBar") } == "foo.car")
+    }
+
     @Test("shifts a retained textEdit when the prefix shrinks")
     func plansRetainedTextEditAfterBackspace() {
         let candidate = CompletionCandidate(

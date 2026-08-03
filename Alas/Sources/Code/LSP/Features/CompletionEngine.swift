@@ -178,6 +178,7 @@ enum CompletionEngine {
                 for: textEdit.range,
                 originalPrefix: originalPrefix,
                 prefix: prefix,
+                includeInsertedTextAtStart: true,
                 includeInsertedTextAtEnd: true,
                 in: text
             ) else { return nil }
@@ -198,6 +199,7 @@ enum CompletionEngine {
                 for: additional.range,
                 originalPrefix: originalPrefix,
                 prefix: prefix,
+                includeInsertedTextAtStart: false,
                 includeInsertedTextAtEnd: false,
                 in: text
             ) else { continue }
@@ -317,6 +319,7 @@ enum CompletionEngine {
         for range: LSPRange,
         originalPrefix: CompletionPrefix?,
         prefix: CompletionPrefix,
+        includeInsertedTextAtStart: Bool,
         includeInsertedTextAtEnd: Bool,
         in text: String
     ) -> NSRange? {
@@ -345,9 +348,11 @@ enum CompletionEngine {
                position.character < oldCaretCharacter {
                 return LSPPosition(line: position.line, character: newCaretCharacter)
             }
+            let shiftsAtCaret = growth < 0 || (atEnd
+                ? includeInsertedTextAtEnd || isInsertion
+                : !includeInsertedTextAtStart)
             guard position.character > oldCaretCharacter ||
-                  (!atEnd || includeInsertedTextAtEnd || isInsertion || growth < 0) &&
-                  position.character == oldCaretCharacter else {
+                  shiftsAtCaret && position.character == oldCaretCharacter else {
                 return position
             }
             return LSPPosition(line: position.line, character: position.character + growth)
