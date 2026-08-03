@@ -128,6 +128,92 @@ struct MissionCoordinatorTests {
         #expect(fake.startACPCalls == 0)
     }
 
+    // Break caught: restart reconciliation awaits one creating leg to settle
+    // before advancing the next, serializing otherwise independent Git work.
+    @Test("restart advances creating legs independently")
+    func restartAdvancesCreatingLegsIndependently() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+        await fake.resumeWorktreeCreation(for: try #require(fake.startedLegIDs.first))
+        _ = await fake.waitUntilSettled(missionID)
+        fake.clearStartedLegIDs()
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: missionID))
+        let now = Date()
+        let sdkLeg = Self.leg(
+            id: MissionLegID(rawValue: "restart-sdk"),
+            missionID: missionID,
+            ordinal: 1,
+            draft: Self.sdkDraft,
+            at: now
+        )
+        let serverLeg = Self.leg(
+            id: MissionLegID(rawValue: "restart-server"),
+            missionID: missionID,
+            ordinal: 2,
+            draft: Self.serverDraft,
+            at: now
+        )
+        try await fake.persistence.addLeg(sdkLeg, event: MissionEvent(
+            id: "restart-sdk-added",
+            missionID: missionID,
+            legID: sdkLeg.id,
+            kind: .legAdded,
+            message: "Mission leg added.",
+            createdAt: now
+        ))
+        try await fake.persistence.addLeg(serverLeg, event: MissionEvent(
+            id: "restart-server-added",
+            missionID: missionID,
+            legID: serverLeg.id,
+            kind: .legAdded,
+            message: "Mission leg added.",
+            createdAt: now
+        ))
+        #expect(aggregate.mission.state == .running)
+
+        let reconciliation = Task { @MainActor in
+            await coordinator.reconcileInterrupted()
+        }
+        await fake.waitForWorktreeStarts(count: 2)
+
+        #expect(Set(fake.startedLegIDs) == Set([sdkLeg.id, serverLeg.id]))
+
+        await fake.resumeWorktreeCreation(for: sdkLeg.id)
+        await fake.waitForWorktreeStarts(count: 2)
+        await fake.resumeWorktreeCreation(for: serverLeg.id)
+        await reconciliation.value
+    }
+
+    private static func leg(
+        id: MissionLegID,
+        missionID: MissionID,
+        ordinal: Int,
+        draft: MissionLegDraft,
+        at: Date
+    ) -> MissionLeg {
+        MissionLeg(
+            id: id,
+            missionID: missionID,
+            ordinal: ordinal,
+            projectId: draft.projectId,
+            baseRef: draft.baseRef,
+            baseRemoteName: draft.baseRemoteName,
+            branch: draft.branch,
+            destinationPath: draft.destinationPath,
+            worktreeId: nil,
+            agentId: draft.agentId,
+            acpSessionId: nil,
+            initialPromptId: draft.initialPromptId,
+            pendingInitialPrompt: draft.initialPrompt,
+            reviewIdentity: nil,
+            createdAt: at,
+            updatedAt: at
+        )
+    }
+
     @Test("success persists every checkpoint in order")
     func successPersistsEveryCheckpointInOrder() async throws {
         let fake = MissionCoordinatorFake()

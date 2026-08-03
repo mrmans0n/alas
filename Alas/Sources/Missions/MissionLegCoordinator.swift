@@ -121,11 +121,21 @@ final class MissionLegCoordinator {
                 await reconcileArtifacts(missionID: aggregate.mission.id, legID: leg.id)
             }
         }
-        for aggregate in aggregates {
-            guard aggregate.mission.state != .needsAttention else { continue }
-            for leg in aggregate.legs where setupLeg(in: aggregate, legID: leg.id)?.state == .creating {
-                await advance(missionID: aggregate.mission.id, legID: leg.id)
+        let creatingLegs: [(missionID: MissionID, legID: MissionLegID)] = aggregates.flatMap { aggregate -> [(missionID: MissionID, legID: MissionLegID)] in
+            guard aggregate.mission.state != .needsAttention else { return [] }
+            return aggregate.legs.compactMap { leg -> (missionID: MissionID, legID: MissionLegID)? in
+                guard setupLeg(in: aggregate, legID: leg.id)?.state == .creating else { return nil }
+                return (missionID: aggregate.mission.id, legID: leg.id)
             }
+        }
+        let advances: [Task<Void, Never>] = creatingLegs.map { candidate in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.advance(missionID: candidate.missionID, legID: candidate.legID)
+            }
+        }
+        for advance in advances {
+            await advance.value
         }
     }
 
