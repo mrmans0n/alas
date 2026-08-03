@@ -301,6 +301,7 @@
 		330D198F38767801994BF84C /* RemoteHostCapabilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10B3615A1591964AB1C9E524 /* RemoteHostCapabilities.swift */; };
 		3326658AC801C394C43AC8A2 /* SearchKbd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36992F601C8EB6C3D45B584F /* SearchKbd.swift */; };
 		33376EB37508D556E2385D33 /* ACPSessionUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D62D907375A5CBAED1E698 /* ACPSessionUpdateTests.swift */; };
+		3347BAC4410B740D67FAEE1A /* ACPMessageListSwitchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31BE86A981CD5741B1F7A6E2 /* ACPMessageListSwitchTests.swift */; };
 		3388D5141427C0046BD8CCC7 /* LanguageRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 328607AAAAA12EE2206ED5A4 /* LanguageRegistry.swift */; };
 		33A0FC862C45CDFF47053A04 /* ACPComposerActionButtonMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */; };
 		342C28B197D5048F78D2E8D6 /* RemotePairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F77AE52695B7B19A9F11B89 /* RemotePairingService.swift */; };
@@ -1759,6 +1760,7 @@
 		3111744632DAC342A40DB62A /* ACPAdapterUpdateBannerDecider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterUpdateBannerDecider.swift; sourceTree = "<group>"; };
 		311B7CA55176621C35DE3E92 /* AlasCLIWorktreeResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIWorktreeResolverTests.swift; sourceTree = "<group>"; };
 		312DC027D433B496FD010F85 /* DiffReviewSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewSurfaceTests.swift; sourceTree = "<group>"; };
+		31BE86A981CD5741B1F7A6E2 /* ACPMessageListSwitchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageListSwitchTests.swift; sourceTree = "<group>"; };
 		31CE012ED93AA22C257FEB8A /* MergeConflictBinaryDetectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictBinaryDetectionTests.swift; sourceTree = "<group>"; };
 		31F3A80227DD4A52C4752722 /* CompletionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionWindowController.swift; sourceTree = "<group>"; };
 		321866B3EB8CCE337B1D3A58 /* ACPMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessage.swift; sourceTree = "<group>"; };
@@ -3977,6 +3979,7 @@
 				E64221361A2743CDAD692E64 /* ACPMCPStatusPolicyTests.swift */,
 				E941397D0207F68135B3464D /* ACPMentionPickerTests.swift */,
 				9272E334A0A5DF460514CF01 /* ACPMessageListPaginationTests.swift */,
+				31BE86A981CD5741B1F7A6E2 /* ACPMessageListSwitchTests.swift */,
 				D0CE3F0637B3CA27B1D87080 /* ACPNewChatEmptyStateTests.swift */,
 				80BAFADCDC3E349AC3DBDDEA /* ACPPlanPillStateTests.swift */,
 				44ACE3DEC81C465524111058 /* ACPQuestionPromptTests.swift */,
@@ -6527,6 +6530,7 @@
 				162363BDA6BC54B372C77B91 /* ACPMarkdownTextBareURLTests.swift in Sources */,
 				26F83C65E75B5F44024FEF1F /* ACPMentionPickerTests.swift in Sources */,
 				FD7719ABDA6CFCF28BB0F800 /* ACPMessageListPaginationTests.swift in Sources */,
+				3347BAC4410B740D67FAEE1A /* ACPMessageListSwitchTests.swift in Sources */,
 				9737C1A3CD708D28C62FD6A5 /* ACPMessageStableIdTests.swift in Sources */,
 				D10A8F47A537C1C8969752B1 /* ACPMessageTests.swift in Sources */,
 				BC4B8B193F020CBEA02B01A6 /* ACPMessageWireTests.swift in Sources */,

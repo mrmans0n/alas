@@ -137,7 +137,68 @@ struct ACPMessageList: View {
         }
     }
 
+    nonisolated static func usesAppKitScroller(flagEnabled: Bool) -> Bool {
+        flagEnabled
+    }
+
     var body: some View {
+        Group {
+            if Self.usesAppKitScroller(flagEnabled: ACPTranscriptScrollerFlag.isEnabled) {
+                appKitScrollerBody
+            } else {
+                legacyScrollViewBody
+            }
+        }
+        .background(
+            LinearGradient(
+                colors: [theme.color("bg-1"), theme.color("bg-0")],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+    }
+
+    private var appKitScrollerBody: some View {
+        ZStack(alignment: .bottomTrailing) {
+            ACPTranscriptScroller(
+                session: session,
+                transcript: transcript,
+                contentMaxWidth: contentMaxWidth,
+                typography: typography,
+                trustedImageRoot: trustedImageRoot,
+                onOpenDiff: onOpenDiff,
+                onLoadFullToolCallContent: onLoadFullToolCallContent,
+                forkTargets: forkTargets,
+                onFork: onFork,
+                rememberedScrollAnchor: rememberedScrollAnchor,
+                onRememberScrollAnchor: onRememberScrollAnchor,
+                onOpenTranscriptLink: onOpenTranscriptLink,
+                policy: policy,
+                scopeKey: scopeKey,
+                onUserInputResponse: onUserInputResponse,
+                onOpenElicitationURL: onOpenElicitationURL,
+                onDismissElicitationURLWait: onDismissElicitationURLWait,
+                onQueueEdit: onQueueEdit,
+                onQueueForceSend: onQueueForceSend,
+                onQueueRemove: onQueueRemove,
+                onQueueRetry: onQueueRetry,
+                onQueueReorder: onQueueReorder,
+                onQueueClearAll: onQueueClearAll,
+                onRetryContextRecovery: onRetryContextRecovery,
+                onOpenForkSource: onOpenForkSource,
+                agentDisplayName: agentDisplayName
+            )
+            if Self.shouldShowGoToNewestAffordance(
+                followsTranscriptTail: session.followsTranscriptTail
+            ) {
+                goToNewestButton {
+                    session.followsTranscriptTail = true
+                    transcript.resetWindowToTail()
+                }
+            }
+        }
+    }
+
+    private var legacyScrollViewBody: some View {
         ScrollViewReader { proxy in
             GeometryReader { viewport in
                 ZStack(alignment: .bottomTrailing) {
@@ -349,42 +410,42 @@ struct ACPMessageList: View {
                     if Self.shouldShowGoToNewestAffordance(
                         followsTranscriptTail: session.followsTranscriptTail
                     ) {
-                        Button {
+                        goToNewestButton {
                             goToNewestMessage(proxy: proxy)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 14, weight: .semibold))
-                                .frame(width: goToNewestButtonSize, height: goToNewestButtonSize)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(theme.color("fg"))
-                        .background(
-                            Circle()
-                                .fill(theme.color("bg-1").opacity(0.95))
-                                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                        )
-                        .overlay(
-                            Circle()
-                                .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
-                        )
-                        .accessibilityLabel("Go to newest message")
-                        .help("Go to newest message")
-                        .padding(.trailing, 20)
-                        .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
-                            composerSpacerHeight: composerSpacerHeight,
-                            gap: goToNewestButtonComposerGap
-                        ))
-                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
                     }
                 }
             }
         }
+    }
+
+    private func goToNewestButton(action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: goToNewestButtonSize, height: goToNewestButtonSize)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.color("fg"))
         .background(
-            LinearGradient(
-                colors: [theme.color("bg-1"), theme.color("bg-0")],
-                startPoint: .top, endPoint: .bottom
-            )
+            Circle()
+                .fill(theme.color("bg-1").opacity(0.95))
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         )
+        .overlay(
+            Circle()
+                .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
+        )
+        .accessibilityLabel("Go to newest message")
+        .help("Go to newest message")
+        .padding(.trailing, 20)
+        .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
+            composerSpacerHeight: composerSpacerHeight,
+            gap: goToNewestButtonComposerGap
+        ))
+        .transition(.opacity.combined(with: .scale(scale: 0.94)))
     }
 
     private func restoreTailIfNeeded(proxy: ScrollViewProxy, animated: Bool) {
