@@ -237,13 +237,14 @@ final class MissionStore {
         }
     }
 
+    @discardableResult
     func replaceIssueSnapshot(
         missionID: MissionID,
         snapshot: MissionIssueSnapshot,
         event: MissionEvent
-    ) throws {
+    ) throws -> [MissionID] {
         try validate(event: event, for: missionID)
-        try immediateTransaction {
+        return try immediateTransaction {
             try requireMission(missionID)
             let storedIdentity = try issueIdentity(missionID: missionID)
             guard Self.sameIssueSource(storedIdentity, snapshot.identity) else {
@@ -259,12 +260,15 @@ final class MissionStore {
                ) {
                 throw Error.duplicateActiveIssueIdentity
             }
+            let migratedDuplicateIDs: [MissionID]
             if repositoryRenamed {
-                try migrateActiveDuplicateIssueIdentities(
+                migratedDuplicateIDs = try migrateActiveDuplicateIssueIdentities(
                     excluding: missionID,
                     from: storedIdentity,
                     to: snapshot
                 )
+            } else {
+                migratedDuplicateIDs = []
             }
             let snapshot = repositoryRenamed
                 ? snapshot
@@ -290,6 +294,7 @@ final class MissionStore {
                 missionID.rawValue,
             ])
             try insertEvent(event)
+            return [missionID] + migratedDuplicateIDs
         }
     }
 
@@ -327,7 +332,7 @@ final class MissionStore {
         excluding missionID: MissionID,
         from storedIdentity: MissionIssueIdentity,
         to snapshot: MissionIssueSnapshot
-    ) throws {
+    ) throws -> [MissionID] {
         let duplicateIDs = try db.query("""
         SELECT missions.id
         FROM missions
@@ -365,6 +370,7 @@ final class MissionStore {
                 to: snapshot.identity
             )
         }
+        return duplicateIDs.map { MissionID(rawValue: $0) }
     }
 
     func updateIssueRefreshError(

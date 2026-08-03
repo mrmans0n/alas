@@ -690,6 +690,50 @@ struct MissionReadinessEvaluatorTests {
         #expect(fake.notifications.last?.issue.title == "Fresh issue title")
     }
 
+    @Test func repositoryRenamePublishesEveryMigratedDuplicateMission() async throws {
+        var first = MissionFixtures.creatingMission(id: "mission-1")
+        first.mission.state = .running
+        first.mission.setupCheckpoint = .running
+        first.legs[0].worktreeId = "worktree-1"
+        first.legs[0].worktreeLineageID = "lineage-1"
+        first.legs[0].pendingInitialPrompt = nil
+        var second = MissionFixtures.creatingMission(id: "mission-2")
+        second.mission.state = .running
+        second.mission.setupCheckpoint = .running
+        second.legs[0].worktreeId = "worktree-2"
+        second.legs[0].worktreeLineageID = "lineage-2"
+        second.legs[0].pendingInitialPrompt = nil
+        let renamed = MissionIssueSnapshot(
+            identity: .init(
+                provider: first.issue.identity.provider,
+                host: first.issue.identity.host,
+                repositorySlug: "acquired/renamed-alas",
+                number: first.issue.identity.number
+            ),
+            canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
+            title: "Fresh after rename",
+            body: first.issue.body,
+            state: first.issue.state,
+            labels: first.issue.labels,
+            assignees: first.issue.assignees,
+            providerUpdatedAt: first.issue.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 250),
+            refreshError: nil
+        )
+        let fake = try MissionLifecycleFake(
+            aggregate: first,
+            additionalAggregates: [second],
+            issueRefresh: { _, _ in renamed }
+        )
+        await fake.controller.load()
+
+        await fake.controller.refreshIssue(first.mission.id)
+
+        #expect(fake.controller.aggregate(id: first.mission.id)?.issue.identity == renamed.identity)
+        #expect(fake.controller.aggregate(id: second.mission.id)?.issue.identity == renamed.identity)
+        #expect(fake.notifications.contains { $0.mission.id == second.mission.id && $0.issue.identity == renamed.identity })
+    }
+
     @Test func providerRefreshFailureRetainsSnapshotAndPersistsError() async throws {
         let failure = CodeHostProviderError.unauthenticated("github.com")
         let fake = try MissionLifecycleFake(issueRefresh: { _, _ in throw failure })
@@ -1824,6 +1868,7 @@ private final class MissionLifecycleFake {
 
     init(
         aggregate: MissionAggregate = MissionReadinessEvaluatorTests.runningAggregate(),
+        additionalAggregates: [MissionAggregate] = [],
         worktreeAvailable: Bool = true,
         worktreeBranch: String = "fix/parser-crash",
         worktreeLineageID: String? = "lineage-1",
@@ -1854,6 +1899,9 @@ private final class MissionLifecycleFake {
             aggregate.legs[0].worktreeLineageID = worktreeLineageID
         }
         try store.insert(aggregate)
+        for additional in additionalAggregates {
+            try store.insert(additional, allowDuplicate: true)
+        }
         persistence = MissionPersistence(path: path)
         let recorder = MissionLifecycleRecorder()
         self.recorder = recorder

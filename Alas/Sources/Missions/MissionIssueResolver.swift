@@ -92,10 +92,16 @@ struct MissionIssueResolver {
                 return (entry.project, remote)
             }
             if !exactMatches.isEmpty {
-                return try await resolve(
+                let probed = try await resolve(
                     number: number,
                     matches: exactMatches,
                     preferredProjectID: environment.selectedProjectId()
+                )
+                return try Self.canonicalResult(
+                    probed,
+                    number: number,
+                    projectRemotes: projectRemotes,
+                    preferredProjectID: probed.selectedProjectId
                 )
             }
 
@@ -131,36 +137,11 @@ struct MissionIssueResolver {
                         selectedProjectId: entry.project.id,
                         cwd: entry.project.path
                     )
-                    let canonicalMatches = projectRemotes.flatMap { candidate in
-                        candidate.remotes.compactMap { remote -> (project: ProjectConfig, remote: CodeHostRemote)? in
-                            guard Self.matches(
-                                remote: remote,
-                                kind: probed.snapshot.identity.provider,
-                                host: probed.snapshot.identity.host,
-                                slug: probed.snapshot.identity.repositorySlug
-                            ) else { return nil }
-                            return (candidate.project, remote)
-                        }
-                    }
-                    guard probed.snapshot.identity.number == number,
-                          !canonicalMatches.isEmpty
-                    else {
-                        lastError = CodeHostProviderError.malformedOutput(
-                            "The redirected issue repository does not match a configured project."
-                        )
-                        continue
-                    }
-                    let selectedMatch = canonicalMatches.first { $0.project.id == entry.project.id }
-                        ?? canonicalMatches[0]
-                    var candidateProjectIDs: [String] = []
-                    for match in canonicalMatches where !candidateProjectIDs.contains(match.project.id) {
-                        candidateProjectIDs.append(match.project.id)
-                    }
-                    return ResolvedMissionIssue(
-                        snapshot: probed.snapshot,
-                        remote: selectedMatch.remote,
-                        candidateProjectIds: candidateProjectIDs,
-                        selectedProjectId: selectedMatch.project.id
+                    return try Self.canonicalResult(
+                        probed,
+                        number: number,
+                        projectRemotes: projectRemotes,
+                        preferredProjectID: entry.project.id
                     )
                 } catch {
                     lastError = error
@@ -210,6 +191,44 @@ struct MissionIssueResolver {
 
     private static func matches(remote: CodeHostRemote, kind: CodeHostKind, host: String, slug: String) -> Bool {
         remote.kind == kind && remote.host.caseInsensitiveCompare(host) == .orderedSame && remote.repositorySlug.caseInsensitiveCompare(slug) == .orderedSame
+    }
+
+    private static func canonicalResult(
+        _ probed: ResolvedMissionIssue,
+        number: Int,
+        projectRemotes: [(project: ProjectConfig, remotes: [CodeHostRemote])],
+        preferredProjectID: String
+    ) throws -> ResolvedMissionIssue {
+        let canonicalMatches = projectRemotes.flatMap { candidate in
+            candidate.remotes.compactMap { remote -> (project: ProjectConfig, remote: CodeHostRemote)? in
+                guard matches(
+                    remote: remote,
+                    kind: probed.snapshot.identity.provider,
+                    host: probed.snapshot.identity.host,
+                    slug: probed.snapshot.identity.repositorySlug
+                ) else { return nil }
+                return (candidate.project, remote)
+            }
+        }
+        guard probed.snapshot.identity.number == number,
+              !canonicalMatches.isEmpty
+        else {
+            throw CodeHostProviderError.malformedOutput(
+                "The redirected issue repository does not match a configured project."
+            )
+        }
+        let selectedMatch = canonicalMatches.first { $0.project.id == preferredProjectID }
+            ?? canonicalMatches[0]
+        var candidateProjectIDs: [String] = []
+        for match in canonicalMatches where !candidateProjectIDs.contains(match.project.id) {
+            candidateProjectIDs.append(match.project.id)
+        }
+        return ResolvedMissionIssue(
+            snapshot: probed.snapshot,
+            remote: selectedMatch.remote,
+            candidateProjectIds: candidateProjectIDs,
+            selectedProjectId: selectedMatch.project.id
+        )
     }
 
     private static func redirectProbeRemote(

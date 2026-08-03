@@ -395,12 +395,14 @@ final class MissionController {
                 kind: .sourceRefreshed,
                 message: "Issue #\(refreshed.identity.number) refreshed."
             )
-            try await persistence.replaceIssueSnapshot(
+            let updatedMissionIDs = try await persistence.replaceIssueSnapshot(
                 missionID: id,
                 snapshot: refreshed,
                 event: event
             )
-            try await publish(id: id)
+            for updatedMissionID in updatedMissionIDs {
+                try await publish(id: updatedMissionID)
+            }
             loadError = nil
         } catch {
             guard issueRefreshGenerations[id] == generation else { return }

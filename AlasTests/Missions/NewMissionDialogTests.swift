@@ -390,6 +390,26 @@ struct NewMissionDialogTests {
         #expect(model.branch == "\(seed)-3")
     }
 
+    @Test("generated branch strips the longest slash-containing remote alias")
+    func generatedBranchSkipsSlashRemoteTrackingBranches() async {
+        let seed = MissionBranchName.make(
+            issueNumber: 1842,
+            title: "Fix offline sync conflicts",
+            prefix: "feature/"
+        )
+        let fake = NewMissionDialogFake(
+            configuredBases: ["alas": "main"],
+            branchesByProject: ["alas": ["team/origin/\(seed)", "team/origin/\(seed)-2"]],
+            remoteNamesByProject: ["alas": ["team", "team/origin"]]
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "#1842"
+
+        await model.resolve()
+
+        #expect(model.branch == "\(seed)-3")
+    }
+
     @Test("duplicate can be created only with an explicit override")
     func duplicateCanCreateAnotherMission() async {
         let fake = NewMissionDialogFake(duplicateMissionID: .init(rawValue: "existing-mission"))

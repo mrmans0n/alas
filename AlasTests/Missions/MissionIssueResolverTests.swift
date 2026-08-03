@@ -100,6 +100,25 @@ struct MissionIssueResolverTests {
         }
     }
 
+    @Test func exactStaleRemoteRejectsAnUnconfiguredRedirectTarget() async {
+        let provider = FakeIssueProvider(
+            canonicalRepositorySlug: "openai/renamed-alas",
+            acceptedRepositorySlugs: ["mrmans0n/alas"]
+        )
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")] },
+            providers: .init([provider])
+        ))
+
+        await #expect(throws: CodeHostProviderError.malformedOutput(
+            "The redirected issue repository does not match a configured project."
+        )) {
+            try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+        }
+    }
+
     @Test func redirectedFullURLSelectsTheCloneThatCompletedTheProbe() async throws {
         let provider = FakeIssueProvider(
             unavailablePaths: [Self.cloneA.path],

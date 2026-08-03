@@ -409,10 +409,11 @@ final class NewMissionDialogModel {
         let rawOccupied = Set(occupied)
         var occupied = rawOccupied
         for branch in rawOccupied {
-            guard let separator = branch.firstIndex(of: "/"),
-                  remoteNames.contains(String(branch[..<separator]))
+            guard let remoteName = remoteNames
+                .filter({ branch.hasPrefix("\($0)/") })
+                .max(by: { $0.count < $1.count })
             else { continue }
-            occupied.insert(String(branch[branch.index(after: separator)...]))
+            occupied.insert(String(branch.dropFirst(remoteName.count + 1)))
         }
         guard occupied.contains(seed) else { return seed }
         var suffix = 2

@@ -68,11 +68,12 @@ actor MissionPersistence {
         )
     }
 
+    @discardableResult
     func replaceIssueSnapshot(
         missionID: MissionID,
         snapshot: MissionIssueSnapshot,
         event: MissionEvent
-    ) throws {
+    ) throws -> [MissionID] {
         try openedStore().replaceIssueSnapshot(missionID: missionID, snapshot: snapshot, event: event)
     }
 
