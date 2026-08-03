@@ -876,10 +876,14 @@ final class AppState {
         return tab
     }
 
-    func openMissionChanges(worktree: Worktree, missionID: MissionID) async {
+    func openMissionChanges(
+        worktree: Worktree,
+        missionID: MissionID,
+        legID: MissionLegID? = nil
+    ) async {
         guard let aggregate = missions.aggregate(id: missionID),
-              let leg = aggregate.primaryLeg,
-              missionWorktree(worktree, for: aggregate)?.id == worktree.id
+              let leg = legID.flatMap({ id in aggregate.legs.first { $0.id == id } }) ?? aggregate.primaryLeg,
+              missionWorktree(worktree, for: leg, aggregate: aggregate)?.id == worktree.id
         else { return }
         guard !projectsManager.isWorktreeHidden(
             projectId: worktree.projectId,
@@ -887,13 +891,41 @@ final class AppState {
         ) else { return }
 
         focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
+        let paneBaseRef = await missionPaneBaseRef(for: aggregate, leg: leg, worktree: worktree)
         let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
         rightPane.activeTab = .changes
         if !config.rightPaneVisible {
             config.rightPaneVisible = true
             _ = saveConfig()
         }
+    }
+
+    private func missionWorktree(
+        _ candidate: Worktree?,
+        for leg: MissionLeg,
+        aggregate: MissionAggregate
+    ) -> Worktree? {
+        guard let candidate,
+              candidate.projectId == leg.projectId,
+              candidate.branch == leg.branch,
+              leg.worktreeId == nil || candidate.id == leg.worktreeId
+        else { return nil }
+        guard let persistedLineageID = leg.worktreeLineageID,
+              candidate.lineageID == persistedLineageID
+        else { return nil }
+        guard aggregate.mission.state == .completed else { return candidate }
+        let candidatePath = candidate.path.standardizedFileURL.path
+        let ownedByALaterMission = missions.aggregates.contains { other in
+            guard other.mission.id != aggregate.mission.id,
+                  other.mission.createdAt > aggregate.mission.createdAt
+            else { return false }
+            return other.legs.contains { otherLeg in
+                guard otherLeg.projectId == candidate.projectId else { return false }
+                return otherLeg.worktreeId == candidate.id
+                    || URL(fileURLWithPath: otherLeg.destinationPath).standardizedFileURL.path == candidatePath
+            }
+        }
+        return ownedByALaterMission ? nil : candidate
     }
 
     func refreshMission(_ id: MissionID) async {
@@ -968,9 +1000,17 @@ final class AppState {
     }
 
     private func missionPaneBaseRef(for aggregate: MissionAggregate, worktree: Worktree) async -> String {
-        guard let leg = aggregate.primaryLeg,
-              let remotes = try? await GitService().remotes(worktreePath: worktree.path)
-        else { return aggregate.primaryLeg?.baseRef ?? config.worktrees.baseBranch }
+        guard let leg = aggregate.primaryLeg else { return config.worktrees.baseBranch }
+        return await missionPaneBaseRef(for: aggregate, leg: leg, worktree: worktree)
+    }
+
+    private func missionPaneBaseRef(
+        for aggregate: MissionAggregate,
+        leg: MissionLeg,
+        worktree: Worktree
+    ) async -> String {
+        guard let remotes = try? await GitService().remotes(worktreePath: worktree.path)
+        else { return leg.baseRef }
         return Self.missionPaneBaseRef(
             identity: aggregate.issue.identity,
             baseRef: leg.baseRef,
@@ -1003,10 +1043,12 @@ final class AppState {
         paneBaseRef: String,
         aggregates: [MissionAggregate]
     ) -> String {
-        aggregates.first { aggregate in
-            aggregate.mission.state != .completed
-                && aggregate.primaryLeg?.worktreeId == worktreeID
-        }?.primaryLeg?.baseRef ?? paneBaseRef
+        for aggregate in aggregates where aggregate.mission.state != .completed {
+            if let leg = aggregate.legs.first(where: { $0.worktreeId == worktreeID }) {
+                return leg.baseRef
+            }
+        }
+        return paneBaseRef
     }
 
     func restoreDefaultRightPaneBaseAfterMission(worktree: Worktree) {
@@ -2553,6 +2595,31 @@ final class AppState {
         )
     }
 
+    func preparedMissionLegDraft(_ draft: MissionLegDraft) async throws -> MissionLegDraft {
+        guard let project = projects.first(where: { $0.id == draft.projectId }) else {
+            throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
+        }
+        let destination = try await Self.preparedCreateWorktreeDestination(
+            repoPath: URL(fileURLWithPath: project.path),
+            destination: URL(fileURLWithPath: draft.destinationPath)
+        )
+        let availableDestination = try await availablePreparedMissionDestination(
+            projectID: draft.projectId,
+            requested: destination,
+            projectPath: URL(fileURLWithPath: project.path)
+        )
+        return MissionLegDraft(
+            projectId: draft.projectId,
+            baseRef: draft.baseRef,
+            baseRemoteName: draft.baseRemoteName,
+            branch: draft.branch,
+            destinationPath: availableDestination.path,
+            agentId: draft.agentId,
+            initialPromptId: draft.initialPromptId,
+            preparedPrompt: draft.preparedPrompt
+        )
+    }
+
     private func availablePreparedMissionDestination(
         projectID: String,
         requested: URL,
@@ -2561,12 +2628,12 @@ final class AppState {
         let worktreePaths = projectsManager.worktrees(projectId: projectID).map {
             $0.path.standardizedFileURL.path
         }
-        let missionPaths = missions.aggregates.compactMap { aggregate -> String? in
-            guard aggregate.mission.state != .completed,
-                  aggregate.primaryLeg?.projectId == projectID,
-                  let path = aggregate.primaryLeg?.destinationPath
-            else { return nil }
-            return URL(fileURLWithPath: path).standardizedFileURL.path
+        let missionPaths = missions.aggregates.flatMap { aggregate -> [String] in
+            guard aggregate.mission.state != .completed else { return [] }
+            return aggregate.legs.compactMap { leg in
+                guard leg.projectId == projectID else { return nil }
+                return URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+            }
         }
         let occupiedPaths = Set(worktreePaths + missionPaths)
         if let host = RemoteHostRegistry.shared.host(forPath: projectPath.path) {

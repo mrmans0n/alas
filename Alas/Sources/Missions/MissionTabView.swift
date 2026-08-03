@@ -324,6 +324,8 @@ struct MissionTabView: View {
 
     @State private var completionConfirmationPresented = false
     @State private var agentPickerPresented = false
+    @State private var agentPickerLegID: MissionLegID?
+    @State private var addLegPresented = false
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -355,10 +357,21 @@ struct MissionTabView: View {
         .popover(isPresented: $agentPickerPresented) {
             MissionAgentReplacementPopover(
                 agents: enabledACPAgents,
-                storedAgentID: state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.agentId ?? ""
+                storedAgentID: agentPickerLeg?.agentId
+                    ?? state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.agentId
+                    ?? ""
             ) { agentID in
-                Task { await state.missions.retry(tabState.missionID, agentId: agentID) }
+                let legID = agentPickerLegID
+                Task { await retryAgent(legID: legID, agentID: agentID) }
             }
+            .environment(\.theme, theme)
+        }
+        .sheet(isPresented: $addLegPresented) {
+            AddMissionLegDialog(
+                presented: $addLegPresented,
+                state: state,
+                missionID: tabState.missionID
+            )
             .environment(\.theme, theme)
         }
     }
@@ -416,16 +429,29 @@ struct MissionTabView: View {
                             if let url = leg.reviewDestination {
                                 NSWorkspace.shared.open(url)
                             }
-                        }
+                        },
+                        onRetryWorktree: { retryWorktree(legID: leg.id) },
+                        onRetryAgent: {
+                            agentPickerLegID = leg.id
+                            agentPickerPresented = true
+                        },
+                        onRecoverWorktree: { recoverWorktree(legID: leg.id) }
                     )
+                }
+                if aggregate.mission.state == .running {
+                    Button("Add Leg") { addLegPresented = true }
+                        .buttonStyle(.borderedProminent)
                 }
                 MissionIssueContextSection(presentation: presentation, onRefresh: refresh)
                 MissionActivitySection(events: presentation.events)
                 MissionReadinessSection(
                     presentation: presentation,
-                    onRetryWorktree: retryWorktree,
-                    onRetryAgent: { agentPickerPresented = true },
-                    onRecoverWorktree: recoverWorktree,
+                    onRetryWorktree: { retryWorktree(legID: aggregate.primaryLeg?.id) },
+                    onRetryAgent: {
+                        agentPickerLegID = aggregate.primaryLeg?.id
+                        agentPickerPresented = true
+                    },
+                    onRecoverWorktree: { recoverWorktree(legID: aggregate.primaryLeg?.id) },
                     onCompleteMission: { completionConfirmationPresented = true }
                 )
             }
@@ -451,6 +477,11 @@ struct MissionTabView: View {
               let manager = state.acpManager(forWorktreeId: worktree.id)
         else { return nil }
         return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
+    }
+
+    private var agentPickerLeg: MissionLeg? {
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID) else { return nil }
+        return leg(in: aggregate, id: agentPickerLegID)
     }
 
     private func linkedSession(for presentation: MissionLegPresentation, aggregate: MissionAggregate) -> ACPSession? {
@@ -488,24 +519,36 @@ struct MissionTabView: View {
               let leg = leg(in: aggregate, id: legID),
               let worktree = worktree(for: leg, aggregate: aggregate)
         else { return }
-        Task { await state.openMissionChanges(worktree: worktree, missionID: tabState.missionID) }
+        Task { await state.openMissionChanges(worktree: worktree, missionID: tabState.missionID, legID: leg.id) }
     }
 
     private func refresh() {
         Task { await state.refreshMission(tabState.missionID) }
     }
 
-    private func retryWorktree() {
-        Task { await state.missions.retry(tabState.missionID) }
+    private func retryWorktree(legID: MissionLegID?) {
+        guard let legID else { return }
+        Task { await state.missions.retry(tabState.missionID, legID: legID) }
     }
 
-    private func recoverWorktree() {
-        let aggregate = state.missions.aggregate(id: tabState.missionID)
-        guard let worktree = aggregate.flatMap({ state.missionWorktree(worktree, for: $0) }) else {
-            Task { await state.missions.retry(tabState.missionID) }
+    private func retryAgent(legID: MissionLegID?, agentID: String) async {
+        guard let legID else {
+            await state.missions.retry(tabState.missionID, agentId: agentID)
             return
         }
-        guard worktreeIsArchived else { return }
+        await state.missions.retry(tabState.missionID, legID: legID, agentId: agentID)
+    }
+
+    private func recoverWorktree(legID: MissionLegID?) {
+        let aggregate = state.missions.aggregate(id: tabState.missionID)
+        guard let aggregate,
+              let leg = leg(in: aggregate, id: legID)
+        else { return }
+        guard let worktree = worktree(for: leg, aggregate: aggregate) else {
+            Task { await state.missions.retry(tabState.missionID, legID: leg.id) }
+            return
+        }
+        guard worktreeIsArchived(worktree) else { return }
         state.unarchiveWorktree(projectId: worktree.projectId, path: worktree.path)
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
     }
@@ -625,6 +668,9 @@ private struct MissionLegSection: View {
     let onOpenChanges: () -> Void
     let onOpenIssue: () -> Void
     let onOpenReview: () -> Void
+    let onRetryWorktree: () -> Void
+    let onRetryAgent: () -> Void
+    let onRecoverWorktree: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -677,6 +723,15 @@ private struct MissionLegSection: View {
                         .disabled(!presentation.actions.openChanges)
                 }
                 Button("Open Issue", action: onOpenIssue)
+                if presentation.actions.retryWorktree {
+                    Button("Retry Worktree", action: onRetryWorktree)
+                }
+                if presentation.actions.retryAgent {
+                    Button("Retry Agent", action: onRetryAgent)
+                }
+                if presentation.actions.recoverWorktree {
+                    Button("Recover Worktree", action: onRecoverWorktree)
+                }
             }
             .buttonStyle(.bordered)
         }

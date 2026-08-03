@@ -268,6 +268,32 @@ struct MissionTabTests {
         #expect(pane.baseBranch == fixture.aggregate.primaryLeg?.baseRef)
     }
 
+    @Test func openMissionChangesRoutesSecondaryLegToItsPersistedBase() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            includeSecondaryLeg: true
+        )
+        let secondary = try #require(fixture.secondaryWorktree)
+        let secondaryLeg = try #require(fixture.aggregate.legs.first { $0.projectId == "project-2" })
+        await fixture.state.missions.load()
+        let pane = fixture.state.rightPaneStore.state(
+            for: secondary,
+            baseBranch: "global-main",
+            comparisonMode: fixture.state.config.changes.comparisonMode
+        )
+        #expect(pane.baseBranch == "global-main")
+
+        await fixture.state.openMissionChanges(
+            worktree: secondary,
+            missionID: fixture.aggregate.mission.id,
+            legID: secondaryLeg.id
+        )
+
+        #expect(pane.baseBranch == secondaryLeg.baseRef)
+        #expect(fixture.state.selectedWorktreeId == secondary.id)
+    }
+
     @Test func leavingMissionRestoresTheDefaultRightPaneBase() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()
@@ -668,12 +694,14 @@ private func subview(withAccessibilityIdentifier identifier: String, in view: NS
 private struct MissionNavigationFixture {
     let aggregate: MissionAggregate
     let worktree: Worktree
+    let secondaryWorktree: Worktree?
     let state: AppState
 
     init(
         hidden: Bool,
         includeProject: Bool = true,
         includeWorktree: Bool,
+        includeSecondaryLeg: Bool = false,
         worktreeBranch: String = "fix/parser-crash",
         worktreeCreatedAt: TimeInterval = 100,
         worktreeLineageID: String = "device:inode",
@@ -697,9 +725,50 @@ private struct MissionNavigationFixture {
         aggregate.legs[0].worktreeLineageID = persistedWorktreeLineageID ?? worktreeLineageID
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
+        var secondaryLeg: MissionLeg?
+        var secondaryWorktree: Worktree?
+        if includeSecondaryLeg {
+            let secondaryLegID = MissionLegID(rawValue: "\(aggregate.mission.id.rawValue)-leg-2")
+            secondaryLeg = MissionLeg(
+                id: secondaryLegID,
+                missionID: aggregate.mission.id,
+                ordinal: 1,
+                projectId: "project-2",
+                baseRef: "upstream/trunk",
+                baseRemoteName: "upstream",
+                branch: "fix/server-parser-crash",
+                destinationPath: "/tmp/alas-server-mission",
+                worktreeId: "worktree-2",
+                worktreeLineageID: "device:inode-2",
+                agentId: "codex",
+                acpSessionId: "session-2",
+                initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+                pendingInitialPrompt: nil,
+                reviewIdentity: nil,
+                state: .running,
+                setupCheckpoint: .running,
+                attentionReason: nil,
+                readinessEvidence: nil,
+                createdAt: Date(timeIntervalSince1970: 101),
+                updatedAt: Date(timeIntervalSince1970: 101)
+            )
+        }
         let persistence = MissionPersistence(path: databaseURL.path)
         let store = try MissionStore(path: databaseURL.path)
         try store.insert(aggregate)
+        if let secondaryLeg {
+            try store.addLeg(
+                secondaryLeg,
+                event: MissionFixtures.event(
+                    id: "\(aggregate.mission.id.rawValue)-event-leg-2",
+                    missionID: aggregate.mission.id,
+                    legID: secondaryLeg.id,
+                    kind: .legAdded,
+                    createdAt: 101
+                )
+            )
+            aggregate.legs.append(secondaryLeg)
+        }
         if let competingMissionState {
             var competitor = MissionFixtures.creatingMission(
                 id: "mission-2",
@@ -752,6 +821,26 @@ private struct MissionNavigationFixture {
             addedAt: Date(timeIntervalSince1970: 0),
             hiddenWorktreePaths: hidden ? [worktree.path.path] : []
         )
+        let secondaryProject = ProjectConfig(
+            id: "project-2",
+            name: "Alas Server",
+            path: "/tmp/alas-server",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        if includeSecondaryLeg {
+            secondaryWorktree = Worktree(
+                id: "worktree-2",
+                projectId: "project-2",
+                name: "fix/server-parser-crash",
+                branch: "fix/server-parser-crash",
+                path: URL(fileURLWithPath: "/tmp/alas-server-mission"),
+                status: .clean,
+                lastActivity: Date(timeIntervalSince1970: worktreeCreatedAt),
+                createdAt: Date(timeIntervalSince1970: worktreeCreatedAt),
+                lineageID: "device:inode-2"
+            )
+        }
         let spaces = SpacesFile(
             version: 1,
             activeSpaceId: "other-space",
@@ -768,7 +857,7 @@ private struct MissionNavigationFixture {
                     id: "mission-space",
                     name: "Mission",
                     emoji: "2",
-                    projectIds: [project.id],
+                    projectIds: includeSecondaryLeg ? [project.id, secondaryProject.id] : [project.id],
                     lastSelectedWorktreeId: nil,
                     createdAt: Date(timeIntervalSince1970: 1)
                 ),
@@ -776,7 +865,9 @@ private struct MissionNavigationFixture {
         )
         let state = AppState(
             store: MissionNavigationStore(
-                projectsFile: ProjectsFile(projects: includeProject ? [project] : []),
+                projectsFile: ProjectsFile(projects: includeProject
+                    ? (includeSecondaryLeg ? [project, secondaryProject] : [project])
+                    : []),
                 spacesFile: spaces
             ),
             missionPersistence: persistence,
@@ -787,10 +878,14 @@ private struct MissionNavigationFixture {
         )
         if includeWorktree {
             state.projectsManager.insertOptimisticWorktree(worktree)
+            if let secondaryWorktree {
+                state.projectsManager.insertOptimisticWorktree(secondaryWorktree)
+            }
         }
 
         self.aggregate = aggregate
         self.worktree = worktree
+        self.secondaryWorktree = secondaryWorktree
         self.state = state
     }
 }
