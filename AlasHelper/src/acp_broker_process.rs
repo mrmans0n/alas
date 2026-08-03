@@ -27,8 +27,8 @@ const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a caller gives a broker to send *something* before treating it as
 /// wedged. Idle rather than total, because a legitimate response has no size
-/// we can predict (see `MAX_IPC_LINE_BYTES`) and therefore no duration we can
-/// predict either: the reply to a maximal image prompt carries its params
+/// we can predict and therefore no duration we can predict either: the reply
+/// to a maximal image prompt carries its params
 /// twice and measures ~15s just to serialize, silently, before a byte is
 /// written. A total budget would have to out-guess that; an idle budget only
 /// has to notice a broker that has stopped.
@@ -43,32 +43,6 @@ const BROKER_IPC_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 /// request measures ~0.2s, so this only ever fires on a broker that has
 /// stopped reading.
 const BROKER_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Upper bound on a *request* line arriving at a broker, so a peer that never
-/// sends a newline cannot grow the buffer without limit.
-///
-/// It has to clear the largest request the UI can legitimately produce, or it
-/// rejects valid input instead of catching abuse. The composer allows
-/// `ACPComposer.maxImagesPerMessage` (10) images of `ACPImageStaging.maxBytes`
-/// (20 MiB) each, and ACP embeds images as base64 inside `session/prompt`,
-/// which travels this socket as one `acp/send` line — 200 MiB of image
-/// becoming ~267 MiB on the wire, before prompt text and the JSON envelope.
-/// `ipc_line_cap_admits_the_largest_composer_payload` fails if those UI limits
-/// ever outgrow the value below.
-///
-/// Deliberately NOT applied to responses read back from a broker. A response
-/// is not a bounded multiple of the request: `broker_attach` returns the
-/// snapshot *and* the replayed events, and a prompt's params appear in both
-/// (`ACPBrokerState::snapshot` carries `operations[*].params`, while
-/// `OperationStarted` carries them again), while the snapshot also retains
-/// every operation not yet acknowledged. Any fixed ceiling there is a guess
-/// that eventually rejects a legitimate reply — and it would do so *after*
-/// the prompt was already dispatched, failing the send with nothing to retry.
-/// The peer on that side is a broker this helper spawned, and
-/// `BROKER_IPC_IDLE_TIMEOUT` still bounds how long it can hold the caller
-/// without sending anything — progress is what can be asked of it, size is
-/// not.
-const MAX_IPC_LINE_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
@@ -414,14 +388,13 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
 
 /// How a line read is bounded in time.
 ///
-/// The two variants exist for the same reason `max_len` is optional: whether a
-/// fixed ceiling is meaningful depends entirely on whether we can predict what
-/// the peer legitimately sends.
+/// Which variant is right depends on whether the peer is one we trust to
+/// finish what it starts.
 #[derive(Clone, Copy)]
 enum LineBudget {
-    /// Wall-clock for the whole line. Correct where the payload size is one we
-    /// bound ourselves, so the time it can take is bounded too — and where the
-    /// peer is arbitrary, since only a total bound stops a slow trickle.
+    /// Wall-clock for the whole line. Correct where the peer is arbitrary,
+    /// since only a total bound stops a slow trickle that keeps looking like
+    /// progress.
     Total(Duration),
     /// Longest run with no bytes arriving. Correct where a legitimate payload
     /// can be arbitrarily large, which makes any total a guess that eventually
@@ -430,8 +403,7 @@ enum LineBudget {
     Idle(Duration),
 }
 
-/// Reads one newline-terminated line, bounded in time by `budget` and, when
-/// given, in length by `max_len`.
+/// Reads one newline-terminated line, bounded in time by `budget`.
 ///
 /// `set_read_timeout` on its own bounds neither: it applies to each underlying
 /// read for inactivity, while `read_line` keeps issuing fresh reads until it
@@ -446,14 +418,18 @@ enum LineBudget {
 /// the peer goes away mid-stream, which would turn an otherwise complete read
 /// into an error.)
 ///
-/// `max_len` is `None` where the peer is our own broker and the size of what
-/// it sends is not ours to predict — see `MAX_IPC_LINE_BYTES`.
+/// There is deliberately no length ceiling in either direction. Neither side
+/// sends a payload whose size we can predict: a request can be an `acp/respond`
+/// carrying a whole file `fs/read_text_file` was asked for, and a reply can be
+/// an attach replay carrying a prompt's params more than once. Every ceiling
+/// picked for those was eventually below something legitimate, and being wrong
+/// is expensive — the Swift side drops the resulting error (`catch {}` in
+/// `ACPBrokerClient.respondToRawResult`), so a rejected response leaves the
+/// adapter waiting forever, which is the very hang this bounding exists to
+/// prevent. `budget` still limits how long a peer can feed us, and so how much
+/// it can feed us.
 #[cfg(unix)]
-fn read_line_within(
-    stream: &UnixStream,
-    budget: LineBudget,
-    max_len: Option<usize>,
-) -> io::Result<String> {
+fn read_line_within(stream: &UnixStream, budget: LineBudget) -> io::Result<String> {
     /// How long a blocked read waits before the budget is re-checked. Also
     /// the amount by which a read may overshoot it.
     const POLL_SLICE: Duration = Duration::from_millis(500);
@@ -527,15 +503,6 @@ fn read_line_within(
         if let LineBudget::Idle(limit) = budget {
             deadline = std::time::Instant::now() + limit;
         }
-        // Checked on every pass, including the one that completes the line: a
-        // line that arrives inside a single buffer fill is over the cap just
-        // as much as one that took several.
-        if max_len.is_some_and(|max| line.len() > max) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "IPC line exceeded the maximum length",
-            ));
-        }
         if finished {
             return String::from_utf8(line)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
@@ -571,11 +538,7 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
             {
                 continue;
             }
-            let Ok(line) = read_line_within(
-                &stream,
-                LineBudget::Total(IPC_REQUEST_TIMEOUT),
-                Some(MAX_IPC_LINE_BYTES),
-            ) else {
+            let Ok(line) = read_line_within(&stream, LineBudget::Total(IPC_REQUEST_TIMEOUT)) else {
                 continue;
             };
             if ipc_line_is_close(&line) {
@@ -1134,7 +1097,7 @@ fn send_ipc_within(
         // the moment `accept()` returns, so any work done between connecting
         // and writing is spent out of the broker's budget rather than ours.
         // That is not a small effect at the sizes the UI permits: encoding a
-        // maximal image prompt (~267 MiB, see `MAX_IPC_LINE_BYTES`) measures
+        // maximal image prompt (~267 MiB) measures
         // ~7.4s on an idle machine, against an `IPC_REQUEST_TIMEOUT` of 5s —
         // so connecting first would drop a perfectly valid prompt every time,
         // not merely under load. Writing the bytes, by contrast, takes ~0.2s,
@@ -1173,12 +1136,11 @@ fn send_ipc_within(
         stream
             .flush()
             .map_err(|error| broker_error(-32072, format!("broker flush failed: {error}")))?;
-        // Neither a length cap nor a total time budget here: this is a
-        // response from a broker this helper spawned, and its size — and so
-        // the time it legitimately takes — is not a bounded multiple of the
-        // request (see `MAX_IPC_LINE_BYTES`). What can be asked of it is that
-        // it keep making progress.
-        let line = read_line_within(&stream, LineBudget::Idle(idle_timeout), None)
+        // Bounded by inactivity, not total time: a reply's size — and so how
+        // long it legitimately takes — is not a bounded multiple of the
+        // request. What can be asked of a broker is that it keep making
+        // progress.
+        let line = read_line_within(&stream, LineBudget::Idle(idle_timeout))
             .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?;
         let response: BrokerIpcResponse = serde_json::from_str(&line)
             .map_err(|error| broker_error(-32072, format!("broker response failed: {error}")))?;
@@ -1509,61 +1471,6 @@ mod tests {
         ));
     }
 
-    /// The IPC line cap is a guard against abuse, so it must sit above what
-    /// the composer legitimately produces — otherwise a user attaching the
-    /// permitted number of full-size images has their prompt dropped at the
-    /// socket with a broker read error. Raising the UI limits without raising
-    /// this cap should fail here rather than in someone's chat.
-    #[test]
-    fn ipc_line_cap_admits_the_largest_composer_payload() {
-        // Alas/Sources/ACP/UI/ACPImageStaging.swift: maxBytes = 20 MiB
-        // Alas/Sources/ACP/UI/ACPComposer.swift: maxImagesPerMessage = 10
-        const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
-        const MAX_IMAGES_PER_MESSAGE: usize = 10;
-        let raw = MAX_IMAGE_BYTES * MAX_IMAGES_PER_MESSAGE;
-        let base64 = raw.div_ceil(3) * 4;
-        assert!(
-            MAX_IPC_LINE_BYTES > base64,
-            "IPC line cap {MAX_IPC_LINE_BYTES} would reject a permitted \
-             {MAX_IMAGES_PER_MESSAGE}-image prompt ({base64} base64 bytes)"
-        );
-    }
-
-    /// The whole fix rests on this: a peer that keeps the connection alive and
-    /// keeps sending, but never ends the line, must still hit the deadline.
-    /// A per-read inactivity timeout never would.
-    #[cfg(unix)]
-    #[test]
-    fn read_line_within_stops_a_peer_that_drips_without_ever_ending_the_line() {
-        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
-        let done = Arc::new(Mutex::new(false));
-        let writer_done = done.clone();
-        std::thread::spawn(move || {
-            while !*writer_done.lock().expect("drip flag") {
-                if writer.write_all(b" ").is_err() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        });
-
-        let started = std::time::Instant::now();
-        let outcome = read_line_within(
-            &reader,
-            LineBudget::Total(Duration::from_secs(2)),
-            Some(MAX_IPC_LINE_BYTES),
-        );
-        let elapsed = started.elapsed();
-        *done.lock().expect("drip flag") = true;
-
-        let error = outcome.expect_err("a line that never ends must not read forever");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(
-            elapsed < Duration::from_secs(10),
-            "deadline overshot badly: {elapsed:?}"
-        );
-    }
-
     /// The retry budget governs how long to keep retrying a broker that is not
     /// answering *yet* — its socket may not exist while it starts up. It must
     /// not double as the deadline for a single legitimate response, which can
@@ -1677,7 +1584,7 @@ mod tests {
         });
 
         let started = std::time::Instant::now();
-        let line = read_line_within(&reader, LineBudget::Idle(Duration::from_secs(1)), None)
+        let line = read_line_within(&reader, LineBudget::Idle(Duration::from_secs(1)))
             .expect("a peer that keeps making progress must not be given up on");
         assert_eq!(line.len(), 6 * 512 + 1);
         assert!(
@@ -1686,31 +1593,41 @@ mod tests {
         );
     }
 
-    /// Requests get a length cap; responses from our own broker do not, and
-    /// that difference is load-bearing — an attach reply can legitimately
-    /// carry a prompt's params more than once. Exercised with a tiny cap so
-    /// the distinction is testable without allocating hundreds of megabytes.
+    /// The whole fix rests on this: a peer that keeps the connection alive and
+    /// keeps sending, but never ends the line, must still hit the deadline.
+    /// A per-read inactivity timeout never would — and with no length ceiling
+    /// left, this total budget is the only thing standing between a trickling
+    /// peer and an unbounded read.
     #[cfg(unix)]
     #[test]
-    fn read_line_within_enforces_a_length_cap_only_when_given_one() {
-        fn read_with(max_len: Option<usize>) -> io::Result<String> {
-            let (mut writer, reader) = UnixStream::pair().expect("socket pair");
-            std::thread::spawn(move || {
-                let _ = writer.write_all(&vec![b'y'; 4096]);
-                let _ = writer.write_all(b"\n");
-                let _ = writer.flush();
-            });
-            read_line_within(&reader, LineBudget::Total(Duration::from_secs(10)), max_len)
-        }
+    fn read_line_within_stops_a_peer_that_drips_without_ever_ending_the_line() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let writer_done = done.clone();
+        std::thread::spawn(move || {
+            while !*writer_done.lock().expect("drip flag") {
+                if writer.write_all(b" ").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
 
-        let capped = read_with(Some(1024)).expect_err("a line past the cap must be rejected");
-        assert_eq!(capped.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(read_with(None).expect("uncapped read").len(), 4097);
+        let started = std::time::Instant::now();
+        let outcome = read_line_within(&reader, LineBudget::Total(Duration::from_secs(2)));
+        let elapsed = started.elapsed();
+        *done.lock().expect("drip flag") = true;
+
+        let error = outcome.expect_err("a line that never ends must not read forever");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "deadline overshot badly: {elapsed:?}"
+        );
     }
 
-    /// Guards the cap against the read path itself: a line well past the
-    /// previous 32 MiB limit must still arrive intact rather than being cut
-    /// short mid-request.
+    /// A large line must arrive intact rather than being cut short mid-way:
+    /// an `acp/respond` can carry a whole file the adapter asked to read.
     #[cfg(unix)]
     #[test]
     fn read_line_within_accepts_a_line_larger_than_a_typical_request() {
@@ -1723,12 +1640,8 @@ mod tests {
             let _ = writer.flush();
         });
 
-        let line = read_line_within(
-            &reader,
-            LineBudget::Total(Duration::from_secs(30)),
-            Some(MAX_IPC_LINE_BYTES),
-        )
-        .expect("large line");
+        let line = read_line_within(&reader, LineBudget::Total(Duration::from_secs(30)))
+            .expect("large line");
         assert_eq!(line.len(), expected + 1);
     }
 }
