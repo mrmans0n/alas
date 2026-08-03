@@ -1074,6 +1074,20 @@ fn send_ipc_within(
 ) -> Result<Value, AcpBrokerProcessError> {
     #[cfg(unix)]
     {
+        // Serialize BEFORE connecting. The broker starts its request deadline
+        // the moment `accept()` returns, so any work done between connecting
+        // and writing is spent out of the broker's budget rather than ours.
+        // That is not a small effect at the sizes the UI permits: encoding a
+        // maximal image prompt (~267 MiB, see `MAX_IPC_LINE_BYTES`) measures
+        // ~7.4s on an idle machine, against an `IPC_REQUEST_TIMEOUT` of 5s —
+        // so connecting first would drop a perfectly valid prompt every time,
+        // not merely under load. Writing the bytes, by contrast, takes ~0.2s,
+        // which is what the broker's deadline should actually be covering.
+        let body = serde_json::to_string(&BrokerIpcRequest {
+            method: method.to_string(),
+            params: Some(params),
+        })
+        .expect("IPC request serialization");
         // This connect is blocking and deliberately left that way. On Darwin
         // — the only platform that reaches this code, since the ACP broker is
         // spawned for local sessions only — a full listen backlog fails the
@@ -1097,16 +1111,8 @@ fn send_ipc_within(
         stream.set_write_timeout(Some(timeout)).map_err(|error| {
             broker_error(-32072, format!("broker write timeout failed: {error}"))
         })?;
-        let request = BrokerIpcRequest {
-            method: method.to_string(),
-            params: Some(params),
-        };
-        writeln!(
-            stream,
-            "{}",
-            serde_json::to_string(&request).expect("IPC request serialization")
-        )
-        .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
+        writeln!(stream, "{body}")
+            .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
         stream
             .flush()
             .map_err(|error| broker_error(-32072, format!("broker flush failed: {error}")))?;
