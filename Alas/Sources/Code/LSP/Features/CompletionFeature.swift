@@ -444,6 +444,15 @@ final class CompletionFeature {
             return
         }
 
+        let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
+        let selectedEditPlan = selectedCandidate.flatMap { candidate in
+            CompletionEngine.editPlan(
+                accepting: candidate,
+                prefix: updatedPrefix,
+                originalPrefix: candidatePoolPrefix,
+                in: textView.string
+            )
+        }
         if let previousPrefix,
            let candidatePrefix,
            updatedPrefix.range.length < previousPrefix.range.length,
@@ -464,7 +473,6 @@ final class CompletionFeature {
             candidatePoolPrefix = candidatePrefix
         }
 
-        let selectedCandidateID = candidates.indices.contains(selection) ? candidates[selection].id : nil
         candidates = candidatePool.filter { candidate in
             let filter = candidate.filterText ?? candidate.label
             return CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) ||
@@ -472,7 +480,21 @@ final class CompletionFeature {
         }
         isRefreshing = candidates.isEmpty
         prefix = updatedPrefix
-        selection = selectedCandidateID.flatMap { id in candidates.firstIndex { $0.id == id } } ?? 0
+        selection = selectedCandidate.flatMap { selected in
+            candidates.firstIndex {
+                $0.label == selected.label &&
+                    $0.kind == selected.kind &&
+                    $0.detail == selected.detail &&
+                    $0.source == selected.source &&
+                    selectedEditPlan != nil &&
+                    CompletionEngine.editPlan(
+                        accepting: $0,
+                        prefix: updatedPrefix,
+                        originalPrefix: candidatePoolPrefix,
+                        in: textView.string
+                    ) == selectedEditPlan
+            }
+        } ?? 0
 
         if candidates.isEmpty {
             closeUI()

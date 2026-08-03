@@ -109,7 +109,22 @@ struct CompletionFeatureTests {
 
     @Test("refresh retains candidates from a broader response")
     func refreshRetainsBroaderResponse() {
-        let textView = makeTextView("ope")
+        func item(_ label: String, sortText: String, rangeLength: Int) -> LSPCompletionItem {
+            .testing(
+                label: label,
+                sortText: sortText,
+                filterText: nil,
+                textEdit: LSPTextEdit(
+                    range: LSPRange(
+                        start: LSPPosition(line: 0, character: 0),
+                        end: LSPPosition(line: 0, character: rangeLength)
+                    ),
+                    newText: label
+                )
+            )
+        }
+
+        let textView = makeTextView("o")
         let feature = CompletionFeature(
             textView: textView,
             getClient: { nil },
@@ -118,22 +133,28 @@ struct CompletionFeatureTests {
         )
         feature.testingPresent(
             items: [
-                .testing(label: "openAlpha", sortText: "001", filterText: nil),
-                .testing(label: "operate", sortText: "002", filterText: nil)
+                item("openAlpha", sortText: "001", rangeLength: 1),
+                item("operate", sortText: "002", rangeLength: 1),
+                item("output", sortText: "003", rangeLength: 1)
             ],
-            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
-            bufferText: "ope"
+            prefix: CompletionPrefix(text: "o", range: NSRange(location: 0, length: 1)),
+            bufferText: "o"
         )
 
-        textView.insertText("n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.insertText("p", replacementRange: NSRange(location: NSNotFound, length: 0))
         feature.testingPresent(
-            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
-            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
-            bufferText: "open"
+            items: [
+                item("openAlpha", sortText: "001", rangeLength: 2),
+                item("operate", sortText: "002", rangeLength: 2)
+            ],
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            bufferText: "op"
         )
+        feature.testingSetSelection(1)
         textView.deleteBackward(nil)
 
-        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "operate"])
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "operate", "output"])
+        #expect(feature.testingSnapshot.selection == 1)
         feature.cancelAndDismiss()
     }
 
