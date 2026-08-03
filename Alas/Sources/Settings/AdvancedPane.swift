@@ -11,7 +11,7 @@ struct AdvancedPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Advanced").font(.system(size: 18, weight: .semibold))
-                Text("Destructive maintenance actions for Alas project tracking.")
+                Text("Experimental features and destructive maintenance actions.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
