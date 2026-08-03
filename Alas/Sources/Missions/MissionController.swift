@@ -26,6 +26,12 @@ typealias MissionLinkedReviewRequest = @MainActor (
     _ baseRef: String
 ) async -> ReviewRequest?
 
+typealias MissionProjectReviewRepositoryMatcher = @MainActor (
+    _ projectID: String,
+    _ baseRef: String,
+    _ request: ReviewRequest
+) async -> Bool
+
 typealias MissionBranchTip = @MainActor (
     _ projectID: String,
     _ branch: String
@@ -57,6 +63,8 @@ final class MissionController {
     private let issueRefresh: MissionIssueRefresh
     @ObservationIgnored
     private let linkedReviewRequest: MissionLinkedReviewRequest
+    @ObservationIgnored
+    private let reviewRepositoryMatches: MissionProjectReviewRepositoryMatcher
     @ObservationIgnored
     private let branchTip: MissionBranchTip
     @ObservationIgnored
@@ -108,6 +116,7 @@ final class MissionController {
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("Issue refresh is unavailable.")
         },
+        reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _ in false },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in nil },
         branchOwner: @escaping MissionBranchOwner = { _, _, _, _ in nil },
@@ -122,6 +131,7 @@ final class MissionController {
         persistence = environment.persistence
         self.environment = environment
         self.issueRefresh = issueRefresh
+        self.reviewRepositoryMatches = reviewRepositoryMatches
         self.linkedReviewRequest = linkedReviewRequest
         self.branchTip = branchTip
         self.branchOwner = branchOwner
@@ -193,6 +203,7 @@ final class MissionController {
                         // therefore needs a fresh, durable session ID instead of mutating
                         // the prior session or accidentally hydrating it for the new agent.
                         leg.acpSessionId = environment.makeID()
+                        leg.pendingInitialPrompt = leg.preparedInitialPrompt
                         // Retry input is a prepared, persisted draft. Do not rebuild it from
                         // current issue state after a session has consumed it.
                         try await persistence.updateLeg(leg, event: nil)
@@ -273,9 +284,9 @@ final class MissionController {
                     continue
                 }
                 let identity = Self.reviewIdentity(for: request)
-                guard Self.review(
+                guard await reviewMatchesTarget(
                     request,
-                    matches: leg,
+                    leg: leg,
                     issueIdentity: aggregate.issue.identity
                 ) else { continue }
                 guard request.state != .merged
@@ -453,7 +464,11 @@ final class MissionController {
                   let leg = aggregate.legs.first(where: { $0.id == legID }),
                   let identity = leg.reviewIdentity,
                   let request = await linkedReviewRequest(identity, leg.projectId, Self.baseBranch(for: leg)),
-                  Self.review(request, matches: leg, issueIdentity: aggregate.issue.identity)
+                  await reviewMatchesTarget(
+                      request,
+                      leg: leg,
+                      issueIdentity: aggregate.issue.identity
+                  )
             else { return }
             if request.state == .merged {
                 guard let currentTip = await branchTip(leg.projectId, leg.branch),
@@ -679,7 +694,7 @@ final class MissionController {
               request.headRefName == leg.branch,
               request.headSHA == headSHA,
               request.state == .merged,
-              Self.review(request, matches: leg, issueIdentity: issueIdentity)
+              await reviewMatchesTarget(request, leg: leg, issueIdentity: issueIdentity)
         else { return nil }
         return request
     }
@@ -707,8 +722,11 @@ final class MissionController {
                     matchesCurrentTip = true
                 }
                 if linked.state != .closed,
-                   Self.review(linked, matches: leg, issueIdentity: aggregate.issue.identity),
-                   matchesCurrentTip {
+                   await reviewMatchesTarget(
+                       linked,
+                       leg: leg,
+                       issueIdentity: aggregate.issue.identity
+                   ), matchesCurrentTip {
                     if linked.state == .merged {
                         guard let currentTip,
                               !currentTip.isEmpty,
@@ -831,8 +849,12 @@ final class MissionController {
                       let currentTip = await branchTip(leg.projectId, leg.branch),
                       !currentTip.isEmpty
                 else { return false }
-                return request.headSHA == currentTip
-                    && Self.review(request, matches: leg, issueIdentity: aggregate.issue.identity)
+                guard request.headSHA == currentTip else { return false }
+                return await self.reviewMatchesTarget(
+                    request,
+                    leg: leg,
+                    issueIdentity: aggregate.issue.identity
+                )
             }
         )
     }
@@ -936,7 +958,7 @@ final class MissionController {
                        leg.pendingInitialPrompt == nil {
                         // Losing the worktree creates a fresh delegation target; the
                         // prior prompt receipt belongs to the vanished session.
-                        leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
+                        leg.pendingInitialPrompt = leg.preparedInitialPrompt
                     }
                     leg.state = .needsAttention
                     leg.setupCheckpoint = if case .worktreeMissing = signal { .running } else { targetLeg.setupCheckpoint }
@@ -1060,18 +1082,38 @@ final class MissionController {
 
     private static func review(
         _ request: ReviewRequest,
-        matches leg: MissionLeg,
-        issueIdentity: MissionIssueIdentity
+        matches leg: MissionLeg
     ) -> Bool {
         let expectedBase = MissionBaseReference.branchName(
             leg.baseRef,
             persistedRemoteName: leg.baseRemoteName
         )
-        return request.provider == issueIdentity.provider
+        return request.headRefName == leg.branch
+            && request.baseRefName == expectedBase
+    }
+
+    private static func review(
+        _ request: ReviewRequest,
+        matches leg: MissionLeg,
+        issueIdentity: MissionIssueIdentity
+    ) -> Bool {
+        review(request, matches: leg)
+            && request.provider == issueIdentity.provider
             && request.remote.host.caseInsensitiveCompare(issueIdentity.host) == .orderedSame
             && request.remote.repositorySlug.caseInsensitiveCompare(issueIdentity.repositorySlug) == .orderedSame
-            && request.headRefName == leg.branch
-            && request.baseRefName == expectedBase
+    }
+
+    private func reviewMatchesTarget(
+        _ request: ReviewRequest,
+        leg: MissionLeg,
+        issueIdentity: MissionIssueIdentity
+    ) async -> Bool {
+        guard Self.review(request, matches: leg) else { return false }
+        if leg.ordinal == 0,
+           Self.review(request, matches: leg, issueIdentity: issueIdentity) {
+            return true
+        }
+        return await reviewRepositoryMatches(leg.projectId, leg.baseRef, request)
     }
 
     private static func baseBranch(for leg: MissionLeg) -> String {

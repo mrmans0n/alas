@@ -160,6 +160,20 @@ final class TabsManager {
         hasLoaded = true
     }
 
+    /// Loads every persisted tab file, including files whose worktree is not
+    /// currently discoverable. Legacy Mission tabs must be migrated before an
+    /// orphaned worktree can otherwise make them unreachable.
+    func loadAllPersisted() {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: tabsDirectory,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        let worktreeIDs = files
+            .filter { $0.pathExtension == "json" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+        loadAll(worktreeIds: worktreeIDs)
+    }
+
     @discardableResult
     func appendTerminal(worktreeId: String, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
         let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)

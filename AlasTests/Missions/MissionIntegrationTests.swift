@@ -132,6 +132,24 @@ struct MissionIntegrationTests {
         #expect(try await fake.persistence.aggregate(id: .fixture)?.mission.state == .readyToComplete)
     }
 
+    @Test("review updates require the target leg repository to match")
+    func reviewRequiresTargetLegRepository() async throws {
+        let fake = try MissionControllerFake(
+            existing: MissionFixtures.twoLegMission(),
+            reviewRepositoryMatches: { projectID, _, _ in projectID == "app-project" }
+        )
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "sdk-worktree",
+            baseRef: "origin/main",
+            snapshot: .mergedFixture
+        )
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: .fixture))
+        #expect(aggregate.legs.first(where: { $0.id == .sdk })?.readinessEvidence == nil)
+    }
+
     @Test("parallel leg setup recovers independently and becomes ready after review and archive")
     func multiLegLifecycleRecoversAcrossRestart() async throws {
         let harness = try MissionIntegrationHarness()
@@ -266,6 +284,7 @@ private final class MissionControllerFake {
 
     init(
         existing: MissionAggregate,
+        reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _ in true },
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("No refresh configured.")
         }
@@ -326,6 +345,7 @@ private final class MissionControllerFake {
                 notifyChanged: { _ in }
             ),
             issueRefresh: issueRefresh,
+            reviewRepositoryMatches: reviewRepositoryMatches,
             branchTip: { _, _ in "abc123" },
             projectExists: { _ in true },
             worktreeArchived: { projectID, _ in projectID == "app-project" }

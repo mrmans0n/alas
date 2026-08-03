@@ -759,7 +759,8 @@ struct MissionCoordinatorTests {
 
         #expect(fake.startACPCalls == 2)
         #expect(fake.startedAgentIDs == ["codex", "claude"])
-        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId, Self.draft.initialPromptId])
+        #expect(fake.startedPrompts.last == Self.draft.initialPrompt)
         #expect(recovered.primaryLeg?.agentId == "claude")
         #expect(recovered.primaryLeg?.acpSessionId != "started-session")
         #expect(recovered.primaryLeg?.pendingInitialPrompt == nil)
@@ -788,6 +789,7 @@ struct MissionCoordinatorTests {
         let recoveredLeg = try #require(recovered.legs.first(where: { $0.id == sdkLegID }))
 
         #expect(Array(fake.startedAgentIDs.suffix(2)) == ["codex", "claude"])
+        #expect(fake.startedPrompts.last == Self.sdkDraft.preparedPrompt)
         #expect(recoveredLeg.state == .running)
         #expect(recoveredLeg.agentId == "claude")
         #expect(recoveredLeg.acpSessionId != failedSessionID)
@@ -816,6 +818,7 @@ struct MissionCoordinatorTests {
         let primaryLeg = try #require(recovered.primaryLeg)
 
         #expect(fake.startACPCalls == startCount + 1)
+        #expect(fake.startedPrompts.last == Self.sdkDraft.preparedPrompt)
         #expect(recoveredLeg.state == .running)
         #expect(recoveredLeg.pendingInitialPrompt == nil)
         #expect(primaryLeg.state == .running)
@@ -1035,6 +1038,7 @@ private final class MissionCoordinatorFake {
     private(set) var startACPCalls = 0
     private(set) var startedSessionIDs: [String] = []
     private(set) var startedPromptIDs: [UUID] = []
+    private(set) var startedPrompts: [String] = []
     private(set) var startedAgentIDs: [String] = []
     private(set) var startedLegIDs: [MissionLegID] = []
     private(set) var operations: [String] = []
@@ -1136,8 +1140,9 @@ private final class MissionCoordinatorFake {
                 self.operations.append("startACP")
                 self.startedAgentIDs.append(leg.agentId)
                 self.startedSessionIDs.append(leg.acpSessionId ?? "")
-                if leg.pendingInitialPrompt != nil {
+                if let prompt = leg.pendingInitialPrompt {
                     self.startedPromptIDs.append(leg.initialPromptId)
+                    self.startedPrompts.append(prompt)
                 }
                 if let startACPOverride = self.startACPOverride {
                     return await startACPOverride(leg, self.worktree)

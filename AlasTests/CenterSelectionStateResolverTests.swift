@@ -5,6 +5,25 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CenterSelectionStateResolverTests {
+    @Test func composesGlobalMissionAndWorktreeTabsInOneStrip() {
+        let mission = MissionTabState.fixture
+        let terminal = Tab.terminal(TerminalTabState(
+            id: "terminal-1",
+            title: "Terminal",
+            sessionId: "session-1"
+        ))
+
+        let composition = CenterTabComposition(
+            globalTabs: [.mission(mission)],
+            worktreeTabs: [terminal],
+            activeGlobalMissionTab: mission,
+            activeWorktreeTabId: terminal.id
+        )
+
+        #expect(composition.tabs == [.mission(mission), terminal])
+        #expect(composition.activeId == mission.id)
+    }
+
     @Test func emptyWhenNoSelection() {
         let mgr = ProjectsManager(persistedProjects: [])
         let resolver = CenterSelectionStateResolver(

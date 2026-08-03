@@ -63,7 +63,7 @@ struct MissionStoreTests {
         let store = try MissionStore(path: path)
         let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
 
-        #expect(try store.currentSchemaVersion() == 4)
+        #expect(try store.currentSchemaVersion() == MissionStore.targetSchemaVersion)
         #expect(aggregate.mission.state == .running)
         #expect(aggregate.primaryLeg?.state == .needsAttention)
         #expect(aggregate.primaryLeg?.setupCheckpoint == .startingAgent)
@@ -186,6 +186,19 @@ struct MissionStoreTests {
         #expect(loaded.legs == [aggregate.legs[0], leg])
         #expect(loaded.events.last == event)
         #expect(loaded.mission.updatedAt == event.createdAt)
+    }
+
+    @Test("persists an immutable prepared prompt after delivery is consumed")
+    func persistsPreparedPromptAfterDelivery() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.legs[0].pendingInitialPrompt = nil
+        try store.insert(aggregate)
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+
+        #expect(loaded.primaryLeg?.preparedInitialPrompt == "Fix issue #42.")
+        #expect(loaded.primaryLeg?.pendingInitialPrompt == nil)
     }
 
     @Test("requires a leg-added event to add a Mission leg")

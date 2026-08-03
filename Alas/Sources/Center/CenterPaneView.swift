@@ -1,19 +1,44 @@
 import AppKit
 import SwiftUI
 
+struct CenterTabComposition {
+    let tabs: [Tab]
+    let activeId: TabID?
+
+    init(
+        globalTabs: [GlobalTab],
+        worktreeTabs: [Tab],
+        activeGlobalMissionTab: MissionTabState?,
+        activeWorktreeTabId: TabID?
+    ) {
+        tabs = globalTabs.compactMap { tab -> Tab? in
+            guard case .mission(let mission) = tab else { return nil }
+            return .mission(mission)
+        } + worktreeTabs
+        activeId = activeGlobalMissionTab?.id ?? activeWorktreeTabId
+    }
+}
+
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
+    var activeGlobalMissionTab: MissionTabState? = nil
     var allowsPaneFocus: Bool = true
     @Environment(\.theme) var theme
 
     var body: some View {
         VStack(spacing: 0) {
-            let tabs = state.tabs.tabs(forWorktree: worktree.id)
-            let active = state.tabs.activeTabId(forWorktree: worktree.id)
+            let worktreeTabs = state.tabs.tabs(forWorktree: worktree.id)
+            let composition = CenterTabComposition(
+                globalTabs: state.globalTabs.tabs,
+                worktreeTabs: worktreeTabs,
+                activeGlobalMissionTab: activeGlobalMissionTab,
+                activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+            )
+            let tabs = composition.tabs
             TabBarView(
                 tabs: tabs,
-                activeId: active,
+                activeId: composition.activeId,
                 harnessLookup: { tabId in
                     if case .terminal(let s) = tabs.first(where: { $0.id == tabId }),
                        let focusedSessionId = s.root.find(leafId: s.focusedLeafId)?.leaf.sessionId,
@@ -34,8 +59,21 @@ struct CenterPaneView: View {
                     _ = buffer?.editGeneration
                     return buffer?.dirty ?? false
                 },
-                onActivate: { id in state.tabs.activate(worktreeId: worktree.id, tabId: id) },
-                onClose:    { id in state.requestCloseTab(worktreeId: worktree.id, tabId: id) },
+                onActivate: { id in
+                    if state.globalTabs.tabs.contains(where: { $0.id == id }) {
+                        state.globalTabs.activate(tabId: id)
+                    } else {
+                        state.globalTabs.clearActiveTab()
+                        state.tabs.activate(worktreeId: worktree.id, tabId: id)
+                    }
+                },
+                onClose: { id in
+                    if state.globalTabs.tabs.contains(where: { $0.id == id }) {
+                        state.globalTabs.close(tabId: id)
+                    } else {
+                        state.requestCloseTab(worktreeId: worktree.id, tabId: id)
+                    }
+                },
                 onCloseOthers: { id in state.closeOtherTabs(worktreeId: worktree.id, keeping: id) },
                 onCloseAll: { state.closeAllTabs(worktreeId: worktree.id) },
                 onCloseToLeft: { id in state.closeTabsToLeft(worktreeId: worktree.id, of: id) },
@@ -167,7 +205,7 @@ struct CenterPaneView: View {
                         newAgentTerminalShortcut: state.binding(for: .launchAgentTerminal)?.displayString,
                         newAgentChatShortcut: state.binding(for: .launchAgentChat)?.displayString
                     )
-                } else if let activeId = active,
+                } else if let activeId = composition.activeId,
                           let tab = tabs.first(where: { $0.id == activeId }) {
                     switch tab {
                     case .terminal:

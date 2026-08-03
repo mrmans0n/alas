@@ -119,6 +119,19 @@ struct GlobalTabsManagerTests {
         #expect(harness.tabs.activeTabId(forWorktree: "app") == terminal.id)
     }
 
+    @Test("migration imports Mission tabs from unavailable worktrees before completing")
+    func migrationImportsOrphanedWorktreeTabs() throws {
+        let harness = try GlobalTabsHarness(
+            worktreeTabs: ["orphaned-sdk": [.mission(.fixture)]],
+            worktreeIds: []
+        )
+
+        try harness.global.loadAndMigrate(worktreeTabs: harness.tabs)
+
+        #expect(harness.global.tabs == [.mission(.fixture)])
+        #expect(harness.tabs.tabs(forWorktree: "orphaned-sdk").isEmpty)
+    }
+
     @Test("migration resumes safely after global tabs were written before completion")
     func migrationResumesAfterPartialWrite() throws {
         let harness = try GlobalTabsHarness(

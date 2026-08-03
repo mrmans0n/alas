@@ -15,7 +15,7 @@ final class MissionStore {
         case invalidEventLeg
     }
 
-    static let targetSchemaVersion = 4
+    static let targetSchemaVersion = 5
 
     let path: String
     let db: SQLiteDatabase
@@ -520,6 +520,10 @@ final class MissionStore {
         }
         if current < 4, schemaTargetVersion >= 4 {
             try migrate(to: 4, migrateToV4)
+            current = 4
+        }
+        if current < 5, schemaTargetVersion >= 5 {
+            try migrate(to: 5, migrateToV5)
         }
     }
 
@@ -657,6 +661,19 @@ final class MissionStore {
             if migration.missionState != legacyState {
                 try db.exec("UPDATE missions SET state = ? WHERE id = ?", bindings: [migration.missionState, id])
             }
+        }
+    }
+
+    private func migrateToV5() throws {
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN prepared_initial_prompt TEXT NOT NULL DEFAULT ''")
+        let columns = try db.query("PRAGMA table_info(mission_legs)")
+            .compactMap { $0["name"] as? String }
+        if columns.contains("pending_initial_prompt") {
+            try db.exec("""
+            UPDATE mission_legs
+            SET prepared_initial_prompt = pending_initial_prompt
+            WHERE prepared_initial_prompt = '' AND pending_initial_prompt IS NOT NULL
+            """)
         }
     }
 
@@ -922,9 +939,9 @@ final class MissionStore {
         INSERT INTO mission_legs (
             id, mission_id, ordinal, project_id, base_ref, base_remote_name, branch, destination_path,
             worktree_id, worktree_lineage_id, agent_id, acp_session_id, initial_prompt_id,
-            pending_initial_prompt, review_identity, state, setup_checkpoint, attention_reason,
-            readiness_evidence, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            prepared_initial_prompt, pending_initial_prompt, review_identity, state, setup_checkpoint,
+            attention_reason, readiness_evidence, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, bindings: [
             leg.id.rawValue,
             leg.missionID.rawValue,
@@ -939,6 +956,7 @@ final class MissionStore {
             leg.agentId,
             leg.acpSessionId,
             leg.initialPromptId.uuidString,
+            leg.preparedInitialPrompt,
             leg.pendingInitialPrompt,
             try leg.reviewIdentity.map(encoder.encode),
             leg.state.rawValue,
@@ -1088,6 +1106,7 @@ final class MissionStore {
             agentId: row["agent_id"] as? String ?? "",
             acpSessionId: row["acp_session_id"] as? String,
             initialPromptId: initialPromptID,
+            preparedInitialPrompt: row["prepared_initial_prompt"] as? String,
             pendingInitialPrompt: row["pending_initial_prompt"] as? String,
             reviewIdentity: reviewIdentity,
             state: state,

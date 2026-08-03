@@ -200,6 +200,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
     var agentId: String
     var acpSessionId: String?
     let initialPromptId: UUID
+    let preparedInitialPrompt: String
     var pendingInitialPrompt: String?
     var reviewIdentity: MissionReviewIdentity?
     var state: MissionLegState
@@ -223,6 +224,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
         agentId: String,
         acpSessionId: String?,
         initialPromptId: UUID,
+        preparedInitialPrompt: String? = nil,
         pendingInitialPrompt: String?,
         reviewIdentity: MissionReviewIdentity?,
         state: MissionLegState = .creating,
@@ -245,6 +247,7 @@ struct MissionLeg: Codable, Equatable, Sendable {
         self.agentId = agentId
         self.acpSessionId = acpSessionId
         self.initialPromptId = initialPromptId
+        self.preparedInitialPrompt = preparedInitialPrompt ?? pendingInitialPrompt ?? ""
         self.pendingInitialPrompt = pendingInitialPrompt
         self.reviewIdentity = reviewIdentity
         self.state = state

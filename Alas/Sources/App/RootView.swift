@@ -226,24 +226,34 @@ struct RootView: View {
         )
         switch resolver.resolve() {
         case .globalMission(let tabState):
-            VStack(spacing: 0) {
-                GlobalMissionTabBarView(
-                    tabs: state.globalTabs.tabs,
-                    activeId: tabState.id,
-                    onActivate: { state.globalTabs.activate(tabId: $0) },
-                    onClose: { state.globalTabs.close(tabId: $0) },
-                    onRevealSidebar: {
-                        state.config.sidebarVisible = true
-                        state.saveConfig()
-                    },
-                    sidebarHidden: !state.config.sidebarVisible
+            if let worktree = selectedWorktree() {
+                CenterPaneView(
+                    state: state,
+                    worktree: worktree,
+                    activeGlobalMissionTab: tabState,
+                    allowsPaneFocus: !state.isKeyboardOverlayOpen
                 )
-                MissionTabView(state: state, worktree: nil, tabState: tabState)
+            } else {
+                VStack(spacing: 0) {
+                    GlobalMissionTabBarView(
+                        tabs: state.globalTabs.tabs,
+                        activeId: tabState.id,
+                        onActivate: { state.globalTabs.activate(tabId: $0) },
+                        onClose: { state.globalTabs.close(tabId: $0) },
+                        onRevealSidebar: {
+                            state.config.sidebarVisible = true
+                            state.saveConfig()
+                        },
+                        sidebarHidden: !state.config.sidebarVisible
+                    )
+                    MissionTabView(state: state, worktree: nil, tabState: tabState)
+                }
             }
         case .worktree(let wt):
             CenterPaneView(
                 state: state,
                 worktree: wt,
+                activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
                 allowsPaneFocus: !state.isKeyboardOverlayOpen
             )
         case .deleting(let wt):

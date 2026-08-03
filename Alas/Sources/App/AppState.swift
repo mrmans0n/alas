@@ -744,6 +744,24 @@ final class AppState {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
             return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
+        }, reviewRepositoryMatches: { [weak self] projectID, baseRef, request in
+            guard let self,
+                  let project = self.projectsManager.projects.first(where: { $0.id == projectID }),
+                  let remotes = try? await GitService().remotes(
+                      worktreePath: URL(fileURLWithPath: project.path)
+                  )
+            else { return false }
+            let identity = MissionIssueIdentity(
+                provider: request.provider,
+                host: request.remote.host,
+                repositorySlug: request.remote.repositorySlug,
+                number: request.number
+            )
+            return Self.missionReviewRemote(
+                identity: identity,
+                baseRef: baseRef,
+                remotes: remotes
+            ) != nil
         }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
             await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
         }, branchTip: { [weak self] projectID, branch in

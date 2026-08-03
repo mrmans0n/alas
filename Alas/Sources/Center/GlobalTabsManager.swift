@@ -127,6 +127,8 @@ final class GlobalTabsManager {
 
         guard migrationVersion < 1 else { return }
 
+        worktreeTabs.loadAllPersisted()
+
         merge(worktreeTabs.missionTabs())
         // Persist the imported states before their worktree copies are removed.
         // If the process stops here, the next load repeats safely from this file.
