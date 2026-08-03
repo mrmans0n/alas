@@ -362,6 +362,7 @@ final class CompletionFeature {
             return !CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) &&
                 !CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text)
         }
+        isRefreshing = candidates.isEmpty
         prefix = candidates.isEmpty ? nil : updatedPrefix
         selection = min(max(selection, 0), max(candidates.count - 1, 0))
 
@@ -429,6 +430,10 @@ extension CompletionFeature {
         self.prefix = prefix
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
         isRefreshing = false
+    }
+
+    func testingShowPopup() {
+        showPopup()
     }
 
     var testingSnapshot: TestingSnapshot {
