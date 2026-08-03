@@ -34,6 +34,16 @@ use std::os::unix::net::{UnixListener, UnixStream};
 /// caller has declared a length and is held to it instead.
 const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Rate a peer must sustain while reading a response.
+///
+/// `SO_SNDTIMEO` bounds each write, not the whole reply, so a peer that reads
+/// a little every nineteen seconds renews it forever and keeps its handler
+/// alive. Enough such peers hold every connection worker, and unlike a flood
+/// of idle connections this one never lapses, so the broker does not recover
+/// on its own. Requiring a rate ends it. Lenient by design: the only real
+/// reader is a helper already blocked on the reply.
+const MIN_IPC_RESPONSE_RATE: u64 = 16 * 1024;
+
 /// Rate a caller must sustain on the first line once it starts sending.
 ///
 /// A fixed duration cannot work here. Under the legacy encoding this line is
@@ -50,8 +60,8 @@ const MIN_IPC_REQUEST_RATE: u64 = 16 * 1024;
 
 /// Bounds on the first line of a request: silence, and sustained rate.
 #[cfg(unix)]
-const IPC_REQUEST_HEAD_BUDGET: ReadBudget =
-    ReadBudget::at_least(IPC_REQUEST_IDLE_TIMEOUT, MIN_IPC_REQUEST_RATE);
+const IPC_REQUEST_HEAD_BUDGET: IoBudget =
+    IoBudget::at_least(IPC_REQUEST_IDLE_TIMEOUT, MIN_IPC_REQUEST_RATE);
 
 /// Slowest a caller may deliver a framed body before we stop waiting.
 ///
@@ -69,8 +79,8 @@ const MIN_IPC_BODY_THROUGHPUT: u64 = 10 * 1024 * 1024;
 /// outstanding request, bounded by how many sessions exist rather than by
 /// anything the peer chooses.
 #[cfg(unix)]
-fn trusted_body_budget(_len: usize) -> ReadBudget {
-    ReadBudget::idle(BROKER_IPC_IDLE_TIMEOUT)
+fn trusted_body_budget(_len: usize) -> IoBudget {
+    IoBudget::idle(BROKER_IPC_IDLE_TIMEOUT)
 }
 
 /// Budget for a framed body of `len` bytes arriving from an arbitrary peer.
@@ -81,9 +91,9 @@ fn trusted_body_budget(_len: usize) -> ReadBudget {
 /// that declares 1 TiB and then says nothing would otherwise have bought
 /// itself about 29 hours of silence, and a thread to spend it in.
 #[cfg(unix)]
-fn framed_body_budget(len: usize) -> ReadBudget {
+fn framed_body_budget(len: usize) -> IoBudget {
     let by_rate = Duration::from_secs_f64(len as f64 / MIN_IPC_BODY_THROUGHPUT as f64);
-    ReadBudget::within(
+    IoBudget::within(
         BROKER_IPC_IDLE_TIMEOUT,
         by_rate.max(BROKER_IPC_IDLE_TIMEOUT),
     )
@@ -103,9 +113,10 @@ fn framed_body_budget(len: usize) -> ReadBudget {
 /// too long merely delays reporting a broker that is genuinely stuck.
 const BROKER_IPC_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How long a single write to a broker may block. Writing even a maximal
-/// request measures ~0.2s, so this only ever fires on a broker that has
-/// stopped reading.
+/// How long a transfer may stall with the peer reading nothing at all.
+/// Paired with `MIN_IPC_RESPONSE_RATE`, which is what stops a peer reading
+/// just enough to look alive. Writing even a maximal request measures ~0.2s,
+/// so neither bound is near what real traffic needs.
 const BROKER_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
@@ -531,19 +542,19 @@ enum Pace {
     Unbounded,
 }
 
-/// How a read is bounded in time.
+/// How a transfer is bounded in time, in either direction.
 ///
 /// An idle bound alone has a hole — a trickle satisfies it forever — so every
-/// read from an arbitrary peer pairs one with a `Pace`. Which pace depends on
-/// whether the sender told us how much to expect.
+/// transfer with an arbitrary peer pairs one with a `Pace`. Which pace depends
+/// on whether the amount is known in advance.
 #[derive(Clone, Copy)]
-struct ReadBudget {
+struct IoBudget {
     /// Longest run with no bytes arriving.
     idle: Duration,
     pace: Pace,
 }
 
-impl ReadBudget {
+impl IoBudget {
     /// For a peer we trust to finish what it starts.
     fn idle(idle: Duration) -> Self {
         Self {
@@ -587,7 +598,7 @@ struct BudgetClock {
 
 #[cfg(unix)]
 impl BudgetClock {
-    fn new(budget: ReadBudget) -> Self {
+    fn new(budget: IoBudget) -> Self {
         let now = std::time::Instant::now();
         Self {
             idle: budget.idle,
@@ -637,10 +648,10 @@ impl BudgetClock {
     }
 }
 
-/// How long a blocked read waits before its budget is re-checked. Also the
-/// amount by which a read may overshoot.
+/// How long a blocked read or write waits before its budget is re-checked.
+/// Also the amount by which a transfer may overshoot.
 #[cfg(unix)]
-const IPC_READ_POLL_SLICE: Duration = Duration::from_millis(500);
+const IPC_IO_POLL_SLICE: Duration = Duration::from_millis(500);
 
 /// Prepares a stream for the budgeted readers below.
 ///
@@ -655,7 +666,7 @@ const IPC_READ_POLL_SLICE: Duration = Duration::from_millis(500);
 /// had already pulled off the socket.
 #[cfg(unix)]
 fn ipc_reader(stream: &UnixStream) -> io::Result<BufReader<&UnixStream>> {
-    stream.set_read_timeout(Some(IPC_READ_POLL_SLICE))?;
+    stream.set_read_timeout(Some(IPC_IO_POLL_SLICE))?;
     Ok(BufReader::new(stream))
 }
 
@@ -676,7 +687,7 @@ fn is_quiet(error: &io::Error) -> bool {
 /// reads until it finds a newline, so a peer trickling bytes faster than the
 /// timeout renews its budget indefinitely.
 #[cfg(unix)]
-fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: ReadBudget) -> io::Result<String> {
+fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: IoBudget) -> io::Result<String> {
     let mut clock = BudgetClock::new(budget);
     let mut line: Vec<u8> = Vec::new();
     loop {
@@ -721,7 +732,7 @@ fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: ReadBudget) -> 
 fn read_exact_within(
     reader: &mut BufReader<&UnixStream>,
     len: usize,
-    budget: ReadBudget,
+    budget: IoBudget,
 ) -> io::Result<String> {
     let mut clock = BudgetClock::new(budget);
     let mut body: Vec<u8> = Vec::with_capacity(len.min(1024 * 1024));
@@ -821,8 +832,8 @@ fn read_broker_metadata(dir: &Path) -> Option<ACPBrokerMetadata> {
 #[cfg(unix)]
 fn read_ipc_message(
     reader: &mut BufReader<&UnixStream>,
-    head: ReadBudget,
-    body_for_len: fn(usize) -> ReadBudget,
+    head: IoBudget,
+    body_for_len: fn(usize) -> IoBudget,
 ) -> io::Result<(String, Framing)> {
     let head = read_line_within(reader, head)?;
     let Some(len) = head.strip_prefix(IPC_FRAME_HEADER) else {
@@ -960,10 +971,6 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
 /// to deliver its request costs only that thread.
 #[cfg(unix)]
 fn handle_connection(runtime: Runtime, stream: UnixStream) -> io::Result<()> {
-    // Guards against a caller that stops reading. Generous, because a reply
-    // can legitimately be large and cutting one short would corrupt it rather
-    // than rescue anything.
-    stream.set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))?;
     let (line, _framing) = {
         let mut reader = ipc_reader(&stream)?;
         read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
@@ -1008,10 +1015,82 @@ fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Re
     // serializing all of that into memory before writing a byte: an extra copy
     // of an unbounded payload, and a silent stretch long enough to trip the
     // caller's idle budget before the reply even begins.
-    let mut writer = BufWriter::new(stream);
+    let mut writer = BufWriter::new(BudgetedWriter::new(
+        &stream,
+        IoBudget::at_least(BROKER_IPC_WRITE_TIMEOUT, MIN_IPC_RESPONSE_RATE),
+    )?);
     serde_json::to_writer(&mut writer, &response).map_err(io::Error::other)?;
     writer.write_all(b"\n")?;
     writer.flush()
+}
+
+/// Applies an `IoBudget` to a stream of writes.
+///
+/// The socket's own write timeout resets on every partial write, so it cannot
+/// bound a reply as a whole — a peer draining a byte at a time satisfies it
+/// indefinitely. This carries the budget across writes instead, the same way
+/// `BudgetClock` does for reads.
+///
+/// It puts the socket in non-blocking mode rather than setting a write
+/// timeout, because **`SO_SNDTIMEO` is not honoured for AF_UNIX sockets on
+/// Darwin**. Measured: `set_write_timeout(300ms)` returns `Ok`, reads back as
+/// `Some(300ms)`, and a write to a socket whose peer is draining slowly still
+/// does not return after twelve seconds. Every write timeout set on these
+/// sockets was therefore doing nothing at all, which is worse than a bound
+/// that merely resets too often. Polling gives the budget something real to
+/// act on.
+///
+/// Blocking mode is restored on drop, since the same socket is read from
+/// afterwards on the request side and `SO_RCVTIMEO` *is* honoured.
+#[cfg(unix)]
+struct BudgetedWriter<'a> {
+    stream: &'a UnixStream,
+    clock: BudgetClock,
+}
+
+#[cfg(unix)]
+impl<'a> BudgetedWriter<'a> {
+    fn new(stream: &'a UnixStream, budget: IoBudget) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream,
+            clock: BudgetClock::new(budget),
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for BudgetedWriter<'_> {
+    fn drop(&mut self) {
+        let _ = self.stream.set_nonblocking(false);
+    }
+}
+
+#[cfg(unix)]
+impl Write for BudgetedWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        loop {
+            if self.clock.expired() {
+                return Err(BudgetClock::timed_out());
+            }
+            match (&mut &*self.stream).write(buf) {
+                Ok(written) => {
+                    self.clock.progressed(written);
+                    return Ok(written);
+                }
+                // The peer is not reading yet. Not a failure — the budget
+                // above decides when that has gone on too long.
+                Err(error) if is_quiet(&error) => {
+                    std::thread::sleep(IPC_IO_POLL_SLICE);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&mut &*self.stream).flush()
+    }
 }
 
 fn handle_ipc_request(
@@ -1527,15 +1606,11 @@ fn send_ipc_within(
         // non-blocking, deadline-aware connect before it can be trusted.
         // `connect_does_not_block_on_a_full_backlog` pins the Darwin
         // behaviour this relies on.
-        let mut stream = UnixStream::connect(dir.join("broker.sock"))
+        let stream = UnixStream::connect(dir.join("broker.sock"))
             .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
         // Without a bound, a broker that accepted the connection but never
         // answered would block this call forever.
-        stream
-            .set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))
-            .map_err(|error| {
-                broker_error(-32072, format!("broker write timeout failed: {error}"))
-            })?;
+
         // Frame the request when the broker advertises it. Without framing the
         // reader has to hunt for a newline, which needs a total budget, which
         // is a size ceiling wearing a different hat — and this request can be
@@ -1547,8 +1622,19 @@ fn send_ipc_within(
         } else {
             Framing::Legacy
         };
-        write_ipc_message(&mut stream, &body, framing)
-            .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
+        // Budgeted rather than relying on a socket write timeout, which Darwin
+        // ignores for AF_UNIX (see `BudgetedWriter`). A broker that stopped
+        // reading would otherwise hold this queue's thread forever, and with
+        // it every later request for that broker.
+        {
+            let mut writer = BudgetedWriter::new(
+                &stream,
+                IoBudget::at_least(BROKER_IPC_WRITE_TIMEOUT, MIN_IPC_RESPONSE_RATE),
+            )
+            .map_err(|error| broker_error(-32072, format!("broker write setup: {error}")))?;
+            write_ipc_message(&mut writer, &body, framing)
+                .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
+        }
         // Bounded by inactivity, not total time: a reply's size — and so how
         // long it legitimately takes — is not something we can predict. What
         // can be asked of a broker is that it keep making progress.
@@ -1557,7 +1643,7 @@ fn send_ipc_within(
                 .map_err(|error| broker_error(-32072, format!("broker read setup: {error}")))?;
             read_ipc_message(
                 &mut reader,
-                ReadBudget::idle(idle_timeout),
+                IoBudget::idle(idle_timeout),
                 trusted_body_budget,
             )
             .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?
@@ -2011,7 +2097,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let mut reader = ipc_reader(&reader).expect("reader");
-        let line = read_line_within(&mut reader, ReadBudget::idle(Duration::from_secs(1)))
+        let line = read_line_within(&mut reader, IoBudget::idle(Duration::from_secs(1)))
             .expect("a peer that keeps making progress must not be given up on");
         assert_eq!(line.len(), 6 * 512 + 1);
         assert!(
@@ -2046,7 +2132,7 @@ mod tests {
         let outcome = read_exact_within(
             &mut reader,
             4 * 1024 * 1024,
-            ReadBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
+            IoBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
         );
         *done.lock().expect("drip flag") = true;
 
@@ -2112,6 +2198,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A peer that drains a reply slowly must not be able to hold its handler
+    /// open indefinitely. The socket's write timeout cannot stop it — that
+    /// resets on every partial write — and this direction is worse than the
+    /// read side: a flood of idle connections lapses on its own, while peers
+    /// that keep trickling never do, so the broker would not recover.
+    #[cfg(unix)]
+    #[test]
+    fn a_peer_that_drains_a_reply_slowly_does_not_hold_its_handler_open() {
+        let (writer, mut reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let reader_done = done.clone();
+        std::thread::spawn(move || {
+            // Reads just enough to keep each write making progress, forever.
+            let mut byte = [0u8; 1];
+            while !*reader_done.lock().expect("drain flag") {
+                if std::io::Read::read(&mut reader, &mut byte).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+
+        // 1 MiB/s demanded, delivered at ~50 B/s.
+        let mut budgeted = BudgetedWriter::new(
+            &writer,
+            IoBudget::at_least(Duration::from_secs(30), 1024 * 1024),
+        )
+        .expect("budgeted writer");
+        let payload = vec![b'r'; 8 * 1024 * 1024];
+        let started = std::time::Instant::now();
+        let outcome = budgeted.write_all(&payload);
+        *done.lock().expect("drain flag") = true;
+
+        let error = outcome.expect_err("a reply drained at a trickle must not be waited on");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the rate bound took too long to notice: {:?}",
+            started.elapsed()
+        );
+    }
+
     /// A rate bound has to separate the two cases a fixed duration cannot: a
     /// legacy request whose sender pauses to encode and then delivers a lot,
     /// and a trickle that never intends to finish. Both look identical to an
@@ -2139,7 +2267,7 @@ mod tests {
             // 64 KiB/s required, judged after a 10s grace.
             read_line_within(
                 &mut reader,
-                ReadBudget::at_least(Duration::from_secs(30), 64 * 1024),
+                IoBudget::at_least(Duration::from_secs(30), 64 * 1024),
             )
         }
 
@@ -2252,7 +2380,7 @@ mod tests {
         let mut reader = ipc_reader(&reader).expect("reader");
         let outcome = read_line_within(
             &mut reader,
-            ReadBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
+            IoBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
         );
         let elapsed = started.elapsed();
         *done.lock().expect("drip flag") = true;
@@ -2280,7 +2408,7 @@ mod tests {
         });
 
         let mut reader = ipc_reader(&reader).expect("reader");
-        let line = read_line_within(&mut reader, ReadBudget::idle(Duration::from_secs(30)))
+        let line = read_line_within(&mut reader, IoBudget::idle(Duration::from_secs(30)))
             .expect("large line");
         assert_eq!(line.len(), expected + 1);
     }
