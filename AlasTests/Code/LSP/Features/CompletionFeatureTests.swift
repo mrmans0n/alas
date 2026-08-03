@@ -434,6 +434,35 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("escape cancels a hidden retained completion session")
+    func escapeCancelsHiddenRetainedSession() {
+        let textView = makeTextView("op")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingPresent(
+            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            bufferText: "op"
+        )
+        textView.insertText("Z", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [],
+            prefix: CompletionPrefix(text: "opZ", range: NSRange(location: 0, length: 3)),
+            bufferText: "opZ"
+        )
+
+        #expect(textView.completionKeyHandler?(.dismiss) == true)
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        #expect(feature.testingSnapshot.prefix == nil)
+        feature.cancelAndDismiss()
+    }
+
     @Test("narrow responses extend the retained buffer cache")
     func narrowResponseExtendsBufferCache() {
         let text = "operate openEditor\no"

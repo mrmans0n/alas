@@ -134,13 +134,10 @@ enum CompletionEngine {
             }
 
             let word = ns.substring(with: NSRange(location: start, length: index - start))
-            let wordText = word as NSString
-            let commonLength = caseInsensitiveCommonPrefixLength(wordText, prefixText)
-            guard commonLength >= bufferWordMinimumPrefixLength else { continue }
-            for length in bufferWordMinimumPrefixLength...commonLength {
-                let prefix = prefixes[length - bufferWordMinimumPrefixLength]
+            guard let lastMatchingPrefix = lastMatchingPrefixIndex(for: word, prefixes: prefixes) else { continue }
+            for prefix in prefixes[...lastMatchingPrefix] {
                 guard words[prefix, default: []].count < limit,
-                      wordText.length != length,
+                      word != prefix,
                       seen[prefix, default: []].insert(word).inserted else { continue }
                 words[prefix, default: []].append(word)
                 if words[prefix]?.count == limit {
@@ -405,24 +402,28 @@ enum CompletionEngine {
         prefix.isEmpty || text.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
     }
 
-    private static func caseInsensitiveCommonPrefixLength(_ lhs: NSString, _ rhs: NSString) -> Int {
-        let maximum = min(lhs.length, rhs.length)
-        var length = 0
-        while length < maximum {
-            let lhsCharacter = lhs.character(at: length)
-            let rhsCharacter = rhs.character(at: length)
-            let foldedLHS = lhsCharacter >= 0x41 && lhsCharacter <= 0x5A ? lhsCharacter + 0x20 : lhsCharacter
-            let foldedRHS = rhsCharacter >= 0x41 && rhsCharacter <= 0x5A ? rhsCharacter + 0x20 : rhsCharacter
-            guard foldedLHS == foldedRHS else { break }
-            length += 1
+    private static func lastMatchingPrefixIndex(for word: String, prefixes: [String]) -> Int? {
+        var lowerBound = 0
+        var upperBound = prefixes.count
+        while lowerBound < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if hasCaseInsensitivePrefix(word, prefixes[middle]) {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
         }
-        return length
+        return lowerBound > 0 ? lowerBound - 1 : nil
     }
 
     private static func isIdentifierChar(_ character: unichar) -> Bool {
-        (character >= 0x41 && character <= 0x5A) ||
+        if (character >= 0x41 && character <= 0x5A) ||
         (character >= 0x61 && character <= 0x7A) ||
         (character >= 0x30 && character <= 0x39) ||
-        character == 0x5F
+        character == 0x5F {
+            return true
+        }
+        guard let scalar = UnicodeScalar(character) else { return false }
+        return CharacterSet.alphanumerics.contains(scalar)
     }
 }

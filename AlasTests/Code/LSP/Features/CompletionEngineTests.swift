@@ -37,6 +37,16 @@ struct CompletionEngineTests {
         #expect(candidates.isEmpty)
     }
 
+    @Test("matches Unicode buffer words case-insensitively")
+    func unicodeBufferWordFallback() {
+        let candidates = CompletionEngine.bufferWordCandidates(
+            in: "ÄbcWord",
+            prefix: CompletionPrefix(text: "äbc", range: NSRange(location: 0, length: 3))
+        )
+
+        #expect(candidates.map(\.label) == ["ÄbcWord"])
+    }
+
     @Test("bounds cached buffer words for broadened prefixes")
     func boundedBufferWordCache() {
         let words = (0..<30).map { "openWord\($0)" }.joined(separator: " ")

@@ -461,7 +461,8 @@ final class CompletionFeature {
     }
 
     private func handleKey(_ action: CodeTextView.CompletionKeyAction) -> Bool {
-        if case .dismiss = action, suggestionWindow.isVisible || !candidates.isEmpty || isRefreshing {
+        if case .dismiss = action,
+           suggestionWindow.isVisible || !candidates.isEmpty || !candidatePool.isEmpty || isRefreshing {
             cancelAndDismiss()
             return true
         }
