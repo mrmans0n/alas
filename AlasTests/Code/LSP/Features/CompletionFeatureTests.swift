@@ -91,10 +91,42 @@ struct CompletionFeatureTests {
         #expect(textView.string == "open")
         #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "openBeta"])
 
+        textView.insertText("Z", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        #expect(feature.testingSnapshot.prefix == CompletionPrefix(text: "openZ", range: NSRange(location: 0, length: 5)))
+
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "openBeta"])
+
         textView.insertText("A", replacementRange: NSRange(location: NSNotFound, length: 0))
 
         #expect(textView.completionKeyHandler?(.acceptTop) == true)
         #expect(textView.string == "openAlpha")
+        feature.cancelAndDismiss()
+    }
+
+    @Test("refresh discards candidates when text changes outside the prefix")
+    func refreshDiscardsCandidatesAfterForwardDelete() {
+        let textView = makeTextView("opeXYZ tail")
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingSeedVisibleCandidates(
+            labels: ["openAlpha"],
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3))
+        )
+
+        textView.deleteForward(nil)
+
+        #expect(textView.string == "opeYZ tail")
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        #expect(feature.testingSnapshot.prefix == nil)
         feature.cancelAndDismiss()
     }
 

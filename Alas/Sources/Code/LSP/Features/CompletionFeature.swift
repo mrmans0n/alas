@@ -19,6 +19,7 @@ final class CompletionFeature {
     private var candidatePool: [CompletionCandidate] = []
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
+    private var candidateBufferText: String?
     private var selection: Int = 0
     private let suggestionWindow = CompletionWindowController()
     private var isRefreshing = false
@@ -73,6 +74,7 @@ final class CompletionFeature {
         candidatePool.removeAll()
         prefix = nil
         candidatePrefix = nil
+        candidateBufferText = nil
         selection = 0
         isRefreshing = false
         closeUI()
@@ -248,6 +250,7 @@ final class CompletionFeature {
         candidatePool = next
         self.prefix = prefix
         candidatePrefix = prefix
+        candidateBufferText = bufferText
         isRefreshing = false
         selection = selectedCandidate.flatMap { selected in
             next.firstIndex {
@@ -370,11 +373,13 @@ final class CompletionFeature {
                 caret: textView.selectedRange().location
               ),
               !updatedPrefix.text.isEmpty,
-              previousPrefix?.range.location == updatedPrefix.range.location else {
+              previousPrefix?.range.location == updatedPrefix.range.location,
+              textOutsideCandidatePrefixIsUnchanged(in: textView.string, updatedPrefix: updatedPrefix) else {
             candidates.removeAll()
             candidatePool.removeAll()
             prefix = nil
             candidatePrefix = nil
+            candidateBufferText = nil
             selection = 0
             closeUI()
             return
@@ -387,14 +392,34 @@ final class CompletionFeature {
                 CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text)
         }
         isRefreshing = candidates.isEmpty
-        prefix = candidates.isEmpty ? nil : updatedPrefix
+        prefix = updatedPrefix
         selection = selectedCandidateID.flatMap { id in candidates.firstIndex { $0.id == id } } ?? 0
 
         if candidates.isEmpty {
             closeUI()
-        } else if suggestionWindow.isVisible {
+        } else {
             showPopup()
         }
+    }
+
+    private func textOutsideCandidatePrefixIsUnchanged(
+        in text: String,
+        updatedPrefix: CompletionPrefix
+    ) -> Bool {
+        guard let candidateBufferText,
+              let candidatePrefix else { return false }
+
+        let original = candidateBufferText as NSString
+        let current = text as NSString
+        let start = candidatePrefix.range.location
+        let originalEnd = NSMaxRange(candidatePrefix.range)
+        let currentEnd = NSMaxRange(updatedPrefix.range)
+        guard start >= 0,
+              originalEnd <= original.length,
+              currentEnd <= current.length else { return false }
+
+        return original.substring(to: start) == current.substring(to: start) &&
+            original.substring(from: originalEnd) == current.substring(from: currentEnd)
     }
 
     private func canAcceptCompletion(prefix: CompletionPrefix, in textView: CodeTextView) -> Bool {
@@ -459,6 +484,7 @@ extension CompletionFeature {
         candidatePool = candidates
         self.prefix = prefix
         candidatePrefix = prefix
+        candidateBufferText = textView?.string
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
         isRefreshing = false
     }

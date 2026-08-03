@@ -347,6 +347,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
     }
 
+    override func deleteBackward(_ sender: Any?) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        super.deleteBackward(sender)
+        suppressCompletionSelectionNotifications = wasSuppressing
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        super.deleteForward(sender)
+        suppressCompletionSelectionNotifications = wasSuppressing
+    }
+
     override func insertNewline(_ sender: Any?) {
         guard isEditable else {
             super.insertNewline(sender)
