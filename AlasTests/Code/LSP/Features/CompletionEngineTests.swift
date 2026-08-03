@@ -259,6 +259,40 @@ struct CompletionEngineTests {
         #expect(plan.flatMap { apply($0, to: "openXYZ") } == "openAlpha")
     }
 
+    @Test("shifts a retained textEdit when the prefix shrinks")
+    func plansRetainedTextEditAfterBackspace() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 4)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            originalPrefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            in: "opeXYZ"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 3), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "opeXYZ") } == "openAlphaXYZ")
+    }
+
     @Test("plans textEdit plus non-overlapping additional edits")
     func plansAdditionalTextEdits() {
         let text = "let value = op\n"

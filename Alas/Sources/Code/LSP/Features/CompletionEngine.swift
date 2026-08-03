@@ -323,17 +323,18 @@ enum CompletionEngine {
         }
 
         let growth = NSMaxRange(prefix.range) - NSMaxRange(originalPrefix.range)
-        guard growth > 0,
-              let oldCaret = TextEditCoordinates.lspPosition(
-                utf16Offset: NSMaxRange(originalPrefix.range),
+        guard growth != 0,
+              let prefixStart = TextEditCoordinates.lspPosition(
+                utf16Offset: prefix.range.location,
                 in: text
               ) else {
             return nsRange(for: range, in: text)
         }
+        let oldCaretCharacter = prefixStart.character + originalPrefix.range.length
 
         func shifted(_ position: LSPPosition) -> LSPPosition {
-            guard position.line == oldCaret.line,
-                  position.character >= oldCaret.character else { return position }
+            guard position.line == prefixStart.line,
+                  position.character >= oldCaretCharacter else { return position }
             return LSPPosition(line: position.line, character: position.character + growth)
         }
 
