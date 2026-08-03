@@ -250,11 +250,6 @@ final class CompletionFeature {
             memberAccessOnly: retainedMemberAccessOnly
         )
 
-        guard !next.isEmpty else {
-            cancelAndDismiss()
-            return
-        }
-
         let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
         let selectedEditPlan = selectedCandidate.flatMap { candidate in
             CompletionEngine.editPlan(
@@ -264,10 +259,28 @@ final class CompletionFeature {
                 in: bufferText
             )
         }
-        candidates = next
-        candidatePool = next
+        let merged = Self.mergingCandidates(
+            next,
+            originPrefix: prefix,
+            with: candidatePool,
+            origins: candidateOrigins,
+            prefix: prefix,
+            text: bufferText
+        )
+        let visible = merged.candidates.filter { candidate in
+            let filter = candidate.filterText ?? candidate.label
+            return CompletionEngine.hasCaseInsensitivePrefix(filter, prefix.text) ||
+                CompletionEngine.hasCaseInsensitivePrefix(candidate.label, prefix.text)
+        }
+        guard !visible.isEmpty else {
+            cancelAndDismiss()
+            return
+        }
+
+        candidates = visible
+        candidatePool = merged.candidates
         self.prefix = prefix
-        candidateOrigins = Dictionary(uniqueKeysWithValues: next.map { ($0.id, prefix) })
+        candidateOrigins = merged.origins
         let keepsBroaderResponse = candidatePrefix.map {
             $0.range.location == prefix.range.location && $0.range.length < prefix.range.length
         } ?? false
@@ -281,7 +294,7 @@ final class CompletionFeature {
         candidateAllowsEmptyPrefix = candidateAllowsEmptyPrefix || allowEmptyPrefix
         isRefreshing = false
         selection = selectedCandidate.flatMap { selected in
-            next.firstIndex {
+            visible.firstIndex {
                 $0.label == selected.label &&
                     $0.kind == selected.kind &&
                     $0.detail == selected.detail &&
@@ -317,6 +330,44 @@ final class CompletionFeature {
             })
         }
         return candidates
+    }
+
+    private static func mergingCandidates(
+        _ candidates: [CompletionCandidate],
+        originPrefix: CompletionPrefix,
+        with retained: [CompletionCandidate],
+        origins: [UUID: CompletionPrefix],
+        prefix: CompletionPrefix,
+        text: String
+    ) -> (candidates: [CompletionCandidate], origins: [UUID: CompletionPrefix]) {
+        var merged = candidates
+        var mergedOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, originPrefix) })
+        for candidate in retained {
+            let plan = CompletionEngine.editPlan(
+                accepting: candidate,
+                prefix: prefix,
+                originalPrefix: origins[candidate.id],
+                in: text
+            )
+            let isDuplicate = merged.contains {
+                $0.label == candidate.label &&
+                    $0.kind == candidate.kind &&
+                    $0.detail == candidate.detail &&
+                    $0.source == candidate.source &&
+                    plan != nil &&
+                    CompletionEngine.editPlan(
+                        accepting: $0,
+                        prefix: prefix,
+                        originalPrefix: mergedOrigins[$0.id],
+                        in: text
+                    ) == plan
+            }
+            if !isDuplicate {
+                merged.append(candidate)
+                mergedOrigins[candidate.id] = origins[candidate.id]
+            }
+        }
+        return (merged, mergedOrigins)
     }
 
     private func showPopup() {
@@ -465,38 +516,16 @@ final class CompletionFeature {
                 allowBufferFallback: candidateAllowsBufferFallback,
                 memberAccessOnly: candidateMemberAccessOnly
             )
-            var merged = rebuilt
-            var mergedOrigins = Dictionary(uniqueKeysWithValues: rebuilt.map { ($0.id, candidatePrefix) })
-            for candidate in candidatePool {
-                let filter = candidate.filterText ?? candidate.label
-                guard CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) ||
-                    CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text) else { continue }
-                let plan = CompletionEngine.editPlan(
-                    accepting: candidate,
-                    prefix: updatedPrefix,
-                    originalPrefix: candidateOrigins[candidate.id],
-                    in: textView.string
-                )
-                let isDuplicate = merged.contains {
-                    $0.label == candidate.label &&
-                        $0.kind == candidate.kind &&
-                        $0.detail == candidate.detail &&
-                        $0.source == candidate.source &&
-                        plan != nil &&
-                        CompletionEngine.editPlan(
-                            accepting: $0,
-                            prefix: updatedPrefix,
-                            originalPrefix: mergedOrigins[$0.id],
-                            in: textView.string
-                        ) == plan
-                }
-                if !isDuplicate {
-                    merged.append(candidate)
-                    mergedOrigins[candidate.id] = candidateOrigins[candidate.id]
-                }
-            }
-            candidatePool = merged
-            candidateOrigins = mergedOrigins
+            let merged = Self.mergingCandidates(
+                rebuilt,
+                originPrefix: candidatePrefix,
+                with: candidatePool,
+                origins: candidateOrigins,
+                prefix: updatedPrefix,
+                text: textView.string
+            )
+            candidatePool = merged.candidates
+            candidateOrigins = merged.origins
         }
 
         candidates = candidatePool.filter { candidate in

@@ -227,6 +227,43 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refresh retains candidates introduced by an intermediate response")
+    func refreshRetainsIntermediateResponseCandidates() {
+        let textView = makeTextView("o")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingPresent(
+            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
+            prefix: CompletionPrefix(text: "o", range: NSRange(location: 0, length: 1)),
+            bufferText: "o"
+        )
+
+        textView.insertText("p", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [
+                .testing(label: "openAlpha", sortText: "001", filterText: nil),
+                .testing(label: "option", sortText: "002", filterText: nil)
+            ],
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            bufferText: "op"
+        )
+
+        textView.insertText("e", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            bufferText: "ope"
+        )
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "option"])
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh discards candidates when text changes outside the prefix")
     func refreshDiscardsCandidatesAfterForwardDelete() {
         let textView = makeTextView("opeXYZ tail")
