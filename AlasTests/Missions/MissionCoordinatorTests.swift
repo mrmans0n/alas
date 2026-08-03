@@ -128,6 +128,27 @@ struct MissionCoordinatorTests {
         #expect(fake.startACPCalls == 0)
     }
 
+    // Break caught: completion can race after the ACP session reservation is
+    // durable but before the coordinator starts the next external operation.
+    @Test("completion after session reservation prevents ACP startup")
+    func completionAfterSessionReservationPreventsACPStartup() async throws {
+        let fake = MissionCoordinatorFake(completeWhenSessionReserved: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        for _ in 0..<200 {
+            if try await fake.persistence.aggregate(id: missionID)?.mission.state == .completed {
+                break
+            }
+            await Task.yield()
+        }
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: missionID))
+        #expect(aggregate.mission.state == .completed)
+        #expect(aggregate.primaryLeg?.acpSessionId != nil)
+        #expect(fake.startACPCalls == 0)
+    }
+
     // Break caught: restart reconciliation awaits one creating leg to settle
     // before advancing the next, serializing otherwise independent Git work.
     @Test("restart advances creating legs independently")
@@ -990,6 +1011,7 @@ private struct NotificationSnapshot: Equatable {
 @MainActor
 private final class MissionCoordinatorFake {
     let persistence: MissionPersistence
+    private let store: MissionStore
     var worktree = Worktree(
         id: "worktree-1",
         projectId: "project-1",
@@ -1022,6 +1044,7 @@ private final class MissionCoordinatorFake {
     private var idCounter = 0
     private var clock: TimeInterval = 1_000
     private let suspendWorktreeCreation: Bool
+    private let completeWhenSessionReserved: Bool
     private var startedLegs: [MissionLegID: MissionLeg] = [:]
     private var worktreeCreationContinuations: [
         MissionLegID: CheckedContinuation<Result<Worktree, WorktreeCreationFailure>, Never>
@@ -1032,7 +1055,8 @@ private final class MissionCoordinatorFake {
         existing: [MissionAggregate] = [],
         worktreeResult: Result<Worktree, WorktreeCreationFailure>? = nil,
         agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil,
-        suspendWorktreeCreation: Bool = false
+        suspendWorktreeCreation: Bool = false,
+        completeWhenSessionReserved: Bool = false
     ) {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-coordinator-\(UUID().uuidString).sqlite")
@@ -1042,9 +1066,11 @@ private final class MissionCoordinatorFake {
             try! store.insert(aggregate)
         }
         persistence = MissionPersistence(path: path)
+        self.store = store
         self.worktreeResult = worktreeResult ?? .success(worktree)
         self.agentResult = agentResult
         self.suspendWorktreeCreation = suspendWorktreeCreation
+        self.completeWhenSessionReserved = completeWhenSessionReserved
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
             worktreeAtDestination = worktree
         }
@@ -1121,6 +1147,22 @@ private final class MissionCoordinatorFake {
             notifyChanged: { [weak self] aggregate in
                 guard let self else { return }
                 self.notifications.append(aggregate)
+                if self.completeWhenSessionReserved,
+                   aggregate.primaryLeg?.acpSessionId != nil,
+                   aggregate.mission.state != .completed {
+                    let now = self.clockDate()
+                    try! self.store.complete(
+                        id: aggregate.mission.id,
+                        at: now,
+                        event: MissionFixtures.event(
+                            id: "completed-after-session-reservation",
+                            missionID: aggregate.mission.id,
+                            legID: aggregate.primaryLeg?.id,
+                            kind: .completed,
+                            createdAt: now.timeIntervalSince1970
+                        )
+                    )
+                }
                 if aggregate.events.last?.kind == .created, aggregate.primaryLeg?.worktreeId == nil {
                     self.operations.append("insert:creatingWorktree")
                 } else if aggregate.mission.setupCheckpoint == .startingAgent,
@@ -1141,6 +1183,11 @@ private final class MissionCoordinatorFake {
                 self?.reportedFailures.append((id, message))
             }
         )
+    }
+
+    private func clockDate() -> Date {
+        clock += 1
+        return Date(timeIntervalSince1970: clock)
     }
 
     func waitUntilSettled(_ id: MissionID) async -> MissionAggregate {

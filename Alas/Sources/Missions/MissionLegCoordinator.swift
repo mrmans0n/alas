@@ -269,6 +269,8 @@ final class MissionLegCoordinator {
             ) else { return false }
         }
 
+        guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
+
         switch await environment.startACP(leg, worktree) {
         case .success:
             leg.pendingInitialPrompt = nil
