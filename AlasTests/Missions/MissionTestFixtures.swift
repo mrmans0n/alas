@@ -61,6 +61,7 @@ enum MissionFixtures {
         id: MissionLegID,
         missionID: MissionID,
         ordinal: Int = 0,
+        projectId: String = "project-1",
         baseRef: String = "origin/main",
         baseRemoteName: String? = "origin"
     ) -> MissionLeg {
@@ -68,7 +69,7 @@ enum MissionFixtures {
             id: id,
             missionID: missionID,
             ordinal: ordinal,
-            projectId: "project-1",
+            projectId: projectId,
             baseRef: baseRef,
             baseRemoteName: baseRemoteName,
             branch: "fix/parser-crash",

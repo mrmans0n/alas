@@ -132,6 +132,41 @@ struct MissionIntegrationTests {
         #expect(try await fake.persistence.aggregate(id: .fixture)?.mission.state == .readyToComplete)
     }
 
+    @Test("parallel leg setup recovers independently and becomes ready after review and archive")
+    func multiLegLifecycleRecoversAcrossRestart() async throws {
+        let harness = try MissionIntegrationHarness()
+        let missionID = try await harness.create()
+        _ = await harness.waitUntilSettled(missionID)
+
+        harness.failNextACPStart(forProjectID: "sdk-project")
+        let sdkLegID = try await harness.controller.addLeg(harness.sdkDraft, to: missionID)
+        let failed = await harness.waitUntilLegSettled(missionID, legID: sdkLegID)
+        #expect(failed.legs.first(where: { $0.id == sdkLegID })?.state == .needsAttention)
+
+        await harness.relaunchAndReconcile()
+        await harness.controller.retry(missionID, legID: sdkLegID)
+        let recovered = await harness.waitUntilLegSettled(missionID, legID: sdkLegID)
+        let appLeg = try #require(recovered.legs.first(where: { $0.id == .app }))
+        let sdkLeg = try #require(recovered.legs.first(where: { $0.id == sdkLegID }))
+
+        await harness.controller.observeReview(
+            worktreeId: try #require(appLeg.worktreeId),
+            baseRef: appLeg.baseRef,
+            snapshot: MissionIntegrationHarness.reviewSnapshot(state: .merged)
+        )
+        harness.markArchived(sdkLeg)
+        await harness.controller.recordArchive(worktreeId: try #require(sdkLeg.worktreeId))
+        let aggregate = try #require(try await harness.persistence.aggregate(id: missionID))
+
+        #expect(harness.worktreeCreationsByLeg[.app] == 1)
+        #expect(harness.worktreeCreationsByLeg[sdkLegID] == 1)
+        #expect(harness.promptDeliveriesByLeg[sdkLegID] == 1)
+        #expect(aggregate.legs.first(where: { $0.id == .app })?.state == .ready)
+        #expect(aggregate.legs.first(where: { $0.id == sdkLegID })?.state == .ready)
+        #expect(aggregate.legs.allSatisfy { $0.state == .ready })
+        #expect(aggregate.mission.state == .readyToComplete)
+    }
+
     @Test("A missing worktree affects only its matching leg")
     func missingWorktreeAffectsOnlyMatchingLeg() async throws {
         let fake = try MissionControllerFake(existing: MissionFixtures.twoLegMission())
@@ -448,6 +483,16 @@ private final class MissionIntegrationHarness {
         lastActivity: Date(timeIntervalSince1970: 100),
         lineageID: "device:inode"
     )
+    let sdkDraft = MissionLegDraft(
+        projectId: "sdk-project",
+        baseRef: "origin/main",
+        baseRemoteName: "origin",
+        branch: "fix/sdk-parser-crash",
+        destinationPath: "/tmp/alas-sdk-mission",
+        agentId: "codex",
+        initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+        preparedPrompt: "Fix the SDK parser crash."
+    )
 
     private let path: String
     private let recorder: MissionIntegrationRecorder
@@ -467,8 +512,10 @@ private final class MissionIntegrationHarness {
 
     var missionWasDurableWhenGitStarted: Bool { recorder.missionWasDurableWhenGitStarted }
     var worktreeCreateCount: Int { recorder.worktreeCreateCount }
+    var worktreeCreationsByLeg: [MissionLegID: Int] { recorder.worktreeCreationsByLeg }
     var sessionIDs: [String] { recorder.sessionIDs }
     var promptIDs: [UUID] { recorder.promptIDs }
+    var promptDeliveriesByLeg: [MissionLegID: Int] { recorder.promptDeliveriesByLeg }
     var providerMutations: [String] { recorder.providerMutations }
     var worktreeMutations: [String] { recorder.worktreeMutations }
     var sessionStops: [String] { recorder.sessionStops }
@@ -526,6 +573,14 @@ private final class MissionIntegrationHarness {
         try await controller.create(draft, allowDuplicate: allowDuplicate)
     }
 
+    func failNextACPStart(forProjectID projectID: String) {
+        recorder.failNextACPStart(forProjectID: projectID)
+    }
+
+    func markArchived(_ leg: MissionLeg) {
+        recorder.markArchived(projectID: leg.projectId, destinationPath: leg.destinationPath)
+    }
+
     func relaunchAndReconcile() async {
         persistence = MissionPersistence(path: path)
         controller = Self.makeController(persistence: persistence, recorder: recorder)
@@ -535,10 +590,23 @@ private final class MissionIntegrationHarness {
     }
 
     func waitUntilSettled(_ id: MissionID) async -> MissionAggregate {
-        for _ in 0..<200 {
+        for _ in 0..<2_000 {
             if let aggregate = try? await persistence.aggregate(id: id),
                aggregate.mission.state != .creating,
                controller.aggregate(id: id)?.mission.state == aggregate.mission.state {
+                return aggregate
+            }
+            await Task.yield()
+        }
+        return try! await persistence.aggregate(id: id)!
+    }
+
+    func waitUntilLegSettled(_ id: MissionID, legID: MissionLegID) async -> MissionAggregate {
+        for _ in 0..<2_000 {
+            if let aggregate = try? await persistence.aggregate(id: id),
+               let leg = aggregate.legs.first(where: { $0.id == legID }),
+               leg.state != .creating,
+               controller.aggregate(id: id)?.legs.first(where: { $0.id == legID })?.state == leg.state {
                 return aggregate
             }
             await Task.yield()
@@ -607,7 +675,7 @@ private final class MissionIntegrationHarness {
                 persistence: persistence,
                 now: { recorder.now() },
                 makeID: { recorder.makeID() },
-                plannedWorktreeID: { _ in .success(recorder.worktree.id) },
+                plannedWorktreeID: { leg in .success(recorder.worktree(for: leg).id) },
                 worktreeAtDestination: { projectID, destinationPath in
                     recorder.worktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
                 },
@@ -625,8 +693,10 @@ private final class MissionIntegrationHarness {
                 try await recorder.refreshIssue(identity: identity, projectID: projectID)
             },
             branchTip: { _, _ in "abc123" },
-            projectExists: { $0 == "project-1" },
-            worktreeArchived: { _, _ in false },
+            projectExists: { $0 == "project-1" || $0 == "sdk-project" },
+            worktreeArchived: { projectID, destinationPath in
+                recorder.worktreeArchived(projectID: projectID, destinationPath: destinationPath)
+            },
             reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { _, _ in nil }
         )
@@ -662,8 +732,10 @@ private final class MissionIntegrationRecorder {
     var verifyDurabilityWhenCreatingWorktree = false
     private(set) var missionWasDurableWhenGitStarted = false
     private(set) var worktreeCreateCount = 0
+    private(set) var worktreeCreationsByLeg: [MissionLegID: Int] = [:]
     private(set) var sessionIDs: [String] = []
     private(set) var promptIDs: [UUID] = []
+    private(set) var promptDeliveriesByLeg: [MissionLegID: Int] = [:]
     private(set) var providerMutations: [String] = []
     private(set) var worktreeMutations: [String] = []
     private(set) var sessionStops: [String] = []
@@ -671,6 +743,9 @@ private final class MissionIntegrationRecorder {
 
     private let worktreeFailure: String?
     private var acpFailuresRemaining: Int
+    private var acpFailuresByProject: Set<String> = []
+    private var existingWorktrees: [String: Worktree] = [:]
+    private var archivedDestinations: Set<String> = []
     private var clock: TimeInterval = 1_000
     private var idCounter = 0
 
@@ -691,14 +766,48 @@ private final class MissionIntegrationRecorder {
 
     func makeID() -> String {
         idCounter += 1
+        switch idCounter {
+        case 1: return "mission-1"
+        case 2: return MissionLegID.app.rawValue
+        case 4: return MissionLegID.sdk.rawValue
+        default: break
+        }
         return "integration-id-\(idCounter)"
     }
 
+    func failNextACPStart(forProjectID projectID: String) {
+        acpFailuresByProject.insert(projectID)
+    }
+
+    func markArchived(projectID: String, destinationPath: String) {
+        archivedDestinations.insert("\(projectID):\(URL(fileURLWithPath: destinationPath).standardizedFileURL.path)")
+    }
+
+    func worktreeArchived(projectID: String, destinationPath: String) -> Bool {
+        archivedDestinations.contains(
+            "\(projectID):\(URL(fileURLWithPath: destinationPath).standardizedFileURL.path)"
+        )
+    }
+
+    func worktree(for leg: MissionLeg) -> Worktree {
+        guard leg.projectId != worktree.projectId else { return worktree }
+        return Worktree(
+            id: "worktree-\(leg.id.rawValue)",
+            projectId: leg.projectId,
+            name: leg.branch,
+            branch: leg.branch,
+            path: URL(fileURLWithPath: leg.destinationPath),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 100),
+            lineageID: "device:inode-\(leg.id.rawValue)"
+        )
+    }
+
     func worktreeAtDestination(projectID: String, destinationPath: String) -> Worktree? {
-        guard projectID == worktree.projectId,
+        guard let worktree = existingWorktrees[projectID] ?? (projectID == worktree.projectId ? existingWorktree : nil),
               URL(fileURLWithPath: destinationPath).standardizedFileURL.path == worktree.path.standardizedFileURL.path
         else { return nil }
-        return existingWorktree
+        return worktree
     }
 
     func createWorktree(
@@ -706,6 +815,7 @@ private final class MissionIntegrationRecorder {
         persistence: MissionPersistence
     ) async -> Result<Worktree, WorktreeCreationFailure> {
         worktreeCreateCount += 1
+        worktreeCreationsByLeg[leg.id, default: 0] += 1
         worktreeMutations.append("create:\(leg.destinationPath)")
         if verifyDurabilityWhenCreatingWorktree {
             missionWasDurableWhenGitStarted = (try? await persistence.aggregate(id: leg.missionID)) != nil
@@ -713,8 +823,10 @@ private final class MissionIntegrationRecorder {
         if let worktreeFailure {
             return .failure(.init(message: worktreeFailure))
         }
-        existingWorktree = worktree
-        return .success(worktree)
+        let created = worktree(for: leg)
+        existingWorktree = created
+        existingWorktrees[leg.projectId] = created
+        return .success(created)
     }
 
     func startACP(
@@ -725,6 +837,10 @@ private final class MissionIntegrationRecorder {
         sessionIDs.append(sessionID)
         if let promptID = leg.pendingInitialPrompt.map({ _ in leg.initialPromptId }) {
             promptIDs.append(promptID)
+            promptDeliveriesByLeg[leg.id, default: 0] += 1
+        }
+        if acpFailuresByProject.remove(leg.projectId) != nil {
+            return .failure(.init(message: "Install Codex", consumedInitialPrompt: true))
         }
         if acpFailuresRemaining > 0 {
             acpFailuresRemaining -= 1

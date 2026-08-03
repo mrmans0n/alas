@@ -64,7 +64,9 @@ struct MissionStoreTests {
         let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
 
         #expect(try store.currentSchemaVersion() == 4)
-        #expect(aggregate.mission.state == .running)
+        // The stored v4 state is normalized to running, while the one-leg
+        // compatibility projection preserves the v1 Needs Attention UI.
+        #expect(aggregate.mission.state == .needsAttention)
         #expect(aggregate.primaryLeg?.state == .needsAttention)
         #expect(aggregate.primaryLeg?.setupCheckpoint == .startingAgent)
         #expect(aggregate.primaryLeg?.attentionReason == "Install Codex")
@@ -75,7 +77,7 @@ struct MissionStoreTests {
         let cases: [(state: String, checkpoint: String, mission: MissionState, leg: MissionLegState, readiness: MissionLegReadinessKind?)] = [
             ("creating", "creatingWorktree", .creating, .creating, nil),
             ("running", "running", .running, .running, nil),
-            ("needsAttention", "startingAgent", .running, .needsAttention, nil),
+            ("needsAttention", "startingAgent", .needsAttention, .needsAttention, nil),
             ("readyToComplete", "running", .readyToComplete, .ready, .legacy),
             ("completed", "running", .completed, .running, nil),
             ("completed", "creatingWorktree", .completed, .creating, nil),
@@ -393,22 +395,19 @@ struct MissionStoreTests {
         #expect(try store.activeMission(issueIdentity: aggregate.issue.identity)?.mission.id == MissionID(rawValue: "mission-2"))
     }
 
-    @Test("requires readiness evidence from every leg before completion")
-    func requiresAllLegReadinessBeforeCompletion() throws {
+    @Test("manual completion preserves unfinished leg state")
+    func manualCompletionPreservesUnfinishedLegState() throws {
         let store = try MissionStore(path: temporaryPath())
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = .running
         aggregate.legs[0].state = .running
         aggregate.legs[0].setupCheckpoint = .running
         try store.insert(aggregate)
-        var firstLeg = try #require(aggregate.primaryLeg)
-        firstLeg.state = .ready
-        firstLeg.readinessEvidence = .init(kind: .mergedReview, observedAt: Date(timeIntervalSince1970: 110))
-        try store.updateLegSetup(missionID: aggregate.mission.id, leg: firstLeg, event: nil)
         let secondLeg = MissionFixtures.leg(
             id: MissionLegID(rawValue: "mission-1-leg-2"),
             missionID: aggregate.mission.id,
-            ordinal: 1
+            ordinal: 1,
+            projectId: "project-2"
         )
         try store.addLeg(secondLeg, event: MissionFixtures.event(
             id: "leg-added",
@@ -417,14 +416,21 @@ struct MissionStoreTests {
             kind: .legAdded,
             createdAt: 111
         ))
+        var firstLeg = try #require(aggregate.primaryLeg)
+        firstLeg.state = .ready
+        firstLeg.readinessEvidence = .init(kind: .mergedReview, observedAt: Date(timeIntervalSince1970: 110))
+        try store.updateLegSetup(missionID: aggregate.mission.id, leg: firstLeg, event: nil)
 
-        #expect(throws: MissionStore.Error.invalidLegCollection) {
-            try store.complete(
-                id: aggregate.mission.id,
-                at: Date(timeIntervalSince1970: 120),
-                event: MissionFixtures.event(id: "completed", kind: .completed, createdAt: 120)
-            )
-        }
+        try store.complete(
+            id: aggregate.mission.id,
+            at: Date(timeIntervalSince1970: 120),
+            event: MissionFixtures.event(id: "completed", kind: .completed, createdAt: 120)
+        )
+
+        let completed = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(completed.mission.state == .completed)
+        #expect(completed.legs.first { $0.id == firstLeg.id }?.state == .ready)
+        #expect(completed.legs.first { $0.id == secondLeg.id }?.state == .creating)
     }
 
     @Test("leg setup state and its event are committed together")
@@ -745,6 +751,7 @@ struct MissionStoreTests {
             event: MissionFixtures.event(
                 id: "rename-refresh",
                 missionID: first.mission.id,
+                legID: nil,
                 kind: .sourceRefreshed,
                 createdAt: 150
             )
@@ -774,6 +781,7 @@ struct MissionStoreTests {
             event: MissionFixtures.event(
                 id: "completed",
                 missionID: completed.mission.id,
+                legID: nil,
                 kind: .completed,
                 createdAt: 125
             )
@@ -810,6 +818,7 @@ struct MissionStoreTests {
                 event: MissionFixtures.event(
                     id: "rename-refresh",
                     missionID: completed.mission.id,
+                    legID: nil,
                     kind: .sourceRefreshed,
                     createdAt: 150
                 )
@@ -837,7 +846,13 @@ struct MissionStoreTests {
         try store.complete(
             id: completed.mission.id,
             at: Date(timeIntervalSince1970: 400),
-            event: MissionFixtures.event(id: "completed-event", missionID: completed.mission.id, kind: .completed, createdAt: 400)
+            event: MissionFixtures.event(
+                id: "completed-event",
+                missionID: completed.mission.id,
+                legID: nil,
+                kind: .completed,
+                createdAt: 400
+            )
         )
 
         #expect(try store.list(includeCompleted: true).map(\.mission.id) == [

@@ -234,6 +234,50 @@ struct AppStatePersistenceTests {
         #expect(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).isEmpty)
     }
 
+    @Test func migratedMissionTabRemainsGlobalAcrossAnSDKOnlySpace() async throws {
+        let fixture = try MissionCrossSpaceNavigationFixture()
+        let store = PersistenceStore()
+        try store.write(
+            TabsFile(
+                version: 1,
+                tabs: [.mission(.crossRepoFixture)],
+                activeTabId: MissionTabState.crossRepoFixture.id
+            ),
+            to: fixture.tabsDirectory.appendingPathComponent("\(fixture.appWorktree.id).json")
+        )
+        let worktreeTabs = TabsManager(tabsDirectory: fixture.tabsDirectory)
+        worktreeTabs.loadAll(worktreeIds: [fixture.appWorktree.id, fixture.sdkWorktree.id])
+        let globalTabs = GlobalTabsManager(fileURL: fixture.globalTabsFile)
+
+        try globalTabs.loadAndMigrate(worktreeTabs: worktreeTabs)
+
+        #expect(worktreeTabs.tabs(forWorktree: fixture.appWorktree.id).isEmpty)
+        #expect(globalTabs.tabs == [.mission(.crossRepoFixture)])
+
+        let state = fixture.makeState(globalTabs: globalTabs)
+        await state.missions.load()
+        #expect(state.switchToSpace(id: "sdk-space"))
+        #expect(state.activeSpaceProjects.map(\.id) == ["sdk-project"])
+        #expect(globalTabs.tabs == [.mission(.crossRepoFixture)])
+
+        globalTabs.activate(tabId: MissionTabState.crossRepoFixture.id)
+        let aggregate = try #require(state.missions.aggregate(id: fixture.aggregate.mission.id))
+        let presentation = MissionAggregateSummary(
+            aggregate: aggregate,
+            legs: aggregate.legs.map { leg in
+                MissionLegPresentation(
+                    aggregate: aggregate,
+                    leg: leg,
+                    worktree: state.projectsManager.worktrees(projectId: leg.projectId)
+                        .first(where: { $0.id == leg.worktreeId })
+                )
+            }
+        )
+
+        #expect(globalTabs.activeMissionTab() == .crossRepoFixture)
+        #expect(presentation.legs.map(\.id) == [.app, .sdk])
+    }
+
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemote() {
         let identity = MissionIssueIdentity(
             provider: .github,
@@ -897,6 +941,193 @@ private extension MissionTabState {
         missionID: MissionID(rawValue: "mission-1"),
         title: "Fix parser crash"
     )
+
+    static let crossRepoFixture = MissionTabState(
+        missionID: MissionID(rawValue: "cross-repo-mission"),
+        title: "Fix parser crash"
+    )
+}
+
+private extension MissionLegID {
+    static let app = MissionLegID(rawValue: "fixture-app-leg")
+    static let sdk = MissionLegID(rawValue: "fixture-sdk-leg")
+}
+
+@MainActor
+private struct MissionCrossSpaceNavigationFixture {
+    let root: URL
+    let tabsDirectory: URL
+    let globalTabsFile: URL
+    let aggregate: MissionAggregate
+    let appWorktree: Worktree
+    let sdkWorktree: Worktree
+    private let projectsFile: ProjectsFile
+    private let spacesFile: SpacesFile
+    private let missionDatabaseURL: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-cross-space-\(UUID().uuidString)", isDirectory: true)
+        tabsDirectory = root.appendingPathComponent("tabs", isDirectory: true)
+        globalTabsFile = root.appendingPathComponent("global-tabs.json")
+        missionDatabaseURL = root.appendingPathComponent("missions.sqlite")
+
+        let appProject = ProjectConfig(
+            id: "app-project",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let sdkProject = ProjectConfig(
+            id: "sdk-project",
+            name: "Alas SDK",
+            path: "/tmp/alas-sdk",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 1)
+        )
+        projectsFile = ProjectsFile(projects: [appProject, sdkProject])
+        spacesFile = SpacesFile(
+            version: 1,
+            activeSpaceId: "app-space",
+            spaces: [
+                SpaceConfig(
+                    id: "app-space",
+                    name: "App",
+                    emoji: "1",
+                    projectIds: [appProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: Date(timeIntervalSince1970: 0)
+                ),
+                SpaceConfig(
+                    id: "sdk-space",
+                    name: "SDK",
+                    emoji: "2",
+                    projectIds: [sdkProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: Date(timeIntervalSince1970: 1)
+                ),
+            ]
+        )
+        let missionID = MissionTabState.crossRepoFixture.missionID
+        let timestamp = Date(timeIntervalSince1970: 100)
+        let appLeg = MissionLeg(
+            id: .app,
+            missionID: missionID,
+            ordinal: 0,
+            projectId: appProject.id,
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "fix/parser-crash",
+            destinationPath: "/tmp/alas-mission",
+            worktreeId: "app-worktree",
+            worktreeLineageID: "app-lineage",
+            agentId: "codex",
+            acpSessionId: "app-session",
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!,
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: .running,
+            setupCheckpoint: .running,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        let sdkLeg = MissionLeg(
+            id: .sdk,
+            missionID: missionID,
+            ordinal: 1,
+            projectId: sdkProject.id,
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "fix/sdk-parser-crash",
+            destinationPath: "/tmp/alas-sdk-mission",
+            worktreeId: "sdk-worktree",
+            worktreeLineageID: "sdk-lineage",
+            agentId: "codex",
+            acpSessionId: "sdk-session",
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: .running,
+            setupCheckpoint: .running,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        aggregate = MissionAggregate(
+            mission: MissionRecord(
+                id: missionID,
+                title: MissionTabState.crossRepoFixture.title,
+                state: .running,
+                setupCheckpoint: .running,
+                primaryLegID: .app,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                completedAt: nil
+            ),
+            issue: MissionFixtures.issue(),
+            legs: [appLeg, sdkLeg],
+            events: []
+        )
+        appWorktree = Worktree(
+            id: "app-worktree",
+            projectId: appProject.id,
+            name: appLeg.branch,
+            branch: appLeg.branch,
+            path: URL(fileURLWithPath: appLeg.destinationPath),
+            status: .clean,
+            lastActivity: timestamp,
+            lineageID: appLeg.worktreeLineageID
+        )
+        sdkWorktree = Worktree(
+            id: "sdk-worktree",
+            projectId: sdkProject.id,
+            name: sdkLeg.branch,
+            branch: sdkLeg.branch,
+            path: URL(fileURLWithPath: sdkLeg.destinationPath),
+            status: .clean,
+            lastActivity: timestamp,
+            lineageID: sdkLeg.worktreeLineageID
+        )
+        let missionStore = try MissionStore(path: missionDatabaseURL.path)
+        var initial = aggregate
+        initial.legs = [appLeg]
+        try missionStore.insert(initial)
+        try missionStore.addLeg(
+            sdkLeg,
+            event: MissionEvent(
+                id: "cross-repo-sdk-leg-added",
+                missionID: missionID,
+                legID: sdkLeg.id,
+                kind: .legAdded,
+                message: "Mission leg added for \(sdkLeg.branch).",
+                createdAt: timestamp
+            )
+        )
+    }
+
+    func makeState(globalTabs: GlobalTabsManager) -> AppState {
+        let state = AppState(
+            store: Store(projectsFile: projectsFile, spacesFile: spacesFile),
+            missionPersistence: MissionPersistence(path: missionDatabaseURL.path),
+            globalTabs: globalTabs
+        )
+        state.projectsManager.insertOptimisticWorktree(appWorktree)
+        state.projectsManager.insertOptimisticWorktree(sdkWorktree)
+        return state
+    }
+
+    private struct Store: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+        let spacesFile: SpacesFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == SpacesFile.self { return spacesFile as? T }
+            return nil
+        }
+    }
 }
 
 @MainActor
