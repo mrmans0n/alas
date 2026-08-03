@@ -251,7 +251,9 @@ final class CompletionFeature {
                 $0.label == selected.label &&
                     $0.kind == selected.kind &&
                     $0.detail == selected.detail &&
-                    $0.source == selected.source
+                    $0.source == selected.source &&
+                    $0.replacementText == selected.replacementText &&
+                    $0.additionalTextEdits.map(\.newText) == selected.additionalTextEdits.map(\.newText)
             }
         } ?? 0
         showPopup()
@@ -430,16 +432,21 @@ extension CompletionFeature {
         let isRefreshing: Bool
     }
 
-    func testingSeedVisibleCandidates(labels: [String], prefix: CompletionPrefix, selection: Int = 0) {
-        candidates = labels.map {
+    func testingSeedVisibleCandidates(
+        labels: [String],
+        replacementTexts: [String]? = nil,
+        prefix: CompletionPrefix,
+        selection: Int = 0
+    ) {
+        candidates = labels.enumerated().map { index, label in
             CompletionCandidate(
-                label: $0,
+                label: label,
                 detail: nil,
                 kind: nil,
                 documentation: nil,
                 sortText: nil,
-                filterText: $0,
-                replacementText: $0,
+                filterText: label,
+                replacementText: replacementTexts?[index] ?? label,
                 textEdit: nil,
                 additionalTextEdits: [],
                 source: .lsp

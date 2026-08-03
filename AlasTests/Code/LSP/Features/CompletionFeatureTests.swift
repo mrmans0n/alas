@@ -123,23 +123,25 @@ struct CompletionFeatureTests {
         )
         let prefix = CompletionPrefix(text: "ap", range: NSRange(location: 0, length: 2))
         feature.testingSeedVisibleCandidates(
-            labels: ["apple", "apricot"],
+            labels: ["append", "append"],
+            replacementTexts: ["append(_:)", "append(contentsOf:)"],
             prefix: prefix,
             selection: 1
         )
 
         feature.testingPresent(
             items: [
-                .testing(label: "apartment", sortText: "001", filterText: nil),
-                .testing(label: "apricot", sortText: "002", filterText: nil),
-                .testing(label: "apple", sortText: "003", filterText: nil)
+                .testing(label: "append", sortText: "001", filterText: nil, insertText: "append(_:)"),
+                .testing(label: "append", sortText: "002", filterText: nil, insertText: "append(contentsOf:)")
             ],
             prefix: prefix,
             bufferText: "ap"
         )
 
-        #expect(feature.testingSnapshot.candidateLabels == ["apartment", "apricot", "apple"])
+        #expect(feature.testingSnapshot.candidateLabels == ["append", "append"])
         #expect(feature.testingSnapshot.selection == 1)
+        #expect(textView.completionKeyHandler?(.acceptSelected) == true)
+        #expect(textView.string == "append(contentsOf:)")
         feature.cancelAndDismiss()
     }
 
