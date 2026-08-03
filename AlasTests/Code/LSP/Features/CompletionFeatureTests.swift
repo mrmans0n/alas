@@ -154,7 +154,8 @@ struct CompletionFeatureTests {
 
     @Test("refreshed results preserve the selected candidate")
     func refreshedResultsPreserveSelectedCandidate() {
-        let textView = makeTextView("ap")
+        let textView = makeTextView("apTail")
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
         let feature = CompletionFeature(
             textView: textView,
             getClient: { nil },
@@ -162,27 +163,50 @@ struct CompletionFeatureTests {
             isEnabled: { true }
         )
         let prefix = CompletionPrefix(text: "ap", range: NSRange(location: 0, length: 2))
-        feature.testingSeedVisibleCandidates(
-            labels: ["append", "append"],
-            replacementTexts: ["append(_:)", "append(contentsOf:)"],
+        feature.testingPresent(
+            items: [
+                completionItem(label: "append", sortText: "001", replacement: "append", rangeEnd: 6),
+                completionItem(label: "append", sortText: "002", replacement: "append", rangeEnd: 2)
+            ],
             prefix: prefix,
-            selection: 1
+            bufferText: "apTail"
         )
+        feature.testingSetSelection(0)
 
         feature.testingPresent(
             items: [
-                .testing(label: "append", sortText: "001", filterText: nil, insertText: "append(_:)"),
-                .testing(label: "append", sortText: "002", filterText: nil, insertText: "append(contentsOf:)")
+                completionItem(label: "append", sortText: "001", replacement: "append", rangeEnd: 2),
+                completionItem(label: "append", sortText: "002", replacement: "append", rangeEnd: 6)
             ],
             prefix: prefix,
-            bufferText: "ap"
+            bufferText: "apTail"
         )
 
         #expect(feature.testingSnapshot.candidateLabels == ["append", "append"])
         #expect(feature.testingSnapshot.selection == 1)
         #expect(textView.completionKeyHandler?(.acceptSelected) == true)
-        #expect(textView.string == "append(contentsOf:)")
+        #expect(textView.string == "append")
         feature.cancelAndDismiss()
+    }
+
+    private func completionItem(
+        label: String,
+        sortText: String,
+        replacement: String,
+        rangeEnd: Int
+    ) -> LSPCompletionItem {
+        .testing(
+            label: label,
+            sortText: sortText,
+            filterText: nil,
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: rangeEnd)
+                ),
+                newText: replacement
+            )
+        )
     }
 
     private func waitForCompletionRequest(events: () -> [String]) async throws {

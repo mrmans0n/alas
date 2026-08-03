@@ -246,6 +246,14 @@ final class CompletionFeature {
         }
 
         let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
+        let selectedEditPlan = selectedCandidate.flatMap { candidate in
+            CompletionEngine.editPlan(
+                accepting: candidate,
+                prefix: prefix,
+                originalPrefix: candidatePrefix,
+                in: bufferText
+            )
+        }
         candidates = next
         candidatePool = next
         self.prefix = prefix
@@ -258,8 +266,13 @@ final class CompletionFeature {
                     $0.kind == selected.kind &&
                     $0.detail == selected.detail &&
                     $0.source == selected.source &&
-                    $0.replacementText == selected.replacementText &&
-                    $0.additionalTextEdits.map(\.newText) == selected.additionalTextEdits.map(\.newText)
+                    selectedEditPlan != nil &&
+                    CompletionEngine.editPlan(
+                        accepting: $0,
+                        prefix: prefix,
+                        originalPrefix: prefix,
+                        in: bufferText
+                    ) == selectedEditPlan
             }
         } ?? 0
         showPopup()
@@ -463,11 +476,10 @@ extension CompletionFeature {
 
     func testingSeedVisibleCandidates(
         labels: [String],
-        replacementTexts: [String]? = nil,
         prefix: CompletionPrefix,
         selection: Int = 0
     ) {
-        candidates = labels.enumerated().map { index, label in
+        candidates = labels.map { label in
             CompletionCandidate(
                 label: label,
                 detail: nil,
@@ -475,7 +487,7 @@ extension CompletionFeature {
                 documentation: nil,
                 sortText: nil,
                 filterText: label,
-                replacementText: replacementTexts?[index] ?? label,
+                replacementText: label,
                 textEdit: nil,
                 additionalTextEdits: [],
                 source: .lsp
@@ -491,6 +503,10 @@ extension CompletionFeature {
 
     func testingShowPopup() {
         showPopup()
+    }
+
+    func testingSetSelection(_ selection: Int) {
+        self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
     }
 
     func testingPresent(items: [LSPCompletionItem], prefix: CompletionPrefix, bufferText: String) {
