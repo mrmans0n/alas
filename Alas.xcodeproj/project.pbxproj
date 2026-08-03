@@ -583,6 +583,7 @@
 		6294D44BE2DC7F96933F7C4B /* ACPMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99CD81CC540ACCF1132E62A8 /* ACPMCPServer.swift */; };
 		629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */; };
 		62A80BDF7373A108DCF07512 /* ACPTranscriptRowHostingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BA6DF8E37E9B38C627B030A /* ACPTranscriptRowHostingView.swift */; };
+		62F709F5600956C24D69793A /* GlobalTabsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 263044AF646D45F96CBB2186 /* GlobalTabsManager.swift */; };
 		63327D1ACC38C6559F2FDA99 /* CodeHostProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 031B1108F04B06EAC224AB5B /* CodeHostProvider.swift */; };
 		636ED129478744F9169AD774 /* ProjectConfigAgentOverrideTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */; };
 		63B3A5BB582C8C7ACE51E9E5 /* MermaidDiagramThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED658A433AAE57984ACCD0D /* MermaidDiagramThemeTests.swift */; };
@@ -743,6 +744,7 @@
 		823AA3E801A11C535C9438BD /* ACPPermissionScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4457B30E0C8A22BF06D0BC4B /* ACPPermissionScope.swift */; };
 		824FA55A813A3AE1034EE7D1 /* AlasMCPHTTPSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8E1A57CB48427C32D4F1249 /* AlasMCPHTTPSupervisor.swift */; };
 		82544FFCF9960E0BA0FD2C7F /* ProcessMemoryProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9830BAAE86AA0A20A77731D /* ProcessMemoryProbeTests.swift */; };
+		82C22E104E19372B90A7757C /* GlobalTabsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC558032FCC532E32E1A9A75 /* GlobalTabsManagerTests.swift */; };
 		82D3560952F0B800F56377D7 /* AgentHookInstallNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18CA47D5E0D1BF962CF45ABE /* AgentHookInstallNudgeBanner.swift */; };
 		82E9F713C1BFF433E540314C /* AgentLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F6E707551671670D8CBA38 /* AgentLogoView.swift */; };
 		82F5A171BDDFE0A5E0BD587A /* DiffReviewStagedMutationActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0F10B6B1311831E53DA45C0 /* DiffReviewStagedMutationActionsTests.swift */; };
@@ -1690,6 +1692,7 @@
 		25C1AD69581AAE3D34624F23 /* AgentAutoLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAutoLaunch.swift; sourceTree = "<group>"; };
 		25CBAF6618B6D11EC3B9CC76 /* InstallNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeResolver.swift; sourceTree = "<group>"; };
 		25DBE942154BD154F2D10B9D /* SidebarHeaderViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarHeaderViewTests.swift; sourceTree = "<group>"; };
+		263044AF646D45F96CBB2186 /* GlobalTabsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalTabsManager.swift; sourceTree = "<group>"; };
 		2641F3E2016CE8C83E75BA5D /* SSHConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParser.swift; sourceTree = "<group>"; };
 		2648D58703B6C53ED15D536A /* TreeSitterHCL */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TreeSitterHCL; path = ThirdParty/TreeSitterHCL; sourceTree = SOURCE_ROOT; };
 		269CE27A6F4F2E663EDF9052 /* GitNameValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitNameValidator.swift; sourceTree = "<group>"; };
@@ -2447,6 +2450,7 @@
 		AB9D4FBF08CBAB59C08BBF1D /* ACPQuestionRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPQuestionRequest.swift; sourceTree = "<group>"; };
 		ABC94CFEB59F22E028DA462F /* ACPTranscriptRowSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowSpec.swift; sourceTree = "<group>"; };
 		ABF9F7D29F77AE8524E06EFA /* GGStackGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackGate.swift; sourceTree = "<group>"; };
+		AC558032FCC532E32E1A9A75 /* GlobalTabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalTabsManagerTests.swift; sourceTree = "<group>"; };
 		ACAF0D9BAB4658B356FBBBAA /* RunScriptPaletteModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptPaletteModelTests.swift; sourceTree = "<group>"; };
 		ACAFC463DDFFF41E0E1B52A9 /* MissionPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionPromptBuilder.swift; sourceTree = "<group>"; };
 		ACCA6B39E2B172FADFD9E0E6 /* DiffPaneTextDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneTextDocumentView.swift; sourceTree = "<group>"; };
@@ -3325,6 +3329,7 @@
 				FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */,
 				B86E7E91F81AA92ED7108D82 /* GitStatusCacheTests.swift */,
 				271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */,
+				AC558032FCC532E32E1A9A75 /* GlobalTabsManagerTests.swift */,
 				F198697EB5305E5ECE97BC61 /* HarnessDetectorTests.swift */,
 				F9CA43B30C70A80245BE99CE /* HarnessServiceTests.swift */,
 				2F8A28C3DBC50749BB1D2BEA /* HeadReaderTests.swift */,
@@ -4177,6 +4182,7 @@
 				A526016296D5A07C2422BC19 /* FileHistoryTabView.swift */,
 				D28AEE8E4821977FDAF13960 /* FileSnapshotTabView.swift */,
 				E30876871CAA012C1FD6F00D /* FileSystemOpen.swift */,
+				263044AF646D45F96CBB2186 /* GlobalTabsManager.swift */,
 				6B3F942D660C7ABA8542C77D /* ImageFileType.swift */,
 				12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */,
 				90D74C28EB7B8C3CBC53994D /* MergeAgent.swift */,
@@ -6124,6 +6130,7 @@
 				12035048B950CE0197604F89 /* GitService.swift in Sources */,
 				676C9F2E4246D5E383F83F72 /* GitStatusCache.swift in Sources */,
 				7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */,
+				62F709F5600956C24D69793A /* GlobalTabsManager.swift in Sources */,
 				208E237B41BA6F234151683D /* HTTPRequestParser.swift in Sources */,
 				B1A6F39D02409339072EC164 /* HarnessDetector.swift in Sources */,
 				3AF04FB045CE3D9CAC066B27 /* HarnessKind.swift in Sources */,
@@ -6867,6 +6874,7 @@
 				1748C3645E9B769F371F69E6 /* GitServiceUpstreamTests.swift in Sources */,
 				A2298208242B45155BA07BCD /* GitStatusCacheTests.swift in Sources */,
 				9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */,
+				82C22E104E19372B90A7757C /* GlobalTabsManagerTests.swift in Sources */,
 				74B3955E1F94E39BED58EB7F /* HTTPRequestParserTests.swift in Sources */,
 				ACF240D867C3CCCD59E5A0E6 /* HarnessConfigAutoRunTests.swift in Sources */,
 				D1F372532A0F9607051020F5 /* HarnessDetectorTests.swift in Sources */,

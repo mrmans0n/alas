@@ -34,6 +34,7 @@ final class AppState {
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
     private(set) var missingMissionTab: MissionTabState?
+    private var missingMissionWorktreeId: String?
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
     private var _tabs: TabsManager?
@@ -854,6 +855,7 @@ final class AppState {
             title: aggregate.mission.title
         )
         missingMissionTab = nil
+        missingMissionWorktreeId = nil
         return .success(tab)
     }
 
@@ -861,11 +863,12 @@ final class AppState {
     private func presentMissingMissionTab(aggregate: MissionAggregate, leg: MissionLeg) -> MissionTabState {
         let tab = MissionTabState(
             missionID: aggregate.mission.id,
-            worktreeId: leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)",
             title: aggregate.mission.title
         )
         missingMissionTab = tab
-        focusGlobalWorktree(id: tab.worktreeId, projectId: leg.projectId)
+        let worktreeId = leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)"
+        missingMissionWorktreeId = worktreeId
+        focusGlobalWorktree(id: worktreeId, projectId: leg.projectId)
         return tab
     }
 
@@ -1571,17 +1574,18 @@ final class AppState {
         if let missingMissionTab,
            restoredMissionIDs.contains(missingMissionTab.missionID) {
             self.missingMissionTab = nil
+            missingMissionWorktreeId = nil
         }
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
     }
 
     private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>) {
         let disappeared = beforeIds.subtracting(afterIds)
-        let selectedMissingMission: MissionTabState? = selectedWorktreeId.flatMap { worktreeID in
+        let selectedMissingMission: (tab: MissionTabState, worktreeID: String)? = selectedWorktreeId.flatMap { worktreeID in
             guard disappeared.contains(worktreeID),
                   case .mission(let tab) = tabs.activeTab(forWorktree: worktreeID)
             else { return nil }
-            return tab
+            return (tab, worktreeID)
         }
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
@@ -1599,7 +1603,8 @@ final class AppState {
         }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
             if let selectedMissingMission {
-                missingMissionTab = selectedMissingMission
+                missingMissionTab = selectedMissingMission.tab
+                missingMissionWorktreeId = selectedMissingMission.worktreeID
             } else {
                 selectWorktree(id: resolvedSelectionForActiveSpace())
             }
@@ -1823,8 +1828,9 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
-        if id != missingMissionTab?.worktreeId {
+        if id != missingMissionWorktreeId {
             missingMissionTab = nil
+            missingMissionWorktreeId = nil
         }
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id

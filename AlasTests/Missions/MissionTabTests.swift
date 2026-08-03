@@ -10,7 +10,6 @@ struct MissionTabTests {
     @Test func missionTabRoundTripsWithStableIdentity() throws {
         let state = MissionTabState(
             missionID: MissionID(rawValue: "mission-1"),
-            worktreeId: "worktree-1",
             title: "Fix offline sync conflicts"
         )
 
@@ -48,7 +47,6 @@ struct MissionTabTests {
     @Test func tabsFileSkipsUnknownCasesWithoutDroppingMissionTabs() throws {
         let mission = Tab.mission(MissionTabState(
             missionID: MissionID(rawValue: "mission-1"),
-            worktreeId: "worktree-1",
             title: "Known Mission"
         ))
         let encoded = try #require(
@@ -78,7 +76,6 @@ struct MissionTabTests {
         #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree-1") == tab.id)
         #expect(tab == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: "worktree-1",
             title: fixture.aggregate.mission.title
         )))
     }
@@ -106,12 +103,10 @@ struct MissionTabTests {
 
         #expect(try result.get() == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         )))
         #expect(fixture.state.missingMissionTab == MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         ))
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
@@ -168,7 +163,6 @@ struct MissionTabTests {
 
         #expect(try result.get() == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         )))
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
@@ -189,7 +183,6 @@ struct MissionTabTests {
 
         #expect(try result.get() == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         )))
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
@@ -247,7 +240,6 @@ struct MissionTabTests {
 
         #expect(try result.get() == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         )))
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
@@ -313,7 +305,6 @@ struct MissionTabTests {
 
         #expect(try result.get() == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         )))
         #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
@@ -486,7 +477,6 @@ struct MissionTabTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
         #expect(fixture.state.missingMissionTab == MissionTabState(
             missionID: fixture.aggregate.mission.id,
-            worktreeId: fixture.worktree.id,
             title: fixture.aggregate.mission.title
         ))
         #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
@@ -518,7 +508,6 @@ struct MissionTabTests {
             worktree: nil,
             tabState: MissionTabState(
                 missionID: fixture.aggregate.mission.id,
-                worktreeId: fixture.worktree.id,
                 title: fixture.aggregate.mission.title
             )
         )
