@@ -25,12 +25,24 @@ use std::os::unix::net::{UnixListener, UnixStream};
 /// accepting another connection.
 const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long a caller waits on a single broker IPC round trip. Generous
-/// compared to the work a broker actually does per request (`close` is the
-/// slowest at ~2.5s, and it may queue behind one `IPC_REQUEST_TIMEOUT` read),
-/// but bounded: `send_ipc` runs inline on the helper's single-threaded serve
-/// loop, so an unbounded wait here stalls every session the helper serves.
-const BROKER_IPC_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a caller gives a broker to send *something* before treating it as
+/// wedged. Idle rather than total, because a legitimate response has no size
+/// we can predict (see `MAX_IPC_LINE_BYTES`) and therefore no duration we can
+/// predict either: the reply to a maximal image prompt carries its params
+/// twice and measures ~15s just to serialize, silently, before a byte is
+/// written. A total budget would have to out-guess that; an idle budget only
+/// has to notice a broker that has stopped.
+///
+/// It is still worth keeping tight-ish, because `send_ipc` runs inline on the
+/// helper's single-threaded serve loop, so this is also how long one wedged
+/// broker freezes every other session. Moving `acp/*` dispatch off that thread
+/// would decouple the two and let this be far more generous.
+const BROKER_IPC_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long a single write to a broker may block. Writing even a maximal
+/// request measures ~0.2s, so this only ever fires on a broker that has
+/// stopped reading.
+const BROKER_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Upper bound on a *request* line arriving at a broker, so a peer that never
 /// sends a newline cannot grow the buffer without limit.
@@ -52,9 +64,10 @@ const BROKER_IPC_TIMEOUT: Duration = Duration::from_secs(20);
 /// every operation not yet acknowledged. Any fixed ceiling there is a guess
 /// that eventually rejects a legitimate reply — and it would do so *after*
 /// the prompt was already dispatched, failing the send with nothing to retry.
-/// The peer on that side is a broker this helper spawned, and the deadline
-/// still bounds how long it can hold the caller, so time is the right bound
-/// there and length is not.
+/// The peer on that side is a broker this helper spawned, and
+/// `BROKER_IPC_IDLE_TIMEOUT` still bounds how long it can hold the caller
+/// without sending anything — progress is what can be asked of it, size is
+/// not.
 const MAX_IPC_LINE_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -393,18 +406,36 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
     Ok(json!({ "brokers": brokers }))
 }
 
-/// Reads one newline-terminated line, bounded by a deadline covering the whole
-/// line and by a maximum length.
+/// How a line read is bounded in time.
 ///
-/// `set_read_timeout` on its own does not give that: it bounds each underlying
-/// read for *inactivity*, while `read_line` keeps issuing fresh reads until it
+/// The two variants exist for the same reason `max_len` is optional: whether a
+/// fixed ceiling is meaningful depends entirely on whether we can predict what
+/// the peer legitimately sends.
+#[derive(Clone, Copy)]
+enum LineBudget {
+    /// Wall-clock for the whole line. Correct where the payload size is one we
+    /// bound ourselves, so the time it can take is bounded too — and where the
+    /// peer is arbitrary, since only a total bound stops a slow trickle.
+    Total(Duration),
+    /// Longest run with no bytes arriving. Correct where a legitimate payload
+    /// can be arbitrarily large, which makes any total a guess that eventually
+    /// fails a valid transfer: the real failure being guarded against is a peer
+    /// that has stopped making progress, not one that is merely big.
+    Idle(Duration),
+}
+
+/// Reads one newline-terminated line, bounded in time by `budget` and, when
+/// given, in length by `max_len`.
+///
+/// `set_read_timeout` on its own bounds neither: it applies to each underlying
+/// read for inactivity, while `read_line` keeps issuing fresh reads until it
 /// finds a newline. A peer that trickles bytes faster than the timeout renews
 /// its budget indefinitely, holding the caller — and growing the buffer —
 /// without limit.
 ///
 /// The socket timeout is therefore set once, to a short slice that just wakes
-/// a blocked read periodically; the deadline checked on each pass is what
-/// actually bounds the line. (Re-arming the socket per read would express the
+/// a blocked read periodically; the budget checked on each pass is what
+/// actually bounds the line. (Re-arming the socket per read would express a
 /// deadline more directly, but `setsockopt` starts failing with `EINVAL` once
 /// the peer goes away mid-stream, which would turn an otherwise complete read
 /// into an error.)
@@ -414,11 +445,11 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
 #[cfg(unix)]
 fn read_line_within(
     stream: &UnixStream,
-    deadline: std::time::Instant,
+    budget: LineBudget,
     max_len: Option<usize>,
 ) -> io::Result<String> {
-    /// How long a blocked read waits before the deadline is re-checked. Also
-    /// the amount by which a read may overshoot its deadline.
+    /// How long a blocked read waits before the budget is re-checked. Also
+    /// the amount by which a read may overshoot it.
     const POLL_SLICE: Duration = Duration::from_millis(500);
 
     enum Step {
@@ -430,6 +461,10 @@ fn read_line_within(
     stream.set_read_timeout(Some(POLL_SLICE))?;
     let mut reader = BufReader::new(stream);
     let mut line: Vec<u8> = Vec::new();
+    // For `Idle`, this is pushed back every time bytes actually arrive.
+    let mut deadline = match budget {
+        LineBudget::Total(limit) | LineBudget::Idle(limit) => std::time::Instant::now() + limit,
+    };
     loop {
         if std::time::Instant::now() >= deadline {
             return Err(io::Error::new(
@@ -479,6 +514,13 @@ fn read_line_within(
             }
             Step::Retry => continue,
         };
+        // Bytes arrived, so an idle budget starts over: the peer is making
+        // progress, which is the only thing this bound is asking about. A
+        // total budget is left alone — for an arbitrary peer, progress is
+        // exactly what a slow trickle fakes.
+        if let LineBudget::Idle(limit) = budget {
+            deadline = std::time::Instant::now() + limit;
+        }
         // Checked on every pass, including the one that completes the line: a
         // line that arrives inside a single buffer fill is over the cap just
         // as much as one that took several.
@@ -517,11 +559,17 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
             // it guards against a client that stops reading, but an `attach`
             // replay can be a large response, and cutting one short would
             // corrupt a legitimate reply rather than rescue a stuck one.
-            if stream.set_write_timeout(Some(BROKER_IPC_TIMEOUT)).is_err() {
+            if stream
+                .set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))
+                .is_err()
+            {
                 continue;
             }
-            let deadline = std::time::Instant::now() + IPC_REQUEST_TIMEOUT;
-            let Ok(line) = read_line_within(&stream, deadline, Some(MAX_IPC_LINE_BYTES)) else {
+            let Ok(line) = read_line_within(
+                &stream,
+                LineBudget::Total(IPC_REQUEST_TIMEOUT),
+                Some(MAX_IPC_LINE_BYTES),
+            ) else {
                 continue;
             };
             if ipc_line_is_close(&line) {
@@ -1058,14 +1106,14 @@ fn sorted_env_keys(env: &HashMap<String, String>) -> Vec<String> {
 }
 
 fn send_ipc(dir: &Path, method: &str, params: Value) -> Result<Value, AcpBrokerProcessError> {
-    send_ipc_within(dir, method, params, BROKER_IPC_TIMEOUT)
+    send_ipc_within(dir, method, params, BROKER_IPC_IDLE_TIMEOUT)
 }
 
 fn send_ipc_within(
     dir: &Path,
     method: &str,
     params: Value,
-    timeout: Duration,
+    idle_timeout: Duration,
 ) -> Result<Value, AcpBrokerProcessError> {
     #[cfg(unix)]
     {
@@ -1101,21 +1149,23 @@ fn send_ipc_within(
         // looks: every `acp/*` request is handled inline on the helper's
         // single-threaded serve loop, so one unresponsive broker would take
         // down file, watch, search and *every other ACP session* with it.
-        // The response read is bounded below by `read_line_within`, whose
-        // deadline covers the whole line rather than each read.
-        let deadline = std::time::Instant::now() + timeout;
-        stream.set_write_timeout(Some(timeout)).map_err(|error| {
-            broker_error(-32072, format!("broker write timeout failed: {error}"))
-        })?;
+        // The response read is bounded below by `read_line_within`.
+        stream
+            .set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))
+            .map_err(|error| {
+                broker_error(-32072, format!("broker write timeout failed: {error}"))
+            })?;
         writeln!(stream, "{body}")
             .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
         stream
             .flush()
             .map_err(|error| broker_error(-32072, format!("broker flush failed: {error}")))?;
-        // No length cap here: this is a response from a broker this helper
-        // spawned, and its size is not a bounded multiple of the request (see
-        // `MAX_IPC_LINE_BYTES`). The deadline above is the bound that matters.
-        let line = read_line_within(&stream, deadline, None)
+        // Neither a length cap nor a total time budget here: this is a
+        // response from a broker this helper spawned, and its size — and so
+        // the time it legitimately takes — is not a bounded multiple of the
+        // request (see `MAX_IPC_LINE_BYTES`). What can be asked of it is that
+        // it keep making progress.
+        let line = read_line_within(&stream, LineBudget::Idle(idle_timeout), None)
             .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?;
         let response: BrokerIpcResponse = serde_json::from_str(&line)
             .map_err(|error| broker_error(-32072, format!("broker response failed: {error}")))?;
@@ -1154,14 +1204,14 @@ fn send_ipc_with_retry(
         // `retry_budget`. The two measure different things: `retry_budget` is
         // how long to keep re-trying a broker that is not answering *yet* —
         // typically one still starting up, whose socket does not exist — while
-        // `BROKER_IPC_TIMEOUT` is how long a single legitimate response may
+        // `BROKER_IPC_IDLE_TIMEOUT` is how long a single legitimate response may
         // take once the broker does answer. Those are far apart: `acp_open`
         // adopts a live broker on a 2s retry budget, and a snapshot carrying a
         // retained large-image prompt takes ~7.4s just to serialize on the
         // broker side. Deriving the response deadline from the retry budget
         // makes adopting such a broker fail permanently, since every retry
         // hits the same wall.
-        match send_ipc_within(dir, method, params.clone(), BROKER_IPC_TIMEOUT) {
+        match send_ipc_within(dir, method, params.clone(), BROKER_IPC_IDLE_TIMEOUT) {
             Ok(value) => return Ok(value),
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
@@ -1487,7 +1537,7 @@ mod tests {
         let started = std::time::Instant::now();
         let outcome = read_line_within(
             &reader,
-            started + Duration::from_secs(2),
+            LineBudget::Total(Duration::from_secs(2)),
             Some(MAX_IPC_LINE_BYTES),
         );
         let elapsed = started.elapsed();
@@ -1589,6 +1639,40 @@ mod tests {
         assert_eq!(kind, io::ErrorKind::ConnectionRefused);
     }
 
+    /// An idle budget must survive a transfer that runs well past it in total,
+    /// which is the whole reason responses use one: a maximal attach reply
+    /// carries its prompt params twice and takes ~15s to serialize before a
+    /// byte is written, and there is no total we could pick that a larger
+    /// legitimate reply would not eventually exceed. A total budget of the
+    /// same size would fail this.
+    #[cfg(unix)]
+    #[test]
+    fn an_idle_budget_survives_a_transfer_longer_than_the_budget_itself() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        std::thread::spawn(move || {
+            // Six chunks over ~3s, none more than 0.5s apart: never idle for
+            // long, but comfortably past a 1s total.
+            for _ in 0..6 {
+                if writer.write_all(&[b'z'; 512]).is_err() {
+                    return;
+                }
+                let _ = writer.flush();
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let _ = writer.write_all(b"\n");
+            let _ = writer.flush();
+        });
+
+        let started = std::time::Instant::now();
+        let line = read_line_within(&reader, LineBudget::Idle(Duration::from_secs(1)), None)
+            .expect("a peer that keeps making progress must not be given up on");
+        assert_eq!(line.len(), 6 * 512 + 1);
+        assert!(
+            started.elapsed() > Duration::from_secs(1),
+            "transfer finished too fast to prove the budget was exceeded in total"
+        );
+    }
+
     /// Requests get a length cap; responses from our own broker do not, and
     /// that difference is load-bearing — an attach reply can legitimately
     /// carry a prompt's params more than once. Exercised with a tiny cap so
@@ -1603,11 +1687,7 @@ mod tests {
                 let _ = writer.write_all(b"\n");
                 let _ = writer.flush();
             });
-            read_line_within(
-                &reader,
-                std::time::Instant::now() + Duration::from_secs(10),
-                max_len,
-            )
+            read_line_within(&reader, LineBudget::Total(Duration::from_secs(10)), max_len)
         }
 
         let capped = read_with(Some(1024)).expect_err("a line past the cap must be rejected");
@@ -1630,9 +1710,12 @@ mod tests {
             let _ = writer.flush();
         });
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        let line =
-            read_line_within(&reader, deadline, Some(MAX_IPC_LINE_BYTES)).expect("large line");
+        let line = read_line_within(
+            &reader,
+            LineBudget::Total(Duration::from_secs(30)),
+            Some(MAX_IPC_LINE_BYTES),
+        )
+        .expect("large line");
         assert_eq!(line.len(), expected + 1);
     }
 }
