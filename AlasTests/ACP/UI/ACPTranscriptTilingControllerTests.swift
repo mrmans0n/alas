@@ -160,3 +160,53 @@ struct ACPTranscriptTilingHeightTests {
         #expect(c.documentHeight == 340)
     }
 }
+
+@MainActor
+@Suite("ACPTranscriptTilingController viewport queries")
+struct ACPTranscriptTilingViewportTests {
+    private func controller() -> ACPTranscriptTilingController {
+        let c = ACPTranscriptTilingController(metrics: .init(rowSpacing: 10, topPadding: 20))
+        c.replaceAll(rows: (0..<100).map { ("row-\($0)", 100) })
+        // row-i: minY = 20 + i*110, maxY = minY + 100
+        return c
+    }
+
+    @Test("top visible row is the first row whose bottom is past the viewport top")
+    func topVisible() {
+        let c = controller()
+        #expect(c.topVisibleRowId(viewportMinY: 0) == "row-0")
+        #expect(c.topVisibleRowId(viewportMinY: 121) == "row-1")   // row-0.maxY = 120
+        #expect(c.topVisibleRowId(viewportMinY: 5000) == "row-45") // first maxY > 5000: 120 + 110*45 = 5070
+    }
+
+    @Test("top visible row of an empty controller is nil")
+    func topVisibleEmpty() {
+        let c = ACPTranscriptTilingController()
+        #expect(c.topVisibleRowId(viewportMinY: 0) == nil)
+    }
+
+    @Test("mount band covers viewport plus overscan and clamps to bounds")
+    func mountBand() {
+        let c = controller()
+        let band = c.mountBand(viewportMinY: 1000, viewportHeight: 800, overscan: 500)
+        // covered y-range: [500, 2300]
+        let first = band.lowerBound, last = band.upperBound - 1
+        #expect(c.rowLayout(at: first).maxY > 500)
+        if first > 0 { #expect(c.rowLayout(at: first - 1).maxY <= 500) }
+        #expect(c.rowLayout(at: last).minY < 2300)
+        if last < c.rowCount - 1 { #expect(c.rowLayout(at: last + 1).minY >= 2300) }
+    }
+
+    @Test("mount band at the very top starts at zero")
+    func mountBandTop() {
+        let c = controller()
+        let band = c.mountBand(viewportMinY: 0, viewportHeight: 800, overscan: 500)
+        #expect(band.lowerBound == 0)
+    }
+
+    @Test("mount band of an empty controller is empty")
+    func mountBandEmpty() {
+        let c = ACPTranscriptTilingController()
+        #expect(c.mountBand(viewportMinY: 0, viewportHeight: 800, overscan: 500).isEmpty)
+    }
+}

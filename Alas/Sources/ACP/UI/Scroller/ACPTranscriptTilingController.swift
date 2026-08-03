@@ -115,6 +115,47 @@ final class ACPTranscriptTilingController {
         documentHeight = rows.last?.maxY ?? 0
     }
 
+    /// Binary search: index of the first row whose bottom edge is below `y`
+    /// (i.e. the row occupying or first following that y-line). Nil when empty
+    /// or `y` is past the last row.
+    ///
+    /// Uses the same half-open-interval convention as `updateHeight`: a row
+    /// whose `maxY` exactly equals `y` is treated as entirely above `y`, not
+    /// intersecting it, so the search requires `maxY > y` (strict).
+    func firstRowIndex(intersectingY y: CGFloat) -> Int? {
+        guard !rows.isEmpty else { return nil }
+        var lo = 0, hi = rows.count - 1
+        guard rows[hi].maxY > y else { return nil }
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if rows[mid].maxY > y { hi = mid } else { lo = mid + 1 }
+        }
+        return lo
+    }
+
+    /// The id of the topmost row intersecting the viewport top, used to
+    /// remember the user's scroll position across sessions.
+    func topVisibleRowId(viewportMinY: CGFloat) -> String? {
+        firstRowIndex(intersectingY: viewportMinY).map { rows[$0].id }
+    }
+
+    /// Indices of rows that should have live hosting views: everything
+    /// intersecting the viewport extended by `overscan` on both sides. Rows
+    /// outside this range keep their measured heights but have no mounted
+    /// view, bounding memory as the render window grows.
+    func mountBand(viewportMinY: CGFloat, viewportHeight: CGFloat, overscan: CGFloat) -> Range<Int> {
+        guard !rows.isEmpty else { return 0..<0 }
+        let lowY = viewportMinY - overscan
+        let highY = viewportMinY + viewportHeight + overscan
+        let first = firstRowIndex(intersectingY: lowY) ?? rows.count
+        guard first < rows.count else { return rows.count..<rows.count }
+        var last = first
+        while last + 1 < rows.count, rows[last + 1].minY < highY {
+            last += 1
+        }
+        return first..<(last + 1)
+    }
+
     /// Rebuilds the id → index lookup, tolerating duplicate row ids rather
     /// than trapping (as `Dictionary(uniqueKeysWithValues:)` would). Duplicate
     /// ids should never happen, but this controller drives the live
