@@ -73,4 +73,25 @@ struct ACPTranscriptTilingControllerTests {
         #expect(c.rowId(at: 1) == "b")
         #expect(c.rowLayout(at: 0).height == 100)
     }
+
+    // Note: rebuildIndex()'s duplicate-id tolerance (last occurrence wins)
+    // cannot be covered by an in-process test here. It is guarded by
+    // `assertionFailure`, which traps as a genuine Fatal error under the
+    // Debug configuration this test target always runs in — verified
+    // empirically: a duplicate-id row crashed the entire xctest process
+    // rather than failing a single test. See the fix report for the
+    // reproduction. The test below instead covers the part that IS safely
+    // testable: that the id index only ever reflects current, non-duplicate
+    // rows after a mix of mutations.
+    @Test("index reflects only current rows after truncation and regrowth")
+    func indexRebuildsCleanlyAfterMutations() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50), ("c", 80)])
+        c.removeSuffix(from: 1)
+        c.append(rows: [("d", 30)])
+        #expect(c.row(withId: "b") == nil)
+        #expect(c.row(withId: "c") == nil)
+        #expect(c.rowId(at: 1) == "d")
+        #expect(c.row(withId: "d")?.minY == c.rowLayout(at: 1).minY)
+    }
 }

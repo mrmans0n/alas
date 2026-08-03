@@ -91,9 +91,22 @@ final class ACPTranscriptTilingController {
         documentHeight = rows.last?.maxY ?? 0
     }
 
+    /// Rebuilds the id → index lookup, tolerating duplicate row ids rather
+    /// than trapping (as `Dictionary(uniqueKeysWithValues:)` would). Duplicate
+    /// ids should never happen, but this controller drives the live
+    /// transcript in the user's daily-driver app: the legacy SwiftUI
+    /// `ForEach` path merely degrades (collapses/misrenders rows) on
+    /// duplicate ids, so a hard trap here would be a strictly harsher
+    /// regression than silently keeping the last occurrence. The
+    /// `assertionFailure` still makes the condition loud during development
+    /// while staying safe in release.
     private func rebuildIndex() {
-        indexById = Dictionary(
-            uniqueKeysWithValues: rows.enumerated().map { ($0.element.id, $0.offset) }
-        )
+        indexById.removeAll(keepingCapacity: true)
+        for (offset, row) in rows.enumerated() {
+            if indexById[row.id] != nil {
+                assertionFailure("duplicate row id \(row.id)")
+            }
+            indexById[row.id] = offset
+        }
     }
 }
