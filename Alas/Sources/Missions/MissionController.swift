@@ -861,6 +861,16 @@ final class MissionController {
                     )
 
                 case .needsAttention(let message):
+                    if case .worktreeMissing = signal,
+                       var leg = aggregate.primaryLeg,
+                       leg.pendingInitialPrompt == nil {
+                        // This is a new durable delegation caused by losing the
+                        // worktree, not a retry-time prompt reconstruction.
+                        leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
+                        leg.updatedAt = environment.now()
+                        try await persistence.updateLeg(leg, event: nil)
+                        aggregate.legs = aggregate.legs.map { $0.id == leg.id ? leg : $0 }
+                    }
                     let checkpoint: MissionSetupCheckpoint = if case .worktreeMissing = signal {
                         .running
                     } else {

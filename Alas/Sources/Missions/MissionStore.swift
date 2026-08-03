@@ -756,10 +756,11 @@ final class MissionStore {
         legs: [MissionLeg],
         updatedAt: Date
     ) throws {
-        try db.exec("UPDATE missions SET state = ?, updated_at = ? WHERE id = ?", bindings: [
+        try db.exec("UPDATE missions SET state = ?, updated_at = ? WHERE id = ? AND state != ?", bindings: [
             Self.globalMissionState(for: legs).rawValue,
             updatedAt.timeIntervalSince1970,
             missionID.rawValue,
+            MissionState.completed.rawValue,
         ])
     }
 
@@ -769,11 +770,26 @@ final class MissionStore {
 
     private func applyLegacyPresentation(to aggregate: inout MissionAggregate) {
         guard let primaryLeg = aggregate.primaryLeg else { return }
+        let legacySetup = aggregate.legs.count == 1
+            && primaryLeg.state == .creating
+            && aggregate.mission.state != .creating
         if aggregate.mission.state != .completed {
-            aggregate.mission.state = Self.globalMissionState(for: aggregate.legs)
+            let legacyAttention = aggregate.mission.state == .needsAttention
+            // Preserve the one-leg presentation contract while callers migrate
+            // from Mission-owned setup state. Multi-leg setup is leg-owned, so
+            // an isolated secondary failure must not take the aggregate out of
+            // its running state.
+            if !legacySetup {
+                aggregate.mission.state = (aggregate.legs.count == 1
+                    && (legacyAttention || primaryLeg.state == .needsAttention))
+                    ? .needsAttention
+                    : Self.globalMissionState(for: aggregate.legs)
+            }
         }
-        aggregate.mission.setupCheckpoint = primaryLeg.setupCheckpoint
-        aggregate.mission.attentionReason = primaryLeg.attentionReason
+        if !legacySetup {
+            aggregate.mission.setupCheckpoint = primaryLeg.setupCheckpoint
+            aggregate.mission.attentionReason = primaryLeg.attentionReason
+        }
     }
 
     private func issueIdentity(missionID: MissionID) throws -> MissionIssueIdentity {
@@ -855,6 +871,10 @@ final class MissionStore {
     }
 
     private func insertMission(_ mission: MissionRecord, initialLeg: MissionLeg) throws {
+        let usesLegacyMissionSetup = initialLeg.state == .creating && mission.state != .creating
+        let state = usesLegacyMissionSetup ? mission.state : Self.globalMissionState(for: [initialLeg])
+        let checkpoint = usesLegacyMissionSetup ? mission.setupCheckpoint : initialLeg.setupCheckpoint
+        let attentionReason = usesLegacyMissionSetup ? mission.attentionReason : initialLeg.attentionReason
         try db.exec("""
         INSERT INTO missions (
             id, title, source_kind, state, setup_checkpoint, primary_leg_id,
@@ -863,10 +883,10 @@ final class MissionStore {
         """, bindings: [
             mission.id.rawValue,
             mission.title,
-            Self.globalMissionState(for: [initialLeg]).rawValue,
-            initialLeg.setupCheckpoint.rawValue,
+            state.rawValue,
+            checkpoint.rawValue,
             mission.primaryLegID.rawValue,
-            initialLeg.attentionReason,
+            attentionReason,
             mission.createdAt.timeIntervalSince1970,
             mission.updatedAt.timeIntervalSince1970,
             mission.completedAt?.timeIntervalSince1970,

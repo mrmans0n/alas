@@ -5,7 +5,7 @@ import Testing
 @MainActor
 @Suite("Mission coordinator")
 struct MissionCoordinatorTests {
-    private static let draft = MissionDraft(
+    private static let primaryDraft = MissionDraft(
         issue: MissionFixtures.issue(),
         projectId: "project-1",
         baseRef: "origin/main",
@@ -16,6 +16,117 @@ struct MissionCoordinatorTests {
         initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         initialPrompt: "Fix issue #42."
     )
+
+    private static let draft = primaryDraft
+
+    private static let sdkDraft = MissionLegDraft(
+        projectId: "project-sdk",
+        baseRef: "origin/main",
+        baseRemoteName: "origin",
+        branch: "fix/parser-crash-sdk",
+        destinationPath: "/tmp/alas-mission-sdk",
+        agentId: "codex",
+        initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+        initialPrompt: "Fix the SDK integration for issue #42."
+    )
+
+    private static let serverDraft = MissionLegDraft(
+        projectId: "project-server",
+        baseRef: "origin/main",
+        baseRemoteName: "origin",
+        branch: "fix/parser-crash-server",
+        destinationPath: "/tmp/alas-mission-server",
+        agentId: "claude",
+        initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+        initialPrompt: "Fix the server integration for issue #42."
+    )
+
+    // Break caught: serializing setup by Mission ID prevents two durable legs
+    // from reaching their independent Git checkpoints together.
+    @Test("secondary legs advance independently")
+    func secondaryLegsAdvanceIndependently() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+        await fake.resumeWorktreeCreation(for: try #require(fake.startedLegIDs.first))
+        _ = await fake.waitUntilSettled(missionID)
+        fake.clearStartedLegIDs()
+
+        async let first = coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        async let second = coordinator.addLeg(missionID: missionID, draft: Self.serverDraft)
+        let legIDs = try await [first, second]
+
+        await fake.waitForWorktreeStarts(count: 2)
+
+        #expect(Set(fake.startedLegIDs) == Set(legIDs))
+
+        for legID in legIDs {
+            await fake.resumeWorktreeCreation(for: legID)
+        }
+    }
+
+    // Break caught: applying a secondary setup failure to the aggregate state
+    // would make a running Mission unavailable while another leg succeeds.
+    @Test("secondary leg failure is isolated from sibling setup")
+    func secondaryLegFailureIsIsolatedFromSiblingSetup() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+        await fake.resumeWorktreeCreation(for: try #require(fake.startedLegIDs.first))
+        _ = await fake.waitUntilSettled(missionID)
+        fake.clearStartedLegIDs()
+
+        async let sdk = coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        async let server = coordinator.addLeg(missionID: missionID, draft: Self.serverDraft)
+        let sdkLegID = try await sdk
+        let serverLegID = try await server
+        await fake.waitForWorktreeStarts(count: 2)
+        fake.worktreeResultsByLegID[sdkLegID] = .failure(.init(message: "SDK Git failed"))
+
+        await fake.resumeWorktreeCreation(for: sdkLegID)
+        await fake.resumeWorktreeCreation(for: serverLegID)
+        let aggregate = await fake.waitUntilLegsSettled(missionID, count: 2)
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.legs.first(where: { $0.id == sdkLegID })?.state == .needsAttention)
+        #expect(aggregate.legs.first(where: { $0.id == serverLegID })?.state == .running)
+    }
+
+    // Break caught: continuing with ACP after an in-flight Git operation returns
+    // can start new external work after the Mission has completed.
+    @Test("completion after Git returns prevents ACP startup")
+    func completionAfterGitReturnsPreventsACPStartup() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+
+        var leg = try #require(try await fake.persistence.leg(
+            missionID: missionID,
+            legID: MissionLegID(rawValue: "id-2")
+        ))
+        leg.state = .ready
+        leg.setupCheckpoint = .running
+        leg.readinessEvidence = .init(kind: .legacy, observedAt: .now)
+        try await fake.persistence.updateLeg(leg, event: nil)
+        try await fake.persistence.complete(
+            id: missionID,
+            at: .now,
+            event: MissionFixtures.event(
+                id: "completed-after-git",
+                missionID: missionID,
+                legID: leg.id,
+                kind: .completed
+            )
+        )
+
+        await fake.resumeWorktreeCreation(for: leg.id)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(fake.startACPCalls == 0)
+    }
 
     @Test("success persists every checkpoint in order")
     func successPersistsEveryCheckpointInOrder() async throws {
@@ -743,6 +854,7 @@ private final class MissionCoordinatorFake {
     )
 
     var worktreeResult: Result<Worktree, WorktreeCreationFailure>
+    var worktreeResultsByLegID: [MissionLegID: Result<Worktree, WorktreeCreationFailure>] = [:]
     var agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>?
     var worktreeAtDestination: Worktree?
     var startACPOverride: ((MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>)?
@@ -754,18 +866,25 @@ private final class MissionCoordinatorFake {
     private(set) var startedSessionIDs: [String] = []
     private(set) var startedPromptIDs: [UUID] = []
     private(set) var startedAgentIDs: [String] = []
+    private(set) var startedLegIDs: [MissionLegID] = []
     private(set) var operations: [String] = []
     private(set) var notifications: [MissionAggregate] = []
     private(set) var reportedFailures: [(MissionID?, String)] = []
 
     private var idCounter = 0
     private var clock: TimeInterval = 1_000
+    private let suspendWorktreeCreation: Bool
+    private var startedLegs: [MissionLegID: MissionLeg] = [:]
+    private var worktreeCreationContinuations: [
+        MissionLegID: CheckedContinuation<Result<Worktree, WorktreeCreationFailure>, Never>
+    ] = [:]
     var idValues: [String] = []
 
     init(
         existing: [MissionAggregate] = [],
         worktreeResult: Result<Worktree, WorktreeCreationFailure>? = nil,
-        agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil
+        agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil,
+        suspendWorktreeCreation: Bool = false
     ) {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-coordinator-\(UUID().uuidString).sqlite")
@@ -777,6 +896,7 @@ private final class MissionCoordinatorFake {
         persistence = MissionPersistence(path: path)
         self.worktreeResult = worktreeResult ?? .success(worktree)
         self.agentResult = agentResult
+        self.suspendWorktreeCreation = suspendWorktreeCreation
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
             worktreeAtDestination = worktree
         }
@@ -798,30 +918,41 @@ private final class MissionCoordinatorFake {
                 self.idCounter += 1
                 return "id-\(self.idCounter)"
             },
-            plannedWorktreeID: { [weak self] _ in
+            plannedWorktreeID: { [weak self] leg in
                 guard let self else { return .failure(.init(message: "Fake released")) }
-                return .success(self.worktree.id)
+                return .success(self.worktree(for: leg).id)
             },
             worktreeAtDestination: { [weak self] projectID, path in
-                guard let self,
-                      projectID == self.worktree.projectId,
-                      URL(fileURLWithPath: path).standardizedFileURL.path == self.worktree.path.standardizedFileURL.path
-                else { return nil }
-                return self.worktreeAtDestination
+                guard let self else { return nil }
+                if projectID == self.worktree.projectId,
+                   URL(fileURLWithPath: path).standardizedFileURL.path == self.worktree.path.standardizedFileURL.path {
+                    return self.worktreeAtDestination
+                }
+                return self.createdWorktrees.first { worktree in
+                    worktree.projectId == projectID
+                        && worktree.path.standardizedFileURL.path
+                            == URL(fileURLWithPath: path).standardizedFileURL.path
+                }
             },
             createWorktree: { [weak self] leg in
                 guard let self else { return .failure(.init(message: "Fake released")) }
                 self.createWorktreeCalls += 1
+                self.startedLegIDs.append(leg.id)
+                self.startedLegs[leg.id] = leg
                 self.operations.append("createWorktree")
                 if self.aggregateObservedWhenGitStarted {
                     let aggregate = try? await self.persistence.aggregate(id: leg.missionID)
                     self.missionWasDurableWhenGitStarted = aggregate != nil
-                    self.worktreeReservationWasDurableWhenGitStarted = aggregate?.primaryLeg?.worktreeId == self.worktree.id
+                    self.worktreeReservationWasDurableWhenGitStarted = aggregate?.legs.first(where: { $0.id == leg.id })?.worktreeId == self.worktree(for: leg).id
                 }
-                if case .success(let worktree) = self.worktreeResult {
-                    self.worktreeAtDestination = worktree
+                let result = self.worktreeResult(for: leg)
+                if self.suspendWorktreeCreation {
+                    return await withCheckedContinuation { continuation in
+                        self.worktreeCreationContinuations[leg.id] = continuation
+                    }
                 }
-                return self.worktreeResult
+                self.recordCreatedWorktree(result)
+                return result
             },
             startACP: { [weak self] leg, _ in
                 guard let self else {
@@ -874,6 +1005,90 @@ private final class MissionCoordinatorFake {
             await Task.yield()
         }
         return try! await persistence.aggregate(id: id)!
+    }
+
+    func waitForWorktreeStarts(count: Int) async {
+        for _ in 0..<200 {
+            if startedLegIDs.count >= count { return }
+            await Task.yield()
+        }
+    }
+
+    func clearStartedLegIDs() {
+        startedLegIDs = []
+    }
+
+    func resumeWorktreeCreation(for legID: MissionLegID) async {
+        guard let continuation = worktreeCreationContinuations.removeValue(forKey: legID) else { return }
+        let result = worktreeResult(for: legID)
+        recordCreatedWorktree(result)
+        continuation.resume(returning: result)
+    }
+
+    func waitUntilLegsSettled(_ id: MissionID, count: Int) async -> MissionAggregate {
+        for _ in 0..<200 {
+            if let aggregate = try? await persistence.aggregate(id: id),
+               aggregate.legs.count >= count + 1,
+               aggregate.legs.filter({ $0.ordinal > 0 }).allSatisfy({ $0.state != .creating }) {
+                return aggregate
+            }
+            await Task.yield()
+        }
+        return try! await persistence.aggregate(id: id)!
+    }
+
+    private var createdWorktrees: [Worktree] = []
+
+    private func worktree(for leg: MissionLeg) -> Worktree {
+        if leg.projectId == worktree.projectId,
+           URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+                == worktree.path.standardizedFileURL.path {
+            return worktree
+        }
+        return Worktree(
+            id: "worktree-\(leg.id.rawValue)",
+            projectId: leg.projectId,
+            name: leg.branch,
+            branch: leg.branch,
+            path: URL(fileURLWithPath: leg.destinationPath),
+            status: .clean,
+            lastActivity: .now,
+            lineageID: "lineage-\(leg.id.rawValue)"
+        )
+    }
+
+    private func worktreeResult(for leg: MissionLeg) -> Result<Worktree, WorktreeCreationFailure> {
+        if let result = worktreeResultsByLegID[leg.id] { return result }
+        if leg.projectId == worktree.projectId,
+           URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+                == worktree.path.standardizedFileURL.path {
+            return worktreeResult
+        }
+        switch worktreeResult {
+        case .failure(let failure):
+            return .failure(failure)
+        case .success:
+            return .success(worktree(for: leg))
+        }
+    }
+
+    private func worktreeResult(for legID: MissionLegID) -> Result<Worktree, WorktreeCreationFailure> {
+        guard let leg = startedLegs[legID] else {
+            return worktreeResultsByLegID[legID] ?? worktreeResult
+        }
+        return worktreeResult(for: leg)
+    }
+
+    private func recordCreatedWorktree(_ result: Result<Worktree, WorktreeCreationFailure>) {
+        if case .success(let worktree) = result {
+            if worktree.projectId == self.worktree.projectId,
+               worktree.path.standardizedFileURL.path == self.worktree.path.standardizedFileURL.path {
+                worktreeAtDestination = worktree
+            } else {
+                createdWorktrees.removeAll { $0.id == worktree.id }
+                createdWorktrees.append(worktree)
+            }
+        }
     }
 }
 
