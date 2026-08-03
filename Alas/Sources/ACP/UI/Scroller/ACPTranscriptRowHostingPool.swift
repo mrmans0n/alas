@@ -17,6 +17,14 @@ final class ACPTranscriptRowHostingPool {
 
     var mountedIds: Set<String> { Set(entries.keys) }
 
+    /// The live hosting view for `id`, or nil when the row currently has
+    /// none. Unlike `view(for:)` this never CREATES one, so callers can ask
+    /// "is this row's content already measured at the current width?"
+    /// without paying for a hosting view they may not need.
+    func mountedView(id: String) -> ACPTranscriptRowHostingView? {
+        entries[id]?.view
+    }
+
     func view(for spec: ACPTranscriptRowSpec) -> (view: ACPTranscriptRowHostingView, contentChanged: Bool) {
         if var entry = entries[spec.id] {
             if entry.token.isEqual(to: spec.equalityToken) {

@@ -45,8 +45,9 @@ final class ACPTranscriptScrollerReconciler {
     /// itself makes (e.g. via `addSubview` or re-pinning `rootView`), which
     /// would otherwise route back into `remeasureRow` while `specsById` and
     /// the tiling controller are mid-mutation (most sharply during a
-    /// `.reset`, between `pool.releaseAll()` and `tiling.replaceAll`, where
-    /// `specsById` still holds the OLD specs for ids being reused). Every
+    /// `.reset`, where `resetHeights` measures re-used ids while `specsById`
+    /// still holds their OLD specs and `tiling` still holds the OLD
+    /// geometry). Every
     /// measurement `apply()` needs is already performed directly by its own
     /// code paths, so ignoring the reentrant signal during this window loses
     /// nothing.
@@ -170,7 +171,7 @@ final class ACPTranscriptScrollerReconciler {
             // visible content is never wrong), and debounce the full
             // re-measure-every-row reset until the resize settles — so a
             // live drag doesn't rebuild thousands of hosting views per tick.
-            applyDiff(idDiff, specs: specs)
+            applyDiff(idDiff, specs: specs, widthChanged: true, followsTail: followsTail)
             widthSettleTimer.poke()
         } else {
             let change: Diff = widthChanged ? .reset : idDiff
@@ -179,7 +180,7 @@ final class ACPTranscriptScrollerReconciler {
                 // earlier pending width-settle reset is now redundant.
                 widthSettleTimer.cancel()
             }
-            applyDiff(change, specs: specs)
+            applyDiff(change, specs: specs, widthChanged: widthChanged, followsTail: followsTail)
         }
 
         orderedIds = newIds
@@ -192,7 +193,9 @@ final class ACPTranscriptScrollerReconciler {
         layoutMountedRows()
     }
 
-    private func applyDiff(_ change: Diff, specs: [ACPTranscriptRowSpec]) {
+    private func applyDiff(
+        _ change: Diff, specs: [ACPTranscriptRowSpec], widthChanged: Bool, followsTail: Bool
+    ) {
         switch change {
         case .unchanged:
             updateChangedContent(specs: specs)
@@ -220,10 +223,103 @@ final class ACPTranscriptScrollerReconciler {
             // of `keep` and `pool.releaseAll(except:)` cleans them up.
             updateChangedContent(specs: specs)
         case .reset:
-            pool.releaseAll()
-            tiling.replaceAll(rows: measure(specs[...]))
-            scroller.setDocumentHeight(tiling.documentHeight)
+            performReset(specs: specs, widthChanged: widthChanged, followsTail: followsTail)
         }
+    }
+
+    /// Replaces the entire geometry from `specs`, preserving what the user
+    /// is looking at.
+    ///
+    /// Two properties every other diff case already had, and `.reset` did
+    /// not:
+    ///   - the scroll offset is re-anchored to the row that was at the
+    ///     viewport top, instead of keeping its old numeric value against a
+    ///     completely different document (a hard content jump — most
+    ///     visibly on the FINAL head step, where `__top_pagination__`
+    ///     disappearing in the same update that inserts older rows changes
+    ///     ids at both ends and so falls to `.reset`);
+    ///   - rows whose measured height is still valid keep it instead of
+    ///     being rebuilt and re-measured. The mount band bounds how many
+    ///     hosting views are LIVE, but nothing bounded how many this path
+    ///     CONSTRUCTED: `pool.releaseAll()` + measuring every spec meant a
+    ///     reset after browsing deep into a long transcript allocated and
+    ///     synchronously measured a hosting view per row in the whole render
+    ///     window.
+    private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, followsTail: Bool) {
+        // While following the tail, `apply()`'s own `scrollToBottom()` (or
+        // `performWidthSettledReset`'s) is the correct final position and
+        // must win — don't fight it with a restored anchor.
+        let anchor = followsTail ? nil : captureScrollAnchor()
+        tiling.replaceAll(rows: resetHeights(specs: specs, widthChanged: widthChanged))
+        scroller.setDocumentHeight(tiling.documentHeight)
+        restoreScrollAnchor(anchor)
+    }
+
+    /// The scroll offset expressed relative to a row rather than to the
+    /// document, so it survives a wholesale geometry replacement.
+    private struct ScrollAnchor {
+        let id: String
+        let offsetWithinRow: CGFloat
+    }
+
+    private func captureScrollAnchor() -> ScrollAnchor? {
+        guard let id = tiling.topVisibleRowId(viewportMinY: scroller.scrollY),
+              let row = tiling.row(withId: id)
+        else { return nil }
+        return ScrollAnchor(id: id, offsetWithinRow: scroller.scrollY - row.minY)
+    }
+
+    /// Puts the anchored row back where it was on screen. A nil anchor, or
+    /// one whose row no longer exists in the new geometry, leaves the offset
+    /// alone — there is nothing better to aim at, and `setScrollY`'s clamp
+    /// still keeps it inside the new document.
+    private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
+        guard let anchor, let row = tiling.row(withId: anchor.id) else { return }
+        scroller.setScrollY(row.minY + anchor.offsetWithinRow)
+    }
+
+    /// Heights for a wholesale geometry replacement. Rows whose recorded
+    /// height is still valid are carried forward WITHOUT building or
+    /// measuring a hosting view; everything else is measured now.
+    private func resetHeights(
+        specs: [ACPTranscriptRowSpec], widthChanged: Bool
+    ) -> [(id: String, height: CGFloat)] {
+        let mounted = pool.mountedIds
+        return specs.map { spec in
+            if let known = tiling.row(withId: spec.id)?.height,
+               canReuseMeasuredHeight(
+                   for: spec, isMounted: mounted.contains(spec.id), widthChanged: widthChanged
+               ) {
+                return (spec.id, known)
+            }
+            let (view, _) = pool.view(for: spec)
+            return (spec.id, view.measuredHeight(forWidth: contentWidth))
+        }
+    }
+
+    /// Whether the height already on record for `spec`'s row can stand.
+    ///
+    /// The safety net this leans on is `performLayoutPass`'s mount-time
+    /// fallback: any row without a live hosting view gets a fresh one when
+    /// it next enters the mount band, whose `lastMeasuredWidth` is nil, so
+    /// it is re-measured at that moment. That makes a carried-forward height
+    /// on an UNMOUNTED row self-correcting — it can only ever be observed
+    /// after the row has been re-measured. A mounted row has no such net
+    /// (its view is already pinned at `contentWidth`, so the fallback won't
+    /// fire), which is what the `isMounted` cases below turn on.
+    private func canReuseMeasuredHeight(
+        for spec: ACPTranscriptRowSpec, isMounted: Bool, widthChanged: Bool
+    ) -> Bool {
+        let contentChanged = specsById[spec.id]
+            .map { !$0.equalityToken.isEqual(to: spec.equalityToken) } ?? true
+        if contentChanged { return !isMounted }
+        if !widthChanged { return true }
+        // The width changed, so a height measured at the old width is stale.
+        // Only rows the layout pass already re-pinned to the new width (the
+        // mount band, corrected lazily while the resize drag was still
+        // ticking) are current; everything else must be measured here — this
+        // is the whole reason the width-settle reset exists.
+        return isMounted && pool.mountedView(id: spec.id)?.lastMeasuredWidth == contentWidth
     }
 
     /// Fires once a width-only change has stopped ticking for
@@ -237,9 +333,7 @@ final class ACPTranscriptScrollerReconciler {
     private func performWidthSettledReset() {
         isApplyingSpecs = true
         defer { isApplyingSpecs = false }
-        pool.releaseAll()
-        tiling.replaceAll(rows: measure(lastAppliedSpecs[...]))
-        scroller.setDocumentHeight(tiling.documentHeight)
+        performReset(specs: lastAppliedSpecs, widthChanged: true, followsTail: lastFollowsTail)
         if lastFollowsTail {
             scroller.scrollToBottom()
         }

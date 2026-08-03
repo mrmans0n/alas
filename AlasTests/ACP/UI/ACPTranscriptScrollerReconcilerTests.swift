@@ -104,6 +104,16 @@ struct ACPTranscriptScrollerReconcilerDiffTests {
     }
 }
 
+/// Counts how many times each row's SwiftUI content was actually built, so a
+/// test can prove a code path did NOT construct (and therefore did not
+/// measure) a hosting view for a row it already knew the height of.
+@MainActor
+private final class RowBuildCounter {
+    private(set) var counts: [String: Int] = [:]
+    func record(_ id: String) { counts[id, default: 0] += 1 }
+    func count(_ id: String) -> Int { counts[id] ?? 0 }
+}
+
 @MainActor
 @Suite("ACPTranscriptScrollerReconciler apply")
 struct ACPTranscriptScrollerReconcilerApplyTests {
@@ -135,6 +145,29 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         let pool = ACPTranscriptRowHostingPool()
         let reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
         return (reconciler, scroller, tiling, pool)
+    }
+
+    /// Like `spec`, but records every `build()` invocation into `counter`.
+    private func countingSpec(
+        _ id: String, token: Int = 0, height: CGFloat = 100, counter: RowBuildCounter
+    ) -> ACPTranscriptRowSpec {
+        ACPTranscriptRowSpec(
+            id: id,
+            equalityToken: ACPRowEqualityToken(token),
+            build: {
+                counter.record(id)
+                return AnyView(Color.clear.frame(height: height))
+            }
+        )
+    }
+
+    /// The on-screen y of a row: how far below the viewport's top edge it
+    /// currently sits. Anchor preservation means this value survives a
+    /// geometry replacement.
+    private func screenOffset(
+        of id: String, tiling: ACPTranscriptTilingController, scroller: ACPTranscriptScrollerView
+    ) -> CGFloat {
+        tiling.row(withId: id)!.minY - scroller.scrollY
     }
 
     /// Text content whose measured height genuinely depends on the width
@@ -340,9 +373,121 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         }
         #expect(tiling.documentHeight > 0)
         // No stray compensation from a reentrant remeasure operating against
-        // the old (pre-reset) tiling geometry: `.reset` doesn't touch
-        // scrollY on its own (followsTail is false here).
-        #expect(scroller.scrollY == 300)
+        // the old (pre-reset) tiling geometry. `.reset` now re-anchors the
+        // offset to the row that was at the viewport top (final-review
+        // CRITICAL 1) — here "r7", which sat at minY 260 with scrollY 300,
+        // i.e. 40pt into the row — and nothing else may move it. In the new
+        // (shorter) geometry that target lands past the document's end, so
+        // the expected value is the anchor clamped to the scrollable range,
+        // exactly what `setScrollY` produces.
+        let anchorRowMinY = tiling.row(withId: "r7")!.minY
+        let expected = min(anchorRowMinY + 40, max(0, tiling.documentHeight - scroller.viewportHeight))
+        #expect(abs(scroller.scrollY - expected) < 0.5)
+    }
+
+    // MARK: reset preserves the scroll anchor (final-review CRITICAL 1)
+
+    /// The real spec shape of the FINAL head step: once `visibleHead` reaches
+    /// 0 the `__top_pagination__` row at index 0 disappears in the very same
+    /// update that inserts the last block of older messages. Ids change at
+    /// both ends at once, so prefix/suffix trimming can't classify it and it
+    /// falls to `.reset` — the one diff case that used to replace all
+    /// geometry while leaving `scrollY` at its old numeric value, jumping the
+    /// transcript at exactly the moment head pagination is supposed to feel
+    /// seamless.
+    private func finalHeadStepSpecs() -> (old: [ACPTranscriptRowSpec], new: [ACPTranscriptRowSpec]) {
+        (
+            old: [spec("__top_pagination__", height: 14)]
+                + (30..<90).map { spec("m\($0)") }
+                + [spec("__composer_spacer__", height: 220)],
+            new: (0..<90).map { spec("m\($0)") }
+                + [spec("__composer_spacer__", height: 220)]
+        )
+    }
+
+    @Test("the final head step is a reset, and the reset keeps the top-visible row visually put")
+    func resetPreservesScrollAnchor() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let (old, new) = finalHeadStepSpecs()
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id)) == .reset
+        )
+
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(800)
+        let anchorId = tiling.topVisibleRowId(viewportMinY: scroller.scrollY)!
+        #expect(!anchorId.hasPrefix("__"))
+        let before = screenOffset(of: anchorId, tiling: tiling, scroller: scroller)
+
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        #expect(tiling.row(withId: anchorId) != nil)
+        #expect(abs(screenOffset(of: anchorId, tiling: tiling, scroller: scroller) - before) < 1)
+    }
+
+    @Test("a reset while following the tail still pins to the bottom rather than restoring an anchor")
+    func resetWhileFollowingTailStillPinsToBottom() {
+        let (reconciler, scroller, _) = makeStack()
+        let (old, new) = finalHeadStepSpecs()
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: true)
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: true)
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
+    @Test("the width-settled reset preserves the scroll anchor")
+    func widthSettledResetPreservesScrollAnchor() async throws {
+        let (reconciler, scroller, tiling) = makeStack()
+        let specs = (0..<200).map { wrappingSpec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(2000)
+
+        // A resize while browsing history: same ids, narrower width. The
+        // coalesced path applies immediately; the expensive full re-measure
+        // lands 150ms later and used to teleport the viewport.
+        reconciler.apply(specs: specs, contentWidth: 300, followsTail: false)
+        let anchorId = tiling.topVisibleRowId(viewportMinY: scroller.scrollY)!
+        let before = screenOffset(of: anchorId, tiling: tiling, scroller: scroller)
+
+        let graceNanoseconds = UInt64(
+            (ACPTranscriptScrollerReconciler.widthChangeSettleInterval + 0.4) * 1_000_000_000
+        )
+        try await Task.sleep(nanoseconds: graceNanoseconds)
+
+        #expect(abs(screenOffset(of: anchorId, tiling: tiling, scroller: scroller) - before) < 1)
+    }
+
+    // MARK: reset does not re-measure rows it already knows (final-review CRITICAL 2)
+
+    @Test("a reset at unchanged width does not rebuild rows whose content is unchanged")
+    func resetReusesKnownHeights() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [countingSpec("__top_pagination__", height: 14, counter: counter)]
+            + (30..<90).map { countingSpec("m\($0)", counter: counter) }
+            + [countingSpec("__composer_spacer__", height: 220, counter: counter)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(800)
+        reconciler.layoutMountedRows()
+
+        // "m89" sits ~10,000pt down a ~7,300pt-tall document's worth of rows
+        // below the viewport: far outside the mount band, so it has no live
+        // hosting view and its measured height is already on record.
+        #expect(!reconciler.mountedRowIdsForTesting.contains("m89"))
+        let offBandBuildsBefore = counter.count("m89")
+        #expect(offBandBuildsBefore == 1)
+
+        let new = (0..<90).map { countingSpec("m\($0)", counter: counter) }
+            + [countingSpec("__composer_spacer__", height: 220, counter: counter)]
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        // The reset must carry "m89"'s known height forward rather than
+        // constructing an NSHostingView for it and measuring it again — the
+        // whole point being that a reset costs O(new rows), not O(window).
+        #expect(counter.count("m89") == offBandBuildsBefore)
+        // ...while genuinely new rows are of course measured.
+        #expect(counter.count("m0") >= 1)
+        #expect(tiling.rowCount == 91)
+        #expect(scroller.contentHeight == tiling.documentHeight)
     }
 
     @Test("a pure width change with identical ids coalesces: bounded interim work, full correction after settling")
@@ -381,5 +526,59 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(tiling.row(withId: "r199")!.height > offBandHeightWide)
         #expect(tiling.rowCount == 200)
         #expect(scroller.contentHeight == tiling.documentHeight)
+    }
+}
+
+@MainActor
+@Suite("ACPTranscriptScrollerReconciler window layout")
+struct ACPTranscriptScrollerReconcilerWindowLayoutTests {
+    /// `ACPTranscriptRowHostingView` sets
+    /// `translatesAutoresizingMaskIntoConstraints = false` (NSHostingView
+    /// boilerplate) while the reconciler places every row by assigning
+    /// `frame` directly. Those two are normally mutually exclusive: a view
+    /// opted into Auto Layout with no constraints describing it is the
+    /// classic "everything collapses to the origin" failure.
+    ///
+    /// This test pins down what actually happens, inside a real key window
+    /// with a real layout pass — the configuration the app runs in — so the
+    /// setting is known-correct rather than known-lucky.
+
+    @Test("rows placed by frame keep their frames through a real window layout pass")
+    func framePlacedRowsSurviveWindowLayout() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        window.contentView = scroller
+        let tiling = ACPTranscriptTilingController()
+        let pool = ACPTranscriptRowHostingPool()
+        let reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
+        scroller.layoutSubtreeIfNeeded()
+
+        let specs = (0..<8).map { index in
+            ACPTranscriptRowSpec(
+                id: "r\(index)",
+                equalityToken: ACPRowEqualityToken(0),
+                build: { AnyView(Color.gray.frame(height: 100)) }
+            )
+        }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+
+        window.layoutIfNeeded()
+        scroller.layoutSubtreeIfNeeded()
+        scroller.flippedDocumentView.displayIfNeeded()
+
+        let placed = scroller.flippedDocumentView.subviews
+        #expect(placed.count == reconciler.mountedRowIdsForTesting.count)
+        #expect(placed.count == 8)
+        for index in 0..<8 {
+            let layout = tiling.rowLayout(at: index)
+            let view = placed.first { $0 === pool.mountedView(id: layout.id) }
+            #expect(view != nil)
+            #expect(view?.frame.minY == layout.minY)
+            #expect(view?.frame.height == layout.height)
+            #expect(view?.frame.width == 600)
+        }
     }
 }
