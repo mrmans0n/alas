@@ -588,36 +588,69 @@ fn dispatch_acp_job(
     responses: &Sender<ServerMessage>,
     queues: &mut HashMap<String, Sender<AcpJob>>,
 ) {
+    // Every spawn below goes through `Builder`, never `thread::spawn`, which
+    // panics when threads run out. A panic here is raised on the serve loop
+    // and takes the helper down — every session, and every fs, watch and
+    // search caller with it. Answering one request with an error is the
+    // smaller failure by a wide margin.
+    fn answer_off_thread(job: AcpJob, responses: &Sender<ServerMessage>) {
+        // Kept back so the caller can still be answered if no thread is
+        // available: a failed spawn drops the closure, and the job with it.
+        let id = job.id.clone();
+        let worker_responses = responses.clone();
+        if std::thread::Builder::new()
+            .spawn(move || {
+                let _ = worker_responses.send(ServerMessage::Response(job.run()));
+            })
+            .is_err()
+        {
+            let _ = responses.send(ServerMessage::Response(error_response(
+                id,
+                -32000,
+                "helper could not start a worker for this request",
+            )));
+        }
+    }
+
     let Some(broker_id) = job.broker_id() else {
-        let responses = responses.clone();
-        std::thread::spawn(move || {
-            let _ = responses.send(ServerMessage::Response(job.run()));
-        });
+        answer_off_thread(job, responses);
         return;
     };
 
-    let queue = queues.entry(broker_id.clone()).or_insert_with(|| {
-        let (sender, receiver) = mpsc::channel::<AcpJob>();
-        let responses = responses.clone();
-        std::thread::spawn(move || {
-            for job in receiver {
-                if responses.send(ServerMessage::Response(job.run())).is_err() {
-                    return;
-                }
+    let queue = match queues.entry(broker_id.clone()) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let (sender, receiver) = mpsc::channel::<AcpJob>();
+            let worker_responses = responses.clone();
+            if std::thread::Builder::new()
+                .spawn(move || {
+                    for job in receiver {
+                        if worker_responses
+                            .send(ServerMessage::Response(job.run()))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                })
+                .is_err()
+            {
+                // No queue means no ordering guarantee, but refusing to answer
+                // is worse: the caller would wait forever on a reply that is
+                // never coming.
+                answer_off_thread(job, responses);
+                return;
             }
-        });
-        sender
-    });
+            entry.insert(sender)
+        }
+    };
 
     // A queue only fails if its thread is gone, which it should not be. Drop
-    // the entry and answer on a fresh thread rather than losing the request:
+    // the entry and answer separately rather than losing the request:
     // ordering is worth less than a reply.
     if let Err(returned) = queue.send(job) {
         queues.remove(&broker_id);
-        let responses = responses.clone();
-        std::thread::spawn(move || {
-            let _ = responses.send(ServerMessage::Response(returned.0.run()));
-        });
+        answer_off_thread(returned.0, responses);
     }
 }
 
