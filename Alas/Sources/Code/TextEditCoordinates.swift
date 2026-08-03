@@ -14,7 +14,9 @@ struct EditorTextEdit: Sendable, Equatable {
 enum TextEditCoordinates {
     struct LineIndex {
         private let starts: [Int]
-        private let textLength: Int
+        private var textLength: Int
+        private var shiftedAfterLine: Int?
+        private var suffixShift = 0
 
         init(_ text: String) {
             let ns = text as NSString
@@ -26,10 +28,21 @@ enum TextEditCoordinates {
             textLength = ns.length
         }
 
+        func adjustingOffsets(after offset: Int, by delta: Int) -> LineIndex? {
+            guard delta != 0 else { return self }
+            guard let line = lspPosition(utf16Offset: offset)?.line,
+                  shiftedAfterLine == nil || shiftedAfterLine == line else { return nil }
+            var adjusted = self
+            adjusted.shiftedAfterLine = line
+            adjusted.suffixShift += delta
+            adjusted.textLength += delta
+            return adjusted
+        }
+
         func utf16Offset(from position: LSPPosition) -> Int? {
             guard starts.indices.contains(position.line), position.character >= 0 else { return nil }
-            let lineEnd = position.line + 1 < starts.count ? starts[position.line + 1] - 1 : textLength
-            let offset = starts[position.line] + position.character
+            let lineEnd = position.line + 1 < starts.count ? lineStart(position.line + 1) - 1 : textLength
+            let offset = lineStart(position.line) + position.character
             return offset <= lineEnd ? offset : nil
         }
 
@@ -39,14 +52,18 @@ enum TextEditCoordinates {
             var upperBound = starts.count
             while lowerBound < upperBound {
                 let middle = (lowerBound + upperBound) / 2
-                if starts[middle] <= target {
+                if lineStart(middle) <= target {
                     lowerBound = middle + 1
                 } else {
                     upperBound = middle
                 }
             }
             let line = lowerBound - 1
-            return LSPPosition(line: line, character: target - starts[line])
+            return LSPPosition(line: line, character: target - lineStart(line))
+        }
+
+        private func lineStart(_ line: Int) -> Int {
+            starts[line] + (shiftedAfterLine.map { line > $0 } == true ? suffixShift : 0)
         }
     }
 

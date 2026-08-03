@@ -28,6 +28,7 @@ final class CompletionFeature {
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
     private var candidateOrigins: [UUID: CompletionPrefix] = [:]
+    private var candidateCoordinateIndex: TextEditCoordinates.LineIndex?
     private var candidateBufferCache: [String: [CompletionCandidate]] = [:]
     private var candidateItems: [LSPCompletionItem] = []
     private var candidateAllowsBufferFallback = false
@@ -88,6 +89,7 @@ final class CompletionFeature {
         prefix = nil
         candidatePrefix = nil
         candidateOrigins.removeAll()
+        candidateCoordinateIndex = nil
         candidateBufferCache.removeAll()
         candidateItems.removeAll()
         candidateAllowsBufferFallback = false
@@ -295,6 +297,7 @@ final class CompletionFeature {
         candidatePool = merged.candidates
         self.prefix = prefix
         candidateOrigins = merged.origins
+        candidateCoordinateIndex = coordinateIndex
         let keepsBroaderResponse = candidatePrefix.map {
             $0.range.location == prefix.range.location && $0.range.length < prefix.range.length
         } ?? false
@@ -523,6 +526,7 @@ final class CompletionFeature {
             prefix = nil
             candidatePrefix = nil
             candidateOrigins.removeAll()
+            candidateCoordinateIndex = nil
             candidateBufferCache.removeAll()
             candidateItems.removeAll()
             candidateAllowsBufferFallback = false
@@ -534,7 +538,10 @@ final class CompletionFeature {
         }
 
         let bufferText = textView.string
-        let coordinateIndex = TextEditCoordinates.LineIndex(bufferText)
+        let prefixDelta = updatedPrefix.range.length - previousPrefix.range.length
+        let coordinateIndex = candidateCoordinateIndex?
+            .adjustingOffsets(after: editRange.location, by: prefixDelta) ?? TextEditCoordinates.LineIndex(bufferText)
+        candidateCoordinateIndex = coordinateIndex
         let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
         let selectedEditPlan = selectedCandidate.flatMap { candidate in
             CompletionEngine.editPlan(
@@ -662,6 +669,7 @@ extension CompletionFeature {
         self.prefix = prefix
         candidatePrefix = prefix
         candidateOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, prefix) })
+        candidateCoordinateIndex = textView.map { TextEditCoordinates.LineIndex($0.string) }
         candidateBufferCache.removeAll()
         candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
