@@ -1103,6 +1103,51 @@ fn a_broker_answers_a_legacy_caller_in_the_legacy_encoding() {
     );
 }
 
+/// A broker must outlive a peer that opens connections faster than they
+/// retire. Every accepted socket owns a thread that can sit for the whole head
+/// timeout, so spawning one per connection without a ceiling exhausts threads
+/// until `spawn` panics and takes the supervisor down — and with it every
+/// session using that broker.
+///
+/// Note what is asserted and what is not. While the connections are held the
+/// broker can legitimately be starved: one that has sent nothing is
+/// indistinguishable from an older helper still encoding its request. The
+/// property that matters is that the stall is survivable and self-healing, not
+/// that service continues throughout.
+#[cfg(unix)]
+#[test]
+fn a_flood_of_idle_connections_does_not_take_the_broker_down() {
+    use std::os::unix::net::UnixStream;
+
+    let fixture = Fixture::new("connection-flood");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-flood", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-flood/broker.sock");
+
+    // The listen backlog refuses connections past ~128, so this saturates
+    // what a peer can hold at once rather than reaching 400.
+    let flood: Vec<UnixStream> = (0..400)
+        .filter_map(|_| UnixStream::connect(&socket).ok())
+        .collect();
+    assert!(
+        flood.len() >= 100,
+        "expected to saturate the broker with connections, got {}",
+        flood.len()
+    );
+    drop(flood);
+
+    // Closing them frees the workers immediately — each read ends on EOF
+    // rather than waiting out its budget — so the broker should serve again
+    // without needing to be restarted.
+    let adopted = helper.request("acp/open", fixture.open_params("broker-flood", 0));
+    assert_eq!(
+        adopted["adopted"], true,
+        "broker did not recover after a flood of connections: {adopted}"
+    );
+}
+
 /// A helper from an earlier build serializes its request *after* connecting,
 /// so it can legitimately say nothing for as long as encoding takes — ~7.4s
 /// for a maximal image prompt. A broker that bounded the first line by total

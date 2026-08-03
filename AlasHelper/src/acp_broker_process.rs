@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -195,10 +196,7 @@ fn broker_lock(broker_id: &str) -> Arc<Mutex<()>> {
     )
 }
 
-fn with_broker_lock<T>(params: Option<&Value>, body: impl FnOnce() -> T) -> T {
-    let broker_id = params
-        .and_then(|params| params.get("brokerId"))
-        .and_then(Value::as_str);
+fn with_broker_lock<T>(broker_id: Option<&str>, body: impl FnOnce() -> T) -> T {
     match broker_id {
         Some(broker_id) => {
             let lock = broker_lock(broker_id);
@@ -215,8 +213,17 @@ pub fn handle_control_request(
     method: &str,
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
-    with_broker_lock(params.as_ref(), || {
-        dispatch_control_request(method, params.clone())
+    // The id is copied out before locking so `params` can be *moved* into the
+    // dispatch below. Borrowing it across the lock instead would force a clone,
+    // and these payloads are the large ones — a maximal image prompt is ~267
+    // MiB, and an `acp/respond` carrying a file read is unbounded.
+    let broker_id = params
+        .as_ref()
+        .and_then(|params| params.get("brokerId"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    with_broker_lock(broker_id.as_deref(), || {
+        dispatch_control_request(method, params)
     })
 }
 
@@ -830,6 +837,14 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
         /// How long to let in-flight handlers finish after a `close`, so the
         /// caller that asked for it still receives its answer.
         const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+        /// Most connections served at once. See the accept loop below.
+        ///
+        /// Set for headroom rather than thrift: a helper serializes its calls
+        /// per broker, so real use is a handful, while thread exhaustion needs
+        /// thousands. Sitting between the two means a flood has to be
+        /// deliberate to be felt, and even then it costs availability rather
+        /// than the process.
+        const MAX_BROKER_CONNECTION_WORKERS: usize = 256;
 
         let socket_path = dir.join("broker.sock");
         let _ = std::fs::remove_file(&socket_path);
@@ -852,8 +867,31 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
             .map_err(|error| broker_error(-32072, format!("socket mode failed: {error}")))?;
         write_restrictive_bytes(&dir.join("ready"), b"1\n")?;
 
-        let inflight = Arc::new(Mutex::new(0usize));
+        let inflight = Arc::new(AtomicUsize::new(0));
         while !runtime_is_closing(&runtime) {
+            // Stop accepting rather than spawning without limit. Every
+            // connection owns a thread that can sit for the whole head
+            // timeout, so a peer opening sockets faster than they retire would
+            // otherwise exhaust threads until `spawn` panics and takes the
+            // supervisor with it. Leaving them in the kernel's backlog is
+            // better than a bespoke rejection: a caller that cannot connect
+            // sees the same refusal it already handles, and one that is merely
+            // queued is served as soon as a worker frees up.
+            //
+            // Worth being clear about what this does and does not buy. A local
+            // peer holding sockets open can still starve this broker for as
+            // long as it keeps them, because a connection that has sent
+            // nothing yet is indistinguishable from an older helper still
+            // encoding its request — that is what the head's idle bound is
+            // for. What the ceiling changes is the consequence: a bounded,
+            // self-healing stall instead of a dead supervisor and every
+            // session on it lost. Fixing the rest means not dedicating a
+            // thread to a connection before it has said anything, which is a
+            // different I/O model than this file uses.
+            if inflight.load(Ordering::Acquire) >= MAX_BROKER_CONNECTION_WORKERS {
+                std::thread::sleep(ACCEPT_POLL);
+                continue;
+            }
             let stream = match listener.accept() {
                 Ok((stream, _)) => stream,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -869,18 +907,26 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
             }
             let request_runtime = runtime.clone();
             let request_inflight = Arc::clone(&inflight);
-            *request_inflight.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-            std::thread::spawn(move || {
-                let _ = handle_connection(request_runtime, stream);
-                *request_inflight.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
-            });
+            request_inflight.fetch_add(1, Ordering::AcqRel);
+            if std::thread::Builder::new()
+                .spawn(move || {
+                    let _ = handle_connection(request_runtime, stream);
+                    request_inflight.fetch_sub(1, Ordering::AcqRel);
+                })
+                .is_err()
+            {
+                // Out of threads despite the ceiling. Drop the connection
+                // rather than propagating: the caller retries, and the
+                // supervisor stays up for the sessions it already has.
+                inflight.fetch_sub(1, Ordering::AcqRel);
+            }
         }
 
         // A `close` handler sets the closing flag before it replies, so the
         // loop can exit while that reply is still being written. Wait for it.
         let deadline = std::time::Instant::now() + DRAIN_TIMEOUT;
         while std::time::Instant::now() < deadline {
-            if *inflight.lock().unwrap_or_else(|e| e.into_inner()) == 0 {
+            if inflight.load(Ordering::Acquire) == 0 {
                 break;
             }
             std::thread::sleep(ACCEPT_POLL);
