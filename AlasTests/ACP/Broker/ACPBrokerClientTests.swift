@@ -336,6 +336,31 @@ struct ACPBrokerClientTests {
         #expect(await service.closed.isEmpty)
     }
 
+    /// An adapter that asked for something must be answered even when the
+    /// answer cannot be delivered.
+    ///
+    /// The payload for `fs/read_text_file` is a whole file, so delivery can
+    /// fail on size where nothing else would. Dropping that failure — which is
+    /// what this used to do — leaves the adapter waiting on a request that will
+    /// never be answered and the turn stalled with no sign of why. Every
+    /// objection raised against bounding the broker's memory rested on this
+    /// clause, so it is the part worth pinning.
+    @Test func undeliverableFileResponseIsReportedToTheAdapter() async throws {
+        let service = MockBrokerService()
+        let client = makeClient(service: service)
+        try await client.start()
+        await service.failNextResponds(1)
+
+        client.respondToFileRequest(id: .number(42), result: .success(Data("{}".utf8)))
+
+        // Two: the attempt that failed, and the error sent in its place.
+        try await waitUntil { await service.responded.count == 2 }
+        let fallback = try await #require(service.responded.last)
+        #expect(fallback.requestId == .number(42))
+        #expect(fallback.result == nil)
+        #expect(fallback.error != nil, "the adapter must be told, not left waiting")
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -1472,6 +1497,10 @@ private final class SyncTurnStateRecorder: @unchecked Sendable {
     }
 }
 
+private enum MockBrokerFailure: Error {
+    case rejected
+}
+
 private actor MockBrokerService: ACPBrokerServicing {
     var opened: [ACPBrokerOpenParams] = []
     var attached: [ACPBrokerAttachParams] = []
@@ -1486,6 +1515,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
     var openAdopted = false
+    private var respondFailuresRemaining = 0
 
     func enqueueAttach(
         events: [ACPBrokerEvent],
@@ -1580,8 +1610,16 @@ private actor MockBrokerService: ACPBrokerServicing {
         return ACPBrokerSimpleOK(ok: true)
     }
 
+    func failNextResponds(_ count: Int) {
+        respondFailuresRemaining = count
+    }
+
     func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
         responded.append(params)
+        if respondFailuresRemaining > 0 {
+            respondFailuresRemaining -= 1
+            throw MockBrokerFailure.rejected
+        }
         return ACPBrokerSimpleOK(ok: true)
     }
 
