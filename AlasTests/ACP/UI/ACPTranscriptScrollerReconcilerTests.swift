@@ -425,6 +425,60 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(screenOffset(of: anchorId, tiling: tiling, scroller: scroller) - before) < 1)
     }
 
+    @Test("the reset anchor skips the synthetic row that the reset itself deletes")
+    func resetAnchorSkipsSyntheticRows() {
+        // The head pagination spinner occupies row 0 (minY 24, maxY 38), so
+        // any scrollY < 38 makes it the topmost VISIBLE row — and that
+        // position, the top-of-history bounce, is precisely what triggers
+        // the final head step, which deletes that very row. Anchoring to it
+        // means restoration finds nothing to aim at and silently no-ops,
+        // leaving the original hard jump exactly where it was reported.
+        let (reconciler, scroller, tiling) = makeStack()
+        let (old, new) = finalHeadStepSpecs()
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(30)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "__top_pagination__")
+        // The anchor row starts BELOW the scroll position here, so its
+        // offset within the row is negative — which must still restore
+        // exactly, not be floored to zero.
+        #expect(tiling.row(withId: "m30")!.minY > scroller.scrollY)
+        let before = screenOffset(of: "m30", tiling: tiling, scroller: scroller)
+
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        #expect(abs(screenOffset(of: "m30", tiling: tiling, scroller: scroller) - before) < 1)
+    }
+
+    @Test("the restored anchor offset is capped at the anchor row's new height")
+    func resetClampsAnchorOffsetToRowHeight() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0", token: 0, height: 1000)]
+            + (1..<6).map { spec("m\($0)") }
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        #expect(tiling.row(withId: "m0")!.minY == 56)
+        scroller.setScrollY(600)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "m0")
+
+        // Ids change at both ends at once (the head sentinel replaced by a
+        // real row) so this is a `.reset`, and the anchor row itself
+        // collapses from 1000pt to 100pt in the same update.
+        let new = [spec("mA"), spec("m0", token: 1, height: 100)]
+            + (1..<6).map { spec("m\($0)") }
+            + [spec("__composer_spacer__", height: 220)]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id)) == .reset
+        )
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "m0")!
+        #expect(row.height == 100)
+        // The offset within the row was 544pt; unclamped it would land far
+        // past a row that is now only 100pt tall. The viewport top can be at
+        // most the anchor row's bottom edge.
+        #expect(abs(scroller.scrollY - row.maxY) < 0.5)
+    }
+
     @Test("a reset while following the tail still pins to the bottom rather than restoring an anchor")
     func resetWhileFollowingTailStillPinsToBottom() {
         let (reconciler, scroller, _) = makeStack()
@@ -488,6 +542,41 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(counter.count("m0") >= 1)
         #expect(tiling.rowCount == 91)
         #expect(scroller.contentHeight == tiling.documentHeight)
+    }
+
+    @Test("an id-change reset inside the settle window does not cancel the pending width settle")
+    func idChangeResetDoesNotCancelPendingWidthSettle() async throws {
+        let (reconciler, scroller, tiling) = makeStack()
+        let rows = (0..<200).map { wrappingSpec("r\($0)") }
+        reconciler.apply(specs: rows, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        let offBandHeightWide = tiling.row(withId: "r199")!.height
+
+        // A resize: same ids, so this coalesces and schedules the settle
+        // reset rather than re-measuring everything now.
+        reconciler.apply(specs: rows, contentWidth: 300, followsTail: false)
+
+        // An id change now lands at the width that has ALREADY been applied,
+        // so `widthChanged` is false. It is a `.reset`, but not a substitute
+        // for the settle reset: every off-band height it carries forward was
+        // measured at 600. Cancelling the pending settle here would strand
+        // them there permanently.
+        let reshuffled = [wrappingSpec("head")] + rows + [wrappingSpec("tail")]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(
+                oldIds: rows.map(\.id), newIds: reshuffled.map(\.id)
+            ) == .reset
+        )
+        reconciler.apply(specs: reshuffled, contentWidth: 300, followsTail: false)
+        #expect(tiling.row(withId: "r199")!.height == offBandHeightWide)
+
+        let graceNanoseconds = UInt64(
+            (ACPTranscriptScrollerReconciler.widthChangeSettleInterval + 0.4) * 1_000_000_000
+        )
+        try await Task.sleep(nanoseconds: graceNanoseconds)
+
+        // The settle reset still fires and corrects the off-band rows.
+        #expect(tiling.row(withId: "r199")!.height > offBandHeightWide)
     }
 
     // MARK: mount-time fallback re-measure (final-review IMPORTANT 3)

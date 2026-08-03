@@ -47,10 +47,9 @@ final class ACPTranscriptScrollerReconciler {
     /// the tiling controller are mid-mutation (most sharply during a
     /// `.reset`, where `resetHeights` measures re-used ids while `specsById`
     /// still holds their OLD specs and `tiling` still holds the OLD
-    /// geometry). Every
-    /// measurement `apply()` needs is already performed directly by its own
-    /// code paths, so ignoring the reentrant signal during this window loses
-    /// nothing.
+    /// geometry). Every measurement `apply()` needs is already performed
+    /// directly by its own code paths, so ignoring the reentrant signal
+    /// during this window loses nothing.
     ///
     /// Exposed read-only so `ACPTranscriptScroller.Coordinator`'s `onScroll`
     /// callback can skip its own `layoutMountedRows()` call while `apply()`
@@ -175,9 +174,16 @@ final class ACPTranscriptScrollerReconciler {
             widthSettleTimer.poke()
         } else {
             let change: Diff = widthChanged ? .reset : idDiff
-            if change == .reset {
-                // We're about to do the full remeasure ourselves; any
-                // earlier pending width-settle reset is now redundant.
+            if change == .reset, widthChanged {
+                // A reset AT A NEW WIDTH re-measures everything against that
+                // width, so any earlier pending width-settle reset is now
+                // redundant. An id-change reset at the SAME width is not a
+                // substitute: `canReuseMeasuredHeight` carries every off-band
+                // height forward untouched, and those were measured at the
+                // pre-resize width. Cancelling here would silently drop the
+                // "off-band rows are correct once the resize settles"
+                // guarantee for any reset that happens to land inside the
+                // settle window.
                 widthSettleTimer.cancel()
             }
             applyDiff(change, specs: specs, widthChanged: widthChanged, followsTail: followsTail)
@@ -263,20 +269,49 @@ final class ACPTranscriptScrollerReconciler {
         let offsetWithinRow: CGFloat
     }
 
+    /// Anchors to the first NON-synthetic row at or below the viewport top,
+    /// not simply to the topmost visible row.
+    ///
+    /// Synthetic rows are exactly the ones a reset is most likely to delete,
+    /// and the worst case is the one that matters most: the head pagination
+    /// spinner occupies row 0 (`minY 24`, `maxY 38`), so any `scrollY < 38`
+    /// — the top-of-history bounce, i.e. precisely the gesture that CAUSES
+    /// the final head step — would otherwise capture `__top_pagination__`
+    /// as the anchor. That is the very row the final head step removes, so
+    /// restoration would find nothing to aim at, silently no-op, and leave
+    /// the original hard jump intact at exactly the position it was fixed
+    /// for.
+    ///
+    /// `offsetWithinRow` is deliberately allowed to be negative: the chosen
+    /// row may start below the current scroll position (the spinner is on
+    /// screen and the first message begins under it). Restoration
+    /// reproduces the same relationship either way, so a negative offset is
+    /// exact rather than approximate.
     private func captureScrollAnchor() -> ScrollAnchor? {
-        guard let id = tiling.topVisibleRowId(viewportMinY: scroller.scrollY),
-              let row = tiling.row(withId: id)
-        else { return nil }
-        return ScrollAnchor(id: id, offsetWithinRow: scroller.scrollY - row.minY)
+        let viewportMinY = scroller.scrollY
+        guard var index = tiling.firstRowIndex(intersectingY: viewportMinY) else { return nil }
+        while index < tiling.rowCount, tiling.rowId(at: index).hasPrefix(Self.syntheticIdPrefix) {
+            index += 1
+        }
+        guard index < tiling.rowCount else { return nil }
+        let row = tiling.rowLayout(at: index)
+        return ScrollAnchor(id: row.id, offsetWithinRow: viewportMinY - row.minY)
     }
 
     /// Puts the anchored row back where it was on screen. A nil anchor, or
     /// one whose row no longer exists in the new geometry, leaves the offset
     /// alone — there is nothing better to aim at, and `setScrollY`'s clamp
     /// still keeps it inside the new document.
+    ///
+    /// The offset is capped at the anchor row's NEW height: a row that
+    /// shrank across the reset (a tall tool-output row collapsing, say)
+    /// would otherwise place the viewport top past its own end by
+    /// `oldHeight - newHeight`. The viewport top can be at most the anchor
+    /// row's bottom edge. No lower cap — see `captureScrollAnchor` on why
+    /// negative offsets are legitimate.
     private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
         guard let anchor, let row = tiling.row(withId: anchor.id) else { return }
-        scroller.setScrollY(row.minY + anchor.offsetWithinRow)
+        scroller.setScrollY(row.minY + min(anchor.offsetWithinRow, row.height))
     }
 
     /// Heights for a wholesale geometry replacement. Rows whose recorded
