@@ -893,6 +893,7 @@ final class MissionController {
             guard let self else { return }
             do {
                 guard var aggregate = try await persistence.aggregate(id: id) else { return }
+                guard aggregate.mission.state != .completed else { return }
                 guard let targetLegID = legID ?? aggregate.primaryLeg?.id else { return }
                 let setupWasCreating = aggregate.legs.first(where: { $0.id == targetLegID })?.state == .creating
                 if setupWasCreating {

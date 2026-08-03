@@ -138,6 +138,20 @@ struct AppStatePersistenceTests {
         #expect(remote.remoteName == "team/origin")
     }
 
+    @Test func missionDiscoveryRemoteUsesTheTargetProjectRepository() throws {
+        let remote = try #require(AppState.missionDiscoveryRemote(
+            baseRef: "origin/main",
+            remotes: [
+                GitRemote(name: "origin", url: "git@github.com:acme/sdk.git"),
+                GitRemote(name: "issue", url: "git@github.com:acme/alas.git"),
+            ],
+            supportedKinds: [.github, .gitlab]
+        ))
+
+        #expect(remote.remoteName == "origin")
+        #expect(remote.repositorySlug == "acme/sdk")
+    }
+
     @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
         let current = try #require(CodeHostRemoteDetector.detect(
             from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],
@@ -231,7 +245,14 @@ struct AppStatePersistenceTests {
         fixture.state.reloadTabs()
 
         #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
-        #expect(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).isEmpty)
+        let orphanedTabs = fixture.state.tabs.tabs(forWorktree: fixture.worktree.id)
+        #expect(orphanedTabs.count == 1)
+        if let first = orphanedTabs.first, case .terminal = first {
+            // The migration scans the unavailable worktree's persisted file,
+            // extracts only its Mission tab, and preserves ordinary tabs.
+        } else {
+            Issue.record("Expected the orphaned terminal tab to survive Mission migration")
+        }
     }
 
     @Test func migratedMissionTabRemainsGlobalAcrossAnSDKOnlySpace() async throws {
@@ -421,6 +442,26 @@ struct AppStatePersistenceTests {
             baseRef: "origin/main",
             branchRemoteName: "",
             remotes: remotes
+        )
+
+        #expect(owner == "acme")
+    }
+
+    @Test func missionBranchOwnerUsesTheTargetProjectsProvider() {
+        let sharedIssue = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [GitRemote(name: "origin", url: "git@gitlab.com:acme/sdk.git")]
+
+        let owner = AppState.missionBranchOwner(
+            identity: sharedIssue,
+            baseRef: "origin/main",
+            branchRemoteName: "origin",
+            remotes: remotes,
+            supportedKinds: [.github, .gitlab]
         )
 
         #expect(owner == "acme")

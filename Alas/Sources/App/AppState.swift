@@ -1239,7 +1239,7 @@ final class AppState {
 
     private func discoverMissionReview(
         projectID: String,
-        issueIdentity: MissionIssueIdentity,
+        issueIdentity _: MissionIssueIdentity,
         branch: String,
         baseRef: String,
         headSHA: String,
@@ -1250,12 +1250,13 @@ final class AppState {
         let cwd = URL(fileURLWithPath: project.path)
         do {
             let remotes = try await GitService().remotes(worktreePath: cwd)
-            guard let remote = Self.missionReviewRemote(
-                identity: issueIdentity,
+            let registry = CodeHostProviderRegistry.live()
+            guard let remote = Self.missionDiscoveryRemote(
                 baseRef: baseRef,
-                remotes: remotes
+                remotes: remotes,
+                supportedKinds: registry.supportedKinds
             ),
-                let provider = CodeHostProviderRegistry.live().provider(for: issueIdentity.provider),
+                let provider = registry.provider(for: remote.kind),
                 await provider.isAvailable(cwd: cwd),
                 await provider.isAuthenticated(remote: remote, cwd: cwd)
             else { return nil }
@@ -1272,6 +1273,26 @@ final class AppState {
         } catch {
             return nil
         }
+    }
+
+    static func missionDiscoveryRemote(
+        baseRef: String,
+        remotes: [GitRemote],
+        supportedKinds: Set<CodeHostKind>
+    ) -> CodeHostRemote? {
+        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+            forBaseBranch: baseRef,
+            remotes: remotes
+        )
+        let candidates = CodeHostRemoteDetector.detectAll(
+            from: remotes,
+            supportedKinds: supportedKinds,
+            preferredRemoteName: preferredRemoteName
+        )
+        return candidates
+            .filter { baseRef.hasPrefix("\($0.remoteName)/") }
+            .max { $0.remoteName.count < $1.remoteName.count }
+            ?? candidates.first
     }
 
     static func missionReviewRemote(
@@ -1354,7 +1375,8 @@ final class AppState {
             baseRef: baseRef,
             branchRemoteName: branchRemoteName,
             pushRemoteName: pushRemoteName,
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: CodeHostProviderRegistry.live().supportedKinds
         )
     }
 
@@ -1373,7 +1395,8 @@ final class AppState {
         baseRef: String,
         branchRemoteName: String,
         pushRemoteName: String = "",
-        remotes: [GitRemote]
+        remotes: [GitRemote],
+        supportedKinds: Set<CodeHostKind>? = nil
     ) -> String? {
         let effectiveRemoteName = effectiveMissionPushRemote(
             branchPushRemoteName: pushRemoteName,
@@ -1391,18 +1414,32 @@ final class AppState {
             branchRemotes = namedBranchRemotes.filter { $0.direction == .push }
                 + namedBranchRemotes.filter { $0.direction == .fetch }
         }
-        let branchRemote = branchRemotes
-            .compactMap { remote in
+        let branchRemote: CodeHostRemote? = if let supportedKinds {
+            branchRemotes.lazy.compactMap { remote in
+                CodeHostRemoteDetector.detectAll(
+                    from: [GitRemote(name: remote.name, url: remote.url)],
+                    supportedKinds: supportedKinds
+                ).first
+            }.first
+        } else {
+            branchRemotes.lazy.compactMap { remote in
                 CodeHostRemoteDetector.detect(
                     from: [GitRemote(name: remote.name, url: remote.url)],
                     matching: identity.provider
                 )
-            }
-            .first { candidate in
+            }.first { candidate in
                 candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
             }
-        return branchRemote?.owner
-            ?? missionReviewRemote(identity: identity, baseRef: baseRef, remotes: remotes)?.owner
+        }
+        if let branchRemote { return branchRemote.owner }
+        if let supportedKinds {
+            return missionDiscoveryRemote(
+                baseRef: baseRef,
+                remotes: remotes,
+                supportedKinds: supportedKinds
+            )?.owner
+        }
+        return missionReviewRemote(identity: identity, baseRef: baseRef, remotes: remotes)?.owner
     }
 
     func reconcileDeletedMissionWorktree(_ worktreeID: String) async {
@@ -4672,6 +4709,27 @@ final class AppState {
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+    }
+
+    func closeCenterTabs(worktreeId: String, tabIds: [TabID]) {
+        let ids = Set(tabIds)
+        guard !ids.isEmpty else { return }
+        for id in stateGlobalTabIDs().intersection(ids) {
+            globalTabs.close(tabId: id)
+        }
+
+        let allTabs = tabs.tabs(forWorktree: worktreeId)
+        let closed = allTabs.map(\.id).filter(ids.contains)
+        for id in closed {
+            tabs.close(worktreeId: worktreeId, tabId: id)
+        }
+        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
+        cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+    }
+
+    private func stateGlobalTabIDs() -> Set<TabID> {
+        Set(globalTabs.tabs.map(\.id))
     }
 
     /// Tear down every tab/terminal/harness reference for a worktree id without

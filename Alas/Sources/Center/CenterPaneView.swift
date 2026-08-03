@@ -19,6 +19,28 @@ struct CenterTabComposition {
     }
 }
 
+struct CenterTabClosurePlan {
+    let orderedTabIDs: [TabID]
+
+    func others(keeping tabID: TabID) -> [TabID] {
+        orderedTabIDs.filter { $0 != tabID }
+    }
+
+    func all() -> [TabID] {
+        orderedTabIDs
+    }
+
+    func left(of tabID: TabID) -> [TabID] {
+        guard let index = orderedTabIDs.firstIndex(of: tabID) else { return [] }
+        return Array(orderedTabIDs[..<index])
+    }
+
+    func right(of tabID: TabID) -> [TabID] {
+        guard let index = orderedTabIDs.firstIndex(of: tabID) else { return [] }
+        return Array(orderedTabIDs[orderedTabIDs.index(after: index)...])
+    }
+}
+
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
@@ -36,6 +58,7 @@ struct CenterPaneView: View {
                 activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
             )
             let tabs = composition.tabs
+            let closurePlan = CenterTabClosurePlan(orderedTabIDs: tabs.map(\.id))
             TabBarView(
                 tabs: tabs,
                 activeId: composition.activeId,
@@ -74,10 +97,18 @@ struct CenterPaneView: View {
                         state.requestCloseTab(worktreeId: worktree.id, tabId: id)
                     }
                 },
-                onCloseOthers: { id in state.closeOtherTabs(worktreeId: worktree.id, keeping: id) },
-                onCloseAll: { state.closeAllTabs(worktreeId: worktree.id) },
-                onCloseToLeft: { id in state.closeTabsToLeft(worktreeId: worktree.id, of: id) },
-                onCloseToRight: { id in state.closeTabsToRight(worktreeId: worktree.id, of: id) },
+                onCloseOthers: { id in
+                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.others(keeping: id))
+                },
+                onCloseAll: {
+                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.all())
+                },
+                onCloseToLeft: { id in
+                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.left(of: id))
+                },
+                onCloseToRight: { id in
+                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.right(of: id))
+                },
                 onCopyPath: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           let rel = tab.relativeFilePath else { return }

@@ -24,6 +24,25 @@ struct CenterSelectionStateResolverTests {
         #expect(composition.activeId == mission.id)
     }
 
+    @Test func bulkClosurePlanUsesTheComposedTabOrder() {
+        let firstMission = MissionTabState.fixture
+        let secondMission = MissionTabState(
+            missionID: MissionID(rawValue: "mission-2"),
+            title: "Second Mission"
+        )
+        let terminalID = "terminal-1"
+        let plan = CenterTabClosurePlan(orderedTabIDs: [
+            firstMission.id,
+            secondMission.id,
+            terminalID,
+        ])
+
+        #expect(plan.others(keeping: secondMission.id) == [firstMission.id, terminalID])
+        #expect(plan.all() == [firstMission.id, secondMission.id, terminalID])
+        #expect(plan.left(of: terminalID) == [firstMission.id, secondMission.id])
+        #expect(plan.right(of: firstMission.id) == [secondMission.id, terminalID])
+    }
+
     @Test func emptyWhenNoSelection() {
         let mgr = ProjectsManager(persistedProjects: [])
         let resolver = CenterSelectionStateResolver(

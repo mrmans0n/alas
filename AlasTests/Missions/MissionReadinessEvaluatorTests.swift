@@ -1740,6 +1740,18 @@ struct MissionReadinessEvaluatorTests {
         #expect(fake.externalOperations.isEmpty)
     }
 
+    @Test func readinessSignalsDoNotMutateACompletedMission() async throws {
+        let fake = try MissionLifecycleFake(worktreeAvailable: false)
+        await fake.controller.load()
+        await fake.controller.complete(Self.missionID)
+        let completed = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        await fake.controller.recordMissingWorktree(Self.missionID)
+        let unchanged = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(unchanged == completed)
+    }
+
     @Test func completionPreservesOriginalLineageWhenOnlyAReplacementExists() async throws {
         var missing = Self.runningAggregate()
         missing.markPrimaryLegNeedsAttention(
