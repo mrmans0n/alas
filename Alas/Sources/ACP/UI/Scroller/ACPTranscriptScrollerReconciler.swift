@@ -262,11 +262,12 @@ final class ACPTranscriptScrollerReconciler {
         restoreScrollAnchor(anchor)
     }
 
-    /// The scroll offset expressed relative to a row rather than to the
-    /// document, so it survives a wholesale geometry replacement.
-    private struct ScrollAnchor {
-        let id: String
-        let offsetWithinRow: CGFloat
+    /// The scroll offset expressed relative to a row (so it survives a
+    /// wholesale geometry replacement), or — for the synthetic tail region,
+    /// where no such row exists — relative to the document's bottom edge.
+    private enum ScrollAnchor {
+        case row(id: String, offsetWithinRow: CGFloat)
+        case bottomRelative(distance: CGFloat)
     }
 
     /// Anchors to the first NON-synthetic row at or below the viewport top,
@@ -287,31 +288,67 @@ final class ACPTranscriptScrollerReconciler {
     /// screen and the first message begins under it). Restoration
     /// reproduces the same relationship either way, so a negative offset is
     /// exact rather than approximate.
+    ///
+    /// The forward walk can run off the end of the document without ever
+    /// finding a non-synthetic row: when the viewport top is already inside
+    /// the synthetic TAIL region (a queued prompt, the context-recovery row,
+    /// the composer spacer — everything after the last message row), every
+    /// remaining row is synthetic too. Falling back to `nil` there (as this
+    /// used to) skips restoration entirely, so a width-settled reset that
+    /// reflows message heights ABOVE the viewport moves the synthetic
+    /// content the user was looking at even though nothing at or below the
+    /// viewport itself changed. Anchor to the distance from the document's
+    /// bottom edge instead: a reset always re-measures the SAME spec list
+    /// (`performReset` never adds or removes rows — only `resetHeights`
+    /// dimensions change), so nothing in this window can move the document's
+    /// end for reasons other than the very reflow being compensated for,
+    /// which makes a bottom-relative anchor exact here — and, unlike
+    /// anchoring to the nearest preceding message row, it reproduces the
+    /// user's actual depth into the tail rather than snapping to the top of
+    /// it. (A preceding-message anchor was considered — it reuses the `.row`
+    /// case outright — but `offsetWithinRow` for a row the viewport has
+    /// scrolled past is always at or beyond that row's height, so restoring
+    /// through it would always land on the clamp in `restoreScrollAnchor`
+    /// below, i.e. the top of the tail, not the user's actual position
+    /// within it.)
     private func captureScrollAnchor() -> ScrollAnchor? {
         let viewportMinY = scroller.scrollY
         guard var index = tiling.firstRowIndex(intersectingY: viewportMinY) else { return nil }
         while index < tiling.rowCount, tiling.rowId(at: index).hasPrefix(Self.syntheticIdPrefix) {
             index += 1
         }
-        guard index < tiling.rowCount else { return nil }
+        guard index < tiling.rowCount else {
+            return .bottomRelative(distance: scroller.distanceFromBottom)
+        }
         let row = tiling.rowLayout(at: index)
-        return ScrollAnchor(id: row.id, offsetWithinRow: viewportMinY - row.minY)
+        return .row(id: row.id, offsetWithinRow: viewportMinY - row.minY)
     }
 
-    /// Puts the anchored row back where it was on screen. A nil anchor, or
-    /// one whose row no longer exists in the new geometry, leaves the offset
-    /// alone — there is nothing better to aim at, and `setScrollY`'s clamp
-    /// still keeps it inside the new document.
+    /// Puts the anchored position back where it was on screen. A nil
+    /// anchor, or a `.row` anchor whose row no longer exists in the new
+    /// geometry, leaves the offset alone — there is nothing better to aim
+    /// at, and `setScrollY`'s clamp still keeps it inside the new document.
     ///
-    /// The offset is capped at the anchor row's NEW height: a row that
-    /// shrank across the reset (a tall tool-output row collapsing, say)
-    /// would otherwise place the viewport top past its own end by
+    /// For `.row`, the offset is capped at the anchor row's NEW height: a
+    /// row that shrank across the reset (a tall tool-output row collapsing,
+    /// say) would otherwise place the viewport top past its own end by
     /// `oldHeight - newHeight`. The viewport top can be at most the anchor
     /// row's bottom edge. No lower cap — see `captureScrollAnchor` on why
     /// negative offsets are legitimate.
+    ///
+    /// For `.bottomRelative`, `setScrollY` re-derives the offset from the
+    /// NEW `documentHeight` (already installed by the caller before this
+    /// runs) and the captured distance, reproducing the same visual gap
+    /// from the bottom edge.
     private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
-        guard let anchor, let row = tiling.row(withId: anchor.id) else { return }
-        scroller.setScrollY(row.minY + min(anchor.offsetWithinRow, row.height))
+        guard let anchor else { return }
+        switch anchor {
+        case .row(let id, let offsetWithinRow):
+            guard let row = tiling.row(withId: id) else { return }
+            scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
+        case .bottomRelative(let distance):
+            scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)
+        }
     }
 
     /// Heights for a wholesale geometry replacement. Rows whose recorded

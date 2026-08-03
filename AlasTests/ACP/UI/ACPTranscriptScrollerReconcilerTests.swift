@@ -510,6 +510,56 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(screenOffset(of: anchorId, tiling: tiling, scroller: scroller) - before) < 1)
     }
 
+    @Test("a width-settled reset preserves the viewport position when its top sits inside the synthetic tail region")
+    func widthSettledResetPreservesPositionInSyntheticTailRegion() async throws {
+        // The forward-only anchor walk in `captureScrollAnchor` finds the
+        // first NON-synthetic row at or below the viewport top. When the
+        // viewport top is already past every message row — parked over a
+        // queued bubble, say — there is no following message row to walk
+        // to, and the old behavior returned nil, silently skipping
+        // restoration. A width-settled reset still reflows the wrapping
+        // message rows ABOVE the viewport, which must not visibly drag the
+        // synthetic tail content the user is looking at.
+        let (reconciler, scroller, tiling) = makeStack()
+        // The composer spacer is made much taller than its real ~220pt so
+        // the tail region below "__queue_2__" comfortably exceeds the
+        // 400pt viewport height — otherwise `setScrollY`'s clamp (which
+        // never lets the viewport scroll past the document's end) would
+        // pull the requested offset back up onto a message row, defeating
+        // the point of parking the viewport inside the synthetic tail.
+        let specs = (0..<50).map { wrappingSpec("m\($0)") }
+            + [
+                spec("__queue_1__", height: 50), spec("__queue_2__", height: 50),
+                spec("__composer_spacer__", height: 600),
+            ]
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        let m0HeightBefore = tiling.row(withId: "m0")!.height
+
+        // Park the viewport top inside the synthetic tail region: every row
+        // from here through the document end is synthetic.
+        let queueRowMinY = tiling.row(withId: "__queue_2__")!.minY
+        scroller.setScrollY(queueRowMinY + 10)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "__queue_2__")
+        let distanceBefore = scroller.distanceFromBottom
+
+        // A resize while browsing the synthetic tail: same ids, narrower
+        // width. The coalesced path applies immediately; the full
+        // re-measure lands 150ms later.
+        reconciler.apply(specs: specs, contentWidth: 300, followsTail: false)
+
+        let graceNanoseconds = UInt64(
+            (ACPTranscriptScrollerReconciler.widthChangeSettleInterval + 0.4) * 1_000_000_000
+        )
+        try await Task.sleep(nanoseconds: graceNanoseconds)
+
+        // The message rows above genuinely reflowed (proves the assertion
+        // below isn't vacuously true), and the viewport's distance from the
+        // document's bottom edge — the synthetic tail's natural reference
+        // point — is unchanged.
+        #expect(tiling.row(withId: "m0")!.height != m0HeightBefore)
+        #expect(abs(scroller.distanceFromBottom - distanceBefore) < 1)
+    }
+
     // MARK: reset does not re-measure rows it already knows (final-review CRITICAL 2)
 
     @Test("a reset at unchanged width does not rebuild rows whose content is unchanged")
