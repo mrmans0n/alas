@@ -15,6 +15,18 @@ struct AdvancedPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
+                SettingsGroup(title: "Experiments") {
+                    SettingsRow(
+                        name: "AppKit transcript scroller",
+                        desc: "Replaces the transcript's scrolling implementation with an AppKit-backed scroller, keeping pagination through long chat history jump-free. Toggling this re-creates the transcript view, so the scroll position in any open chats is lost."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { ACPTranscriptScrollerFlag.isEnabled },
+                            set: { ACPTranscriptScrollerFlag.setOverride($0) }
+                        ))
+                    }
+                }
+
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(
                         name: "Clear all projects",

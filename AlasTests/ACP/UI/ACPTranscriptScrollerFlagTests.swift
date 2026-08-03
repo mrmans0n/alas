@@ -82,3 +82,83 @@ struct ACPTranscriptScrollerFlagUserDefaultsTests {
         #expect(result3 == true)
     }
 }
+
+/// The exact contract the Debug settings toggle relies on: what it should
+/// display given whatever is (or isn't) currently stored. This is `resolve`
+/// itself — the toggle must never diverge from the semantics that govern the
+/// transcript — spelled out as its own cases so a future change to `resolve`
+/// that silently breaks the settings toggle fails here too.
+@Suite("ACPTranscriptScrollerFlag settings toggle display value")
+struct ACPTranscriptScrollerFlagToggleDisplayTests {
+    @Test("unset in a DEBUG build displays on")
+    func unsetInDebugDisplaysOn() {
+        #expect(ACPTranscriptScrollerFlag.resolve(override: nil, isDebugBuild: true) == true)
+    }
+
+    @Test("unset in a release build displays off")
+    func unsetInReleaseDisplaysOff() {
+        #expect(ACPTranscriptScrollerFlag.resolve(override: nil, isDebugBuild: false) == false)
+    }
+
+    @Test("explicit true displays on, including in a release build")
+    func explicitTrueDisplaysOn() {
+        #expect(ACPTranscriptScrollerFlag.resolve(override: true, isDebugBuild: false) == true)
+    }
+
+    @Test("explicit false displays off, including in a DEBUG build")
+    func explicitFalseDisplaysOff() {
+        #expect(ACPTranscriptScrollerFlag.resolve(override: false, isDebugBuild: true) == false)
+    }
+}
+
+@Suite("ACPTranscriptScrollerFlag setOverride")
+struct ACPTranscriptScrollerFlagSetOverrideTests {
+    @Test("writing true persists an explicit true override")
+    func writesTrue() throws {
+        let suiteName = "ACPTranscriptScrollerFlagTest-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        ACPTranscriptScrollerFlag.setOverride(true, in: defaults, notificationCenter: NotificationCenter())
+        #expect(ACPTranscriptScrollerFlag.readOverride(from: defaults) == true)
+        #expect(ACPTranscriptScrollerFlag.isEnabledWithDefaults(defaults) == true)
+    }
+
+    @Test("writing false persists an explicit false override, even in a DEBUG build")
+    func writesFalse() throws {
+        let suiteName = "ACPTranscriptScrollerFlagTest-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        ACPTranscriptScrollerFlag.setOverride(false, in: defaults, notificationCenter: NotificationCenter())
+        #expect(ACPTranscriptScrollerFlag.readOverride(from: defaults) == false)
+        #expect(ACPTranscriptScrollerFlag.isEnabledWithDefaults(defaults) == false)
+    }
+
+    @Test("posts overrideDidChangeNotification so open transcripts can re-evaluate isEnabled")
+    func postsChangeNotification() async throws {
+        let suiteName = "ACPTranscriptScrollerFlagTest-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let center = NotificationCenter()
+
+        await confirmation { didReceive in
+            let observer = center.addObserver(
+                forName: ACPTranscriptScrollerFlag.overrideDidChangeNotification,
+                object: nil,
+                queue: nil
+            ) { _ in
+                didReceive()
+            }
+            defer { center.removeObserver(observer) }
+
+            ACPTranscriptScrollerFlag.setOverride(true, in: defaults, notificationCenter: center)
+        }
+    }
+}

@@ -35,6 +35,16 @@ struct ACPMessageList: View {
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     @Environment(\.theme) private var theme
+    // Cached rather than read fresh from `ACPTranscriptScrollerFlag.isEnabled`
+    // on every body evaluation (which happens per streamed chunk) so that a
+    // flag flip is the ONLY thing that changes it. `.id(scrollerFlagState)`
+    // below then forces SwiftUI to tear down and rebuild the whole transcript
+    // subtree when it changes — switching between the AppKit scroller and the
+    // legacy ScrollView mid-flight, sharing this view's scroll bookkeeping
+    // `@State`, is not something either implementation is designed to
+    // tolerate, so a full identity change (losing scroll position, as
+    // documented in the settings row) is the deliberate, safe behavior.
+    @State private var scrollerFlagState = ACPTranscriptScrollerFlag.isEnabled
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
     @State private var scrollBook = ACPTranscriptScrollBookkeeping()
@@ -143,11 +153,17 @@ struct ACPMessageList: View {
 
     var body: some View {
         Group {
-            if Self.usesAppKitScroller(flagEnabled: ACPTranscriptScrollerFlag.isEnabled) {
+            if Self.usesAppKitScroller(flagEnabled: scrollerFlagState) {
                 appKitScrollerBody
             } else {
                 legacyScrollViewBody
             }
+        }
+        .id(scrollerFlagState)
+        .onReceive(
+            NotificationCenter.default.publisher(for: ACPTranscriptScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            scrollerFlagState = ACPTranscriptScrollerFlag.isEnabled
         }
         .background(
             LinearGradient(
