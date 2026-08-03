@@ -648,6 +648,12 @@ impl BudgetClock {
     }
 }
 
+/// How many times a write retries on a yield before it starts sleeping. Sized
+/// so a reader that is keeping up never reaches the sleep — see the write loop
+/// in `BudgetedWriter`.
+#[cfg(unix)]
+const IPC_WRITE_SPIN_LIMIT: u32 = 128;
+
 /// How long a blocked read or write waits before its budget is re-checked.
 /// Also the amount by which a transfer may overshoot.
 #[cfg(unix)]
@@ -1069,6 +1075,7 @@ impl Drop for BudgetedWriter<'_> {
 #[cfg(unix)]
 impl Write for BudgetedWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut stalls = 0u32;
         loop {
             if self.clock.expired() {
                 return Err(BudgetClock::timed_out());
@@ -1080,8 +1087,23 @@ impl Write for BudgetedWriter<'_> {
                 }
                 // The peer is not reading yet. Not a failure — the budget
                 // above decides when that has gone on too long.
+                //
+                // Yield before sleeping, and the difference is not small. A
+                // 267 MiB reply to a reader that is keeping up still fills the
+                // socket buffer ~34k times; sleeping even 100us on each costs
+                // 5.5s against 0.2s for a blocking write, and sleeping a whole
+                // poll slice would cost hours. Yielding first measures ~0.12s
+                // — at or better than blocking — because a keeping-up reader
+                // frees space within a few scheduler passes. A peer that is
+                // genuinely stalled blows through the spins in microseconds
+                // and lands on the sleep, where it belongs.
                 Err(error) if is_quiet(&error) => {
-                    std::thread::sleep(IPC_IO_POLL_SLICE);
+                    stalls += 1;
+                    if stalls <= IPC_WRITE_SPIN_LIMIT {
+                        std::thread::yield_now();
+                    } else {
+                        std::thread::sleep(IPC_IO_POLL_SLICE);
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -2196,6 +2218,52 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Bounding writes must not cost throughput on the writes that matter.
+    ///
+    /// Polling a non-blocking socket means noticing every time the buffer
+    /// fills, which for a large reply to a reader that is keeping up happens
+    /// tens of thousands of times. Sleeping on each is ruinous — measured at
+    /// 5.5s for 267 MiB against 0.2s blocking, and hours at a full poll slice
+    /// — so the loop yields before it sleeps. The bound here is loose on
+    /// purpose: it is meant to catch that class of regression, not to police
+    /// timing on a shared machine.
+    #[cfg(unix)]
+    #[test]
+    fn a_large_reply_to_a_keeping_up_reader_is_not_slowed_by_the_budget() {
+        let (writer, mut reader) = UnixStream::pair().expect("socket pair");
+        let payload = vec![b'w'; 64 * 1024 * 1024];
+        let expected = payload.len();
+        let drain = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut total = 0usize;
+            while total < expected {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => total += read,
+                }
+            }
+            total
+        });
+
+        let mut budgeted = BudgetedWriter::new(
+            &writer,
+            IoBudget::at_least(BROKER_IPC_WRITE_TIMEOUT, MIN_IPC_RESPONSE_RATE),
+        )
+        .expect("budgeted writer");
+        let started = std::time::Instant::now();
+        budgeted.write_all(&payload).expect("large reply");
+        budgeted.flush().expect("flush");
+        let elapsed = started.elapsed();
+        drop(budgeted);
+        drop(writer);
+        assert_eq!(drain.join().expect("drain"), expected);
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "budgeted writes collapsed throughput: 64 MiB took {elapsed:?}"
+        );
     }
 
     /// A peer that drains a reply slowly must not be able to hold its handler
