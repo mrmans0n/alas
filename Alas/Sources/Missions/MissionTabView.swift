@@ -317,6 +317,29 @@ enum MissionTabContext {
     }
 }
 
+struct MissionLegCardActions {
+    let openAgent: () -> Void
+    let openChanges: () -> Void
+    let retryWorktree: () -> Void
+    let retryAgent: () -> Void
+    let recoverWorktree: () -> Void
+
+    init(
+        legID: MissionLegID,
+        openAgent: @escaping (MissionLegID) -> Void,
+        openChanges: @escaping (MissionLegID) -> Void,
+        retryWorktree: @escaping (MissionLegID) -> Void,
+        retryAgent: @escaping (MissionLegID) -> Void,
+        recoverWorktree: @escaping (MissionLegID) -> Void
+    ) {
+        self.openAgent = { openAgent(legID) }
+        self.openChanges = { openChanges(legID) }
+        self.retryWorktree = { retryWorktree(legID) }
+        self.retryAgent = { retryAgent(legID) }
+        self.recoverWorktree = { recoverWorktree(legID) }
+    }
+}
+
 struct MissionTabView: View {
     @Bindable var state: AppState
     let worktree: Worktree?
@@ -416,24 +439,32 @@ struct MissionTabView: View {
                 MissionHeaderSection(presentation: presentation, summary: summary)
                 ForEach(summary.legs) { leg in
                     let legSession = linkedSession(for: leg, aggregate: aggregate)
+                    let actions = MissionLegCardActions(
+                        legID: leg.id,
+                        openAgent: openAgent,
+                        openChanges: openChanges,
+                        retryWorktree: retryWorktree,
+                        retryAgent: { legID in
+                            agentPickerLegID = legID
+                            agentPickerPresented = true
+                        },
+                        recoverWorktree: recoverWorktree
+                    )
                     MissionLegSection(
                         presentation: leg,
                         session: legSession,
                         agentName: legSession.map { agentName(for: $0.agentId) },
-                        onOpenAgent: { openAgent(legID: leg.id) },
-                        onOpenChanges: { openChanges(legID: leg.id) },
+                        onOpenAgent: actions.openAgent,
+                        onOpenChanges: actions.openChanges,
                         onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
                         onOpenReview: {
                             if let url = leg.reviewDestination {
                                 NSWorkspace.shared.open(url)
                             }
                         },
-                        onRetryWorktree: { retryWorktree(legID: leg.id) },
-                        onRetryAgent: {
-                            agentPickerLegID = leg.id
-                            agentPickerPresented = true
-                        },
-                        onRecoverWorktree: { recoverWorktree(legID: leg.id) }
+                        onRetryWorktree: actions.retryWorktree,
+                        onRetryAgent: actions.retryAgent,
+                        onRecoverWorktree: actions.recoverWorktree
                     )
                 }
                 if aggregate.mission.state == .running {

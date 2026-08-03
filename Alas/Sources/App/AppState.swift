@@ -17,6 +17,21 @@ enum MissionOpenError: LocalizedError, Equatable {
     }
 }
 
+private struct MissingMissionRecoveryTarget: Equatable {
+    let worktreeID: String
+    let destinationPath: String
+
+    init(missionID: MissionID, leg: MissionLeg) {
+        worktreeID = leg.worktreeId ?? "mission:\(missionID.rawValue)"
+        destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+    }
+
+    func matches(_ leg: MissionLeg) -> Bool {
+        worktreeID == leg.worktreeId
+            || destinationPath == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -35,7 +50,7 @@ final class AppState {
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
     private(set) var missingMissionTab: MissionTabState?
-    private var missingMissionWorktreeId: String?
+    private var missingMissionRecoveryTarget: MissingMissionRecoveryTarget?
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
     private var _tabs: TabsManager?
@@ -864,7 +879,7 @@ final class AppState {
             title: aggregate.mission.title
         )
         missingMissionTab = nil
-        missingMissionWorktreeId = nil
+        missingMissionRecoveryTarget = nil
         guard case .mission(let tab) = globalTab else {
             preconditionFailure("Global Mission tabs always contain a Mission state.")
         }
@@ -879,8 +894,10 @@ final class AppState {
         )
         globalTabs.openOrFocusMission(missionID: aggregate.mission.id, title: aggregate.mission.title)
         missingMissionTab = tab
-        let worktreeId = leg.worktreeId ?? "mission:\(aggregate.mission.id.rawValue)"
-        missingMissionWorktreeId = worktreeId
+        missingMissionRecoveryTarget = MissingMissionRecoveryTarget(
+            missionID: aggregate.mission.id,
+            leg: leg
+        )
         return tab
     }
 
@@ -1610,7 +1627,7 @@ final class AppState {
             await missions.recordMissingWorktree(missionID, legID: legID)
         }
         let restoredMissionLegs = missions.aggregates.flatMap { aggregate in
-            aggregate.legs.compactMap { leg -> (MissionID, MissionLegID)? in
+            aggregate.legs.compactMap { leg -> (MissionID, MissionLegID, MissionLeg)? in
                 guard leg.state == .needsAttention,
                       leg.setupCheckpoint == .running,
                       leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
@@ -1623,28 +1640,36 @@ final class AppState {
                               && worktree.lineageID == leg.worktreeLineageID
                       }) == true
                 else { return nil }
-                return (aggregate.mission.id, leg.id)
+                return (aggregate.mission.id, leg.id, leg)
             }
         }
-        for (missionID, legID) in restoredMissionLegs {
+        for (missionID, legID, _) in restoredMissionLegs {
             await missions.recordAvailableWorktree(missionID, legID: legID)
         }
         if let missingMissionTab,
-           restoredMissionLegs.contains(where: { $0.0 == missingMissionTab.missionID }) {
+           let missingMissionRecoveryTarget,
+           restoredMissionLegs.contains(where: {
+               $0.0 == missingMissionTab.missionID
+                   && missingMissionRecoveryTarget.matches($0.2)
+           }) {
             self.missingMissionTab = nil
-            missingMissionWorktreeId = nil
+            self.missingMissionRecoveryTarget = nil
         }
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
     }
 
     private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>) {
         let disappeared = beforeIds.subtracting(afterIds)
-        let selectedMissingMission: (tab: MissionTabState, worktreeID: String)? = selectedWorktreeId.flatMap { worktreeID in
+        let selectedMissingMission: (tab: MissionTabState, target: MissingMissionRecoveryTarget)? = selectedWorktreeId.flatMap { worktreeID in
             guard disappeared.contains(worktreeID),
                   let tab = globalTabs.activeMissionTab(),
-                  missions.aggregate(id: tab.missionID)?.legs.contains(where: { $0.worktreeId == worktreeID }) == true
+                  let aggregate = missions.aggregate(id: tab.missionID),
+                  let leg = aggregate.legs.first(where: { $0.worktreeId == worktreeID })
             else { return nil }
-            return (tab, worktreeID)
+            return (
+                tab,
+                MissingMissionRecoveryTarget(missionID: tab.missionID, leg: leg)
+            )
         }
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
@@ -1663,7 +1688,7 @@ final class AppState {
         if let current = selectedWorktreeId, !afterIds.contains(current) {
             if let selectedMissingMission {
                 missingMissionTab = selectedMissingMission.tab
-                missingMissionWorktreeId = selectedMissingMission.worktreeID
+                missingMissionRecoveryTarget = selectedMissingMission.target
             } else {
                 selectWorktree(id: resolvedSelectionForActiveSpace())
             }
@@ -1895,9 +1920,9 @@ final class AppState {
 
     func selectWorktree(id: String?) {
         globalTabs.clearActiveTab()
-        if id != missingMissionWorktreeId {
+        if id != missingMissionRecoveryTarget?.worktreeID {
             missingMissionTab = nil
-            missingMissionWorktreeId = nil
+            missingMissionRecoveryTarget = nil
         }
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id

@@ -556,6 +556,35 @@ struct MissionTabTests {
         #expect(aggregate.primaryLeg?.state == .running)
     }
 
+    @Test func restoringSecondaryLegKeepsPrimaryMissingRecoveryVisible() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            includeSecondaryLeg: true
+        )
+        let secondaryWorktree = try #require(fixture.secondaryWorktree)
+        await fixture.state.missions.load()
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId
+        )
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        let missingPrimaryTab = try #require(fixture.state.missingMissionTab)
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: secondaryWorktree.id,
+            projectId: secondaryWorktree.projectId
+        )
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [secondaryWorktree.id])
+        fixture.state.projectsManager.insertOptimisticWorktree(secondaryWorktree)
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [])
+
+        #expect(fixture.state.missingMissionTab == missingPrimaryTab)
+    }
+
     @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
         #expect(fixture.state.switchToSpace(id: "mission-space"))

@@ -4,6 +4,43 @@ import Testing
 
 @MainActor
 struct MissionPresentationTests {
+    @Test func legCardActionsRouteAgentToOwningLeg() {
+        let legID = MissionLegID(rawValue: "mission-1-leg-server")
+        var openedLegID: MissionLegID?
+        var retryAgentLegID: MissionLegID?
+        let actions = MissionLegCardActions(
+            legID: legID,
+            openAgent: { openedLegID = $0 },
+            openChanges: { _ in },
+            retryWorktree: { _ in },
+            retryAgent: { retryAgentLegID = $0 },
+            recoverWorktree: { _ in }
+        )
+
+        actions.openAgent()
+        actions.retryAgent()
+
+        #expect(openedLegID == legID)
+        #expect(retryAgentLegID == legID)
+    }
+
+    @Test func legCardActionsRouteWorktreeRetryToOwningLeg() {
+        let legID = MissionLegID(rawValue: "mission-1-leg-server")
+        var retriedLegID: MissionLegID?
+        let actions = MissionLegCardActions(
+            legID: legID,
+            openAgent: { _ in },
+            openChanges: { _ in },
+            retryWorktree: { retriedLegID = $0 },
+            retryAgent: { _ in },
+            recoverWorktree: { _ in }
+        )
+
+        actions.retryWorktree()
+
+        #expect(retriedLegID == legID)
+    }
+
     @Test func aggregateSummaryFoldsOrderedLegCards() {
         let aggregate = Self.threeLegAggregate()
         let presentations = aggregate.legs.map { leg in
