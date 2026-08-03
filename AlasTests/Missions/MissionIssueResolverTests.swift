@@ -62,6 +62,31 @@ struct MissionIssueResolverTests {
         #expect(resolved.selectedProjectId == Self.cloneB.id)
     }
 
+    @Test func fullURLContinuesToCanonicalCloneWhenExactCloneProviderIsUnavailable() async throws {
+        let provider = FakeIssueProvider(
+            unavailablePaths: [Self.cloneA.path],
+            canonicalRepositorySlug: "openai/renamed-alas",
+            acceptedRepositorySlugs: ["mrmans0n/alas"]
+        )
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA, Self.cloneB] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { project in
+                if project.id == Self.cloneA.id {
+                    return [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")]
+                }
+                return [GitRemote(name: "origin", url: "git@github.com:openai/renamed-alas.git")]
+            },
+            providers: .init([provider])
+        ))
+
+        let resolved = try await resolver.resolve("https://github.com/mrmans0n/alas/issues/1842")
+
+        #expect(resolved.remote.repositorySlug == "openai/renamed-alas")
+        #expect(resolved.snapshot.identity.repositorySlug == "openai/renamed-alas")
+        #expect(resolved.selectedProjectId == Self.cloneB.id)
+    }
+
     @Test func redirectedFullURLResolvesAgainstTheConfiguredCanonicalRemote() async throws {
         let provider = FakeIssueProvider(
             canonicalRepositorySlug: "openai/renamed-alas",

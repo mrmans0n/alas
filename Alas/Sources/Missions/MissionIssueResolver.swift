@@ -103,18 +103,23 @@ struct MissionIssueResolver {
                 }) else { return nil }
                 return (entry.project, remote)
             }
+            var exactMatchError: Error?
             if !exactMatches.isEmpty {
-                let probed = try await resolve(
-                    number: number,
-                    matches: exactMatches,
-                    preferredProjectID: environment.selectedProjectId()
-                )
-                return try Self.canonicalResult(
-                    probed,
-                    number: number,
-                    projectRemotes: projectRemotes,
-                    preferredProjectID: probed.selectedProjectId
-                )
+                do {
+                    let probed = try await resolve(
+                        number: number,
+                        matches: exactMatches,
+                        preferredProjectID: environment.selectedProjectId()
+                    )
+                    return try Self.canonicalResult(
+                        probed,
+                        number: number,
+                        projectRemotes: projectRemotes,
+                        preferredProjectID: probed.selectedProjectId
+                    )
+                } catch {
+                    exactMatchError = error
+                }
             }
 
             let sameHostProjects = projectRemotes.filter { entry in
@@ -159,7 +164,7 @@ struct MissionIssueResolver {
                     lastError = error
                 }
             }
-            throw lastError ?? CodeHostProviderError.malformedOutput("No configured project can resolve this issue.")
+            throw exactMatchError ?? lastError ?? CodeHostProviderError.malformedOutput("No configured project can resolve this issue.")
         }
     }
 
