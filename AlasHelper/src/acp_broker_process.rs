@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1115,8 +1115,15 @@ impl Write for BudgetedWriter<'_> {
         }
     }
 
+    /// Flushing is the last thing either caller does, so a successful one
+    /// means the reply is out and the watchdog must stop considering this
+    /// socket — see the `done` check there.
     fn flush(&mut self) -> io::Result<()> {
-        (&mut &*self.stream).flush()
+        let flushed = (&mut &*self.stream).flush();
+        if flushed.is_ok() {
+            self._watch.done.store(true, Ordering::Release);
+        }
+        flushed
     }
 }
 
@@ -1124,6 +1131,7 @@ impl Write for BudgetedWriter<'_> {
 #[cfg(unix)]
 struct WriteWatch {
     id: u64,
+    done: Arc<AtomicBool>,
 }
 
 #[cfg(unix)]
@@ -1131,6 +1139,7 @@ struct WatchedWrite {
     id: u64,
     stream: UnixStream,
     clock: Arc<Mutex<BudgetClock>>,
+    done: Arc<AtomicBool>,
 }
 
 /// The watched set, and the single thread that polices it.
@@ -1145,6 +1154,13 @@ fn watched_writes() -> &'static Mutex<Vec<WatchedWrite>> {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
                 for write in watched.iter() {
+                    // Finished writes are still registered for the moment it
+                    // takes their guard to drop. Cutting one then would
+                    // discard a reply that was already delivered in full,
+                    // which is the opposite of the point.
+                    if write.done.load(Ordering::Acquire) {
+                        continue;
+                    }
                     let expired = write
                         .clock
                         .lock()
@@ -1173,11 +1189,17 @@ impl WriteWatch {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let stream = stream.try_clone()?;
+        let done = Arc::new(AtomicBool::new(false));
         watched_writes()
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .push(WatchedWrite { id, stream, clock });
-        Ok(Self { id })
+            .push(WatchedWrite {
+                id,
+                stream,
+                clock,
+                done: Arc::clone(&done),
+            });
+        Ok(Self { id, done })
     }
 }
 
