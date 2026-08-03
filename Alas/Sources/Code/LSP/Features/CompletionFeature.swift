@@ -19,6 +19,7 @@ final class CompletionFeature {
     private var candidatePool: [CompletionCandidate] = []
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
+    private var candidatePoolPrefix: CompletionPrefix?
     private var candidateBufferText: String?
     private var candidateItems: [LSPCompletionItem] = []
     private var candidateAllowsBufferFallback = false
@@ -78,6 +79,7 @@ final class CompletionFeature {
         candidatePool.removeAll()
         prefix = nil
         candidatePrefix = nil
+        candidatePoolPrefix = nil
         candidateBufferText = nil
         candidateItems.removeAll()
         candidateAllowsBufferFallback = false
@@ -258,16 +260,22 @@ final class CompletionFeature {
             CompletionEngine.editPlan(
                 accepting: candidate,
                 prefix: prefix,
-                originalPrefix: candidatePrefix,
+                originalPrefix: candidatePoolPrefix,
                 in: bufferText
             )
         }
         candidates = next
         candidatePool = next
         self.prefix = prefix
-        candidatePrefix = prefix
-        candidateBufferText = bufferText
-        candidateItems = items
+        candidatePoolPrefix = prefix
+        let keepsBroaderResponse = candidatePrefix.map {
+            $0.range.location == prefix.range.location && $0.range.length < prefix.range.length
+        } ?? false
+        if !keepsBroaderResponse {
+            candidatePrefix = prefix
+            candidateBufferText = bufferText
+            candidateItems = items
+        }
         candidateAllowsBufferFallback = retainedBufferFallback
         candidateMemberAccessOnly = retainedMemberAccessOnly
         candidateAllowsEmptyPrefix = candidateAllowsEmptyPrefix || allowEmptyPrefix
@@ -391,7 +399,7 @@ final class CompletionFeature {
         guard let plan = CompletionEngine.editPlan(
             accepting: candidate,
             prefix: prefix,
-            originalPrefix: candidatePrefix,
+            originalPrefix: candidatePoolPrefix,
             in: textView.string
         ) else {
             cancelAndDismiss()
@@ -425,6 +433,7 @@ final class CompletionFeature {
             candidatePool.removeAll()
             prefix = nil
             candidatePrefix = nil
+            candidatePoolPrefix = nil
             candidateBufferText = nil
             candidateItems.removeAll()
             candidateAllowsBufferFallback = false
@@ -435,8 +444,12 @@ final class CompletionFeature {
             return
         }
 
-        if let candidatePrefix,
-           updatedPrefix.range.length < candidatePrefix.range.length,
+        if let previousPrefix,
+           let candidatePrefix,
+           updatedPrefix.range.length < previousPrefix.range.length,
+           updatedPrefix.range.length <= candidatePrefix.range.length,
+           updatedPrefix.range.length < candidatePrefix.range.length ||
+           candidatePoolPrefix != candidatePrefix,
            let candidateBufferText {
             let rebuilt = Self.candidates(
                 items: candidateItems,
@@ -448,6 +461,7 @@ final class CompletionFeature {
             candidatePool = rebuilt.map { candidate in
                 candidatePool.first { $0 == candidate } ?? candidate
             }
+            candidatePoolPrefix = candidatePrefix
         }
 
         let selectedCandidateID = candidates.indices.contains(selection) ? candidates[selection].id : nil
@@ -549,6 +563,7 @@ extension CompletionFeature {
         candidatePool = candidates
         self.prefix = prefix
         candidatePrefix = prefix
+        candidatePoolPrefix = prefix
         candidateBufferText = textView?.string
         candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
@@ -568,7 +583,8 @@ extension CompletionFeature {
         items: [LSPCompletionItem],
         prefix: CompletionPrefix,
         bufferText: String,
-        allowEmptyPrefix: Bool = false
+        allowEmptyPrefix: Bool = false,
+        memberAccessOnly: Bool = false
     ) {
         present(
             items: items,
@@ -576,7 +592,7 @@ extension CompletionFeature {
             bufferText: bufferText,
             allowEmptyPrefix: allowEmptyPrefix,
             allowBufferFallback: false,
-            memberAccessOnly: false
+            memberAccessOnly: memberAccessOnly
         )
     }
 

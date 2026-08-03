@@ -107,6 +107,36 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refresh retains candidates from a broader response")
+    func refreshRetainsBroaderResponse() {
+        let textView = makeTextView("ope")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingPresent(
+            items: [
+                .testing(label: "openAlpha", sortText: "001", filterText: nil),
+                .testing(label: "operate", sortText: "002", filterText: nil)
+            ],
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            bufferText: "ope"
+        )
+
+        textView.insertText("n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            bufferText: "open"
+        )
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "operate"])
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh discards candidates when text changes outside the prefix")
     func refreshDiscardsCandidatesAfterForwardDelete() {
         let textView = makeTextView("opeXYZ tail")
@@ -139,9 +169,14 @@ struct CompletionFeatureTests {
             getURI: { "file:///tmp/foo.swift" },
             isEnabled: { true }
         )
-        feature.testingSeedVisibleCandidates(
-            labels: ["count", "copy"],
+        feature.testingPresent(
+            items: [
+                .testing(label: "count", kind: 10, sortText: "001", filterText: nil),
+                .testing(label: "copy", kind: 2, sortText: "002", filterText: nil)
+            ],
             prefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0)),
+            bufferText: "foo.",
+            allowEmptyPrefix: true,
             memberAccessOnly: true
         )
 
