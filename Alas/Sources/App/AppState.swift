@@ -758,11 +758,17 @@ final class AppState {
         }, startupReviewSnapshot: { [weak self] worktree, baseRef in
             guard let self else { return nil }
             let paneBaseRef: String
-            if let aggregate = missions.aggregates.first(where: { aggregate in
-                aggregate.mission.state != .completed
-                    && aggregate.primaryLeg?.worktreeId == worktree.id
-            }) {
-                paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
+            if let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
+                guard aggregate.mission.state != .completed,
+                      let leg = aggregate.legs.first(where: { $0.worktreeId == worktree.id })
+                else { return nil }
+                return (aggregate, leg)
+            }).first {
+                paneBaseRef = await missionPaneBaseRef(
+                    for: match.0,
+                    leg: match.1,
+                    worktree: worktree
+                )
             } else {
                 paneBaseRef = baseRef
             }
@@ -800,17 +806,19 @@ final class AppState {
 
     private func refreshRenamedMissionRepositories() async {
         for aggregate in missions.aggregates where aggregate.mission.state != .completed {
-            guard let leg = aggregate.primaryLeg,
-                  let project = projectsManager.projects.first(where: { $0.id == leg.projectId }),
-                  let remotes = try? await GitService().remotes(
-                      worktreePath: URL(fileURLWithPath: project.path)
-                  ),
-                  Self.missionRepositoryNeedsCanonicalRefresh(
-                      identity: aggregate.issue.identity,
-                      remotes: remotes
-                  )
-            else { continue }
-            await missions.refreshIssue(aggregate.mission.id)
+            for leg in aggregate.legs {
+                guard let project = projectsManager.projects.first(where: { $0.id == leg.projectId }),
+                      let remotes = try? await GitService().remotes(
+                          worktreePath: URL(fileURLWithPath: project.path)
+                      ),
+                      Self.missionRepositoryNeedsCanonicalRefresh(
+                          identity: aggregate.issue.identity,
+                          remotes: remotes
+                      )
+                else { continue }
+                await missions.refreshIssue(aggregate.mission.id)
+                break
+            }
         }
     }
 
@@ -879,10 +887,10 @@ final class AppState {
     func openMissionChanges(
         worktree: Worktree,
         missionID: MissionID,
-        legID: MissionLegID? = nil
+        legID: MissionLegID
     ) async {
         guard let aggregate = missions.aggregate(id: missionID),
-              let leg = legID.flatMap({ id in aggregate.legs.first { $0.id == id } }) ?? aggregate.primaryLeg,
+              let leg = aggregate.legs.first(where: { $0.id == legID }),
               missionWorktree(worktree, for: leg, aggregate: aggregate)?.id == worktree.id
         else { return }
         guard !projectsManager.isWorktreeHidden(
@@ -1363,11 +1371,13 @@ final class AppState {
     }
 
     func reconcileDeletedMissionWorktree(_ worktreeID: String) async {
-        let missionIDs = missions.aggregates.compactMap { aggregate in
-            aggregate.primaryLeg?.worktreeId == worktreeID ? aggregate.mission.id : nil
+        let missionLegs = missions.aggregates.flatMap { aggregate in
+            aggregate.legs.compactMap { leg in
+                leg.worktreeId == worktreeID ? (aggregate.mission.id, leg.id) : nil
+            }
         }
-        for missionID in missionIDs {
-            await missions.recordMissingWorktree(missionID)
+        for (missionID, legID) in missionLegs {
+            await missions.recordMissingWorktree(missionID, legID: legID)
         }
     }
 
@@ -1572,53 +1582,55 @@ final class AppState {
     func cleanupMissingWorktrees(beforeIds: Set<String>) async {
         let afterIds = allWorktreeIds()
         let disappeared = beforeIds.subtracting(afterIds)
-        let missingMissionIDs: Set<MissionID> = Set(missions.aggregates.compactMap { aggregate in
-            guard let leg = aggregate.primaryLeg,
-                  aggregate.mission.setupCheckpoint != .creatingWorktree,
-                  projects.contains(where: { $0.id == leg.projectId })
-            else { return nil }
-            let persistedID = leg.worktreeId ?? ""
-            let disappearedWorktree = disappeared.contains(persistedID)
-            let destinationWorktree = missionWorktreeAtDestination(
-                projectID: leg.projectId,
-                destinationPath: leg.destinationPath
-            )
-            let destinationMatches = destinationWorktree?.branch == leg.branch
-                && leg.worktreeLineageID != nil
-                && destinationWorktree?.lineageID == leg.worktreeLineageID
-            let replacementBranch = beforeIds.contains(persistedID)
-                && !destinationMatches
-            let confirmedUnavailableAfterRefresh = [.running, .needsAttention].contains(aggregate.mission.state)
-                && projectsManager.worktreeDiscoverySucceeded(projectId: leg.projectId)
-                && !destinationMatches
-            guard disappearedWorktree || replacementBranch || confirmedUnavailableAfterRefresh
-            else { return nil }
-            return aggregate.mission.id
-        })
-        for missionID in missingMissionIDs {
-            await missions.recordMissingWorktree(missionID)
+        let missingMissionLegs = missions.aggregates.flatMap { aggregate in
+            aggregate.legs.compactMap { leg -> (MissionID, MissionLegID)? in
+                guard leg.setupCheckpoint != .creatingWorktree,
+                      projects.contains(where: { $0.id == leg.projectId })
+                else { return nil }
+                let persistedID = leg.worktreeId ?? ""
+                let disappearedWorktree = disappeared.contains(persistedID)
+                let destinationWorktree = missionWorktreeAtDestination(
+                    projectID: leg.projectId,
+                    destinationPath: leg.destinationPath
+                )
+                let destinationMatches = destinationWorktree?.branch == leg.branch
+                    && leg.worktreeLineageID != nil
+                    && destinationWorktree?.lineageID == leg.worktreeLineageID
+                let replacementBranch = beforeIds.contains(persistedID)
+                    && !destinationMatches
+                let confirmedUnavailableAfterRefresh = [.running, .needsAttention].contains(leg.state)
+                    && projectsManager.worktreeDiscoverySucceeded(projectId: leg.projectId)
+                    && !destinationMatches
+                guard disappearedWorktree || replacementBranch || confirmedUnavailableAfterRefresh
+                else { return nil }
+                return (aggregate.mission.id, leg.id)
+            }
         }
-        let restoredMissionIDs: Set<MissionID> = Set(missions.aggregates.compactMap { aggregate in
-            guard aggregate.mission.state == .needsAttention,
-                  aggregate.mission.setupCheckpoint == .running,
-                  aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
-                  let leg = aggregate.primaryLeg,
-                  missionWorktreeAtDestination(
-                      projectID: leg.projectId,
-                      destinationPath: leg.destinationPath
-                  ).map({ worktree in
-                      worktree.branch == leg.branch
-                          && leg.worktreeLineageID != nil
-                          && worktree.lineageID == leg.worktreeLineageID
-                  }) == true
-            else { return nil }
-            return aggregate.mission.id
-        })
-        for missionID in restoredMissionIDs {
-            await missions.recordAvailableWorktree(missionID)
+        for (missionID, legID) in missingMissionLegs {
+            await missions.recordMissingWorktree(missionID, legID: legID)
+        }
+        let restoredMissionLegs = missions.aggregates.flatMap { aggregate in
+            aggregate.legs.compactMap { leg -> (MissionID, MissionLegID)? in
+                guard leg.state == .needsAttention,
+                      leg.setupCheckpoint == .running,
+                      leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
+                      missionWorktreeAtDestination(
+                          projectID: leg.projectId,
+                          destinationPath: leg.destinationPath
+                      ).map({ worktree in
+                          worktree.branch == leg.branch
+                              && leg.worktreeLineageID != nil
+                              && worktree.lineageID == leg.worktreeLineageID
+                      }) == true
+                else { return nil }
+                return (aggregate.mission.id, leg.id)
+            }
+        }
+        for (missionID, legID) in restoredMissionLegs {
+            await missions.recordAvailableWorktree(missionID, legID: legID)
         }
         if let missingMissionTab,
-           restoredMissionIDs.contains(missingMissionTab.missionID) {
+           restoredMissionLegs.contains(where: { $0.0 == missingMissionTab.missionID }) {
             self.missingMissionTab = nil
             missingMissionWorktreeId = nil
         }
@@ -1630,7 +1642,7 @@ final class AppState {
         let selectedMissingMission: (tab: MissionTabState, worktreeID: String)? = selectedWorktreeId.flatMap { worktreeID in
             guard disappeared.contains(worktreeID),
                   let tab = globalTabs.activeMissionTab(),
-                  missions.aggregate(id: tab.missionID)?.primaryLeg?.worktreeId == worktreeID
+                  missions.aggregate(id: tab.missionID)?.legs.contains(where: { $0.worktreeId == worktreeID }) == true
             else { return nil }
             return (tab, worktreeID)
         }
@@ -1661,16 +1673,18 @@ final class AppState {
     private func presentMissingMissionRecoveryIfNeeded() {
         let activeProjectIDs = Set(activeSpaceProjects.map(\.id))
         guard missingMissionTab == nil,
-              let aggregate = missions.aggregates.first(where: {
-                  $0.mission.state == .needsAttention
-                      && $0.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
-                      && $0.primaryLeg.map { activeProjectIDs.contains($0.projectId) } == true
-              }),
-              let leg = aggregate.primaryLeg,
-              projects.contains(where: { $0.id == leg.projectId })
+              let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
+                  guard let leg = aggregate.legs.first(where: {
+                      $0.state == .needsAttention
+                          && $0.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+                          && activeProjectIDs.contains($0.projectId)
+                  }) else { return nil }
+                  return (aggregate, leg)
+              }).first,
+              projects.contains(where: { $0.id == match.1.projectId })
         else { return }
 
-        presentMissingMissionTab(aggregate: aggregate, leg: leg)
+        presentMissingMissionTab(aggregate: match.0, leg: match.1)
     }
 
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call

@@ -62,10 +62,11 @@ struct MissionLegPresentation: Equatable, Identifiable {
             && leg.setupCheckpoint == .running
         let canComplete = [MissionState.running, .needsAttention, .readyToComplete]
             .contains(aggregate.mission.state)
-        let canRecover = worktreeRecoveryAvailable
-            && isAttention
-            && leg.setupCheckpoint == .running
-            && leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+        let canRecover = (worktreeArchived && worktree != nil)
+            || (worktreeRecoveryAvailable
+                && isAttention
+                && leg.setupCheckpoint == .running
+                && leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
         actions = MissionTabPresentation.Actions(
             openAgent: openAgent,
             openChanges: hasUsableWorktree,

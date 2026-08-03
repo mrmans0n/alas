@@ -256,6 +256,47 @@ struct MissionPresentationTests {
         #expect(!presentation.actions.openChanges)
     }
 
+    @Test func archivedSecondaryLegOffersTheSameRestoreAction() {
+        var aggregate = Self.runningAggregate()
+        let primary = aggregate.legs[0]
+        let secondary = MissionLeg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"),
+            missionID: aggregate.mission.id,
+            ordinal: 1,
+            projectId: "project-2",
+            baseRef: "upstream/trunk",
+            branch: "fix/server-parser-crash",
+            destinationPath: "/tmp/alas-server-mission",
+            worktreeId: "worktree-2",
+            agentId: "codex",
+            acpSessionId: "session-2",
+            initialPromptId: UUID(),
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: .ready,
+            setupCheckpoint: .running
+        )
+        aggregate.legs = [primary, secondary]
+        let worktree = Worktree(
+            id: "worktree-2",
+            projectId: secondary.projectId,
+            name: secondary.branch,
+            branch: secondary.branch,
+            path: URL(fileURLWithPath: secondary.destinationPath),
+            status: .clean,
+            lastActivity: .now
+        )
+
+        let presentation = MissionLegPresentation(
+            aggregate: aggregate,
+            leg: secondary,
+            worktree: worktree,
+            worktreeArchived: true
+        )
+
+        #expect(presentation.actions.recoverWorktree)
+    }
+
     @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() {
         var aggregate = Self.runningAggregate()
         aggregate.issue = .init(

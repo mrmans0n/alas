@@ -66,11 +66,20 @@ final class AddMissionLegDialogActions {
 
     static func sanitizedError(_ error: Error) -> String {
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        return message.replacingOccurrences(
-            of: #"\b(?:gh[pousr]_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_\-]+|[A-Za-z0-9_]*token[A-Za-z0-9_]*=[^\s]+)\b"#,
-            with: "[redacted]",
-            options: .regularExpression
-        )
+        return [
+            #"\bgithub_pat_[A-Za-z0-9_]+\b"#,
+            #"\bgh[pousr]_[A-Za-z0-9_]+\b"#,
+            #"\bglpat-[A-Za-z0-9_-]+\b"#,
+            #"(?i)\b(?:authorization\s*:\s*bearer|bearer)\s+[A-Za-z0-9._~+/=-]+"#,
+            #"(?i)\b(?:access[_-]?token|api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+"#,
+            #"(?i)(https?://)[^/\s@]+@"#,
+        ].reduce(message) { sanitized, pattern in
+            sanitized.replacingOccurrences(
+                of: pattern,
+                with: pattern.contains("https?://") ? "$1[redacted]@" : "[redacted]",
+                options: .regularExpression
+            )
+        }
     }
 }
 
@@ -238,6 +247,29 @@ struct AddMissionLegDialog: View {
             Text(aggregate.issue.title)
                 .font(.headline)
                 .foregroundStyle(theme.color("fg"))
+            Text(aggregate.issue.body.isEmpty ? "No issue description captured." : aggregate.issue.body)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-dim"))
+                .textSelection(.enabled)
+                .accessibilityIdentifier("add-mission-leg-shared-issue-body")
+                .background(MissionAccessibilityMarker(identifier: "add-mission-leg-shared-issue-body"))
+            Text("EXISTING LEGS")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(theme.color("fg-muted"))
+                .padding(.top, 3)
+            ForEach(aggregate.legs.sorted { lhs, rhs in
+                if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+                return lhs.id.rawValue < rhs.id.rawValue
+            }, id: \.id) { leg in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Repository: \(projectName(for: leg.projectId)) · Project: \(leg.projectId)")
+                    Text("Branch: \(leg.branch) · State: \(leg.state.rawValue.capitalized)")
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(theme.color("fg-dim"))
+                .accessibilityIdentifier("add-mission-leg-existing-leg-\(leg.id.rawValue)")
+                .background(MissionAccessibilityMarker(identifier: "add-mission-leg-existing-leg-\(leg.id.rawValue)"))
+            }
             Text("Existing legs: \(MissionAggregateSummary.statusCopy(for: aggregate.legs))")
                 .font(.caption)
                 .foregroundStyle(theme.color("fg-dim"))
@@ -249,6 +281,10 @@ struct AddMissionLegDialog: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
+    }
+
+    private func projectName(for projectID: String) -> String {
+        state.projects.first(where: { $0.id == projectID })?.name ?? projectID
     }
 
     private func progressRow(_ title: String) -> some View {

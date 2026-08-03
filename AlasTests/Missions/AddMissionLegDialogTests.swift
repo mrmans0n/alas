@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -73,6 +75,47 @@ struct AddMissionLegDialogTests {
         #expect(!actions.isSubmitting)
     }
 
+    @Test(arguments: [
+        "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UUuuVVvvWWwwXXxxYYyyZZzz",
+        "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+        "glpat-abcdefghijklmnopqrstuvwxyz0123456789",
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+        "https://octocat:super-secret@github.com/acme/alas.git",
+    ])
+    func errorRedactionCoversProviderTokensAndURLCredentials(secret: String) {
+        let error = CodeHostProviderError.malformedOutput("Request failed: \(secret)")
+
+        let displayed = AddMissionLegDialogActions.sanitizedError(error)
+
+        #expect(!displayed.contains(secret))
+        #expect(displayed.contains("[redacted]"))
+    }
+
+    @Test func dialogShowsSharedIssueBodyAndExistingLegManifest() async throws {
+        let fixture = try DialogFixture()
+        await fixture.state.missions.load()
+        let dialog = AddMissionLegDialog(
+            presented: .constant(true),
+            state: fixture.state,
+            missionID: fixture.aggregate.mission.id
+        )
+        .environment(\.theme, try ThemeStore().current)
+        let host = NSHostingController(rootView: dialog)
+        host.view.frame = NSRect(x: 0, y: 0, width: 720, height: 860)
+        host.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "add-mission-leg-shared-issue-body",
+            in: host.view
+        ) != nil)
+        for leg in fixture.aggregate.legs {
+            #expect(subview(
+                withAccessibilityIdentifier: "add-mission-leg-existing-leg-\(leg.id.rawValue)",
+                in: host.view
+            ) != nil)
+        }
+    }
+
     private static func environment() -> AddMissionLegModel.Environment {
         .init(
             branches: { _ in
@@ -116,6 +159,83 @@ struct AddMissionLegDialogTests {
             isEnabled: true,
             builtinLogoAssetName: nil
         )
+    }
+}
+
+@MainActor
+private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+    if view.accessibilityIdentifier() == identifier { return view }
+    return view.subviews.lazy.compactMap {
+        subview(withAccessibilityIdentifier: identifier, in: $0)
+    }.first
+}
+
+@MainActor
+private struct DialogFixture {
+    let aggregate: MissionAggregate
+    let state: AppState
+
+    init() throws {
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        let secondary = MissionLeg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"),
+            missionID: aggregate.mission.id,
+            ordinal: 1,
+            projectId: "project-2",
+            baseRef: "upstream/trunk",
+            branch: "fix/server-parser-crash",
+            destinationPath: "/tmp/alas-server-mission",
+            worktreeId: "worktree-2",
+            agentId: "codex",
+            acpSessionId: "session-2",
+            initialPromptId: UUID(),
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: .running,
+            setupCheckpoint: .running
+        )
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("add-mission-leg-dialog-\(UUID().uuidString).sqlite")
+        let persistence = MissionPersistence(path: databaseURL.path)
+        let store = try MissionStore(path: databaseURL.path)
+        try store.insert(aggregate)
+        try store.addLeg(
+            secondary,
+            event: MissionFixtures.event(
+                id: "mission-1-event-leg-2",
+                missionID: aggregate.mission.id,
+                legID: secondary.id,
+                kind: .legAdded,
+                createdAt: 101
+            )
+        )
+        aggregate.legs.append(secondary)
+        let projects = [
+            ProjectConfig(id: "project-1", name: "Alas", path: "/tmp/alas", color: "blue", addedAt: .now),
+            ProjectConfig(id: "project-2", name: "Server", path: "/tmp/server", color: "green", addedAt: .now),
+            ProjectConfig(id: "project-3", name: "Web", path: "/tmp/web", color: "purple", addedAt: .now),
+        ]
+        state = AppState(
+            store: DialogStore(projects: projects),
+            missionPersistence: persistence
+        )
+        self.aggregate = aggregate
+    }
+}
+
+private struct DialogStore: PersistenceStoreProtocol {
+    let projects: [ProjectConfig]
+
+    func write<T: Encodable>(_: T, to _: URL) throws {}
+
+    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+        if T.self == ProjectsFile.self { return ProjectsFile(projects: projects) as? T }
+        if T.self == SpacesFile.self {
+            return SpacesFile(activeSpaceId: "default", spaces: []) as? T
+        }
+        if T.self == AppConfig.self { return AppConfig.defaults as? T }
+        return nil
     }
 }
 

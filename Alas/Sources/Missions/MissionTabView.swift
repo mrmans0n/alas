@@ -357,11 +357,9 @@ struct MissionTabView: View {
         .popover(isPresented: $agentPickerPresented) {
             MissionAgentReplacementPopover(
                 agents: enabledACPAgents,
-                storedAgentID: agentPickerLeg?.agentId
-                    ?? state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.agentId
-                    ?? ""
+                storedAgentID: agentPickerLeg?.agentId ?? ""
             ) { agentID in
-                let legID = agentPickerLegID
+                guard let legID = agentPickerLegID else { return }
                 Task { await retryAgent(legID: legID, agentID: agentID) }
             }
             .environment(\.theme, theme)
@@ -446,12 +444,12 @@ struct MissionTabView: View {
                 MissionActivitySection(events: presentation.events)
                 MissionReadinessSection(
                     presentation: presentation,
-                    onRetryWorktree: { retryWorktree(legID: aggregate.primaryLeg?.id) },
+                    onRetryWorktree: { retryWorktree(legID: aggregate.mission.primaryLegID) },
                     onRetryAgent: {
-                        agentPickerLegID = aggregate.primaryLeg?.id
+                        agentPickerLegID = aggregate.mission.primaryLegID
                         agentPickerPresented = true
                     },
-                    onRecoverWorktree: { recoverWorktree(legID: aggregate.primaryLeg?.id) },
+                    onRecoverWorktree: { recoverWorktree(legID: aggregate.mission.primaryLegID) },
                     onCompleteMission: { completionConfirmationPresented = true }
                 )
             }
@@ -480,8 +478,10 @@ struct MissionTabView: View {
     }
 
     private var agentPickerLeg: MissionLeg? {
-        guard let aggregate = state.missions.aggregate(id: tabState.missionID) else { return nil }
-        return leg(in: aggregate, id: agentPickerLegID)
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+              let legID = agentPickerLegID
+        else { return nil }
+        return leg(in: aggregate, id: legID)
     }
 
     private func linkedSession(for presentation: MissionLegPresentation, aggregate: MissionAggregate) -> ACPSession? {
@@ -503,7 +503,7 @@ struct MissionTabView: View {
             ?? id
     }
 
-    private func openAgent(legID: MissionLegID? = nil) {
+    private func openAgent(legID: MissionLegID) {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
               let leg = leg(in: aggregate, id: legID),
               let worktree = worktree(for: leg, aggregate: aggregate),
@@ -514,7 +514,7 @@ struct MissionTabView: View {
         Task { await state.openExistingACPSession(sessionId: sessionID) }
     }
 
-    private func openChanges(legID: MissionLegID? = nil) {
+    private func openChanges(legID: MissionLegID) {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
               let leg = leg(in: aggregate, id: legID),
               let worktree = worktree(for: leg, aggregate: aggregate)
@@ -526,20 +526,15 @@ struct MissionTabView: View {
         Task { await state.refreshMission(tabState.missionID) }
     }
 
-    private func retryWorktree(legID: MissionLegID?) {
-        guard let legID else { return }
+    private func retryWorktree(legID: MissionLegID) {
         Task { await state.missions.retry(tabState.missionID, legID: legID) }
     }
 
-    private func retryAgent(legID: MissionLegID?, agentID: String) async {
-        guard let legID else {
-            await state.missions.retry(tabState.missionID, agentId: agentID)
-            return
-        }
+    private func retryAgent(legID: MissionLegID, agentID: String) async {
         await state.missions.retry(tabState.missionID, legID: legID, agentId: agentID)
     }
 
-    private func recoverWorktree(legID: MissionLegID?) {
+    private func recoverWorktree(legID: MissionLegID) {
         let aggregate = state.missions.aggregate(id: tabState.missionID)
         guard let aggregate,
               let leg = leg(in: aggregate, id: legID)
@@ -553,8 +548,7 @@ struct MissionTabView: View {
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
     }
 
-    private func leg(in aggregate: MissionAggregate, id: MissionLegID?) -> MissionLeg? {
-        guard let id else { return aggregate.primaryLeg }
+    private func leg(in aggregate: MissionAggregate, id: MissionLegID) -> MissionLeg? {
         return aggregate.legs.first { $0.id == id }
     }
 
@@ -938,7 +932,7 @@ private struct MissionAgentReplacementPopover: View {
     }
 }
 
-private struct MissionAccessibilityMarker: NSViewRepresentable {
+struct MissionAccessibilityMarker: NSViewRepresentable {
     let identifier: String
 
     func makeNSView(context: Context) -> NSView {

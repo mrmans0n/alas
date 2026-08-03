@@ -262,7 +262,8 @@ struct MissionTabTests {
 
         await fixture.state.openMissionChanges(
             worktree: fixture.worktree,
-            missionID: fixture.aggregate.mission.id
+            missionID: fixture.aggregate.mission.id,
+            legID: try #require(fixture.aggregate.primaryLeg?.id)
         )
 
         #expect(pane.baseBranch == fixture.aggregate.primaryLeg?.baseRef)
@@ -299,7 +300,8 @@ struct MissionTabTests {
         await fixture.state.missions.load()
         await fixture.state.openMissionChanges(
             worktree: fixture.worktree,
-            missionID: fixture.aggregate.mission.id
+            missionID: fixture.aggregate.mission.id,
+            legID: try #require(fixture.aggregate.primaryLeg?.id)
         )
         fixture.state.config.worktrees.baseBranch = "global-main"
         let missionBase = try #require(fixture.aggregate.primaryLeg?.baseRef)
@@ -319,7 +321,8 @@ struct MissionTabTests {
         await fixture.state.missions.load()
         await fixture.state.openMissionChanges(
             worktree: fixture.worktree,
-            missionID: fixture.aggregate.mission.id
+            missionID: fixture.aggregate.mission.id,
+            legID: try #require(fixture.aggregate.primaryLeg?.id)
         )
         fixture.state.config.worktrees.baseBranch = "origin/main"
         let pane = fixture.state.rightPaneStore.state(
@@ -363,15 +366,16 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == nil)
         #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.setupCheckpoint == .running)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
-        let presentation = MissionTabPresentation(
+        let primaryLeg = try #require(aggregate.primaryLeg)
+        #expect(primaryLeg.state == .needsAttention)
+        #expect(primaryLeg.setupCheckpoint == .running)
+        #expect(primaryLeg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        let presentation = MissionLegPresentation(
             aggregate: aggregate,
+            leg: primaryLeg,
             worktree: nil,
             worktreeRecoveryAvailable: true
         )
-        #expect(presentation.worktreeRecovery == .recreateMissing)
         #expect(presentation.actions.recoverWorktree)
     }
 
@@ -397,8 +401,8 @@ struct MissionTabTests {
         await fixture.state.cleanupMissingWorktrees(beforeIds: beforeIds)
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test func topologyCleanupDetectsAReplacementLineageOnTheSameBranch() async throws {
@@ -417,8 +421,8 @@ struct MissionTabTests {
         await fixture.state.cleanupMissingWorktrees(beforeIds: beforeIds)
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test func topologyCleanupReconcilesMissingMissionAfterDiscoveryRecovers() async throws {
@@ -432,8 +436,8 @@ struct MissionTabTests {
         await fixture.state.cleanupMissingWorktrees(beforeIds: [])
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test func topologyCleanupReconcilesMissingMissionFromALaterCheckpoint() async throws {
@@ -449,9 +453,9 @@ struct MissionTabTests {
         await fixture.state.cleanupMissingWorktrees(beforeIds: [])
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.setupCheckpoint == .running)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.setupCheckpoint == .running)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test func topologyCleanupPreservesAnInitialWorktreeCreationFailure() async throws {
@@ -467,9 +471,9 @@ struct MissionTabTests {
         await fixture.state.cleanupMissingWorktrees(beforeIds: [])
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
-        #expect(aggregate.mission.attentionReason == "Git rejected the branch.")
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.setupCheckpoint == .creatingWorktree)
+        #expect(aggregate.primaryLeg?.attentionReason == "Git rejected the branch.")
     }
 
     @Test func directDeletionMarksTheMissionWorktreeMissing() async throws {
@@ -479,8 +483,27 @@ struct MissionTabTests {
         await fixture.state.reconcileDeletedMissionWorktree(fixture.worktree.id)
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+    }
+
+    @Test func directDeletionMarksOnlyTheDeletedSecondaryLegMissing() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            includeSecondaryLeg: true
+        )
+        let secondaryWorktree = try #require(fixture.secondaryWorktree)
+        let secondaryLeg = try #require(fixture.aggregate.legs.first { $0.projectId == "project-2" })
+        await fixture.state.missions.load()
+
+        await fixture.state.reconcileDeletedMissionWorktree(secondaryWorktree.id)
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.primaryLeg?.state == .running)
+        #expect(aggregate.legs.first { $0.id == secondaryLeg.id }?.state == .needsAttention)
+        #expect(aggregate.legs.first { $0.id == secondaryLeg.id }?.attentionReason
+            == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test func topologyCleanupRestoresAReappearedMissionWorktree() async throws {
@@ -498,9 +521,39 @@ struct MissionTabTests {
         await fixture.state.cleanupMissingWorktrees(beforeIds: [])
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .running)
-        #expect(aggregate.mission.attentionReason == nil)
+        let primaryLeg = try #require(aggregate.primaryLeg)
+        #expect(primaryLeg.state == .running || primaryLeg.setupCheckpoint == .startingAgent)
+        #expect(primaryLeg.attentionReason != MissionReadinessEvaluator.missingWorktreeMessage)
         #expect(fixture.state.missingMissionTab == nil)
+    }
+
+    @Test func topologyCleanupRestoresAReappearedSecondaryMissionWorktree() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            includeSecondaryLeg: true
+        )
+        let secondaryWorktree = try #require(fixture.secondaryWorktree)
+        let secondaryLeg = try #require(fixture.aggregate.legs.first { $0.projectId == "project-2" })
+        await fixture.state.missions.load()
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: secondaryWorktree.id,
+            projectId: secondaryWorktree.projectId
+        )
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [secondaryWorktree.id])
+
+        var aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.legs.first { $0.id == secondaryLeg.id }?.state == .needsAttention)
+        fixture.state.projectsManager.insertOptimisticWorktree(secondaryWorktree)
+
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [])
+
+        aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        let restoredSecondaryLeg = try #require(aggregate.legs.first { $0.id == secondaryLeg.id })
+        #expect(restoredSecondaryLeg.state == .running || restoredSecondaryLeg.setupCheckpoint == .startingAgent)
+        #expect(restoredSecondaryLeg.attentionReason != MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.primaryLeg?.state == .running)
     }
 
     @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
@@ -510,21 +563,22 @@ struct MissionTabTests {
         await fixture.state.reconcileMissionsForStartup()
 
         let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.setupCheckpoint == .running)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        let primaryLeg = try #require(aggregate.primaryLeg)
+        #expect(primaryLeg.state == .needsAttention)
+        #expect(primaryLeg.setupCheckpoint == .running)
+        #expect(primaryLeg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
         #expect(fixture.state.missingMissionTab == MissionTabState(
             missionID: fixture.aggregate.mission.id,
             title: fixture.aggregate.mission.title
         ))
         #expect(fixture.state.selectedWorktreeId == nil)
         #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
-        let presentation = MissionTabPresentation(
+        let presentation = MissionLegPresentation(
             aggregate: aggregate,
+            leg: primaryLeg,
             worktree: nil,
             worktreeRecoveryAvailable: true
         )
-        #expect(presentation.worktreeRecovery == .recreateMissing)
         #expect(presentation.actions.recoverWorktree)
     }
 
@@ -627,13 +681,13 @@ struct MissionTabTests {
 
         #expect(openedMissionIDs == [id])
         #expect(checkpointAtOpen?.mission.state == .creating)
-        #expect(checkpointAtOpen?.mission.setupCheckpoint == .startingAgent)
+        #expect(checkpointAtOpen?.primaryLeg?.setupCheckpoint == .startingAgent)
         #expect(checkpointAtOpen?.primaryLeg?.worktreeId == worktree.id)
         #expect(checkpointAtOpen?.primaryLeg?.acpSessionId == nil)
         #expect(failed.primaryLeg?.worktreeId == worktree.id)
         #expect(failed.primaryLeg?.acpSessionId != nil)
-        #expect(failed.mission.setupCheckpoint == .startingAgent)
-        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.primaryLeg?.setupCheckpoint == .startingAgent)
+        #expect(failed.primaryLeg?.state == .needsAttention)
     }
 
     @Test func restartReconciliationDoesNotReopenMissionForReservedSession() async throws {
@@ -641,6 +695,7 @@ struct MissionTabTests {
             .appendingPathComponent("mission-restart-no-focus-\(UUID().uuidString).sqlite")
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.setupCheckpoint = .startingAgent
+        aggregate.legs[0].setupCheckpoint = .startingAgent
         aggregate.legs[0].worktreeId = "worktree-1"
         aggregate.legs[0].acpSessionId = "reserved-session"
         let store = try MissionStore(path: databaseURL.path)
@@ -675,8 +730,8 @@ struct MissionTabTests {
 
         #expect(openedMissionIDs.isEmpty)
         #expect(failed.primaryLeg?.acpSessionId == "reserved-session")
-        #expect(failed.mission.state == .needsAttention)
-        #expect(failed.mission.setupCheckpoint == .startingAgent)
+        #expect(failed.primaryLeg?.state == .needsAttention)
+        #expect(failed.primaryLeg?.setupCheckpoint == .startingAgent)
     }
 }
 
@@ -721,6 +776,20 @@ private struct MissionNavigationFixture {
             : nil
         aggregate.mission.setupCheckpoint = setupCheckpoint
         aggregate.mission.attentionReason = attentionReason
+        if aggregate.mission.state != .completed {
+            aggregate.legs[0].state = switch aggregate.mission.state {
+            case .creating: .creating
+            case .running: .running
+            case .needsAttention: .needsAttention
+            case .readyToComplete: .ready
+            case .completed: .running
+            }
+            aggregate.legs[0].readinessEvidence = aggregate.mission.state == .readyToComplete
+                ? MissionLegReadinessEvidence(kind: .legacy, observedAt: Date(timeIntervalSince1970: 100))
+                : nil
+        }
+        aggregate.legs[0].setupCheckpoint = setupCheckpoint
+        aggregate.legs[0].attentionReason = attentionReason
         aggregate.legs[0].worktreeId = "worktree-1"
         aggregate.legs[0].worktreeLineageID = persistedWorktreeLineageID ?? worktreeLineageID
         aggregate.legs[0].acpSessionId = "session-1"
