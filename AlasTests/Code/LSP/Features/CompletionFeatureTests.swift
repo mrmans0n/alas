@@ -85,6 +85,14 @@ struct CompletionFeatureTests {
         #expect(feature.testingSnapshot.prefix == CompletionPrefix(text: "openA", range: NSRange(location: 0, length: 5)))
         #expect(feature.testingSnapshot.selection == 0)
         #expect(!feature.testingSnapshot.isRefreshing)
+
+        textView.deleteBackward(nil)
+
+        #expect(textView.string == "open")
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "openBeta"])
+
+        textView.insertText("A", replacementRange: NSRange(location: NSNotFound, length: 0))
+
         #expect(textView.completionKeyHandler?(.acceptTop) == true)
         #expect(textView.string == "openAlpha")
         feature.cancelAndDismiss()

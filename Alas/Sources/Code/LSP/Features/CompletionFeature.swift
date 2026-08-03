@@ -16,6 +16,7 @@ final class CompletionFeature {
     private var requestTask: Task<Void, Never>?
     private var requestID: UInt64 = 0
     private var candidates: [CompletionCandidate] = []
+    private var candidatePool: [CompletionCandidate] = []
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
     private var selection: Int = 0
@@ -69,6 +70,7 @@ final class CompletionFeature {
         requestTask = nil
         requestID &+= 1
         candidates.removeAll()
+        candidatePool.removeAll()
         prefix = nil
         candidatePrefix = nil
         selection = 0
@@ -243,6 +245,7 @@ final class CompletionFeature {
 
         let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
         candidates = next
+        candidatePool = next
         self.prefix = prefix
         candidatePrefix = prefix
         isRefreshing = false
@@ -369,6 +372,7 @@ final class CompletionFeature {
               !updatedPrefix.text.isEmpty,
               previousPrefix?.range.location == updatedPrefix.range.location else {
             candidates.removeAll()
+            candidatePool.removeAll()
             prefix = nil
             candidatePrefix = nil
             selection = 0
@@ -377,10 +381,10 @@ final class CompletionFeature {
         }
 
         let selectedCandidateID = candidates.indices.contains(selection) ? candidates[selection].id : nil
-        candidates.removeAll { candidate in
+        candidates = candidatePool.filter { candidate in
             let filter = candidate.filterText ?? candidate.label
-            return !CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) &&
-                !CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text)
+            return CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) ||
+                CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text)
         }
         isRefreshing = candidates.isEmpty
         prefix = candidates.isEmpty ? nil : updatedPrefix
@@ -452,6 +456,7 @@ extension CompletionFeature {
                 source: .lsp
             )
         }
+        candidatePool = candidates
         self.prefix = prefix
         candidatePrefix = prefix
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
