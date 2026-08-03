@@ -49,4 +49,35 @@ struct ACPTranscriptRowHostingViewTests {
         view.invalidateIntrinsicContentSize()
         #expect(fired == 1)
     }
+
+    @Test("lastMeasuredWidth reflects the last successful measurement")
+    func lastMeasuredWidthTracksMeasurement() {
+        let view = ACPTranscriptRowHostingView(rootView: AnyView(Text("hello world")))
+        #expect(view.lastMeasuredWidth == nil)
+
+        _ = view.measuredHeight(forWidth: 320)
+        #expect(view.lastMeasuredWidth == 320)
+
+        _ = view.measuredHeight(forWidth: 150)
+        #expect(view.lastMeasuredWidth == 150)
+    }
+
+    @Test("non-positive width is rejected without pinning the view to a degenerate frame")
+    func nonPositiveWidthIsRejected() {
+        let freshView = ACPTranscriptRowHostingView(rootView: AnyView(Text("hello world")))
+        #expect(freshView.measuredHeight(forWidth: 0) == 0)
+        #expect(freshView.lastMeasuredWidth == nil)
+        #expect(freshView.measuredHeight(forWidth: -50) == 0)
+        #expect(freshView.lastMeasuredWidth == nil)
+
+        let measuredView = ACPTranscriptRowHostingView(rootView: AnyView(Text("hello world")))
+        _ = measuredView.measuredHeight(forWidth: 320)
+        #expect(measuredView.lastMeasuredWidth == 320)
+
+        #expect(measuredView.measuredHeight(forWidth: 0) == 0)
+        #expect(measuredView.lastMeasuredWidth == 320)
+
+        #expect(measuredView.measuredHeight(forWidth: -10) == 0)
+        #expect(measuredView.lastMeasuredWidth == 320)
+    }
 }
