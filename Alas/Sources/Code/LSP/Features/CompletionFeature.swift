@@ -456,8 +456,7 @@ final class CompletionFeature {
         if let previousPrefix,
            let candidatePrefix,
            updatedPrefix.range.length < previousPrefix.range.length,
-           updatedPrefix.range.length < candidatePrefix.range.length ||
-           candidatePoolPrefix != candidatePrefix,
+           !candidateItems.isEmpty || candidateAllowsBufferFallback,
            let candidateBufferText {
             let rebuilt = Self.candidates(
                 items: candidateItems,
