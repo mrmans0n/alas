@@ -1095,9 +1095,10 @@ fn send_ipc_within(
         // so a wedged supervisor cannot stall the caller here; the retry
         // deadline in `send_ipc_with_retry` handles the refusal. Linux instead
         // *blocks* until backlog space frees up, so if brokers ever run on a
-        // remote helper this needs a non-blocking, deadline-aware connect
-        // before it can be trusted. `connect_does_not_block_on_a_full_backlog`
-        // fails rather than hangs if that assumption ever stops holding.
+        // remote helper — this binary is built for Linux too — this needs a
+        // non-blocking, deadline-aware connect before it can be trusted.
+        // `connect_does_not_block_on_a_full_backlog` pins the Darwin
+        // behaviour this relies on.
         let mut stream = UnixStream::connect(dir.join("broker.sock"))
             .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
         // Without a bound, a broker that accepted the connection but never
@@ -1509,9 +1510,16 @@ mod tests {
     /// because Darwin refuses a connect to a full listen backlog instead of
     /// waiting for room — otherwise a wedged supervisor could stall the
     /// helper's single-threaded loop before any timeout is installed. Pin that
-    /// assumption: on a platform that blocks instead (Linux does), this fails
-    /// rather than hanging, and points at the connect that needs rewriting.
-    #[cfg(unix)]
+    /// behaviour so a future Darwin that starts blocking is caught here.
+    ///
+    /// Darwin-only on purpose. This helper is also built for Linux (see
+    /// `scripts/build-alas-helper.sh`), where a full backlog *does* block —
+    /// but Linux never reaches the code this guards, because brokers are
+    /// spawned for local sessions only. Running it there would fail for an
+    /// assumption that platform does not need to hold. What Linux would need
+    /// if brokers ever ran on a remote helper is documented at the connect
+    /// itself, which is the thing that would have to change.
+    #[cfg(target_os = "macos")]
     #[test]
     fn connect_does_not_block_on_a_full_backlog() {
         use std::sync::mpsc;
