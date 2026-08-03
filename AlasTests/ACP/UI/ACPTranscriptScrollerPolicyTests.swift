@@ -191,17 +191,50 @@ struct ACPTranscriptScrollerPolicyTests {
             hasPendingHeadStep: false))
     }
 
-    @Test("tail step fires near the bottom when newer rows are hidden")
+    @Test("tail step fires near the bottom when newer rows are hidden and the user is scrolling down")
     func tailStep() {
         #expect(ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500))
+            isUserDriven: true, threshold: 1500,
+            previousScrollY: 1000, newScrollY: 1050))
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 200, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500))
+            isUserDriven: true, threshold: 1500,
+            previousScrollY: 1000, newScrollY: 1050))
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 5000,
-            isUserDriven: true, threshold: 1500))
+            isUserDriven: true, threshold: 1500,
+            previousScrollY: 1000, newScrollY: 1050))
+    }
+
+    @Test("tail step does not fire while the user is scrolling up, even within threshold")
+    func tailStepWithholdsOnUpwardScroll() {
+        // Same visibleTail/messageCount/distanceFromBottom/isUserDriven/threshold
+        // as the passing case in `tailStep`, but the offset moved UP
+        // (newScrollY < previousScrollY) — browsing older content should not
+        // page in hidden newer messages.
+        #expect(!ACPTranscriptScroller.shouldStepTailForward(
+            visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
+            isUserDriven: true, threshold: 1500,
+            previousScrollY: 1050, newScrollY: 1000))
+    }
+
+    @Test("tail step withholds when direction is unknown (no previous offset yet)")
+    func tailStepWithholdsWithoutPreviousOffset() {
+        #expect(!ACPTranscriptScroller.shouldStepTailForward(
+            visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
+            isUserDriven: true, threshold: 1500,
+            previousScrollY: nil, newScrollY: 1050))
+    }
+
+    @Test("tail step ignores sub-epsilon jitter as downward movement")
+    func tailStepWithholdsOnJitter() {
+        // A change smaller than `ACPScrollDirectionClassifier.upwardEpsilon`
+        // (0.5pt) must not be treated as a deliberate downward scroll.
+        #expect(!ACPTranscriptScroller.shouldStepTailForward(
+            visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
+            isUserDriven: true, threshold: 1500,
+            previousScrollY: 1000, newScrollY: 1000.2))
     }
 
     @Test("head step threshold scales with viewport but has a floor")

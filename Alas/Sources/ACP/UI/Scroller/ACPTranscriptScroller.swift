@@ -514,7 +514,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 visibleTail: host.transcript.visibleTailBound,
                 messageCount: host.transcript.messages.count,
                 distanceFromBottom: scroller.distanceFromBottom,
-                isUserDriven: isUserDriven, threshold: threshold
+                isUserDriven: isUserDriven, threshold: threshold,
+                previousScrollY: previousY, newScrollY: newY
             ) {
                 host.transcript.stepTailForward(preserving: nil, boundHead: false)
             }
@@ -632,11 +633,27 @@ extension ACPTranscriptScroller {
         visibleHead > 0 && isUserDriven && scrollY < threshold && !hasPendingHeadStep
     }
 
+    /// Mirrors `ACPMessageList.shouldStepTailForwardFromBottomGeometry`: a
+    /// bounds change within the bottom threshold only pages the hidden tail
+    /// while the viewport is actually moving DOWN through the document (in
+    /// this flipped, top-down coordinate space, that means `newScrollY`
+    /// increasing past `previousScrollY`). Without this, browsing upward
+    /// while near the bottom threshold — e.g. a non-tail-following session
+    /// with hidden newer messages — would advance `visibleTail` and
+    /// synchronously measure another chunk of rows on every tick, which is
+    /// exactly the unnecessary synchronous work this scroller exists to
+    /// avoid. `previousScrollY` is `nil` only before the first reported
+    /// scroll offset, in which case direction is unknown and paging is
+    /// withheld.
     nonisolated static func shouldStepTailForward(
         visibleTail: Int, messageCount: Int, distanceFromBottom: CGFloat,
-        isUserDriven: Bool, threshold: CGFloat
+        isUserDriven: Bool, threshold: CGFloat,
+        previousScrollY: CGFloat?, newScrollY: CGFloat
     ) -> Bool {
-        visibleTail < messageCount && isUserDriven && distanceFromBottom < threshold
+        guard visibleTail < messageCount, isUserDriven, distanceFromBottom < threshold,
+              let previousScrollY
+        else { return false }
+        return newScrollY > previousScrollY + ACPScrollDirectionClassifier.upwardEpsilon
     }
 }
 
