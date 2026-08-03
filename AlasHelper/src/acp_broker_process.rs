@@ -33,6 +33,21 @@ use std::os::unix::net::{UnixListener, UnixStream};
 /// caller has declared a length and is held to it instead.
 const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Ceiling on the whole first line, alongside the silence bound above.
+///
+/// Without it a caller can send one byte every 59s forever, and since every
+/// connection owns a thread, repeating that accumulates threads until the
+/// broker cannot spawn any more. Generous next to what the line actually
+/// costs — a legacy caller pauses ~7.4s to encode a maximal prompt and then
+/// writes it in ~0.2s — so this only ever catches a caller that is not really
+/// trying to finish.
+const IPC_REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Bounds on the first line of a request: silence, and total elapsed.
+#[cfg(unix)]
+const IPC_REQUEST_HEAD_BUDGET: ReadBudget =
+    ReadBudget::bounded_const(IPC_REQUEST_IDLE_TIMEOUT, IPC_REQUEST_TOTAL_TIMEOUT);
+
 /// Slowest a caller may deliver a framed body before we stop waiting.
 ///
 /// An idle budget alone is not enough once a length is known: a caller can
@@ -42,13 +57,20 @@ const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// so a legitimate transfer clears it by two orders of magnitude.
 const MIN_IPC_BODY_THROUGHPUT: u64 = 10 * 1024 * 1024;
 
-/// Deadline for a framed body of `len` bytes: whatever the throughput floor
-/// allows, but never less than the ordinary idle budget, so a small body is
-/// not held to a stricter rule than a large one.
+/// Budget for a framed body of `len` bytes.
+///
+/// The total scales with the length the caller declared — never below the
+/// ordinary idle budget, so a small body is not held to a stricter rule than a
+/// large one. The idle bound is kept alongside it and does not scale: a caller
+/// that declares 1 TiB and then says nothing would otherwise have bought
+/// itself about 29 hours of silence, and a thread to spend it in.
 #[cfg(unix)]
-fn framed_body_budget(len: usize) -> LineBudget {
+fn framed_body_budget(len: usize) -> ReadBudget {
     let by_rate = Duration::from_secs_f64(len as f64 / MIN_IPC_BODY_THROUGHPUT as f64);
-    LineBudget::Total(by_rate.max(BROKER_IPC_IDLE_TIMEOUT))
+    ReadBudget::bounded(
+        BROKER_IPC_IDLE_TIMEOUT,
+        by_rate.max(BROKER_IPC_IDLE_TIMEOUT),
+    )
 }
 
 /// How long a caller gives a broker to send *something* before treating it as
@@ -457,53 +479,71 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
     Ok(json!({ "brokers": brokers }))
 }
 
-/// How a line read is bounded in time.
+/// How a read is bounded in time.
 ///
-/// Which variant is right depends on whether the peer is one we trust to
-/// finish what it starts.
+/// Two bounds, because either alone has a hole. An idle bound asks only that
+/// the peer keep sending, which a trickle satisfies forever. A total bound
+/// asks the read to finish by a fixed time, which fails a legitimately large
+/// or slow-to-start transfer. Applying both lets a peer be slow *or* large
+/// without letting it be indefinite.
 #[derive(Clone, Copy)]
-enum LineBudget {
-    /// Wall-clock for the whole line. Correct where the peer is arbitrary,
-    /// since only a total bound stops a slow trickle that keeps looking like
-    /// progress.
-    Total(Duration),
-    /// Longest run with no bytes arriving. Correct where a legitimate payload
-    /// can be arbitrarily large, which makes any total a guess that eventually
-    /// fails a valid transfer: the real failure being guarded against is a peer
-    /// that has stopped making progress, not one that is merely big.
-    Idle(Duration),
+struct ReadBudget {
+    /// Longest run with no bytes arriving.
+    idle: Duration,
+    /// Longest the whole read may take, however much progress is made. `None`
+    /// where the peer is a broker this helper spawned and its reply has no
+    /// size we could turn into a deadline — there, one thread per outstanding
+    /// request is bounded by the number of sessions, not by the peer.
+    total: Option<Duration>,
 }
 
-/// Tracks whether a read still has time left, under whichever budget applies.
+impl ReadBudget {
+    /// For a peer we trust to finish what it starts.
+    fn idle(idle: Duration) -> Self {
+        Self { idle, total: None }
+    }
+
+    /// For an arbitrary peer, which must be both making progress and finishing.
+    fn bounded(idle: Duration, total: Duration) -> Self {
+        Self::bounded_const(idle, total)
+    }
+
+    const fn bounded_const(idle: Duration, total: Duration) -> Self {
+        Self {
+            idle,
+            total: Some(total),
+        }
+    }
+}
+
+/// Tracks whether a read still has time left under both of its bounds.
 #[cfg(unix)]
 struct BudgetClock {
-    budget: LineBudget,
-    deadline: std::time::Instant,
+    idle: Duration,
+    idle_deadline: std::time::Instant,
+    total_deadline: Option<std::time::Instant>,
 }
 
 #[cfg(unix)]
 impl BudgetClock {
-    fn new(budget: LineBudget) -> Self {
-        let limit = match budget {
-            LineBudget::Total(limit) | LineBudget::Idle(limit) => limit,
-        };
+    fn new(budget: ReadBudget) -> Self {
+        let now = std::time::Instant::now();
         Self {
-            budget,
-            deadline: std::time::Instant::now() + limit,
+            idle: budget.idle,
+            idle_deadline: now + budget.idle,
+            total_deadline: budget.total.map(|total| now + total),
         }
     }
 
     fn expired(&self) -> bool {
-        std::time::Instant::now() >= self.deadline
+        let now = std::time::Instant::now();
+        now >= self.idle_deadline || self.total_deadline.is_some_and(|deadline| now >= deadline)
     }
 
-    /// Bytes arrived. An idle budget starts over — the peer is making
-    /// progress, which is the only thing it asks about. A total budget is left
-    /// alone: for an arbitrary peer, progress is exactly what a trickle fakes.
+    /// Bytes arrived, so the idle bound starts over. The total bound does not:
+    /// that is the one a trickle cannot renew.
     fn progressed(&mut self) {
-        if let LineBudget::Idle(limit) = self.budget {
-            self.deadline = std::time::Instant::now() + limit;
-        }
+        self.idle_deadline = std::time::Instant::now() + self.idle;
     }
 
     fn timed_out() -> io::Error {
@@ -550,7 +590,7 @@ fn is_quiet(error: &io::Error) -> bool {
 /// reads until it finds a newline, so a peer trickling bytes faster than the
 /// timeout renews its budget indefinitely.
 #[cfg(unix)]
-fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: LineBudget) -> io::Result<String> {
+fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: ReadBudget) -> io::Result<String> {
     let mut clock = BudgetClock::new(budget);
     let mut line: Vec<u8> = Vec::new();
     loop {
@@ -595,7 +635,7 @@ fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: LineBudget) -> 
 fn read_exact_within(
     reader: &mut BufReader<&UnixStream>,
     len: usize,
-    budget: LineBudget,
+    budget: ReadBudget,
 ) -> io::Result<String> {
     let mut clock = BudgetClock::new(budget);
     let mut body: Vec<u8> = Vec::with_capacity(len.min(1024 * 1024));
@@ -649,9 +689,25 @@ const IPC_FRAME_HEADER: &str = "ALASIPC1 ";
 #[cfg(unix)]
 const IPC_FRAMING_MARKER: &str = "framing";
 
+/// True when the broker *currently* running in `dir` wrote the marker.
+///
+/// Presence alone is not enough. A supervisor from an earlier build can
+/// replace one from this build in the same directory, and its cleanup does not
+/// know to remove a file it has never heard of — so the marker outlives the
+/// broker that meant it. Framed requests would then go to a broker that only
+/// understands newlines, which rejects them, and `acp/open` will not replace it
+/// because its pid is live: the session cannot be reopened at all. Recording
+/// the pid the marker was written for makes it expire with its broker, since
+/// any replacement writes a new `pid.json`.
 #[cfg(unix)]
 fn broker_supports_framing(dir: &Path) -> bool {
-    dir.join(IPC_FRAMING_MARKER).exists()
+    let Ok(marker) = std::fs::read_to_string(dir.join(IPC_FRAMING_MARKER)) else {
+        return false;
+    };
+    let Ok(marked_pid) = marker.trim().parse::<u32>() else {
+        return false;
+    };
+    read_broker_pid_metadata(dir).is_some_and(|metadata| metadata.pid == marked_pid)
 }
 
 /// Reads one message, in whichever framing the peer used.
@@ -660,16 +716,16 @@ fn broker_supports_framing(dir: &Path) -> bool {
 /// pairings work: a new caller reaching an old broker, and an old caller
 /// reaching a new one.
 ///
-/// `head_idle` bounds silence on the first line, which is a short framing
-/// header or — under the legacy encoding — the entire message. The framed body
-/// is then bounded by the length the caller declared, so an advertised size
-/// cannot be used to hold resources indefinitely.
+/// `head` bounds the first line, which is a short framing header or — under
+/// the legacy encoding — the entire message. The framed body is then bounded
+/// by the length the caller declared, so an advertised size cannot be used to
+/// hold resources indefinitely.
 #[cfg(unix)]
 fn read_ipc_message(
     reader: &mut BufReader<&UnixStream>,
-    head_idle: Duration,
+    head: ReadBudget,
 ) -> io::Result<(String, Framing)> {
-    let head = read_line_within(reader, LineBudget::Idle(head_idle))?;
+    let head = read_line_within(reader, head)?;
     let Some(len) = head.strip_prefix(IPC_FRAME_HEADER) else {
         return Ok((head, Framing::Legacy));
     };
@@ -709,8 +765,12 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
         let _ = std::fs::remove_file(&socket_path);
         // Advertise framing before the socket exists, not after: a caller that
         // connected in between would find no marker and fall back to the
-        // legacy encoding for that request.
-        write_restrictive_bytes(&dir.join(IPC_FRAMING_MARKER), b"1\n")?;
+        // legacy encoding for that request. Stamped with this process's pid so
+        // it cannot outlive this broker — see `broker_supports_framing`.
+        write_restrictive_bytes(
+            &dir.join(IPC_FRAMING_MARKER),
+            format!("{}\n", std::process::id()).as_bytes(),
+        )?;
         let listener = UnixListener::bind(&socket_path)
             .map_err(|error| broker_error(-32072, format!("socket bind failed: {error}")))?;
         // Non-blocking so the loop can notice `close` without waiting for
@@ -776,7 +836,7 @@ fn handle_connection(runtime: Runtime, stream: UnixStream) -> io::Result<()> {
     stream.set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))?;
     let (line, framing) = {
         let mut reader = ipc_reader(&stream)?;
-        read_ipc_message(&mut reader, IPC_REQUEST_IDLE_TIMEOUT)?
+        read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET)?
     };
     handle_ipc_line(runtime, stream, line, framing)
 }
@@ -1377,7 +1437,7 @@ fn send_ipc_within(
         let (line, _) = {
             let mut reader = ipc_reader(&stream)
                 .map_err(|error| broker_error(-32072, format!("broker read setup: {error}")))?;
-            read_ipc_message(&mut reader, idle_timeout)
+            read_ipc_message(&mut reader, ReadBudget::idle(idle_timeout))
                 .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?
         };
         let response: BrokerIpcResponse = serde_json::from_str(&line)
@@ -1829,7 +1889,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let mut reader = ipc_reader(&reader).expect("reader");
-        let line = read_line_within(&mut reader, LineBudget::Idle(Duration::from_secs(1)))
+        let line = read_line_within(&mut reader, ReadBudget::idle(Duration::from_secs(1)))
             .expect("a peer that keeps making progress must not be given up on");
         assert_eq!(line.len(), 6 * 512 + 1);
         assert!(
@@ -1864,7 +1924,7 @@ mod tests {
         let outcome = read_exact_within(
             &mut reader,
             4 * 1024 * 1024,
-            LineBudget::Total(Duration::from_secs(2)),
+            ReadBudget::bounded(Duration::from_secs(2), Duration::from_secs(2)),
         );
         *done.lock().expect("drip flag") = true;
 
@@ -1873,24 +1933,101 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 
+    /// A framing marker must expire with the broker that wrote it.
+    ///
+    /// A supervisor from an earlier build can replace this one in the same
+    /// directory, and its cleanup does not know to remove a file it has never
+    /// heard of — so the marker outlives the broker that meant it. Trusting it
+    /// then sends framed requests to a broker that only speaks newlines, which
+    /// rejects them, and `acp/open` will not replace it while its pid is live.
+    ///
+    /// Tested here rather than end-to-end because reproducing it for real
+    /// needs a supervisor built before framing existed; what can be pinned is
+    /// that presence alone is not taken as consent.
+    #[cfg(unix)]
+    #[test]
+    fn a_framing_marker_is_only_trusted_for_the_live_broker() {
+        let dir = PathBuf::from(format!("/tmp/alas-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("marker dir");
+        write_broker_pid(&dir).expect("pid metadata");
+        let live = std::process::id();
+
+        assert!(
+            !broker_supports_framing(&dir),
+            "no marker should mean no framing"
+        );
+
+        std::fs::write(dir.join(IPC_FRAMING_MARKER), format!("{live}\n")).expect("marker");
+        assert!(
+            broker_supports_framing(&dir),
+            "a marker written by the live broker should be trusted"
+        );
+
+        // Stands in for a marker left behind by a broker that has since been
+        // replaced: present, but naming a process that is no longer the one
+        // serving this directory.
+        std::fs::write(dir.join(IPC_FRAMING_MARKER), format!("{}\n", live + 1)).expect("marker");
+        assert!(
+            !broker_supports_framing(&dir),
+            "a marker from a replaced broker must not be trusted"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A declared length buys time proportional to itself, and nothing else.
+    /// Deriving the only deadline from it would let a caller claim 1 TiB and
+    /// then say nothing for the ~29 hours that implies, parking a thread per
+    /// such connection.
+    #[cfg(unix)]
+    #[test]
+    fn a_huge_declared_length_does_not_buy_silence() {
+        let (_writer, reader) = UnixStream::pair().expect("socket pair");
+        let mut reader = ipc_reader(&reader).expect("reader");
+
+        let one_tib = 1024usize.pow(4);
+        let mut budget = framed_body_budget(one_tib);
+        assert!(
+            budget
+                .total
+                .is_some_and(|total| total > Duration::from_secs(3600)),
+            "a 1 TiB body should be allowed hours in total: {:?}",
+            budget.total
+        );
+        // Shorten only the silence bound, so this test does not sit for the
+        // full idle budget while proving the total is not what stops it.
+        budget.idle = Duration::from_millis(300);
+
+        let started = std::time::Instant::now();
+        let error = read_exact_within(&mut reader, one_tib, budget)
+            .expect_err("a silent caller must be cut by the idle bound, not its own claim");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(30));
+    }
+
     /// The rate floor must not turn into a ceiling on legitimate payloads: a
     /// body large enough to take real time still has to be allowed to arrive.
     #[test]
     fn the_body_deadline_scales_with_the_length_a_caller_declares() {
         // Small bodies are not held to a stricter rule than large ones.
-        assert!(matches!(
-            framed_body_budget(1024),
-            LineBudget::Total(budget) if budget == BROKER_IPC_IDLE_TIMEOUT
-        ));
+        assert_eq!(
+            framed_body_budget(1024).total,
+            Some(BROKER_IPC_IDLE_TIMEOUT)
+        );
         // A maximal image prompt (~267 MiB) gets time proportional to its size.
         let maximal = 267 * 1024 * 1024;
-        let LineBudget::Total(budget) = framed_body_budget(maximal) else {
-            panic!("a framed body should be bounded in total, not by inactivity");
-        };
+        let budget = framed_body_budget(maximal);
         assert!(
-            budget >= BROKER_IPC_IDLE_TIMEOUT,
-            "a large body was given less time than a small one: {budget:?}"
+            budget
+                .total
+                .is_some_and(|total| total >= BROKER_IPC_IDLE_TIMEOUT),
+            "a large body was given less time than a small one: {:?}",
+            budget.total
         );
+        // The silence bound does not scale with the declared length, or a
+        // caller could buy quiet by claiming a huge body.
+        assert_eq!(budget.idle, BROKER_IPC_IDLE_TIMEOUT);
     }
 
     /// The whole fix rests on this: a peer that keeps the connection alive and
@@ -1915,7 +2052,10 @@ mod tests {
 
         let started = std::time::Instant::now();
         let mut reader = ipc_reader(&reader).expect("reader");
-        let outcome = read_line_within(&mut reader, LineBudget::Total(Duration::from_secs(2)));
+        let outcome = read_line_within(
+            &mut reader,
+            ReadBudget::bounded(Duration::from_secs(2), Duration::from_secs(2)),
+        );
         let elapsed = started.elapsed();
         *done.lock().expect("drip flag") = true;
 
@@ -1942,7 +2082,7 @@ mod tests {
         });
 
         let mut reader = ipc_reader(&reader).expect("reader");
-        let line = read_line_within(&mut reader, LineBudget::Total(Duration::from_secs(30)))
+        let line = read_line_within(&mut reader, ReadBudget::idle(Duration::from_secs(30)))
             .expect("large line");
         assert_eq!(line.len(), expected + 1);
     }
