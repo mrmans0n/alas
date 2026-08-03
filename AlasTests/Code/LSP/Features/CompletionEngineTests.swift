@@ -293,6 +293,49 @@ struct CompletionEngineTests {
         #expect(plan.flatMap { apply($0, to: "opeXYZ") } == "openAlphaXYZ")
     }
 
+    @Test("keeps an adjacent additional edit before a grown prefix")
+    func plansAdjacentAdditionalEditAtOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "count",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "count",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 4),
+                    end: LSPPosition(line: 0, character: 4)
+                ),
+                newText: "count"
+            ),
+            additionalTextEdits: [
+                LSPTextEdit(
+                    range: LSPRange(
+                        start: LSPPosition(line: 0, character: 0),
+                        end: LSPPosition(line: 0, character: 4)
+                    ),
+                    newText: "object."
+                )
+            ],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "c", range: NSRange(location: 4, length: 1)),
+            originalPrefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0)),
+            in: "foo.c"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 4), replacementText: "object."),
+            CompletionTextEdit(range: NSRange(location: 4, length: 1), replacementText: "count")
+        ])
+        #expect(plan.flatMap { apply($0, to: "foo.c") } == "object.count")
+    }
+
     @Test("plans textEdit plus non-overlapping additional edits")
     func plansAdditionalTextEdits() {
         let text = "let value = op\n"

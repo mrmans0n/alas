@@ -178,6 +178,7 @@ enum CompletionEngine {
                 for: textEdit.range,
                 originalPrefix: originalPrefix,
                 prefix: prefix,
+                includeInsertedTextAtEnd: true,
                 in: text
             ) else { return nil }
             if shouldReplacePrefix(range: range, replacement: candidate.replacementText, prefix: prefix) {
@@ -197,6 +198,7 @@ enum CompletionEngine {
                 for: additional.range,
                 originalPrefix: originalPrefix,
                 prefix: prefix,
+                includeInsertedTextAtEnd: false,
                 in: text
             ) else { continue }
             let edit = CompletionTextEdit(range: range, replacementText: additional.newText)
@@ -315,6 +317,7 @@ enum CompletionEngine {
         for range: LSPRange,
         originalPrefix: CompletionPrefix?,
         prefix: CompletionPrefix,
+        includeInsertedTextAtEnd: Bool,
         in text: String
     ) -> NSRange? {
         guard let originalPrefix,
@@ -332,14 +335,17 @@ enum CompletionEngine {
         }
         let oldCaretCharacter = prefixStart.character + originalPrefix.range.length
 
-        func shifted(_ position: LSPPosition) -> LSPPosition {
+        func shifted(_ position: LSPPosition, atEnd: Bool) -> LSPPosition {
             guard position.line == prefixStart.line,
-                  position.character >= oldCaretCharacter else { return position }
+                  position.character > oldCaretCharacter ||
+                  (!atEnd || includeInsertedTextAtEnd) && position.character == oldCaretCharacter else {
+                return position
+            }
             return LSPPosition(line: position.line, character: position.character + growth)
         }
 
         return nsRange(
-            for: LSPRange(start: shifted(range.start), end: shifted(range.end)),
+            for: LSPRange(start: shifted(range.start, atEnd: false), end: shifted(range.end, atEnd: true)),
             in: text
         )
     }
