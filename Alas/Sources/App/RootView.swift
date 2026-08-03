@@ -262,8 +262,8 @@ struct RootView: View {
 
     private var allowsHiddenSelectedWorktreeForMission: Bool {
         guard let worktreeID = state.selectedWorktreeId,
-              let tab = state.tabs.activeTab(forWorktree: worktreeID),
-              case .mission = tab
+              let tab = state.globalTabs.activeMissionTab(),
+              state.missions.aggregate(id: tab.missionID)?.primaryLeg?.worktreeId == worktreeID
         else { return false }
         return true
     }

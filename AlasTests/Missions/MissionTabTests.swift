@@ -73,7 +73,8 @@ struct MissionTabTests {
         let tab = try result.get()
         #expect(fixture.state.spacesManager.activeSpaceId == "mission-space")
         #expect(fixture.state.selectedWorktreeId == "worktree-1")
-        #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree-1") == tab.id)
+        #expect(fixture.state.globalTabs.activeTabId == tab.id)
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
         #expect(tab == .mission(MissionTabState(
             missionID: fixture.aggregate.mission.id,
             title: fixture.aggregate.mission.title
@@ -92,7 +93,7 @@ struct MissionTabTests {
             projectId: "project-1",
             path: fixture.worktree.path
         ))
-        #expect(fixture.state.tabs.activeTab(forWorktree: "worktree-1")?.id == "mission:mission-1")
+        #expect(fixture.state.globalTabs.activeTabId == "mission:mission-1")
     }
 
     @Test func openMissionPresentsDetailWhenNoKnownWorktreeRowExists() async throws {
@@ -766,7 +767,11 @@ private struct MissionNavigationFixture {
                 projectsFile: ProjectsFile(projects: includeProject ? [project] : []),
                 spacesFile: spaces
             ),
-            missionPersistence: persistence
+            missionPersistence: persistence,
+            globalTabs: GlobalTabsManager(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mission-global-tabs-\(UUID().uuidString).json")
+            )
         )
         if includeWorktree {
             state.projectsManager.insertOptimisticWorktree(worktree)

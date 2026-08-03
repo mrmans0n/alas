@@ -30,6 +30,7 @@ final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
+    let globalTabs: GlobalTabsManager
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
@@ -545,10 +546,12 @@ final class AppState {
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
         missionBranchTipOverride: MissionBranchTip? = nil,
-        missionArchiveRecorder: MissionArchiveRecorder? = nil
+        missionArchiveRecorder: MissionArchiveRecorder? = nil,
+        globalTabs: GlobalTabsManager = GlobalTabsManager()
     ) {
         self.store = store
         self.missionPersistence = missionPersistence
+        self.globalTabs = globalTabs
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
@@ -713,7 +716,7 @@ final class AppState {
             },
             notifyChanged: { [weak self] aggregate in
                 guard let self else { return }
-                tabs.updateMissionTitle(
+                globalTabs.updateMissionTitle(
                     missionID: aggregate.mission.id,
                     title: aggregate.mission.title
                 )
@@ -849,14 +852,16 @@ final class AppState {
         }
 
         focusGlobalWorktree(id: worktree.id, projectId: leg.projectId)
-        let tab = tabs.openOrFocusMission(
-            worktreeId: worktree.id,
+        let globalTab = globalTabs.openOrFocusMission(
             missionID: id,
             title: aggregate.mission.title
         )
         missingMissionTab = nil
         missingMissionWorktreeId = nil
-        return .success(tab)
+        guard case .mission(let tab) = globalTab else {
+            preconditionFailure("Global Mission tabs always contain a Mission state.")
+        }
+        return .success(.mission(tab))
     }
 
     @discardableResult
@@ -1583,7 +1588,8 @@ final class AppState {
         let disappeared = beforeIds.subtracting(afterIds)
         let selectedMissingMission: (tab: MissionTabState, worktreeID: String)? = selectedWorktreeId.flatMap { worktreeID in
             guard disappeared.contains(worktreeID),
-                  case .mission(let tab) = tabs.activeTab(forWorktree: worktreeID)
+                  let tab = globalTabs.activeMissionTab(),
+                  missions.aggregate(id: tab.missionID)?.primaryLeg?.worktreeId == worktreeID
             else { return nil }
             return (tab, worktreeID)
         }
@@ -1633,6 +1639,11 @@ final class AppState {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
+        do {
+            try globalTabs.loadAndMigrate(worktreeTabs: tabs)
+        } catch {
+            persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
+        }
         // When cross-quit persistence is disabled, drop every persisted
         // terminal tab right after load — across all worktrees, before
         // any lazy-display path could observe them — so orphan zmx
@@ -4435,6 +4446,10 @@ final class AppState {
     }
 
     func closeTab(worktreeId: String, tabId: TabID) {
+        if globalTabs.tabs.contains(where: { $0.id == tabId }) {
+            globalTabs.close(tabId: tabId)
+            return
+        }
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let projectPath = projectPath(forWorktreeId: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {

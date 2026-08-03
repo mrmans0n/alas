@@ -42,7 +42,7 @@ final class TabsManager {
     /// persisted tabs have been read from disk. Views use this to
     /// distinguish "no tabs yet (still loading)" from "genuinely empty".
     private(set) var hasLoaded = false
-    private let store = PersistenceStore()
+    private let store: any PersistenceStoreProtocol
     private let tabsDirectory: URL
     private let bufferStore: EditorBufferStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
@@ -83,10 +83,12 @@ final class TabsManager {
     init(
         bufferStore: EditorBufferStore = EditorBufferStore(),
         lsp: WorkspaceLSPManager? = nil,
+        store: any PersistenceStoreProtocol = PersistenceStore(),
         tabsDirectory: URL = Paths.tabsDir
     ) {
         self.bufferStore = bufferStore
         self.lsp = lsp
+        self.store = store
         self.tabsDirectory = tabsDirectory
     }
 
@@ -855,7 +857,7 @@ final class TabsManager {
         }
     }
 
-    func extractMissionTabs() -> [MissionTabState] {
+    func extractMissionTabs() throws -> [MissionTabState] {
         var extracted: [MissionTabState] = []
 
         for worktreeID in byWorktree.keys.sorted() {
@@ -883,8 +885,8 @@ final class TabsManager {
                     ? file.tabs[activeMissionIndex].id
                     : file.tabs.last?.id
             }
+            try store.write(file, to: tabsFile(forWorktreeId: worktreeID))
             byWorktree[worktreeID] = file
-            persist(worktreeID)
         }
 
         return extracted

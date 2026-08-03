@@ -51,13 +51,16 @@ extension GlobalTabsFile {
 @Observable
 @MainActor
 final class GlobalTabsManager {
-    private let store: PersistenceStore
+    private let store: any PersistenceStoreProtocol
     private let fileURL: URL
     private(set) var tabs: [GlobalTab] = []
     private(set) var activeTabId: TabID?
     private var migrationVersion = 0
 
-    init(store: PersistenceStore = PersistenceStore(), fileURL: URL = Paths.globalTabsFile) {
+    init(
+        store: any PersistenceStoreProtocol = PersistenceStore(),
+        fileURL: URL = Paths.globalTabsFile
+    ) {
         self.store = store
         self.fileURL = fileURL
     }
@@ -72,7 +75,7 @@ final class GlobalTabsManager {
             tabs.append(tab)
         }
         activeTabId = tab.id
-        persist()
+        try? persist()
         return tab
     }
 
@@ -83,13 +86,31 @@ final class GlobalTabsManager {
         if wasActive {
             activeTabId = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
         }
-        persist()
+        try? persist()
     }
 
     func activate(tabId: TabID) {
         guard tabs.contains(where: { $0.id == tabId }) else { return }
         activeTabId = tabId
-        persist()
+        try? persist()
+    }
+
+    func updateMissionTitle(missionID: MissionID, title: String) {
+        guard let index = tabs.firstIndex(where: { tab in
+            guard case .mission(let state) = tab else { return false }
+            return state.missionID == missionID
+        }), case .mission(let state) = tabs[index], state.title != title
+        else { return }
+        tabs[index] = .mission(MissionTabState(missionID: missionID, title: title))
+        try? persist()
+    }
+
+    func activeMissionTab() -> MissionTabState? {
+        guard let activeTabId,
+              let tab = tabs.first(where: { $0.id == activeTabId }),
+              case .mission(let state) = tab
+        else { return nil }
+        return state
     }
 
     func loadAndMigrate(worktreeTabs: TabsManager) throws {
@@ -103,10 +124,10 @@ final class GlobalTabsManager {
         merge(worktreeTabs.missionTabs())
         // Persist the imported states before their worktree copies are removed.
         // If the process stops here, the next load repeats safely from this file.
-        persist()
-        merge(worktreeTabs.extractMissionTabs())
+        try persist()
+        merge(try worktreeTabs.extractMissionTabs())
         migrationVersion = 1
-        persist()
+        try persist()
     }
 
     private func merge(_ states: [MissionTabState]) {
@@ -115,8 +136,8 @@ final class GlobalTabsManager {
         }
     }
 
-    private func persist() {
-        try? store.write(
+    private func persist() throws {
+        try store.write(
             GlobalTabsFile(
                 migrationVersion: migrationVersion,
                 tabs: tabs,
