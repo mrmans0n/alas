@@ -1074,6 +1074,16 @@ fn send_ipc_within(
 ) -> Result<Value, AcpBrokerProcessError> {
     #[cfg(unix)]
     {
+        // This connect is blocking and deliberately left that way. On Darwin
+        // — the only platform that reaches this code, since the ACP broker is
+        // spawned for local sessions only — a full listen backlog fails the
+        // connect with ECONNREFUSED immediately rather than waiting for room,
+        // so a wedged supervisor cannot stall the caller here; the retry
+        // deadline in `send_ipc_with_retry` handles the refusal. Linux instead
+        // *blocks* until backlog space frees up, so if brokers ever run on a
+        // remote helper this needs a non-blocking, deadline-aware connect
+        // before it can be trusted. `connect_does_not_block_on_a_full_backlog`
+        // fails rather than hangs if that assumption ever stops holding.
         let mut stream = UnixStream::connect(dir.join("broker.sock"))
             .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
         // Without a bound, a broker that accepted the connection but never
@@ -1487,6 +1497,50 @@ mod tests {
             elapsed < Duration::from_secs(10),
             "deadline overshot badly: {elapsed:?}"
         );
+    }
+
+    /// `send_ipc_within` connects with a blocking socket, which is only safe
+    /// because Darwin refuses a connect to a full listen backlog instead of
+    /// waiting for room — otherwise a wedged supervisor could stall the
+    /// helper's single-threaded loop before any timeout is installed. Pin that
+    /// assumption: on a platform that blocks instead (Linux does), this fails
+    /// rather than hanging, and points at the connect that needs rewriting.
+    #[cfg(unix)]
+    #[test]
+    fn connect_does_not_block_on_a_full_backlog() {
+        use std::sync::mpsc;
+
+        let path = std::env::temp_dir().join(format!("alas-backlog-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        // Bound to a listener that never accepts, so the backlog fills and
+        // stays full.
+        let listener = UnixListener::bind(&path).expect("listener binds");
+
+        let (sender, receiver) = mpsc::channel();
+        let connect_path = path.clone();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            // Comfortably past the default backlog on any platform we target.
+            for _ in 0..1024 {
+                match UnixStream::connect(&connect_path) {
+                    Ok(stream) => held.push(stream),
+                    Err(error) => {
+                        let _ = sender.send(Some(error.kind()));
+                        return;
+                    }
+                }
+            }
+            let _ = sender.send(None);
+        });
+
+        let outcome = receiver.recv_timeout(Duration::from_secs(20));
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+
+        let kind = outcome
+            .expect("connect blocked on a full backlog — send_ipc_within needs a bounded connect")
+            .expect("expected the backlog to fill within 1024 connects");
+        assert_eq!(kind, io::ErrorKind::ConnectionRefused);
     }
 
     /// Requests get a length cap; responses from our own broker do not, and
