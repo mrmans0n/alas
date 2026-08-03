@@ -9,7 +9,7 @@ use crate::acp_broker_protocol::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
@@ -601,7 +601,7 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
 }
 
 #[cfg(unix)]
-fn handle_ipc_line(runtime: Runtime, mut stream: UnixStream, line: String) -> io::Result<()> {
+fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Result<()> {
     let response = match serde_json::from_str::<BrokerIpcRequest>(&line) {
         Ok(request) => match handle_ipc_request(&runtime, request) {
             Ok(result) => BrokerIpcResponse {
@@ -621,12 +621,19 @@ fn handle_ipc_line(runtime: Runtime, mut stream: UnixStream, line: String) -> io
             error: Some(format!("invalid IPC request: {error}")),
         },
     };
-    writeln!(
-        stream,
-        "{}",
-        serde_json::to_string(&response).expect("IPC response serialization")
-    )?;
-    stream.flush()
+    // Serialize straight into the socket rather than building the whole
+    // response first. Two reasons, both about large replies: a maximal attach
+    // reply is ~533 MiB, so `to_string` would materialize that entire String
+    // in this process before a byte moved — on exactly the memory-pressured
+    // machine where it is most likely to happen. And the caller bounds this
+    // read by inactivity, which only works if the expensive phase produces
+    // bytes: encoding to a String first means ~15s of complete silence, long
+    // enough to trip the caller's budget before the reply even starts.
+    // Streaming turns that silence into steady progress.
+    let mut writer = BufWriter::new(stream);
+    serde_json::to_writer(&mut writer, &response).map_err(io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn ipc_line_is_close(line: &str) -> bool {
