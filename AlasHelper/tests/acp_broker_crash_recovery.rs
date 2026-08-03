@@ -1246,6 +1246,70 @@ fn the_helper_falls_back_to_the_legacy_encoding_for_an_older_broker() {
     );
 }
 
+/// Requests to one broker must reach it in the order they were sent.
+///
+/// Running them on independent threads and relying on a mutex for safety is
+/// not enough: a mutex is not FIFO, so whichever worker the scheduler favours
+/// goes first. The case that bites is `session/cancel` overtaking the
+/// `session/prompt` it was sent to stop — the cancel finds no turn to cancel,
+/// and the prompt then runs to completion while the user believes they
+/// stopped it.
+///
+/// The broker's journal records the order it actually processed things, so
+/// `operationStarted` cursors are the observable.
+#[test]
+fn requests_to_one_broker_are_processed_in_the_order_they_arrive() {
+    let fixture = Fixture::new("request-ordering");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-ordering", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    // Enough that a scheduler-dependent order would almost certainly invert
+    // somewhere, and issued back-to-back so they are genuinely in flight
+    // together rather than serialized by waiting for each reply.
+    let sent: Vec<String> = (0..24).map(|index| format!("op-{index:02}")).collect();
+    for key in &sent {
+        helper.write_request_without_reading(
+            "acp/send",
+            json!({
+                "brokerId": "broker-ordering",
+                "generation": generation,
+                "operationKey": key,
+                "method": "noop/order",
+                "params": {}
+            }),
+        );
+    }
+    for _ in &sent {
+        let mut line = String::new();
+        helper
+            .stdout
+            .read_line(&mut line)
+            .expect("read helper response");
+    }
+
+    let attached = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-ordering",
+            "generation": generation,
+            "acknowledgedCursor": 0
+        }),
+    );
+    let started: Vec<String> = attached["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["kind"]["type"] == "operationStarted")
+        .map(|event| event["kind"]["operationKey"].as_str().unwrap().to_string())
+        .collect();
+
+    assert_eq!(
+        started, sent,
+        "broker processed same-broker requests out of order"
+    );
+}
+
 /// One broker going quiet must not stop a different one being used. Every
 /// `acp/*` request used to be handled inline on the helper's single serve
 /// loop, so a call waiting on a wedged broker held up every other session

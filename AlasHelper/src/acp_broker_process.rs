@@ -178,13 +178,18 @@ struct PendingOperation {
 
 /// Serializes requests per broker.
 ///
-/// These now run on worker threads rather than the helper's serve loop, which
-/// is the point — one slow broker must not hold up the others. Within a single
+/// These run on worker threads rather than the helper's serve loop, which is
+/// the point — one slow broker must not hold up the others. Within a single
 /// broker, though, concurrency is not safe: two `acp/open` calls racing would
 /// both find no live supervisor and both spawn one, and the rest mutate broker
-/// state that was written assuming one caller at a time. Holding a per-broker
-/// lock keeps exactly the ordering the single-threaded loop used to provide,
-/// while letting different brokers proceed at once.
+/// state written assuming one caller at a time.
+///
+/// Mutual exclusion only. This does **not** order anything: a mutex is not
+/// FIFO, so it says nothing about which of two waiting callers goes first.
+/// Ordering comes from the per-broker queue in `dispatch_acp_job`, which is
+/// what keeps a `session/cancel` from overtaking the `session/prompt` it was
+/// sent to stop. This lock is the backstop for any path that reaches here
+/// without going through that queue.
 fn broker_lock(broker_id: &str) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
     let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));

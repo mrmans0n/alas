@@ -315,6 +315,9 @@ fn serve() -> io::Result<()> {
     };
     let mut pending_events: HashMap<(String, WatchKind), HashSet<String>> = HashMap::new();
     let mut flush_at: Option<Instant> = None;
+    // One queue per broker, fed in the order requests arrive here. See
+    // `dispatch_acp_job`.
+    let mut acp_queues: HashMap<String, Sender<AcpJob>> = HashMap::new();
 
     loop {
         let message = match flush_at {
@@ -347,11 +350,7 @@ fn serve() -> io::Result<()> {
                 // come back through the same channel the watchers use.
                 match AcpJob::from_line(&line) {
                     Some(job) => match state.event_sender.clone() {
-                        Some(sender) => {
-                            std::thread::spawn(move || {
-                                let _ = sender.send(ServerMessage::Response(job.run()));
-                            });
-                        }
+                        Some(sender) => dispatch_acp_job(job, &sender, &mut acp_queues),
                         // No channel to answer on (only reachable outside the
                         // serve loop); fall back to answering inline.
                         None => write_json_line(&mut stdout, &job.run())?,
@@ -523,14 +522,13 @@ fn flush_watch_events(
 /// Only requests with an id qualify: a notification has nothing to send back,
 /// so there is no response to route through the channel.
 ///
-/// A thread per request, with no pool, is deliberate. It reads alarming next
-/// to `ACPBrokerClient`'s 50ms active poll — 20 requests a second per live
-/// session — but that loop awaits each `attachAndReplay` before sleeping
-/// again, so a session has at most one attach outstanding. Concurrency
-/// therefore tracks the number of sessions, not the poll rate, and a wedged
-/// broker parks one thread per session rather than accumulating them. What is
-/// left is churn: ~20 spawns a second per active session, tens of microseconds
-/// each. A pool would buy that back and cost a queue that could itself stall.
+/// Jobs naming a broker go to that broker's queue, and are run by one thread
+/// in the order they arrived. Mutual exclusion is not enough on its own: a
+/// mutex does not hand out the lock in arrival order, so two jobs racing for
+/// it can be applied backwards. `session/cancel` overtaking the
+/// `session/prompt` it was meant to stop is the case that matters — the
+/// cancel finds no turn to cancel, and the prompt then runs to completion
+/// with the user believing they stopped it.
 struct AcpJob {
     id: Value,
     method: String,
@@ -538,6 +536,16 @@ struct AcpJob {
 }
 
 impl AcpJob {
+    /// The broker this job acts on, if it names one. `acp/list` does not: it
+    /// sweeps every broker and only reads, so it has no queue to join.
+    fn broker_id(&self) -> Option<String> {
+        self.params
+            .as_ref()
+            .and_then(|params| params.get("brokerId"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
     fn from_line(line: &str) -> Option<Self> {
         let request: JsonRpcRequest = serde_json::from_str(line).ok()?;
         let method = request.method?;
@@ -556,6 +564,51 @@ impl AcpJob {
             Ok(result) => success_response(self.id, result),
             Err(error) => error_response(self.id, error.code, error.message),
         }
+    }
+}
+
+/// Routes an ACP job so that same-broker work stays in arrival order while
+/// different brokers proceed independently.
+///
+/// Each broker gets a queue and one thread draining it, so ordering comes from
+/// the queue rather than from which worker happens to win a mutex. A job that
+/// names no broker (`acp/list`) has nothing to order against and runs on its
+/// own thread.
+fn dispatch_acp_job(
+    job: AcpJob,
+    responses: &Sender<ServerMessage>,
+    queues: &mut HashMap<String, Sender<AcpJob>>,
+) {
+    let Some(broker_id) = job.broker_id() else {
+        let responses = responses.clone();
+        std::thread::spawn(move || {
+            let _ = responses.send(ServerMessage::Response(job.run()));
+        });
+        return;
+    };
+
+    let queue = queues.entry(broker_id.clone()).or_insert_with(|| {
+        let (sender, receiver) = mpsc::channel::<AcpJob>();
+        let responses = responses.clone();
+        std::thread::spawn(move || {
+            for job in receiver {
+                if responses.send(ServerMessage::Response(job.run())).is_err() {
+                    return;
+                }
+            }
+        });
+        sender
+    });
+
+    // A queue only fails if its thread is gone, which it should not be. Drop
+    // the entry and answer on a fresh thread rather than losing the request:
+    // ordering is worth less than a reply.
+    if let Err(returned) = queue.send(job) {
+        queues.remove(&broker_id);
+        let responses = responses.clone();
+        std::thread::spawn(move || {
+            let _ = responses.send(ServerMessage::Response(returned.0.run()));
+        });
     }
 }
 
