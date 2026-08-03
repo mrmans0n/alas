@@ -387,7 +387,17 @@ fn attach_with_stale_persisted_cursor_does_not_move_ack_back() {
         stale_attach["snapshot"]["acknowledgedCursor"],
         json!(journal_tail)
     );
-    assert_eq!(stale_attach["events"], json!([]), "{stale_attach}");
+    // The property is that a stale cursor cannot resurrect acknowledged
+    // events — not that the journal is quiet. Asserting an empty list assumed
+    // nothing was recorded between reading `journal_tail` and acknowledging
+    // it, which is a race the test does not control and does not care about.
+    let events = stale_attach["events"].as_array().expect("events array");
+    assert!(
+        events
+            .iter()
+            .all(|event| event["cursor"].as_u64().is_some_and(|c| c > journal_tail)),
+        "a stale cursor replayed events at or below the acknowledged tail: {stale_attach}"
+    );
 }
 
 #[test]
@@ -1090,6 +1100,40 @@ fn a_broker_answers_a_legacy_caller_in_the_legacy_encoding() {
     assert_eq!(
         value["result"]["metadata"]["brokerId"], "broker-legacy-in",
         "legacy caller did not get a usable snapshot: {value}"
+    );
+}
+
+/// A helper from an earlier build serializes its request *after* connecting,
+/// so it can legitimately say nothing for as long as encoding takes — ~7.4s
+/// for a maximal image prompt. A broker that bounded the first line by total
+/// time would drop that request, breaking exactly the callers the legacy path
+/// exists to support.
+#[cfg(unix)]
+#[test]
+fn a_legacy_caller_may_pause_before_writing_its_request() {
+    use std::os::unix::net::UnixStream;
+
+    let fixture = Fixture::new("legacy-slow-writer");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-slow-writer", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-slow-writer/broker.sock");
+
+    let mut stream = UnixStream::connect(&socket).expect("broker socket connects");
+    // Stands in for an older helper encoding a large prompt before it writes.
+    std::thread::sleep(Duration::from_secs(8));
+    writeln!(stream, r#"{{"method":"snapshot","params":{{}}}}"#).expect("legacy request");
+    stream.flush().expect("flush");
+
+    let mut reply = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut reply)
+        .expect("broker still answered after the pause");
+    let value: Value = serde_json::from_str(reply.trim()).expect("legacy reply JSON");
+    assert_eq!(
+        value["result"]["metadata"]["brokerId"], "broker-slow-writer",
+        "broker dropped a legacy request whose sender paused to serialize: {value}"
     );
 }
 

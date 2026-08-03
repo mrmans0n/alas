@@ -18,15 +18,38 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 
-/// How long the supervisor waits for a caller to deliver the first line of a
-/// request — a framing header, or under the legacy encoding the whole message.
+/// How long the supervisor waits on a silent caller before giving up on the
+/// first line of a request.
 ///
-/// A total rather than an idle budget, because the caller here is arbitrary
-/// and a trickle would otherwise pass for progress indefinitely. That is
-/// affordable only because the length arrives up front under framing: the body
-/// is then read against an idle budget with no ceiling, so this bound applies
-/// to the header, not to the payload.
-const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Idle, not total, and that is forced by the legacy encoding: under framing
+/// this line is a short header, but a legacy caller sends the whole message
+/// here — and an older helper serializes *after* connecting, so it can
+/// legitimately say nothing at all for the ~7.4s a maximal image prompt takes
+/// to encode. A total budget would drop that request, breaking the very
+/// callers the legacy path exists to keep working.
+///
+/// Shorter than `BROKER_IPC_IDLE_TIMEOUT` because it is the one bound a caller
+/// can hold without having promised anything yet; past this line a framed
+/// caller has declared a length and is held to it instead.
+const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Slowest a caller may deliver a framed body before we stop waiting.
+///
+/// An idle budget alone is not enough once a length is known: a caller can
+/// advertise an enormous frame and dribble it, renewing the budget forever
+/// while the buffer grows. Holding it to a rate turns the promise into a
+/// deadline — and the floor is generous, since this socket measures ~1.3 GB/s,
+/// so a legitimate transfer clears it by two orders of magnitude.
+const MIN_IPC_BODY_THROUGHPUT: u64 = 10 * 1024 * 1024;
+
+/// Deadline for a framed body of `len` bytes: whatever the throughput floor
+/// allows, but never less than the ordinary idle budget, so a small body is
+/// not held to a stricter rule than a large one.
+#[cfg(unix)]
+fn framed_body_budget(len: usize) -> LineBudget {
+    let by_rate = Duration::from_secs_f64(len as f64 / MIN_IPC_BODY_THROUGHPUT as f64);
+    LineBudget::Total(by_rate.max(BROKER_IPC_IDLE_TIMEOUT))
+}
 
 /// How long a caller gives a broker to send *something* before treating it as
 /// wedged. Idle rather than total, because a legitimate reply has no size we
@@ -637,18 +660,16 @@ fn broker_supports_framing(dir: &Path) -> bool {
 /// pairings work: a new caller reaching an old broker, and an old caller
 /// reaching a new one.
 ///
-/// `head` bounds the first line, which is either a short framing header or —
-/// under the legacy encoding — the entire message, so the two callers want
-/// different budgets for it: a request arriving from an arbitrary peer gets a
-/// total, while a reply from a broker we spawned gets an idle budget, since
-/// its size is not ours to predict.
+/// `head_idle` bounds silence on the first line, which is a short framing
+/// header or — under the legacy encoding — the entire message. The framed body
+/// is then bounded by the length the caller declared, so an advertised size
+/// cannot be used to hold resources indefinitely.
 #[cfg(unix)]
 fn read_ipc_message(
     reader: &mut BufReader<&UnixStream>,
-    head: LineBudget,
-    body_idle: Duration,
+    head_idle: Duration,
 ) -> io::Result<(String, Framing)> {
-    let head = read_line_within(reader, head)?;
+    let head = read_line_within(reader, LineBudget::Idle(head_idle))?;
     let Some(len) = head.strip_prefix(IPC_FRAME_HEADER) else {
         return Ok((head, Framing::Legacy));
     };
@@ -658,7 +679,7 @@ fn read_ipc_message(
             format!("invalid IPC frame length: {}", len.trim()),
         )
     })?;
-    let body = read_exact_within(reader, len, LineBudget::Idle(body_idle))?;
+    let body = read_exact_within(reader, len, framed_body_budget(len))?;
     Ok((body, Framing::Framed))
 }
 
@@ -755,11 +776,7 @@ fn handle_connection(runtime: Runtime, stream: UnixStream) -> io::Result<()> {
     stream.set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))?;
     let (line, framing) = {
         let mut reader = ipc_reader(&stream)?;
-        read_ipc_message(
-            &mut reader,
-            LineBudget::Total(IPC_REQUEST_TIMEOUT),
-            BROKER_IPC_IDLE_TIMEOUT,
-        )?
+        read_ipc_message(&mut reader, IPC_REQUEST_IDLE_TIMEOUT)?
     };
     handle_ipc_line(runtime, stream, line, framing)
 }
@@ -1360,7 +1377,7 @@ fn send_ipc_within(
         let (line, _) = {
             let mut reader = ipc_reader(&stream)
                 .map_err(|error| broker_error(-32072, format!("broker read setup: {error}")))?;
-            read_ipc_message(&mut reader, LineBudget::Idle(idle_timeout), idle_timeout)
+            read_ipc_message(&mut reader, idle_timeout)
                 .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?
         };
         let response: BrokerIpcResponse = serde_json::from_str(&line)
@@ -1818,6 +1835,61 @@ mod tests {
         assert!(
             started.elapsed() > Duration::from_secs(1),
             "transfer finished too fast to prove the budget was exceeded in total"
+        );
+    }
+
+    /// A framed caller declares a length, and is then held to delivering it.
+    /// Without that, an idle budget alone lets a caller advertise an enormous
+    /// body and dribble it, renewing its budget forever while the buffer
+    /// grows — the trickle path framing was supposed to close, not reopen.
+    #[cfg(unix)]
+    #[test]
+    fn a_framed_body_must_be_delivered_at_a_minimum_rate() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let writer_done = done.clone();
+        std::thread::spawn(move || {
+            while !*writer_done.lock().expect("drip flag") {
+                if writer.write_all(b"z").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+
+        // Claims 4 MiB, which the floor allows well under the 2s asked for
+        // here, then delivers a byte at a time.
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let started = std::time::Instant::now();
+        let outcome = read_exact_within(
+            &mut reader,
+            4 * 1024 * 1024,
+            LineBudget::Total(Duration::from_secs(2)),
+        );
+        *done.lock().expect("drip flag") = true;
+
+        let error = outcome.expect_err("a dribbled body must not be waited on forever");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// The rate floor must not turn into a ceiling on legitimate payloads: a
+    /// body large enough to take real time still has to be allowed to arrive.
+    #[test]
+    fn the_body_deadline_scales_with_the_length_a_caller_declares() {
+        // Small bodies are not held to a stricter rule than large ones.
+        assert!(matches!(
+            framed_body_budget(1024),
+            LineBudget::Total(budget) if budget == BROKER_IPC_IDLE_TIMEOUT
+        ));
+        // A maximal image prompt (~267 MiB) gets time proportional to its size.
+        let maximal = 267 * 1024 * 1024;
+        let LineBudget::Total(budget) = framed_body_budget(maximal) else {
+            panic!("a framed body should be bounded in total, not by inactivity");
+        };
+        assert!(
+            budget >= BROKER_IPC_IDLE_TIMEOUT,
+            "a large body was given less time than a small one: {budget:?}"
         );
     }
 
