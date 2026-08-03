@@ -28,7 +28,7 @@ final class CompletionFeature {
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
     private var candidateOrigins: [UUID: CompletionPrefix] = [:]
-    private var candidateBufferWords: [String] = []
+    private var candidateBufferCache: [String: [CompletionCandidate]] = [:]
     private var candidateItems: [LSPCompletionItem] = []
     private var candidateAllowsBufferFallback = false
     private var candidateMemberAccessOnly = false
@@ -88,7 +88,7 @@ final class CompletionFeature {
         prefix = nil
         candidatePrefix = nil
         candidateOrigins.removeAll()
-        candidateBufferWords.removeAll()
+        candidateBufferCache.removeAll()
         candidateItems.removeAll()
         candidateAllowsBufferFallback = false
         candidateMemberAccessOnly = false
@@ -251,11 +251,13 @@ final class CompletionFeature {
         let coordinateIndex = TextEditCoordinates.LineIndex(bufferText)
         let retainedMemberAccessOnly = candidateMemberAccessOnly || memberAccessOnly
         let retainedBufferFallback = allowBufferFallback && !retainedMemberAccessOnly
-        let bufferWords = retainedBufferFallback ? CompletionEngine.bufferWords(in: bufferText) : []
+        let bufferCache = retainedBufferFallback
+            ? CompletionEngine.bufferWordCandidateCache(in: bufferText, prefix: prefix)
+            : [:]
         let next = Self.candidates(
             items: items,
             prefix: prefix,
-            bufferWords: bufferWords,
+            bufferCandidates: bufferCache[prefix.text] ?? [],
             allowBufferFallback: retainedBufferFallback,
             memberAccessOnly: retainedMemberAccessOnly
         )
@@ -298,7 +300,7 @@ final class CompletionFeature {
         } ?? false
         if !keepsBroaderResponse {
             candidatePrefix = prefix
-            candidateBufferWords = bufferWords
+            candidateBufferCache = bufferCache
             candidateItems = items
         }
         candidateAllowsBufferFallback = retainedBufferFallback
@@ -327,7 +329,7 @@ final class CompletionFeature {
     private static func candidates(
         items: [LSPCompletionItem],
         prefix: CompletionPrefix,
-        bufferWords: [String],
+        bufferCandidates: [CompletionCandidate],
         allowBufferFallback: Bool,
         memberAccessOnly: Bool
     ) -> [CompletionCandidate] {
@@ -337,8 +339,7 @@ final class CompletionFeature {
             memberAccessOnly: memberAccessOnly
         )
         if allowBufferFallback {
-            let buffer = CompletionEngine.bufferWordCandidates(from: bufferWords, prefix: prefix)
-            candidates.append(contentsOf: buffer.filter { bufferCandidate in
+            candidates.append(contentsOf: bufferCandidates.filter { bufferCandidate in
                 !candidates.contains { $0.label == bufferCandidate.label }
             })
         }
@@ -522,7 +523,7 @@ final class CompletionFeature {
             prefix = nil
             candidatePrefix = nil
             candidateOrigins.removeAll()
-            candidateBufferWords.removeAll()
+            candidateBufferCache.removeAll()
             candidateItems.removeAll()
             candidateAllowsBufferFallback = false
             candidateMemberAccessOnly = false
@@ -550,7 +551,7 @@ final class CompletionFeature {
             let rebuilt = Self.candidates(
                 items: candidateItems,
                 prefix: updatedPrefix,
-                bufferWords: candidateBufferWords,
+                bufferCandidates: candidateBufferCache[updatedPrefix.text] ?? [],
                 allowBufferFallback: candidateAllowsBufferFallback,
                 memberAccessOnly: candidateMemberAccessOnly
             )
@@ -661,7 +662,7 @@ extension CompletionFeature {
         self.prefix = prefix
         candidatePrefix = prefix
         candidateOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, prefix) })
-        candidateBufferWords.removeAll()
+        candidateBufferCache.removeAll()
         candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))

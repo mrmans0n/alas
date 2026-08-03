@@ -37,6 +37,19 @@ struct CompletionEngineTests {
         #expect(candidates.isEmpty)
     }
 
+    @Test("bounds cached buffer words for broadened prefixes")
+    func boundedBufferWordCache() {
+        let words = (0..<30).map { "openWord\($0)" }.joined(separator: " ")
+        let cache = CompletionEngine.bufferWordCandidateCache(
+            in: words,
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4))
+        )
+
+        #expect(cache["ope"]?.count == 24)
+        #expect(cache["open"]?.count == 24)
+        #expect(cache.values.allSatisfy { $0.count <= 24 })
+    }
+
     @Test("normalizes and ranks LSP items")
     func normalizeLSPItems() {
         let items = [

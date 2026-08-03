@@ -102,13 +102,21 @@ enum CompletionEngine {
     }
 
     static func bufferWordCandidates(in text: String, prefix: CompletionPrefix, limit: Int = 24) -> [CompletionCandidate] {
-        bufferWordCandidates(from: bufferWords(in: text), prefix: prefix, limit: limit)
+        bufferWordCandidateCache(in: text, prefix: prefix, limit: limit)[prefix.text] ?? []
     }
 
-    static func bufferWords(in text: String) -> [String] {
+    static func bufferWordCandidateCache(
+        in text: String,
+        prefix: CompletionPrefix,
+        limit: Int = 24
+    ) -> [String: [CompletionCandidate]] {
+        let prefixText = prefix.text as NSString
+        guard prefixText.length >= 3, limit > 0 else { return [:] }
+
+        let prefixes = (3...prefixText.length).map { prefixText.substring(to: $0) }
         let ns = text as NSString
-        var seen = Set<String>()
-        var words: [String] = []
+        var seen = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, Set<String>()) })
+        var words = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, [String]()) })
         var index = 0
 
         while index < ns.length {
@@ -123,36 +131,29 @@ enum CompletionEngine {
             }
 
             let word = ns.substring(with: NSRange(location: start, length: index - start))
-            if seen.insert(word).inserted {
-                words.append(word)
+            for prefix in prefixes where words[prefix, default: []].count < limit {
+                guard word != prefix,
+                      hasCaseInsensitivePrefix(word, prefix),
+                      seen[prefix, default: []].insert(word).inserted else { continue }
+                words[prefix, default: []].append(word)
             }
         }
-        return words
-    }
 
-    static func bufferWordCandidates(
-        from words: [String],
-        prefix: CompletionPrefix,
-        limit: Int = 24
-    ) -> [CompletionCandidate] {
-        guard (prefix.text as NSString).length >= 3, limit > 0 else { return [] }
-
-        return words.lazy
-            .filter { $0 != prefix.text && hasCaseInsensitivePrefix($0, prefix.text) }
-            .prefix(limit)
-            .map { word in
-            CompletionCandidate(
-                label: word,
-                detail: "Current buffer",
-                kind: nil,
-                documentation: nil,
-                sortText: nil,
-                filterText: word,
-                replacementText: word,
-                textEdit: nil,
-                additionalTextEdits: [],
-                source: .buffer
-            )
+        return words.mapValues { words in
+            words.map { word in
+                CompletionCandidate(
+                    label: word,
+                    detail: "Current buffer",
+                    kind: nil,
+                    documentation: nil,
+                    sortText: nil,
+                    filterText: word,
+                    replacementText: word,
+                    textEdit: nil,
+                    additionalTextEdits: [],
+                    source: .buffer
+                )
+            }
         }
     }
 
