@@ -152,6 +152,28 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("automatic refresh dismisses at an empty prefix")
+    func automaticRefreshDismissesAtEmptyPrefix() {
+        let textView = makeTextView("o")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingSeedVisibleCandidates(
+            labels: ["openAlpha"],
+            prefix: CompletionPrefix(text: "o", range: NSRange(location: 0, length: 1))
+        )
+
+        textView.deleteBackward(nil)
+
+        #expect(textView.string.isEmpty)
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        #expect(feature.testingSnapshot.prefix == nil)
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh rebuilds candidates when broadening past the response prefix")
     func refreshRebuildsCandidatesPastResponsePrefix() {
         let textView = makeTextView("open")

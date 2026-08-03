@@ -23,6 +23,7 @@ final class CompletionFeature {
     private var candidateItems: [LSPCompletionItem] = []
     private var candidateAllowsBufferFallback = false
     private var candidateMemberAccessOnly = false
+    private var candidateAllowsEmptyPrefix = false
     private var selection: Int = 0
     private let suggestionWindow = CompletionWindowController()
     private var isRefreshing = false
@@ -81,6 +82,7 @@ final class CompletionFeature {
         candidateItems.removeAll()
         candidateAllowsBufferFallback = false
         candidateMemberAccessOnly = false
+        candidateAllowsEmptyPrefix = false
         selection = 0
         isRefreshing = false
         closeUI()
@@ -198,6 +200,7 @@ final class CompletionFeature {
                     items: lspItems,
                     prefix: prefix,
                     bufferText: activeTextView.string,
+                    allowEmptyPrefix: allowEmptyPrefix,
                     allowBufferFallback: allowBufferFallback,
                     memberAccessOnly: memberAccessOnly
                 )
@@ -231,6 +234,7 @@ final class CompletionFeature {
         items: [LSPCompletionItem],
         prefix: CompletionPrefix,
         bufferText: String,
+        allowEmptyPrefix: Bool,
         allowBufferFallback: Bool,
         memberAccessOnly: Bool
     ) {
@@ -264,6 +268,7 @@ final class CompletionFeature {
         candidateItems = items
         candidateAllowsBufferFallback = allowBufferFallback
         candidateMemberAccessOnly = memberAccessOnly
+        candidateAllowsEmptyPrefix = allowEmptyPrefix
         isRefreshing = false
         selection = selectedCandidate.flatMap { selected in
             next.firstIndex {
@@ -411,6 +416,7 @@ final class CompletionFeature {
                 in: textView.string,
                 caret: textView.selectedRange().location
               ),
+              candidateAllowsEmptyPrefix || !updatedPrefix.text.isEmpty,
               previousPrefix?.range.location == updatedPrefix.range.location,
               textOutsideCandidatePrefixIsUnchanged(in: textView.string, updatedPrefix: updatedPrefix) else {
             candidates.removeAll()
@@ -421,6 +427,7 @@ final class CompletionFeature {
             candidateItems.removeAll()
             candidateAllowsBufferFallback = false
             candidateMemberAccessOnly = false
+            candidateAllowsEmptyPrefix = false
             selection = 0
             closeUI()
             return
@@ -540,6 +547,7 @@ extension CompletionFeature {
         self.prefix = prefix
         candidatePrefix = prefix
         candidateBufferText = textView?.string
+        candidateAllowsEmptyPrefix = prefix.text.isEmpty
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
         isRefreshing = false
     }
@@ -552,11 +560,17 @@ extension CompletionFeature {
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
     }
 
-    func testingPresent(items: [LSPCompletionItem], prefix: CompletionPrefix, bufferText: String) {
+    func testingPresent(
+        items: [LSPCompletionItem],
+        prefix: CompletionPrefix,
+        bufferText: String,
+        allowEmptyPrefix: Bool = false
+    ) {
         present(
             items: items,
             prefix: prefix,
             bufferText: bufferText,
+            allowEmptyPrefix: allowEmptyPrefix,
             allowBufferFallback: false,
             memberAccessOnly: false
         )
