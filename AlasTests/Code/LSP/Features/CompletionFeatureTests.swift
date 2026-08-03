@@ -398,6 +398,39 @@ struct CompletionFeatureTests {
         textView.deleteBackward(nil)
 
         #expect(feature.testingSnapshot.candidateLabels == ["openEditor", "operate", "open"])
+
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        feature.cancelAndDismiss()
+    }
+
+    @Test("empty refresh response retains candidates for backspacing")
+    func emptyRefreshRetainsCandidates() {
+        let textView = makeTextView("op")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingPresent(
+            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            bufferText: "op"
+        )
+
+        textView.insertText("Z", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [],
+            prefix: CompletionPrefix(text: "opZ", range: NSRange(location: 0, length: 3)),
+            bufferText: "opZ"
+        )
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha"])
         feature.cancelAndDismiss()
     }
 

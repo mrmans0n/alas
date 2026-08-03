@@ -283,15 +283,7 @@ final class CompletionFeature {
             text: bufferText,
             coordinateIndex: coordinateIndex
         )
-        let visible = merged.candidates.filter { candidate in
-            let filter = candidate.filterText ?? candidate.label
-            return CompletionEngine.hasCaseInsensitivePrefix(filter, prefix.text) ||
-                CompletionEngine.hasCaseInsensitivePrefix(candidate.label, prefix.text)
-        }
-        guard !visible.isEmpty else {
-            cancelAndDismiss()
-            return
-        }
+        let visible = merged.candidates.filter { Self.isVisible($0, for: prefix) }
 
         candidates = visible
         candidatePool = merged.candidates
@@ -326,7 +318,11 @@ final class CompletionFeature {
                     ) == selectedEditPlan
             }
         } ?? 0
-        showPopup()
+        if candidates.isEmpty {
+            closeUI()
+        } else {
+            showPopup()
+        }
     }
 
     private static func candidates(
@@ -406,6 +402,16 @@ final class CompletionFeature {
             source: candidate.source,
             editPlan: editPlan
         )
+    }
+
+    private static func isVisible(_ candidate: CompletionCandidate, for prefix: CompletionPrefix) -> Bool {
+        if candidate.source == .buffer,
+           (prefix.text as NSString).length < CompletionEngine.bufferWordMinimumPrefixLength {
+            return false
+        }
+        let filter = candidate.filterText ?? candidate.label
+        return CompletionEngine.hasCaseInsensitivePrefix(filter, prefix.text) ||
+            CompletionEngine.hasCaseInsensitivePrefix(candidate.label, prefix.text)
     }
 
     private func showPopup() {
@@ -575,11 +581,7 @@ final class CompletionFeature {
             candidateOrigins = merged.origins
         }
 
-        candidates = candidatePool.filter { candidate in
-            let filter = candidate.filterText ?? candidate.label
-            return CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) ||
-                CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text)
-        }
+        candidates = candidatePool.filter { Self.isVisible($0, for: updatedPrefix) }
         isRefreshing = candidates.isEmpty
         prefix = updatedPrefix
         selection = selectedCandidate.flatMap { selected in

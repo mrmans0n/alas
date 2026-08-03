@@ -49,6 +49,8 @@ struct CompletionEditPlan: Hashable, Sendable {
 }
 
 enum CompletionEngine {
+    static let bufferWordMinimumPrefixLength = 3
+
     static func prefix(in text: String, caret: Int) -> CompletionPrefix? {
         let ns = text as NSString
         guard caret >= 0, caret <= ns.length else { return nil }
@@ -111,9 +113,9 @@ enum CompletionEngine {
         limit: Int = 24
     ) -> [String: [CompletionCandidate]] {
         let prefixText = prefix.text as NSString
-        guard prefixText.length >= 3, limit > 0 else { return [:] }
+        guard prefixText.length >= bufferWordMinimumPrefixLength, limit > 0 else { return [:] }
 
-        let prefixes = (3...prefixText.length).map { prefixText.substring(to: $0) }
+        let prefixes = (bufferWordMinimumPrefixLength...prefixText.length).map { prefixText.substring(to: $0) }
         let ns = text as NSString
         var seen = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, Set<String>()) })
         var words = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, [String]()) })
