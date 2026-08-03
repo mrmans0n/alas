@@ -27,7 +27,7 @@ struct MissionCoordinatorTests {
         destinationPath: "/tmp/alas-mission-sdk",
         agentId: "codex",
         initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
-        initialPrompt: "Fix the SDK integration for issue #42."
+        preparedPrompt: "Fix the SDK integration for issue #42."
     )
 
     private static let serverDraft = MissionLegDraft(
@@ -38,7 +38,7 @@ struct MissionCoordinatorTests {
         destinationPath: "/tmp/alas-mission-server",
         agentId: "claude",
         initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
-        initialPrompt: "Fix the server integration for issue #42."
+        preparedPrompt: "Fix the server integration for issue #42."
     )
 
     // Break caught: serializing setup by Mission ID prevents two durable legs
@@ -207,7 +207,7 @@ struct MissionCoordinatorTests {
             agentId: draft.agentId,
             acpSessionId: nil,
             initialPromptId: draft.initialPromptId,
-            pendingInitialPrompt: draft.initialPrompt,
+            pendingInitialPrompt: draft.preparedPrompt,
             reviewIdentity: nil,
             createdAt: at,
             updatedAt: at

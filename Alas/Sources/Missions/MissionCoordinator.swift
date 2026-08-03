@@ -149,7 +149,7 @@ final class MissionCoordinator {
             agentId: draft.agentId,
             acpSessionId: nil,
             initialPromptId: draft.initialPromptId,
-            pendingInitialPrompt: draft.initialPrompt,
+            pendingInitialPrompt: draft.preparedPrompt,
             reviewIdentity: nil,
             createdAt: now,
             updatedAt: now

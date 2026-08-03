@@ -1,36 +1,5 @@
 import Foundation
 
-struct MissionLegDraft: Equatable, Sendable {
-    let projectId: String
-    let baseRef: String
-    let baseRemoteName: String?
-    let branch: String
-    let destinationPath: String
-    let agentId: String
-    let initialPromptId: UUID
-    let initialPrompt: String
-
-    init(
-        projectId: String,
-        baseRef: String,
-        baseRemoteName: String? = nil,
-        branch: String,
-        destinationPath: String,
-        agentId: String,
-        initialPromptId: UUID,
-        initialPrompt: String
-    ) {
-        self.projectId = projectId
-        self.baseRef = baseRef
-        self.baseRemoteName = baseRemoteName
-        self.branch = branch
-        self.destinationPath = destinationPath
-        self.agentId = agentId
-        self.initialPromptId = initialPromptId
-        self.initialPrompt = initialPrompt
-    }
-}
-
 @MainActor
 final class MissionLegCoordinator {
     private let environment: MissionCoordinator.Environment

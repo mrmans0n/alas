@@ -309,3 +309,14 @@ struct MissionDraft: Equatable, Sendable {
         self.initialPrompt = initialPrompt
     }
 }
+
+struct MissionLegDraft: Equatable, Sendable {
+    let projectId: String
+    let baseRef: String
+    let baseRemoteName: String?
+    let branch: String
+    let destinationPath: String
+    let agentId: String
+    let initialPromptId: UUID
+    let preparedPrompt: String
+}
