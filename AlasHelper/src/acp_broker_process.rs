@@ -9,14 +9,140 @@ use crate::acp_broker_protocol::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+
+/// How long the supervisor waits on a silent caller before giving up on the
+/// first line of a request.
+///
+/// Idle, not total, and that is forced by the legacy encoding: under framing
+/// this line is a short header, but a legacy caller sends the whole message
+/// here — and an older helper serializes *after* connecting, so it can
+/// legitimately say nothing at all while it encodes. A total budget would drop
+/// that request, breaking the very callers the legacy path exists to serve.
+///
+/// This is the one bound that has to be a fixed duration rather than a rate,
+/// because before a single byte arrives there is nothing to measure a rate
+/// against: a peer part-way through encoding two gigabytes and a peer that
+/// connected and died look identical. Since it cannot be derived, it is sized
+/// against what a sender can physically produce. Serialization measures
+/// ~36 MB/s, so this covers something over ten gigabytes of encoding — and the
+/// largest legacy request is an `acp/respond` carrying a whole file, which
+/// `ACPSessionRunner.serveRead` builds by holding the file, a `String` copy
+/// and the encoded JSON in memory at once. A sender that needs longer than
+/// this has already failed on its own side.
+///
+/// The cost of being generous is bounded too: a silent connection holds one
+/// worker, there are `MAX_BROKER_CONNECTION_WORKERS` of them, and the listen
+/// backlog caps how many a peer can hold at once regardless.
+const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Rate a peer must sustain while reading a response.
+///
+/// `SO_SNDTIMEO` bounds each write, not the whole reply, so a peer that reads
+/// a little every nineteen seconds renews it forever and keeps its handler
+/// alive. Enough such peers hold every connection worker, and unlike a flood
+/// of idle connections this one never lapses, so the broker does not recover
+/// on its own. Requiring a rate ends it. Lenient by design: the only real
+/// reader is a helper already blocked on the reply.
+const MIN_IPC_RESPONSE_RATE: u64 = 16 * 1024;
+
+/// Rate a caller must sustain on the first line once it starts sending.
+///
+/// A fixed duration cannot work here. Under the legacy encoding this line is
+/// the whole message, and a legacy request is not bounded in size — an
+/// `acp/respond` carries whatever `fs/read_text_file` was asked for, and
+/// `ACPSessionRunner.serveRead` returns a whole file when the adapter sends no
+/// line/limit. Any ceiling on elapsed time is therefore a ceiling on size.
+/// Requiring a rate instead tells a large transfer apart from a trickle
+/// without needing to know how large: this is ~1% of what the socket
+/// measures, so a genuine sender clears it easily, while one byte every 59s
+/// does not — and since every connection owns a thread, that pattern would
+/// otherwise accumulate threads until the broker cannot spawn any more.
+const MIN_IPC_REQUEST_RATE: u64 = 16 * 1024;
+
+/// Bounds on the first line of a request: silence, and sustained rate.
+#[cfg(unix)]
+const IPC_REQUEST_HEAD_BUDGET: IoBudget =
+    IoBudget::at_least(IPC_REQUEST_IDLE_TIMEOUT, MIN_IPC_REQUEST_RATE);
+
+/// Largest framed body accepted.
+///
+/// A rate bound limits how long a body may take, not how much of it is held:
+/// a peer declaring a hundred gigabytes and delivering at the required rate is
+/// retained byte for byte until the broker dies. Time was never the dimension
+/// that ran out.
+///
+/// So there is a ceiling again — chosen the way the pre-first-byte bound is,
+/// from what a sender can physically produce rather than from what feels
+/// large. The biggest legitimate request is an `acp/respond` carrying a whole
+/// file, which `ACPSessionRunner.serveRead` builds holding the file, a
+/// `String` copy and the encoded JSON at once; a maximal image prompt is
+/// ~267 MiB by comparison.
+const MAX_IPC_FRAME_BYTES: usize = 8 * 1024 * 1024 * 1024;
+
+/// Slowest a caller may deliver a framed body before we stop waiting.
+///
+/// An idle budget alone is not enough once a length is known: a caller can
+/// advertise an enormous frame and dribble it, renewing the budget forever
+/// while the buffer grows. Holding it to a rate turns the promise into a
+/// deadline — and the floor is generous, since this socket measures ~1.3 GB/s,
+/// so a legitimate transfer clears it by two orders of magnitude.
+const MIN_IPC_BODY_THROUGHPUT: u64 = 10 * 1024 * 1024;
+
+/// Budget for a framed body from a broker this helper spawned.
+///
+/// Progress only. A reply's size is not something we can turn into a deadline,
+/// and the exposure differs in kind from an inbound request: one thread per
+/// outstanding request, bounded by how many sessions exist rather than by
+/// anything the peer chooses.
+#[cfg(unix)]
+fn trusted_body_budget(_len: usize) -> IoBudget {
+    IoBudget::idle(BROKER_IPC_IDLE_TIMEOUT)
+}
+
+/// Budget for a framed body of `len` bytes arriving from an arbitrary peer.
+///
+/// The total scales with the length the caller declared — never below the
+/// ordinary idle budget, so a small body is not held to a stricter rule than a
+/// large one. The idle bound is kept alongside it and does not scale: a caller
+/// that declares 1 TiB and then says nothing would otherwise have bought
+/// itself about 29 hours of silence, and a thread to spend it in.
+#[cfg(unix)]
+fn framed_body_budget(len: usize) -> IoBudget {
+    let by_rate = Duration::from_secs_f64(len as f64 / MIN_IPC_BODY_THROUGHPUT as f64);
+    IoBudget::within(
+        BROKER_IPC_IDLE_TIMEOUT,
+        by_rate.max(BROKER_IPC_IDLE_TIMEOUT),
+    )
+}
+
+/// How long a caller gives a broker to send *something* before treating it as
+/// wedged. Idle rather than total, because a legitimate reply has no size we
+/// can predict and therefore no duration we can predict either; a total budget
+/// would have to out-guess that, while an idle one only has to notice a broker
+/// that has stopped.
+///
+/// Generous, because nothing waits behind it any more. `acp/*` runs on its own
+/// thread (see `AcpJob`) and same-broker calls serialize on `broker_lock`, so
+/// this bounds one session's call rather than the whole helper. Erring long is
+/// the right way round: too short fails a healthy broker and, because
+/// `ACPBrokerClient` drops the error, can leave an adapter waiting forever —
+/// too long merely delays reporting a broker that is genuinely stuck.
+const BROKER_IPC_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a transfer may stall with the peer reading nothing at all.
+/// Paired with `MIN_IPC_RESPONSE_RATE`, which is what stops a peer reading
+/// just enough to look alive. Writing even a maximal request measures ~0.2s,
+/// so neither bound is near what real traffic needs.
+const BROKER_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
@@ -86,7 +212,63 @@ struct PendingOperation {
     method: String,
 }
 
+/// Serializes requests per broker.
+///
+/// These run on worker threads rather than the helper's serve loop, which is
+/// the point — one slow broker must not hold up the others. Within a single
+/// broker, though, concurrency is not safe: two `acp/open` calls racing would
+/// both find no live supervisor and both spawn one, and the rest mutate broker
+/// state written assuming one caller at a time.
+///
+/// Mutual exclusion only. This does **not** order anything: a mutex is not
+/// FIFO, so it says nothing about which of two waiting callers goes first.
+/// Ordering comes from the per-broker queue in `dispatch_acp_job`, which is
+/// what keeps a `session/cancel` from overtaking the `session/prompt` it was
+/// sent to stop. This lock is the backstop for any path that reaches here
+/// without going through that queue.
+fn broker_lock(broker_id: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().unwrap_or_else(|error| error.into_inner());
+    Arc::clone(
+        locks
+            .entry(broker_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
+}
+
+fn with_broker_lock<T>(broker_id: Option<&str>, body: impl FnOnce() -> T) -> T {
+    match broker_id {
+        Some(broker_id) => {
+            let lock = broker_lock(broker_id);
+            let _guard = lock.lock().unwrap_or_else(|error| error.into_inner());
+            body()
+        }
+        // `acp/list` names no broker: it sweeps every one of them, so there is
+        // no single lock to take, and it only reads.
+        None => body(),
+    }
+}
+
 pub fn handle_control_request(
+    method: &str,
+    params: Option<Value>,
+) -> Result<Value, AcpBrokerProcessError> {
+    // The id is copied out before locking so `params` can be *moved* into the
+    // dispatch below. Borrowing it across the lock instead would force a clone,
+    // and these payloads are the large ones — a maximal image prompt is ~267
+    // MiB, and an `acp/respond` carrying a file read is unbounded.
+    let broker_id = params
+        .as_ref()
+        .and_then(|params| params.get("brokerId"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    with_broker_lock(broker_id.as_deref(), || {
+        dispatch_control_request(method, params)
+    })
+}
+
+fn dispatch_control_request(
     method: &str,
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
@@ -135,6 +317,13 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
         created_at_millis: current_millis(),
     };
     write_restrictive_json(&dir.join("metadata.json"), &metadata)?;
+    // Advertise framing here, before anything can connect, and stamp it with
+    // this generation so it cannot be mistaken for a later broker's — see
+    // `broker_supports_framing`.
+    write_restrictive_bytes(
+        &dir.join(IPC_FRAMING_MARKER),
+        format!("{}\n", metadata.generation.value()).as_bytes(),
+    )?;
     write_broker_pid(&dir)?;
 
     let mut command = Command::new(&launch.command);
@@ -336,7 +525,17 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
         if !dir.is_dir() || !broker_is_running(&dir) {
             continue;
         }
-        if let Ok(snapshot) = send_ipc(&dir, "snapshot", json!({})) {
+        // The ordinary budget, deliberately. A shorter one was tempting here
+        // — this sweeps every broker dir on disk, including leftovers from
+        // earlier runs — but it silently drops healthy brokers: a snapshot
+        // carrying a retained large-image prompt takes ~7.4s to serialize,
+        // all of it silent, so any budget below that omits a live broker from
+        // the list rather than reporting it. The cheap exclusions are already
+        // handled above by `broker_is_running`, and a dead socket fails the
+        // connect immediately; what is left is a broker that is live but
+        // wedged, which is exactly what an idle budget is for.
+        if let Ok(snapshot) = send_ipc_within(&dir, "snapshot", json!({}), BROKER_IPC_IDLE_TIMEOUT)
+        {
             if snapshot
                 .get("adapterExited")
                 .and_then(Value::as_bool)
@@ -350,37 +549,451 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
     Ok(json!({ "brokers": brokers }))
 }
 
+/// What is asked of a peer beyond not going silent.
+#[derive(Clone, Copy)]
+enum Pace {
+    /// Finish within this, however fast you go. Right where the sender
+    /// declared a length, since the deadline can then be derived from it.
+    Within(Duration),
+    /// Once you start sending, keep up at least this many bytes per second.
+    /// Right where the length is *not* known — a legacy request is the whole
+    /// message on one line, so there is no size to turn into a deadline, and
+    /// any fixed duration would be a size ceiling in disguise. A rate tells a
+    /// large transfer apart from a trickle without needing to know how large.
+    AtLeast(u64),
+    /// Nothing beyond the idle bound. For a broker this helper spawned: its
+    /// reply has no size we could bound, and one thread per outstanding
+    /// request is limited by how many sessions exist, not by the peer.
+    Unbounded,
+}
+
+/// How a transfer is bounded in time, in either direction.
+///
+/// An idle bound alone has a hole — a trickle satisfies it forever — so every
+/// transfer with an arbitrary peer pairs one with a `Pace`. Which pace depends
+/// on whether the amount is known in advance.
+#[derive(Clone, Copy)]
+struct IoBudget {
+    /// Longest run with no bytes arriving.
+    idle: Duration,
+    pace: Pace,
+}
+
+impl IoBudget {
+    /// For a peer we trust to finish what it starts.
+    fn idle(idle: Duration) -> Self {
+        Self {
+            idle,
+            pace: Pace::Unbounded,
+        }
+    }
+
+    /// For a sender that declared how much it is about to send.
+    fn within(idle: Duration, total: Duration) -> Self {
+        Self {
+            idle,
+            pace: Pace::Within(total),
+        }
+    }
+
+    /// For a sender whose length we cannot know.
+    const fn at_least(idle: Duration, bytes_per_second: u64) -> Self {
+        Self {
+            idle,
+            pace: Pace::AtLeast(bytes_per_second),
+        }
+    }
+}
+
+/// Grace before a rate is judged, so a sender is not failed on the strength of
+/// its first few hundred bytes.
+#[cfg(unix)]
+const IPC_RATE_GRACE: Duration = Duration::from_secs(10);
+
+/// Tracks whether a read still has time left under its bounds.
+#[cfg(unix)]
+struct BudgetClock {
+    idle: Duration,
+    pace: Pace,
+    idle_deadline: std::time::Instant,
+    total_deadline: Option<std::time::Instant>,
+    first_byte_at: Option<std::time::Instant>,
+    bytes: u64,
+}
+
+#[cfg(unix)]
+impl BudgetClock {
+    fn new(budget: IoBudget) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            idle: budget.idle,
+            pace: budget.pace,
+            idle_deadline: now + budget.idle,
+            total_deadline: match budget.pace {
+                Pace::Within(total) => Some(now + total),
+                _ => None,
+            },
+            first_byte_at: None,
+            bytes: 0,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        let now = std::time::Instant::now();
+        if now >= self.idle_deadline {
+            return true;
+        }
+        if self.total_deadline.is_some_and(|deadline| now >= deadline) {
+            return true;
+        }
+        let Pace::AtLeast(rate) = self.pace else {
+            return false;
+        };
+        let Some(first_byte_at) = self.first_byte_at else {
+            // Nothing sent yet, so there is no rate to judge — the idle bound
+            // above is what covers a sender still preparing its request.
+            return false;
+        };
+        let elapsed = now.duration_since(first_byte_at);
+        let judged = elapsed.saturating_sub(IPC_RATE_GRACE);
+        self.bytes < rate.saturating_mul(judged.as_secs())
+    }
+
+    /// `count` bytes arrived, so the idle bound starts over. Neither the total
+    /// nor the required rate does: those are what a trickle cannot renew.
+    fn progressed(&mut self, count: usize) {
+        let now = std::time::Instant::now();
+        self.idle_deadline = now + self.idle;
+        self.first_byte_at.get_or_insert(now);
+        self.bytes = self.bytes.saturating_add(count as u64);
+    }
+
+    fn timed_out() -> io::Error {
+        io::Error::new(io::ErrorKind::TimedOut, "timed out reading IPC message")
+    }
+}
+
+/// Largest amount handed to a single write. See `BudgetedWriter::write`.
+#[cfg(unix)]
+const IPC_WRITE_CHUNK_BYTES: usize = 64 * 1024;
+
+/// How long a blocked read or write waits before its budget is re-checked.
+/// Also the amount by which a transfer may overshoot.
+#[cfg(unix)]
+const IPC_IO_POLL_SLICE: Duration = Duration::from_millis(500);
+
+/// Prepares a stream for the budgeted readers below.
+///
+/// The socket timeout is set once, to a short slice that just wakes a blocked
+/// read periodically; the budget checked on each pass is what actually bounds
+/// the read. (Re-arming the socket per read would express a deadline more
+/// directly, but `setsockopt` starts failing with `EINVAL` once the peer goes
+/// away mid-stream, which would turn an otherwise complete read into an error.)
+///
+/// One reader must be shared across a whole message: `BufReader` reads ahead,
+/// so building a second one to read a frame body would discard bytes the first
+/// had already pulled off the socket.
+#[cfg(unix)]
+fn ipc_reader(stream: &UnixStream) -> io::Result<BufReader<&UnixStream>> {
+    stream.set_read_timeout(Some(IPC_IO_POLL_SLICE))?;
+    Ok(BufReader::new(stream))
+}
+
+/// True when an error means "nothing to read just yet" rather than a failure.
+/// The budget decides when quiet has gone on too long.
+#[cfg(unix)]
+fn is_quiet(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+    )
+}
+
+/// Reads one newline-terminated line, bounded in time by `budget`.
+///
+/// `set_read_timeout` on its own would not bound it: that applies to each
+/// underlying read for inactivity, while reading a line keeps issuing fresh
+/// reads until it finds a newline, so a peer trickling bytes faster than the
+/// timeout renews its budget indefinitely.
+#[cfg(unix)]
+fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: IoBudget) -> io::Result<String> {
+    let mut clock = BudgetClock::new(budget);
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        if clock.expired() {
+            return Err(BudgetClock::timed_out());
+        }
+        let (finished, consumed) = match reader.fill_buf() {
+            Ok([]) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "peer closed before completing the IPC line",
+                ));
+            }
+            Ok(available) => match available.iter().position(|byte| *byte == b'\n') {
+                Some(index) => {
+                    line.extend_from_slice(&available[..=index]);
+                    (true, index + 1)
+                }
+                None => {
+                    line.extend_from_slice(available);
+                    (false, available.len())
+                }
+            },
+            Err(error) if is_quiet(&error) => continue,
+            Err(error) => return Err(error),
+        };
+        reader.consume(consumed);
+        clock.progressed(consumed);
+        if finished {
+            return String::from_utf8(line)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+        }
+    }
+}
+
+/// Reads exactly `len` bytes.
+///
+/// Knowing the length up front is the point of framing: there is no ceiling to
+/// guess and no newline to wait for, so an idle budget is enough — a peer that
+/// keeps delivering is making progress no matter how much it has left to send.
+#[cfg(unix)]
+fn read_exact_within(
+    reader: &mut BufReader<&UnixStream>,
+    len: usize,
+    budget: IoBudget,
+) -> io::Result<String> {
+    let mut clock = BudgetClock::new(budget);
+    let mut body: Vec<u8> = Vec::with_capacity(len.min(1024 * 1024));
+    while body.len() < len {
+        if clock.expired() {
+            return Err(BudgetClock::timed_out());
+        }
+        let consumed = match reader.fill_buf() {
+            Ok([]) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "peer closed before completing the IPC frame",
+                ));
+            }
+            Ok(available) => {
+                let take = available.len().min(len - body.len());
+                body.extend_from_slice(&available[..take]);
+                take
+            }
+            Err(error) if is_quiet(&error) => continue,
+            Err(error) => return Err(error),
+        };
+        reader.consume(consumed);
+        clock.progressed(consumed);
+    }
+    String::from_utf8(body).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+/// How a message is delimited on the broker socket.
+///
+/// `Framed` prefixes a byte count, so the reader knows the length up front and
+/// needs no ceiling and no total-time budget standing in for one. `Legacy` is
+/// the original newline-delimited JSON, kept because a helper can adopt a
+/// broker that a previous build started and which is still speaking it.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Framing {
+    Legacy,
+    Framed,
+}
+
+/// Header introducing a framed message: this, a byte count, and a newline.
+/// Chosen so it cannot be confused with the legacy encoding, which always
+/// starts with `{`.
+#[cfg(unix)]
+const IPC_FRAME_HEADER: &str = "ALASIPC1 ";
+
+/// Marker a supervisor writes to advertise that it understands framing.
+/// Callers check for it rather than negotiating, because the answer has to
+/// survive the caller restarting while the broker keeps running.
+#[cfg(unix)]
+const IPC_FRAMING_MARKER: &str = "framing";
+
+/// True when the broker *currently* running in `dir` wrote the marker.
+///
+/// Presence alone is not enough. A supervisor from an earlier build can
+/// replace one from this build in the same directory, and its cleanup does not
+/// know to remove a file it has never heard of — so the marker outlives the
+/// broker that meant it. Framed requests would then go to a broker that only
+/// understands newlines, which rejects them, and `acp/open` will not replace it
+/// because its pid is live: the session cannot be reopened at all.
+///
+/// Matched against the generation rather than the pid. A pid is recycled, so a
+/// replacement can be handed the very number a stale marker names — unlikely,
+/// but the failure it produces is an unreopenable session, and the generation
+/// is a nanosecond stamp written by every build into `metadata.json`, so there
+/// is nothing to trade for using it.
+#[cfg(unix)]
+fn broker_supports_framing(dir: &Path) -> bool {
+    let Ok(marker) = std::fs::read_to_string(dir.join(IPC_FRAMING_MARKER)) else {
+        return false;
+    };
+    let Ok(marked_generation) = marker.trim().parse::<u64>() else {
+        return false;
+    };
+    read_broker_metadata(dir)
+        .is_some_and(|metadata| metadata.generation.value() == marked_generation)
+}
+
+#[cfg(unix)]
+fn read_broker_metadata(dir: &Path) -> Option<ACPBrokerMetadata> {
+    serde_json::from_slice(&std::fs::read(dir.join("metadata.json")).ok()?).ok()
+}
+
+/// Reads one message, in whichever framing the peer used.
+///
+/// Detection is by prefix rather than by configuration so that both mixed
+/// pairings work: a new caller reaching an old broker, and an old caller
+/// reaching a new one.
+///
+/// `head` bounds the first line, which is a short framing header or — under
+/// the legacy encoding — the entire message. `body_for_len` then bounds the
+/// framed body, and the two callers differ on it: a request comes from an
+/// arbitrary peer and is held to the length it declared, while a reply comes
+/// from a broker this helper spawned and is only asked to keep making
+/// progress.
+#[cfg(unix)]
+fn read_ipc_message(
+    reader: &mut BufReader<&UnixStream>,
+    head: IoBudget,
+    body_for_len: fn(usize) -> IoBudget,
+) -> io::Result<(String, Framing)> {
+    let head = read_line_within(reader, head)?;
+    let Some(len) = head.strip_prefix(IPC_FRAME_HEADER) else {
+        return Ok((head, Framing::Legacy));
+    };
+    let len: usize = len.trim().parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid IPC frame length: {}", len.trim()),
+        )
+    })?;
+    // Refused before a byte of the body is read, so an outsized claim costs
+    // nothing to turn away.
+    if len > MAX_IPC_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("IPC frame length {len} exceeds {MAX_IPC_FRAME_BYTES}"),
+        ));
+    }
+    let body = read_exact_within(reader, len, body_for_len(len))?;
+    Ok((body, Framing::Framed))
+}
+
+#[cfg(unix)]
+fn write_ipc_message(writer: &mut impl Write, body: &str, framing: Framing) -> io::Result<()> {
+    if framing == Framing::Framed {
+        writeln!(writer, "{IPC_FRAME_HEADER}{}", body.len())?;
+    }
+    writer.write_all(body.as_bytes())?;
+    if framing == Framing::Legacy {
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()
+}
+
 fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProcessError> {
     #[cfg(unix)]
     {
+        /// How long the accept loop sleeps between polls when no client is
+        /// waiting. Also the longest a `close` takes to end the loop.
+        const ACCEPT_POLL: Duration = Duration::from_millis(50);
+        /// How long to let in-flight handlers finish after a `close`, so the
+        /// caller that asked for it still receives its answer.
+        const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+        /// Most connections served at once. See the accept loop below.
+        ///
+        /// Set for headroom rather than thrift: a helper serializes its calls
+        /// per broker, so real use is a handful, while thread exhaustion needs
+        /// thousands. Sitting between the two means a flood has to be
+        /// deliberate to be felt, and even then it costs availability rather
+        /// than the process.
+        const MAX_BROKER_CONNECTION_WORKERS: usize = 256;
+
         let socket_path = dir.join("broker.sock");
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path)
             .map_err(|error| broker_error(-32072, format!("socket bind failed: {error}")))?;
+        // Non-blocking so the loop can notice `close` without waiting for
+        // another connection to arrive. Handling used to run inline for
+        // exactly that reason, which is what let one slow client hold up
+        // everyone else.
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| broker_error(-32072, format!("socket mode failed: {error}")))?;
         write_restrictive_bytes(&dir.join("ready"), b"1\n")?;
-        for stream in listener.incoming() {
-            let stream = match stream {
-                Ok(stream) => stream,
-                Err(_) => continue,
-            };
-            let mut line = String::new();
-            {
-                let mut reader = BufReader::new(&stream);
-                if reader.read_line(&mut line).is_err() {
+
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let order = Arc::new(RequestOrder::default());
+        while !runtime_is_closing(&runtime) {
+            // Stop accepting rather than spawning without limit. Every
+            // connection owns a thread that can sit for the whole head
+            // timeout, so a peer opening sockets faster than they retire would
+            // otherwise exhaust threads until `spawn` panics and takes the
+            // supervisor with it. Leaving them in the kernel's backlog is
+            // better than a bespoke rejection: a caller that cannot connect
+            // sees the same refusal it already handles, and one that is merely
+            // queued is served as soon as a worker frees up.
+            //
+            // Worth being clear about what this does and does not buy. A local
+            // peer holding sockets open can still starve this broker for as
+            // long as it keeps them, because a connection that has sent
+            // nothing yet is indistinguishable from an older helper still
+            // encoding its request — that is what the head's idle bound is
+            // for. What the ceiling changes is the consequence: a bounded,
+            // self-healing stall instead of a dead supervisor and every
+            // session on it lost. Fixing the rest means not dedicating a
+            // thread to a connection before it has said anything, which is a
+            // different I/O model than this file uses.
+            if inflight.load(Ordering::Acquire) >= MAX_BROKER_CONNECTION_WORKERS {
+                std::thread::sleep(ACCEPT_POLL);
+                continue;
+            }
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(ACCEPT_POLL);
                     continue;
                 }
+                Err(_) => continue,
+            };
+            // Accepted sockets do not reliably inherit the listener's mode,
+            // and the readers below want a blocking socket with timeouts.
+            if stream.set_nonblocking(false).is_err() {
+                continue;
             }
-            if ipc_line_is_close(&line) {
-                let _ = handle_ipc_line(runtime.clone(), stream, line);
-            } else {
-                let request_runtime = runtime.clone();
-                std::thread::spawn(move || {
-                    let _ = handle_ipc_line(request_runtime, stream, line);
-                });
+            let request_runtime = runtime.clone();
+            let request_order = Arc::clone(&order);
+            let request_inflight = Arc::clone(&inflight);
+            request_inflight.fetch_add(1, Ordering::AcqRel);
+            if std::thread::Builder::new()
+                .spawn(move || {
+                    let _ = handle_connection(request_runtime, stream, request_order);
+                    request_inflight.fetch_sub(1, Ordering::AcqRel);
+                })
+                .is_err()
+            {
+                // Out of threads despite the ceiling. Drop the connection
+                // rather than propagating: the caller retries, and the
+                // supervisor stays up for the sessions it already has.
+                inflight.fetch_sub(1, Ordering::AcqRel);
             }
-            if runtime_is_closing(&runtime) {
+        }
+
+        // A `close` handler sets the closing flag before it replies, so the
+        // loop can exit while that reply is still being written. Wait for it.
+        let deadline = std::time::Instant::now() + DRAIN_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            if inflight.load(Ordering::Acquire) == 0 {
                 break;
             }
+            std::thread::sleep(ACCEPT_POLL);
         }
         Ok(())
     }
@@ -392,8 +1005,90 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
     }
 }
 
+/// Hands out turns so requests are dispatched in the order they finished
+/// arriving, rather than in whatever order the scheduler wakes their threads.
+///
+/// One helper already orders its own calls per broker, but a broker outlives
+/// the app that started it and more than one helper can adopt the same one —
+/// two Alas builds side by side is ordinary here. Their requests arrive on
+/// separate connections, and without this a later `session/cancel` can be
+/// applied before the `session/prompt` it was sent to stop, the same silent
+/// failure the helper's queue prevents within one process.
+///
+/// The turn is taken once a request has finished arriving, not at accept.
+/// Ordering by acceptance would mean holding it across a read allowed to take
+/// minutes for a legacy sender still encoding, letting one slow caller stall
+/// every other client of the broker — reintroducing at the supervisor exactly
+/// what moving dispatch off the serve loop removed at the helper.
 #[cfg(unix)]
-fn handle_ipc_line(runtime: Runtime, mut stream: UnixStream, line: String) -> io::Result<()> {
+#[derive(Default)]
+struct RequestOrder {
+    state: Mutex<(u64, u64)>,
+    turn: Condvar,
+}
+
+#[cfg(unix)]
+impl RequestOrder {
+    /// Claims the next place in line and waits for it. The returned guard
+    /// advances the queue on drop, including on panic — otherwise one failed
+    /// handler would stall every later request for this broker for good.
+    fn take_turn(&self) -> RequestTurn<'_> {
+        let ticket = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let ticket = state.0;
+            state.0 += 1;
+            ticket
+        };
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        while state.1 != ticket {
+            state = self
+                .turn
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        RequestTurn { order: self }
+    }
+}
+
+#[cfg(unix)]
+struct RequestTurn<'a> {
+    order: &'a RequestOrder,
+}
+
+#[cfg(unix)]
+impl Drop for RequestTurn<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .order
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.1 += 1;
+        self.order.turn.notify_all();
+    }
+}
+
+/// Reads one request off an accepted connection and answers it, in whichever
+/// framing the caller used. Runs on its own thread, so a caller that is slow
+/// to deliver its request costs only that thread.
+#[cfg(unix)]
+fn handle_connection(
+    runtime: Runtime,
+    stream: UnixStream,
+    order: Arc<RequestOrder>,
+) -> io::Result<()> {
+    let (line, _framing) = {
+        let mut reader = ipc_reader(&stream)?;
+        read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
+    };
+    // Ticketed here, not before the read: a caller allowed minutes to finish
+    // arriving must not hold the turn of one that already has.
+    let _turn = order.take_turn();
+    handle_ipc_line(runtime, stream, line)
+}
+
+#[cfg(unix)]
+fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Result<()> {
     let response = match serde_json::from_str::<BrokerIpcRequest>(&line) {
         Ok(request) => match handle_ipc_request(&runtime, request) {
             Ok(result) => BrokerIpcResponse {
@@ -413,18 +1108,204 @@ fn handle_ipc_line(runtime: Runtime, mut stream: UnixStream, line: String) -> io
             error: Some(format!("invalid IPC request: {error}")),
         },
     };
-    writeln!(
-        stream,
-        "{}",
-        serde_json::to_string(&response).expect("IPC response serialization")
-    )?;
-    stream.flush()
+    // Replies are never framed, whichever encoding the request used.
+    //
+    // Framing earns its keep on the request path: the peer is arbitrary, so
+    // the read needs a total budget, and a total budget without a declared
+    // length is a size ceiling in disguise. None of that applies here. The
+    // caller is a helper that spawned this process and reads replies against
+    // an idle budget with no ceiling, so a newline is all the delimiter it
+    // needs — and it lets the reply be *streamed*.
+    //
+    // That matters because a reply is not small. `pendingRequests` carries the
+    // payload of every unanswered client request, which for an
+    // `fs/write_text_file` is the file content, and the replayed
+    // `PendingRequest` event carries it a second time. Framing would mean
+    // serializing all of that into memory before writing a byte: an extra copy
+    // of an unbounded payload, and a silent stretch long enough to trip the
+    // caller's idle budget before the reply even begins.
+    let mut writer = BufWriter::new(BudgetedWriter::new(
+        &stream,
+        IoBudget::at_least(BROKER_IPC_WRITE_TIMEOUT, MIN_IPC_RESPONSE_RATE),
+    )?);
+    serde_json::to_writer(&mut writer, &response).map_err(io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
-fn ipc_line_is_close(line: &str) -> bool {
-    serde_json::from_str::<BrokerIpcRequest>(line)
-        .map(|request| request.method == "close")
-        .unwrap_or(false)
+/// Applies an `IoBudget` to a stream of writes.
+///
+/// Writes stay **blocking**, and the budget is enforced from outside by a
+/// watchdog. That indirection is not for elegance — the two obvious
+/// alternatives were both measured and both fail:
+///
+/// - A write timeout does nothing. `SO_SNDTIMEO` is not honoured for AF_UNIX
+///   on Darwin: `set_write_timeout(300ms)` returns `Ok`, reads back as
+///   `Some(300ms)`, and a write to a peer draining slowly has still not
+///   returned twelve seconds later.
+/// - Polling a non-blocking socket is correct but slow in a way that depends
+///   on the machine. A 267 MiB reply fills the socket buffer ~34,000 times
+///   even when the reader keeps up, and every fill has to be noticed:
+///   sleeping on them measured 5.5s against 0.2s blocking, and yielding —
+///   fast when the machine is quiet — degraded to tens of seconds under CPU
+///   load, which is exactly when a broker can least afford it.
+///
+/// So the write blocks, the kernel does the waiting, and a watchdog closes the
+/// socket under a write that has outstayed its budget.
+#[cfg(unix)]
+struct BudgetedWriter<'a> {
+    stream: &'a UnixStream,
+    clock: Arc<Mutex<BudgetClock>>,
+    _watch: WriteWatch,
+}
+
+#[cfg(unix)]
+impl<'a> BudgetedWriter<'a> {
+    fn new(stream: &'a UnixStream, budget: IoBudget) -> io::Result<Self> {
+        let clock = Arc::new(Mutex::new(BudgetClock::new(budget)));
+        let watch = WriteWatch::arm(stream, Arc::clone(&clock))?;
+        Ok(Self {
+            stream,
+            clock,
+            _watch: watch,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Write for BudgetedWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Chunked, because a blocking AF_UNIX write on Darwin does not return
+        // a partial count — it waits until the whole buffer is accepted.
+        // Handing it a large reply in one call means no progress is reported
+        // until the entire thing is through, so the budget sees `bytes = 0`
+        // for as long as the peer cares to take, and only the idle bound ever
+        // fires. Capping each call keeps progress observable without costing
+        // anything measurable: a 267 MiB reply becomes ~4,200 writes.
+        let buf = &buf[..buf.len().min(IPC_WRITE_CHUNK_BYTES)];
+        match (&mut &*self.stream).write(buf) {
+            Ok(written) => {
+                self.clock
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .progressed(written);
+                Ok(written)
+            }
+            // The watchdog unblocks a stalled write by closing the socket, so
+            // the failure surfaces as a broken pipe. Reporting that verbatim
+            // would send whoever reads the log looking for a peer that
+            // disconnected, when what happened is that this peer stopped
+            // reading. Say which it was.
+            Err(error) => {
+                if self
+                    .clock
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .expired()
+                {
+                    return Err(BudgetClock::timed_out());
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Flushing is the last thing either caller does, so a successful one
+    /// means the reply is out and the watchdog must stop considering this
+    /// socket — see the `done` check there.
+    fn flush(&mut self) -> io::Result<()> {
+        let flushed = (&mut &*self.stream).flush();
+        if flushed.is_ok() {
+            self._watch.done.store(true, Ordering::Release);
+        }
+        flushed
+    }
+}
+
+/// A write currently being watched. Dropping it stops the watching.
+#[cfg(unix)]
+struct WriteWatch {
+    id: u64,
+    done: Arc<AtomicBool>,
+}
+
+#[cfg(unix)]
+struct WatchedWrite {
+    id: u64,
+    stream: UnixStream,
+    clock: Arc<Mutex<BudgetClock>>,
+    done: Arc<AtomicBool>,
+}
+
+/// The watched set, and the single thread that polices it.
+#[cfg(unix)]
+fn watched_writes() -> &'static Mutex<Vec<WatchedWrite>> {
+    static WATCHED: OnceLock<Mutex<Vec<WatchedWrite>>> = OnceLock::new();
+    WATCHED.get_or_init(|| {
+        let spawned = std::thread::Builder::new().spawn(|| {
+            loop {
+                std::thread::sleep(IPC_IO_POLL_SLICE);
+                let watched = watched_writes()
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                for write in watched.iter() {
+                    // Finished writes are still registered for the moment it
+                    // takes their guard to drop. Cutting one then would
+                    // discard a reply that was already delivered in full,
+                    // which is the opposite of the point.
+                    if write.done.load(Ordering::Acquire) {
+                        continue;
+                    }
+                    let expired = write
+                        .clock
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .expired();
+                    if expired {
+                        // Closing the socket is what unblocks the write: it
+                        // returns an error and the handler unwinds. The peer
+                        // sees the connection drop, which is the truthful
+                        // thing to tell it.
+                        let _ = write.stream.shutdown(std::net::Shutdown::Both);
+                    }
+                }
+            }
+        });
+        // Without the thread nothing enforces the budget, but refusing to
+        // write at all would be a worse answer than writing unpoliced.
+        let _ = spawned;
+        Mutex::new(Vec::new())
+    })
+}
+
+#[cfg(unix)]
+impl WriteWatch {
+    fn arm(stream: &UnixStream, clock: Arc<Mutex<BudgetClock>>) -> io::Result<Self> {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let stream = stream.try_clone()?;
+        let done = Arc::new(AtomicBool::new(false));
+        watched_writes()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(WatchedWrite {
+                id,
+                stream,
+                clock,
+                done: Arc::clone(&done),
+            });
+        Ok(Self { id, done })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for WriteWatch {
+    fn drop(&mut self) {
+        watched_writes()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|write| write.id != self.id);
+    }
 }
 
 fn handle_ipc_request(
@@ -904,27 +1785,84 @@ fn sorted_env_keys(env: &HashMap<String, String>) -> Vec<String> {
 }
 
 fn send_ipc(dir: &Path, method: &str, params: Value) -> Result<Value, AcpBrokerProcessError> {
+    send_ipc_within(dir, method, params, BROKER_IPC_IDLE_TIMEOUT)
+}
+
+fn send_ipc_within(
+    dir: &Path,
+    method: &str,
+    params: Value,
+    idle_timeout: Duration,
+) -> Result<Value, AcpBrokerProcessError> {
     #[cfg(unix)]
     {
-        let mut stream = UnixStream::connect(dir.join("broker.sock"))
-            .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
-        let request = BrokerIpcRequest {
+        // Serialize BEFORE connecting. The broker starts its request deadline
+        // the moment `accept()` returns, so any work done between connecting
+        // and writing is spent out of the broker's budget rather than ours.
+        // That is not a small effect at the sizes the UI permits: encoding a
+        // maximal image prompt (~267 MiB) measures
+        // ~7.4s on an idle machine, against an `IPC_REQUEST_TIMEOUT` of 5s —
+        // so connecting first would drop a perfectly valid prompt every time,
+        // not merely under load. Writing the bytes, by contrast, takes ~0.2s,
+        // which is what the broker's deadline should actually be covering.
+        let body = serde_json::to_string(&BrokerIpcRequest {
             method: method.to_string(),
             params: Some(params),
+        })
+        .expect("IPC request serialization");
+        // This connect is blocking and deliberately left that way. On Darwin
+        // — the only platform that reaches this code, since the ACP broker is
+        // spawned for local sessions only — a full listen backlog fails the
+        // connect with ECONNREFUSED immediately rather than waiting for room,
+        // so a wedged supervisor cannot stall the caller here; the retry
+        // deadline in `send_ipc_with_retry` handles the refusal. Linux instead
+        // *blocks* until backlog space frees up, so if brokers ever run on a
+        // remote helper — this binary is built for Linux too — this needs a
+        // non-blocking, deadline-aware connect before it can be trusted.
+        // `connect_does_not_block_on_a_full_backlog` pins the Darwin
+        // behaviour this relies on.
+        let stream = UnixStream::connect(dir.join("broker.sock"))
+            .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
+        // Without a bound, a broker that accepted the connection but never
+        // answered would block this call forever.
+
+        // Frame the request when the broker advertises it. Without framing the
+        // reader has to hunt for a newline, which needs a total budget, which
+        // is a size ceiling wearing a different hat — and this request can be
+        // an `acp/respond` carrying a whole file the adapter asked to read.
+        // A broker started by an earlier build has no marker and still gets
+        // the original encoding.
+        let framing = if broker_supports_framing(dir) {
+            Framing::Framed
+        } else {
+            Framing::Legacy
         };
-        writeln!(
-            stream,
-            "{}",
-            serde_json::to_string(&request).expect("IPC request serialization")
-        )
-        .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
-        stream
-            .flush()
-            .map_err(|error| broker_error(-32072, format!("broker flush failed: {error}")))?;
-        let mut line = String::new();
-        BufReader::new(stream)
-            .read_line(&mut line)
-            .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?;
+        // Budgeted rather than relying on a socket write timeout, which Darwin
+        // ignores for AF_UNIX (see `BudgetedWriter`). A broker that stopped
+        // reading would otherwise hold this queue's thread forever, and with
+        // it every later request for that broker.
+        {
+            let mut writer = BudgetedWriter::new(
+                &stream,
+                IoBudget::at_least(BROKER_IPC_WRITE_TIMEOUT, MIN_IPC_RESPONSE_RATE),
+            )
+            .map_err(|error| broker_error(-32072, format!("broker write setup: {error}")))?;
+            write_ipc_message(&mut writer, &body, framing)
+                .map_err(|error| broker_error(-32072, format!("broker write failed: {error}")))?;
+        }
+        // Bounded by inactivity, not total time: a reply's size — and so how
+        // long it legitimately takes — is not something we can predict. What
+        // can be asked of a broker is that it keep making progress.
+        let (line, _) = {
+            let mut reader = ipc_reader(&stream)
+                .map_err(|error| broker_error(-32072, format!("broker read setup: {error}")))?;
+            read_ipc_message(
+                &mut reader,
+                IoBudget::idle(idle_timeout),
+                trusted_body_budget,
+            )
+            .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?
+        };
         let response: BrokerIpcResponse = serde_json::from_str(&line)
             .map_err(|error| broker_error(-32072, format!("broker response failed: {error}")))?;
         if response.ok {
@@ -951,14 +1889,25 @@ fn send_ipc_with_retry(
     dir: &Path,
     method: &str,
     params: Value,
-    timeout: Duration,
+    retry_budget: Duration,
 ) -> Result<Value, AcpBrokerProcessError> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = std::time::Instant::now() + retry_budget;
     loop {
         if let Some(message) = read_startup_error(dir) {
             return Err(broker_error(-32072, message));
         }
-        match send_ipc(dir, method, params.clone()) {
+        // Each attempt gets the ordinary response budget, NOT what is left of
+        // `retry_budget`. The two measure different things: `retry_budget` is
+        // how long to keep re-trying a broker that is not answering *yet* —
+        // typically one still starting up, whose socket does not exist — while
+        // `BROKER_IPC_IDLE_TIMEOUT` is how long a single legitimate response may
+        // take once the broker does answer. Those are far apart: `acp_open`
+        // adopts a live broker on a 2s retry budget, and a snapshot carrying a
+        // retained large-image prompt takes ~7.4s just to serialize on the
+        // broker side. Deriving the response deadline from the retry budget
+        // makes adopting such a broker fail permanently, since every retry
+        // hits the same wall.
+        match send_ipc_within(dir, method, params.clone(), BROKER_IPC_IDLE_TIMEOUT) {
             Ok(value) => return Ok(value),
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
@@ -980,7 +1929,13 @@ fn read_startup_error(dir: &Path) -> Option<String> {
 }
 
 fn remove_transient_startup_files(dir: &Path) {
-    for name in ["broker.sock", "ready", "startup-error", "pid.json"] {
+    for name in [
+        "broker.sock",
+        "ready",
+        "startup-error",
+        "pid.json",
+        IPC_FRAMING_MARKER,
+    ] {
         let _ = std::fs::remove_file(dir.join(name));
     }
 }
@@ -1241,5 +2196,559 @@ mod tests {
         assert!(!pending_kind_awaits_user(
             PendingClientRequestKind::Terminal
         ));
+    }
+
+    /// The retry budget governs how long to keep retrying a broker that is not
+    /// answering *yet* — its socket may not exist while it starts up. It must
+    /// not double as the deadline for a single legitimate response, which can
+    /// take far longer: `acp_open` adopts with a 2s retry budget, while a
+    /// snapshot carrying a retained large-image prompt takes ~7.4s just to
+    /// serialize broker-side. Conflating the two makes adoption of a live
+    /// broker fail permanently, every retry hitting the same wall.
+    #[cfg(unix)]
+    #[test]
+    fn a_retry_budget_does_not_cap_how_long_one_response_may_take() {
+        let dir = PathBuf::from(format!("/tmp/alas-slow-broker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("broker dir");
+        let listener = UnixListener::bind(dir.join("broker.sock")).expect("listener binds");
+
+        let responder = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut line = String::new();
+            BufReader::new(&stream)
+                .read_line(&mut line)
+                .expect("request");
+            // Stands in for a broker serializing a large snapshot: answers
+            // correctly, just well past the caller's retry budget.
+            std::thread::sleep(Duration::from_secs(4));
+            let mut stream = stream;
+            writeln!(stream, r#"{{"ok":true,"result":{{"slow":true}}}}"#).expect("response");
+            stream.flush().expect("flush");
+        });
+
+        let outcome = send_ipc_with_retry(&dir, "snapshot", json!({}), Duration::from_secs(2));
+        let _ = responder.join();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let value = outcome.expect("a slow but healthy broker must not be given up on");
+        assert_eq!(value["slow"], json!(true));
+    }
+
+    /// `send_ipc_within` connects with a blocking socket, which is only safe
+    /// because Darwin refuses a connect to a full listen backlog instead of
+    /// waiting for room — otherwise a wedged supervisor could stall the
+    /// helper's single-threaded loop before any timeout is installed. Pin that
+    /// behaviour so a future Darwin that starts blocking is caught here.
+    ///
+    /// Darwin-only on purpose. This helper is also built for Linux (see
+    /// `scripts/build-alas-helper.sh`), where a full backlog *does* block —
+    /// but Linux never reaches the code this guards, because brokers are
+    /// spawned for local sessions only. Running it there would fail for an
+    /// assumption that platform does not need to hold. What Linux would need
+    /// if brokers ever ran on a remote helper is documented at the connect
+    /// itself, which is the thing that would have to change.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn connect_does_not_block_on_a_full_backlog() {
+        use std::sync::mpsc;
+
+        let path = std::env::temp_dir().join(format!("alas-backlog-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        // Bound to a listener that never accepts, so the backlog fills and
+        // stays full.
+        let listener = UnixListener::bind(&path).expect("listener binds");
+
+        let (sender, receiver) = mpsc::channel();
+        let connect_path = path.clone();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            // Comfortably past the default backlog on any platform we target.
+            for _ in 0..1024 {
+                match UnixStream::connect(&connect_path) {
+                    Ok(stream) => held.push(stream),
+                    Err(error) => {
+                        let _ = sender.send(Some(error.kind()));
+                        return;
+                    }
+                }
+            }
+            let _ = sender.send(None);
+        });
+
+        let outcome = receiver.recv_timeout(Duration::from_secs(20));
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+
+        let kind = outcome
+            .expect("connect blocked on a full backlog — send_ipc_within needs a bounded connect")
+            .expect("expected the backlog to fill within 1024 connects");
+        assert_eq!(kind, io::ErrorKind::ConnectionRefused);
+    }
+
+    /// An idle budget must survive a transfer that runs well past it in total,
+    /// which is the whole reason responses use one: a maximal attach reply
+    /// carries its prompt params twice and takes ~15s to serialize before a
+    /// byte is written, and there is no total we could pick that a larger
+    /// legitimate reply would not eventually exceed. A total budget of the
+    /// same size would fail this.
+    #[cfg(unix)]
+    #[test]
+    fn an_idle_budget_survives_a_transfer_longer_than_the_budget_itself() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        std::thread::spawn(move || {
+            // Six chunks over ~3s, none more than 0.5s apart: never idle for
+            // long, but comfortably past a 1s total.
+            for _ in 0..6 {
+                if writer.write_all(&[b'z'; 512]).is_err() {
+                    return;
+                }
+                let _ = writer.flush();
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let _ = writer.write_all(b"\n");
+            let _ = writer.flush();
+        });
+
+        let started = std::time::Instant::now();
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let line = read_line_within(&mut reader, IoBudget::idle(Duration::from_secs(1)))
+            .expect("a peer that keeps making progress must not be given up on");
+        assert_eq!(line.len(), 6 * 512 + 1);
+        assert!(
+            started.elapsed() > Duration::from_secs(1),
+            "transfer finished too fast to prove the budget was exceeded in total"
+        );
+    }
+
+    /// A framed caller declares a length, and is then held to delivering it.
+    /// Without that, an idle budget alone lets a caller advertise an enormous
+    /// body and dribble it, renewing its budget forever while the buffer
+    /// grows — the trickle path framing was supposed to close, not reopen.
+    #[cfg(unix)]
+    #[test]
+    fn a_framed_body_must_be_delivered_at_a_minimum_rate() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let writer_done = done.clone();
+        std::thread::spawn(move || {
+            while !*writer_done.lock().expect("drip flag") {
+                if writer.write_all(b"z").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+
+        // Claims 4 MiB, which the floor allows well under the 2s asked for
+        // here, then delivers a byte at a time.
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let started = std::time::Instant::now();
+        let outcome = read_exact_within(
+            &mut reader,
+            4 * 1024 * 1024,
+            IoBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
+        );
+        *done.lock().expect("drip flag") = true;
+
+        let error = outcome.expect_err("a dribbled body must not be waited on forever");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// A framing marker must expire with the broker that wrote it.
+    ///
+    /// A supervisor from an earlier build can replace this one in the same
+    /// directory, and its cleanup does not know to remove a file it has never
+    /// heard of — so the marker outlives the broker that meant it. Trusting it
+    /// then sends framed requests to a broker that only speaks newlines, which
+    /// rejects them, and `acp/open` will not replace it while its pid is live.
+    ///
+    /// Tested here rather than end-to-end because reproducing it for real
+    /// needs a supervisor built before framing existed; what can be pinned is
+    /// that presence alone is not taken as consent.
+    #[cfg(unix)]
+    #[test]
+    fn a_framing_marker_is_only_trusted_for_the_live_broker() {
+        fn write_metadata(dir: &Path, generation: u64) {
+            let metadata = ACPBrokerMetadata {
+                broker_id: BrokerId::new("marker-broker"),
+                generation: BrokerGeneration::new(generation),
+                alas_session_id: "marker-session".to_string(),
+                adapter_program: "adapter".to_string(),
+                adapter_args: vec![],
+                cwd: "/tmp".to_string(),
+                env_keys: vec![],
+                created_at_millis: 0,
+            };
+            write_restrictive_json(&dir.join("metadata.json"), &metadata).expect("metadata");
+        }
+
+        let dir = PathBuf::from(format!("/tmp/alas-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("marker dir");
+        write_metadata(&dir, 1_000);
+
+        assert!(
+            !broker_supports_framing(&dir),
+            "no marker should mean no framing"
+        );
+
+        std::fs::write(dir.join(IPC_FRAMING_MARKER), "1000\n").expect("marker");
+        assert!(
+            broker_supports_framing(&dir),
+            "a marker written by the live broker should be trusted"
+        );
+
+        // Stands in for a broker replaced by one from an earlier build: the
+        // marker survives its cleanup, but the generation moved on. Matching
+        // on the pid instead would let this through whenever the replacement
+        // happened to be handed the same pid.
+        write_metadata(&dir, 2_000);
+        assert!(
+            !broker_supports_framing(&dir),
+            "a marker from a replaced broker must not be trusted"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Bounding writes must not cost throughput on the writes that matter.
+    ///
+    /// Polling a non-blocking socket means noticing every time the buffer
+    /// fills, which for a large reply to a reader that is keeping up happens
+    /// tens of thousands of times. Sleeping on each is ruinous — measured at
+    /// 5.5s for 267 MiB against 0.2s blocking, and hours at a full poll slice
+    /// — so the loop yields before it sleeps. The bound here is loose on
+    /// purpose: it is meant to catch that class of regression, not to police
+    /// timing on a shared machine.
+    #[cfg(unix)]
+    #[test]
+    fn a_large_reply_to_a_keeping_up_reader_is_not_slowed_by_the_budget() {
+        let (writer, mut reader) = UnixStream::pair().expect("socket pair");
+        let payload = vec![b'w'; 64 * 1024 * 1024];
+        let expected = payload.len();
+        let drain = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut total = 0usize;
+            while total < expected {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => total += read,
+                }
+            }
+            total
+        });
+
+        let mut budgeted = BudgetedWriter::new(
+            &writer,
+            IoBudget::at_least(BROKER_IPC_WRITE_TIMEOUT, MIN_IPC_RESPONSE_RATE),
+        )
+        .expect("budgeted writer");
+        let started = std::time::Instant::now();
+        budgeted.write_all(&payload).expect("large reply");
+        budgeted.flush().expect("flush");
+        let elapsed = started.elapsed();
+        drop(budgeted);
+        drop(writer);
+        assert_eq!(drain.join().expect("drain"), expected);
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "budgeted writes collapsed throughput: 64 MiB took {elapsed:?}"
+        );
+    }
+
+    /// An advertised length is refused before any of the body is read, so a
+    /// peer cannot make the broker hold gigabytes simply by claiming them.
+    /// The rate bound does not cover this: a peer delivering at the required
+    /// rate is retained byte for byte, and time was never what ran out.
+    #[cfg(unix)]
+    #[test]
+    fn an_oversized_declared_frame_is_refused_before_its_body_is_read() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let oversized = MAX_IPC_FRAME_BYTES + 1;
+        std::thread::spawn(move || {
+            // Header only. If the length were accepted this would block
+            // forever waiting for a body that never comes.
+            let _ = writeln!(writer, "{IPC_FRAME_HEADER}{oversized}");
+            let _ = writer.flush();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let started = std::time::Instant::now();
+        let error = read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)
+            .expect_err("an outsized declared length must be refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "refusal should not wait on the body: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Turns are handed out in the order they are claimed, not in whatever
+    /// order the scheduler wakes the waiters. A mutex would satisfy the
+    /// mutual-exclusion half of this and still let a `session/cancel` overtake
+    /// the `session/prompt` it was sent to stop.
+    ///
+    /// Each worker holds its turn for a spell that *shrinks* with its ticket,
+    /// so the two behaviours produce different answers: granted in order, the
+    /// holds are serial and the record comes out ascending; granted freely,
+    /// they overlap and the shortest holds finish first.
+    #[cfg(unix)]
+    #[test]
+    fn request_turns_are_granted_in_the_order_they_are_claimed() {
+        const WORKERS: u64 = 8;
+        let order = Arc::new(RequestOrder::default());
+        let observed = Arc::new(Mutex::new(Vec::new()));
+
+        // Held so every worker is queued behind it before any can proceed.
+        let first = order.take_turn();
+        let mut workers = Vec::new();
+        for index in 0..WORKERS {
+            let order = Arc::clone(&order);
+            let observed = Arc::clone(&observed);
+            workers.push(std::thread::spawn(move || {
+                let _turn = order.take_turn();
+                std::thread::sleep(Duration::from_millis(30 * (WORKERS - index)));
+                observed
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(index);
+            }));
+            // Sequences the claims only; it does not sequence the grants.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(first);
+        for worker in workers {
+            worker.join().expect("worker");
+        }
+
+        let observed = observed.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(*observed, (0..WORKERS).collect::<Vec<_>>());
+    }
+
+    /// A peer that drains a reply slowly must not be able to hold its handler
+    /// open indefinitely. Enough such peers hold every connection worker, and
+    /// unlike a flood of idle connections — which lapses on its own — these
+    /// never do, so the broker would not recover.
+    ///
+    /// The peer here keeps reading, just far below the rate asked of it, which
+    /// is the case neither an idle bound nor a socket write timeout can catch:
+    /// it is always making progress, and every partial write looks healthy.
+    #[cfg(unix)]
+    #[test]
+    fn a_peer_that_drains_a_reply_slowly_does_not_hold_its_handler_open() {
+        let (writer, mut reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let reader_done = done.clone();
+        std::thread::spawn(move || {
+            // ~320 KiB/s: fast enough that writes keep completing, far short
+            // of the megabytes per second demanded below.
+            let mut chunk = vec![0u8; 32 * 1024];
+            while !*reader_done.lock().expect("drain flag") {
+                if std::io::Read::read(&mut reader, &mut chunk).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+
+        let mut budgeted = BudgetedWriter::new(
+            &writer,
+            IoBudget::at_least(Duration::from_secs(120), 4 * 1024 * 1024),
+        )
+        .expect("budgeted writer");
+        let payload = vec![b'r'; 64 * 1024 * 1024];
+        let started = std::time::Instant::now();
+        let outcome = budgeted.write_all(&payload);
+        *done.lock().expect("drain flag") = true;
+
+        let error = outcome.expect_err("a reply drained below the required rate must be cut");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::TimedOut,
+            "the cause should say the peer was too slow, not that the pipe broke"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the rate bound took too long to notice: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A rate bound has to separate the two cases a fixed duration cannot: a
+    /// legacy request whose sender pauses to encode and then delivers a lot,
+    /// and a trickle that never intends to finish. Both look identical to an
+    /// idle bound, and any total that admits the first admits the second.
+    #[cfg(unix)]
+    #[test]
+    fn a_rate_bound_admits_a_slow_start_but_not_a_trickle() {
+        fn read_with(chunk: usize, gap: Duration, chunks: usize) -> io::Result<String> {
+            let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+            std::thread::spawn(move || {
+                // A long pause first, standing in for an older helper encoding
+                // its request before it writes anything at all.
+                std::thread::sleep(Duration::from_secs(1));
+                for _ in 0..chunks {
+                    if writer.write_all(&vec![b'q'; chunk]).is_err() {
+                        return;
+                    }
+                    let _ = writer.flush();
+                    std::thread::sleep(gap);
+                }
+                let _ = writer.write_all(b"\n");
+                let _ = writer.flush();
+            });
+            let mut reader = ipc_reader(&reader).expect("reader");
+            // 64 KiB/s required, judged after a 10s grace.
+            read_line_within(
+                &mut reader,
+                IoBudget::at_least(Duration::from_secs(30), 64 * 1024),
+            )
+        }
+
+        // Pauses a second, then sends ~2 MiB in bursts: comfortably above the
+        // rate, and a fixed total tuned to reject the trickle below would have
+        // had to reject this too.
+        let delivered = read_with(256 * 1024, Duration::from_millis(50), 8)
+            .expect("a sender that pauses and then delivers must be allowed to finish");
+        assert_eq!(delivered.len(), 8 * 256 * 1024 + 1);
+
+        // A byte every 100ms never approaches the rate, and never ends.
+        let started = std::time::Instant::now();
+        let error = read_with(1, Duration::from_millis(100), usize::MAX)
+            .expect_err("a trickle must not be allowed to run indefinitely");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the rate bound took too long to notice: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The two body budgets encode different trust, and mixing them up is easy
+    /// to do silently: holding a broker's reply to a throughput floor would
+    /// fail a legitimately slow one, while letting an inbound request go
+    /// unbounded is the trickle path this all exists to close.
+    #[test]
+    fn only_arbitrary_peers_are_held_to_a_declared_length() {
+        let len = 64 * 1024 * 1024;
+        assert!(
+            matches!(framed_body_budget(len).pace, Pace::Within(_)),
+            "a request body must be bounded by the length its sender declared"
+        );
+        assert!(
+            matches!(trusted_body_budget(len).pace, Pace::Unbounded),
+            "a reply from our own broker has no size we can turn into a deadline"
+        );
+        assert_eq!(trusted_body_budget(len).idle, BROKER_IPC_IDLE_TIMEOUT);
+    }
+
+    /// A declared length buys time proportional to itself, and nothing else.
+    /// Deriving the only deadline from it would let a caller claim 1 TiB and
+    /// then say nothing for the ~29 hours that implies, parking a thread per
+    /// such connection.
+    #[cfg(unix)]
+    #[test]
+    fn a_huge_declared_length_does_not_buy_silence() {
+        let (_writer, reader) = UnixStream::pair().expect("socket pair");
+        let mut reader = ipc_reader(&reader).expect("reader");
+
+        let one_tib = 1024usize.pow(4);
+        let mut budget = framed_body_budget(one_tib);
+        assert!(
+            matches!(budget.pace, Pace::Within(total) if total > Duration::from_secs(3600)),
+            "a 1 TiB body should be allowed hours in total"
+        );
+        // Shorten only the silence bound, so this test does not sit for the
+        // full idle budget while proving the total is not what stops it.
+        budget.idle = Duration::from_millis(300);
+
+        let started = std::time::Instant::now();
+        let error = read_exact_within(&mut reader, one_tib, budget)
+            .expect_err("a silent caller must be cut by the idle bound, not its own claim");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(30));
+    }
+
+    /// The rate floor must not turn into a ceiling on legitimate payloads: a
+    /// body large enough to take real time still has to be allowed to arrive.
+    #[test]
+    fn the_body_deadline_scales_with_the_length_a_caller_declares() {
+        // Small bodies are not held to a stricter rule than large ones.
+        assert!(matches!(
+            framed_body_budget(1024).pace,
+            Pace::Within(total) if total == BROKER_IPC_IDLE_TIMEOUT
+        ));
+        // A maximal image prompt (~267 MiB) gets time proportional to its size.
+        let maximal = 267 * 1024 * 1024;
+        let budget = framed_body_budget(maximal);
+        assert!(
+            matches!(budget.pace, Pace::Within(total) if total >= BROKER_IPC_IDLE_TIMEOUT),
+            "a large body was given less time than a small one"
+        );
+        // The silence bound does not scale with the declared length, or a
+        // caller could buy quiet by claiming a huge body.
+        assert_eq!(budget.idle, BROKER_IPC_IDLE_TIMEOUT);
+    }
+
+    /// The whole fix rests on this: a peer that keeps the connection alive and
+    /// keeps sending, but never ends the line, must still hit the deadline.
+    /// A per-read inactivity timeout never would — and with no length ceiling
+    /// left, this total budget is the only thing standing between a trickling
+    /// peer and an unbounded read.
+    #[cfg(unix)]
+    #[test]
+    fn read_line_within_stops_a_peer_that_drips_without_ever_ending_the_line() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let writer_done = done.clone();
+        std::thread::spawn(move || {
+            while !*writer_done.lock().expect("drip flag") {
+                if writer.write_all(b" ").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let outcome = read_line_within(
+            &mut reader,
+            IoBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
+        );
+        let elapsed = started.elapsed();
+        *done.lock().expect("drip flag") = true;
+
+        let error = outcome.expect_err("a line that never ends must not read forever");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "deadline overshot badly: {elapsed:?}"
+        );
+    }
+
+    /// A large line must arrive intact rather than being cut short mid-way:
+    /// an `acp/respond` can carry a whole file the adapter asked to read.
+    #[cfg(unix)]
+    #[test]
+    fn read_line_within_accepts_a_line_larger_than_a_typical_request() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let payload = vec![b'x'; 40 * 1024 * 1024];
+        let expected = payload.len();
+        std::thread::spawn(move || {
+            let _ = writer.write_all(&payload);
+            let _ = writer.write_all(b"\n");
+            let _ = writer.flush();
+        });
+
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let line = read_line_within(&mut reader, IoBudget::idle(Duration::from_secs(30)))
+            .expect("large line");
+        assert_eq!(line.len(), expected + 1);
     }
 }

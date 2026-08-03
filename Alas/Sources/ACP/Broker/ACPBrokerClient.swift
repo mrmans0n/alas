@@ -788,6 +788,16 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    /// Answers an adapter's `fs`/`terminal` request, and answers it *somehow*
+    /// even when the intended reply cannot be delivered.
+    ///
+    /// The payload here is whatever the adapter asked for, which for an
+    /// unbounded `fs/read_text_file` is an entire file — so delivery can fail
+    /// on size where nothing else would. Dropping that failure, as this did,
+    /// leaves the adapter waiting on a request that will never be answered and
+    /// the turn stalled with no indication why. A JSON-RPC error is a poor
+    /// answer but an answer: the adapter can report it, retry with `line` and
+    /// `limit`, or give up, none of which it can do while blocked.
     private func respondToRawResult(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         Task { [weak self] in
             guard let self else { return }
@@ -798,7 +808,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 case .failure(let error):
                     try await self.respond(id: id, result: nil, error: error)
                 }
-            } catch {}
+            } catch {
+                let undeliverable = JSONRPCError(
+                    code: -32603,
+                    message: "response could not be delivered: \(error.localizedDescription)",
+                    data: nil
+                )
+                try? await self.respond(id: id, result: nil, error: undeliverable)
+            }
         }
     }
 

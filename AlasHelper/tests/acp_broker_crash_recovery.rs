@@ -7,6 +7,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Budget for the polling helpers below. These waits used to be bounded by
+/// iteration count, which measures round trips rather than time: the suite
+/// runs its integration tests in parallel, each driving its own helper,
+/// broker and adapter processes, so on a loaded machine a healthy-but-slow
+/// broker could exhaust the count and fail the test. A wall-clock budget
+/// still catches a genuinely stuck broker, without failing a slow one.
+const POLL_BUDGET: Duration = Duration::from_secs(20);
+
+fn poll_deadline() -> std::time::Instant {
+    std::time::Instant::now() + POLL_BUDGET
+}
+
 struct Helper {
     child: Child,
     stdin: ChildStdin,
@@ -62,6 +74,24 @@ impl Helper {
             .read_line(&mut line)
             .expect("read helper response");
         serde_json::from_str(&line).expect("helper response JSON")
+    }
+
+    /// Like `raw_request`, but skips past responses to other requests instead
+    /// of assuming the next line is ours. `acp/*` requests are answered on
+    /// worker threads now, so a later request can legitimately finish first.
+    fn raw_request_matching(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.write_request_without_reading(method, params);
+        loop {
+            let mut line = String::new();
+            self.stdout
+                .read_line(&mut line)
+                .expect("read helper response");
+            let value: Value = serde_json::from_str(&line).expect("helper response JSON");
+            if value["id"] == json!(id) {
+                return value;
+            }
+        }
     }
 
     fn write_request_without_reading(&mut self, method: &str, params: Value) {
@@ -357,7 +387,17 @@ fn attach_with_stale_persisted_cursor_does_not_move_ack_back() {
         stale_attach["snapshot"]["acknowledgedCursor"],
         json!(journal_tail)
     );
-    assert_eq!(stale_attach["events"], json!([]), "{stale_attach}");
+    // The property is that a stale cursor cannot resurrect acknowledged
+    // events — not that the journal is quiet. Asserting an empty list assumed
+    // nothing was recorded between reading `journal_tail` and acknowledging
+    // it, which is a race the test does not control and does not care about.
+    let events = stale_attach["events"].as_array().expect("events array");
+    assert!(
+        events
+            .iter()
+            .all(|event| event["cursor"].as_u64().is_some_and(|c| c > journal_tail)),
+        "a stale cursor replayed events at or below the acknowledged tail: {stale_attach}"
+    );
 }
 
 #[test]
@@ -368,7 +408,8 @@ fn load_updates_do_not_mark_turn_as_streaming() {
     let generation = open["snapshot"]["metadata"]["generation"].clone();
 
     let mut loaded = Value::Null;
-    for _ in 0..20 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let result = send(
             &mut helper,
             "broker-load-update",
@@ -864,7 +905,8 @@ fn drive_until_operation_completed(
     operation_key: &str,
     params: Value,
 ) -> Value {
-    for _ in 0..60 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let result = send(
             helper,
             broker_id,
@@ -891,7 +933,8 @@ fn drive_until_pending_request(
 ) -> Value {
     let mut acknowledged_cursor = 0;
     let mut last_attached = Value::Null;
-    for _ in 0..60 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let progress = send(
             helper,
             broker_id,
@@ -940,7 +983,8 @@ fn wait_for_pending_request_visible(
     request_id: Value,
 ) -> Value {
     let mut last_attached = Value::Null;
-    for _ in 0..60 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         last_attached = helper.request(
             "acp/attach",
             json!({
@@ -971,7 +1015,8 @@ fn drive_until_prompt_completed(
     operation_key: &str,
     params: Value,
 ) -> Value {
-    for _ in 0..20 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let result = send(
             helper,
             broker_id,
@@ -997,6 +1042,455 @@ fn attached_has_pending_request(attached: &Value) -> bool {
     }) || attached["snapshot"]["pendingRequests"]
         .as_array()
         .is_some_and(|requests| !requests.is_empty())
+}
+
+/// A client that connects to a broker's socket and then goes quiet — killed
+/// Sends a raw request straight to a broker socket, bypassing the helper, and
+/// returns the reply plus whether it came back framed. `framed` picks the
+/// request encoding, so the same broker can be driven both ways — and the
+/// caller can assert the reply mirrored it rather than silently downgrading.
+#[cfg(unix)]
+fn broker_roundtrip(socket: &Path, request: &str, framed: bool) -> (String, bool) {
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(socket).expect("broker socket connects");
+    if framed {
+        write!(stream, "ALASIPC1 {}\n{}", request.len(), request).expect("framed request");
+    } else {
+        writeln!(stream, "{request}").expect("legacy request");
+    }
+    stream.flush().expect("flush request");
+
+    let mut reader = BufReader::new(&stream);
+    let mut head = String::new();
+    reader.read_line(&mut head).expect("reply head");
+    match head.strip_prefix("ALASIPC1 ") {
+        Some(len) => {
+            let len: usize = len.trim().parse().expect("frame length");
+            let mut body = vec![0u8; len];
+            std::io::Read::read_exact(&mut reader, &mut body).expect("framed reply body");
+            (String::from_utf8(body).expect("reply utf8"), true)
+        }
+        None => (head, false),
+    }
+}
+
+/// A broker built after framing landed must still understand a caller that
+/// does not use it. This is not hypothetical: a helper from an earlier build
+/// can be the one talking to it, and it only knows the newline encoding.
+#[cfg(unix)]
+#[test]
+fn a_broker_answers_a_legacy_caller_in_the_legacy_encoding() {
+    let fixture = Fixture::new("legacy-caller");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-legacy-in", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-legacy-in/broker.sock");
+
+    let (reply, reply_framed) =
+        broker_roundtrip(&socket, r#"{"method":"snapshot","params":{}}"#, false);
+
+    assert!(
+        !reply_framed,
+        "a legacy caller must not be answered with a framed reply it cannot parse"
+    );
+    let value: Value = serde_json::from_str(reply.trim()).expect("legacy reply JSON");
+    assert_eq!(value["ok"], true);
+    assert_eq!(
+        value["result"]["metadata"]["brokerId"], "broker-legacy-in",
+        "legacy caller did not get a usable snapshot: {value}"
+    );
+}
+
+/// A broker must outlive a peer that opens connections faster than they
+/// retire. Every accepted socket owns a thread that can sit for the whole head
+/// timeout, so spawning one per connection without a ceiling exhausts threads
+/// until `spawn` panics and takes the supervisor down — and with it every
+/// session using that broker.
+///
+/// Note what is asserted and what is not. While the connections are held the
+/// broker can legitimately be starved: one that has sent nothing is
+/// indistinguishable from an older helper still encoding its request. The
+/// property that matters is that the stall is survivable and self-healing, not
+/// that service continues throughout.
+///
+/// Darwin-only, for the same reason as
+/// `connect_does_not_block_on_a_full_backlog`: saturating the listen backlog
+/// is how this test bounds itself, and that only returns an error here. On
+/// Linux the connects would block instead, and the loop would sit for a head
+/// timeout rather than reaching `drop`.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_flood_of_idle_connections_does_not_take_the_broker_down() {
+    use std::os::unix::net::UnixStream;
+
+    let fixture = Fixture::new("connection-flood");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-flood", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-flood/broker.sock");
+
+    // The listen backlog refuses connections past ~128, so this saturates
+    // what a peer can hold at once rather than reaching 400.
+    let flood: Vec<UnixStream> = (0..400)
+        .filter_map(|_| UnixStream::connect(&socket).ok())
+        .collect();
+    assert!(
+        flood.len() >= 100,
+        "expected to saturate the broker with connections, got {}",
+        flood.len()
+    );
+    drop(flood);
+
+    // Closing them frees the workers immediately — each read ends on EOF
+    // rather than waiting out its budget — so the broker should serve again
+    // without needing to be restarted.
+    let adopted = helper.request("acp/open", fixture.open_params("broker-flood", 0));
+    assert_eq!(
+        adopted["adopted"], true,
+        "broker did not recover after a flood of connections: {adopted}"
+    );
+}
+
+/// A helper from an earlier build serializes its request *after* connecting,
+/// so it can legitimately say nothing for as long as encoding takes — ~7.4s
+/// for a maximal image prompt. A broker that bounded the first line by total
+/// time would drop that request, breaking exactly the callers the legacy path
+/// exists to support.
+#[cfg(unix)]
+#[test]
+fn a_legacy_caller_may_pause_before_writing_its_request() {
+    use std::os::unix::net::UnixStream;
+
+    let fixture = Fixture::new("legacy-slow-writer");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-slow-writer", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-slow-writer/broker.sock");
+
+    let mut stream = UnixStream::connect(&socket).expect("broker socket connects");
+    // Stands in for an older helper encoding a large prompt before it writes.
+    std::thread::sleep(Duration::from_secs(8));
+    writeln!(stream, r#"{{"method":"snapshot","params":{{}}}}"#).expect("legacy request");
+    stream.flush().expect("flush");
+
+    let mut reply = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut reply)
+        .expect("broker still answered after the pause");
+    let value: Value = serde_json::from_str(reply.trim()).expect("legacy reply JSON");
+    assert_eq!(
+        value["result"]["metadata"]["brokerId"], "broker-slow-writer",
+        "broker dropped a legacy request whose sender paused to serialize: {value}"
+    );
+}
+
+/// The point of framing: the reader is told the length up front, so a request
+/// carries whatever it carries. An `acp/respond` returning a whole file has no
+/// size the caller could have predicted, and under the newline encoding the
+/// only bound available was a total time budget standing in for a size cap.
+#[cfg(unix)]
+#[test]
+fn a_framed_request_carries_a_payload_far_past_any_line_budget() {
+    let fixture = Fixture::new("framed-payload");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-framed", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-framed/broker.sock");
+
+    // `snapshot` ignores its params, so this exercises the framed read path
+    // with a large body without involving the adapter.
+    let filler = "x".repeat(40 * 1024 * 1024);
+    let request = json!({"method": "snapshot", "params": {"filler": filler}}).to_string();
+    assert!(request.len() > 40 * 1024 * 1024);
+
+    let (reply, reply_framed) = broker_roundtrip(&socket, &request, true);
+
+    // Replies are never framed, whichever encoding the request used: framing
+    // buys nothing on a path the caller reads against an idle budget, and it
+    // would force the whole reply — including every unanswered request's
+    // payload — to be built in memory before a byte could be written.
+    assert!(
+        !reply_framed,
+        "replies should stream, not be framed, so a large one needs no buffering"
+    );
+    let value: Value = serde_json::from_str(reply.trim()).expect("reply JSON");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["result"]["metadata"]["brokerId"], "broker-framed");
+}
+
+/// The mirror case: a helper built after framing landed can adopt a broker
+/// that a previous build started, which advertises nothing and speaks only the
+/// newline encoding. Removing the marker stands in for that broker.
+#[test]
+fn the_helper_falls_back_to_the_legacy_encoding_for_an_older_broker() {
+    let fixture = Fixture::new("legacy-broker");
+    let mut helper = Helper::start(&fixture.home);
+    let opened = helper.request("acp/open", fixture.open_params("broker-legacy-out", 0));
+    assert_eq!(opened["adopted"], false);
+
+    let marker = fixture
+        .home
+        .join(".alas/acp-brokers/broker-legacy-out/framing");
+    assert!(marker.exists(), "a fresh broker should advertise framing");
+    std::fs::remove_file(&marker).expect("remove framing marker");
+
+    let adopted = helper.request("acp/open", fixture.open_params("broker-legacy-out", 0));
+    assert_eq!(
+        adopted["adopted"], true,
+        "helper could not talk to a broker that does not advertise framing: {adopted}"
+    );
+}
+
+/// Requests to one broker must reach it in the order they were sent.
+///
+/// Running them on independent threads and relying on a mutex for safety is
+/// not enough: a mutex is not FIFO, so whichever worker the scheduler favours
+/// goes first. The case that bites is `session/cancel` overtaking the
+/// `session/prompt` it was sent to stop — the cancel finds no turn to cancel,
+/// and the prompt then runs to completion while the user believes they
+/// stopped it.
+///
+/// The broker's journal records the order it actually processed things, so
+/// `operationStarted` cursors are the observable.
+#[test]
+fn requests_to_one_broker_are_processed_in_the_order_they_arrive() {
+    let fixture = Fixture::new("request-ordering");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-ordering", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    // Enough that a scheduler-dependent order would almost certainly invert
+    // somewhere, and issued back-to-back so they are genuinely in flight
+    // together rather than serialized by waiting for each reply.
+    let sent: Vec<String> = (0..24).map(|index| format!("op-{index:02}")).collect();
+    for key in &sent {
+        helper.write_request_without_reading(
+            "acp/send",
+            json!({
+                "brokerId": "broker-ordering",
+                "generation": generation,
+                "operationKey": key,
+                "method": "noop/order",
+                "params": {}
+            }),
+        );
+    }
+    for _ in &sent {
+        let mut line = String::new();
+        helper
+            .stdout
+            .read_line(&mut line)
+            .expect("read helper response");
+    }
+
+    let attached = helper.request(
+        "acp/attach",
+        json!({
+            "brokerId": "broker-ordering",
+            "generation": generation,
+            "acknowledgedCursor": 0
+        }),
+    );
+    let started: Vec<String> = attached["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["kind"]["type"] == "operationStarted")
+        .map(|event| event["kind"]["operationKey"].as_str().unwrap().to_string())
+        .collect();
+
+    assert_eq!(
+        started, sent,
+        "broker processed same-broker requests out of order"
+    );
+}
+
+/// One broker going quiet must not stop a different one being used. Every
+/// `acp/*` request used to be handled inline on the helper's single serve
+/// loop, so a call waiting on a wedged broker held up every other session
+/// behind it — the reason a single bad broker could take the whole app down
+/// rather than one chat.
+#[cfg(unix)]
+#[test]
+fn a_wedged_broker_does_not_block_a_different_broker() {
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+
+    let fixture = Fixture::new("independent-brokers");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-wedged", 0));
+    let healthy = helper.request("acp/open", fixture.open_params("broker-healthy", 0));
+    assert_eq!(healthy["adopted"], false);
+
+    // Hold the first broker's accept loop with clients that never complete a
+    // request line. Each costs the broker one request-read timeout, so enough
+    // of them keep it unavailable for far longer than this test waits — a
+    // single one would lapse and let the broker recover, and the test would
+    // then pass whether or not dispatch is concurrent.
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-wedged/broker.sock");
+    let silent: Vec<UnixStream> = (0..10)
+        .map(|_| UnixStream::connect(&socket).expect("silent client connects"))
+        .collect();
+
+    let (sender, receiver) = mpsc::channel();
+    let wedged_params = fixture.open_params("broker-wedged", 0);
+    let healthy_params = fixture.open_params("broker-healthy", 0);
+    std::thread::spawn(move || {
+        // Issued first, and expected to be the slow one.
+        helper.write_request_without_reading("acp/open", wedged_params);
+        // The interesting call: a different broker, behind the slow one in
+        // arrival order, which must not have to wait for it.
+        let adopted = helper.raw_request_matching("acp/open", healthy_params);
+        let _ = sender.send(adopted);
+    });
+
+    let adopted = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("a healthy broker must be usable while another is wedged");
+    drop(silent);
+    assert_eq!(
+        adopted["result"]["adopted"], true,
+        "healthy broker did not answer while another was wedged: {adopted}"
+    );
+}
+
+/// A socket read timeout is an *inactivity* timeout on each underlying read,
+/// and `read_line` keeps issuing reads until it sees a newline. So a client
+/// that dribbles a byte at a time, faster than the timeout but never ending
+/// the line, renews its budget forever and holds the accept thread just as
+/// effectively as one that sends nothing — while growing the line buffer
+/// without limit. Only a deadline across the whole line catches this.
+#[cfg(unix)]
+#[test]
+fn a_client_dripping_bytes_cannot_renew_the_request_read_forever() {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+
+    let fixture = Fixture::new("dripping-ipc-client");
+    let mut helper = Helper::start(&fixture.home);
+    let opened = helper.request("acp/open", fixture.open_params("broker-drip", 0));
+    assert_eq!(opened["adopted"], false);
+
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-drip/broker.sock");
+    let mut drip = UnixStream::connect(&socket).expect("dripping client connects");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dripper_stop = stop.clone();
+    let dripper = std::thread::spawn(move || {
+        // Never a newline: valid JSON padding, one byte at a time, well
+        // inside any per-read inactivity window.
+        while !dripper_stop.load(Ordering::Relaxed) {
+            if drip.write_all(b" ").is_err() || drip.flush().is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+
+    // The helper survives either way — its own socket reads are bounded, so
+    // it answers with an error rather than hanging. What is at stake here is
+    // the broker: its accept loop is stuck mid-line, so until that read is
+    // bounded in total it never serves anyone again and this session is
+    // permanently dead. Recovery must happen while the client is STILL
+    // dripping, which is what a per-read timeout can never deliver.
+    let (sender, receiver) = mpsc::channel();
+    let params = fixture.open_params("broker-drip", 0);
+    std::thread::spawn(move || {
+        let deadline = poll_deadline();
+        loop {
+            let attempt = helper.raw_request("acp/open", params.clone());
+            if attempt["result"]["adopted"] == true || std::time::Instant::now() >= deadline {
+                let ping = helper.request("ping", json!({}));
+                let _ = sender.send((attempt, ping));
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+
+    let result = receiver.recv_timeout(Duration::from_secs(60));
+    stop.store(true, Ordering::Relaxed);
+    let _ = dripper.join();
+
+    let (recovered, ping) = result.expect("probe finished");
+    assert_eq!(
+        recovered["result"]["adopted"], true,
+        "broker never accepted again while a client dripped bytes without a newline: {recovered}"
+    );
+    assert_eq!(ping["ok"], true);
+}
+
+/// between `connect()` and `write()`, or just slow — used to stall the
+/// supervisor's accept loop forever, because the request line is read on that
+/// thread with no timeout. The helper then blocked forever too: it talks to
+/// brokers over the same unbounded socket, inline on its single-threaded serve
+/// loop, so every other ACP session (and every file, watch and search request)
+/// died with it. Both reads are bounded now, so one silent client costs a
+/// bounded stall and the broker recovers on its own.
+#[cfg(unix)]
+#[test]
+fn a_silent_client_on_the_broker_socket_does_not_wedge_the_helper() {
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+
+    let fixture = Fixture::new("silent-ipc-client");
+    let mut helper = Helper::start(&fixture.home);
+    let opened = helper.request("acp/open", fixture.open_params("broker-silent", 0));
+    assert_eq!(opened["adopted"], false);
+
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-silent/broker.sock");
+    let silent = UnixStream::connect(&socket).expect("silent client connects");
+
+    let (sender, receiver) = mpsc::channel();
+    let params = fixture.open_params("broker-silent", 0);
+    let probe = std::thread::spawn(move || {
+        // Whatever this answers, it must answer: an error is a recoverable
+        // outcome the UI can surface and retry, a hang is not.
+        let contested = helper.raw_request("acp/open", params.clone());
+        // The decisive check. `ping` never touches a broker, so if it stops
+        // being served, one bad broker has taken the whole helper down.
+        let ping = helper.request("ping", json!({}));
+        let _ = sender.send((contested, ping));
+        // Once the broker times out the silent reader it accepts again, with
+        // no restart and no intervention. Poll for that rather than sleeping
+        // out the timeout, so this test costs only as long as recovery
+        // actually takes.
+        let deadline = poll_deadline();
+        loop {
+            let attempt = helper.raw_request("acp/open", params.clone());
+            if attempt["result"]["adopted"] == true || std::time::Instant::now() >= deadline {
+                return attempt;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let (contested, ping) = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("helper keeps answering while a silent client holds the broker socket");
+    assert!(
+        contested.get("result").is_some() || contested.get("error").is_some(),
+        "contested acp/open produced neither result nor error: {contested}"
+    );
+    assert_eq!(ping["ok"], true);
+
+    let recovered = probe.join().expect("probe thread");
+    assert_eq!(
+        recovered["result"]["adopted"], true,
+        "broker did not recover after the silent client timed out: {recovered}"
+    );
+    drop(silent);
 }
 
 struct Fixture {
@@ -1044,7 +1538,7 @@ impl Fixture {
     }
 
     fn wait_for_log(&self, needle: &str) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = poll_deadline();
         while std::time::Instant::now() < deadline {
             if std::fs::read_to_string(&self.log)
                 .map(|log| log.contains(needle))

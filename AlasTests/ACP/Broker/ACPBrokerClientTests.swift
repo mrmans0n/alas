@@ -708,7 +708,6 @@ struct ACPBrokerClientTests {
                     operationKey: ACPBrokerOperationKey(rawValue: "queued-prompt:item:0:session/prompt"),
                     adapterRequestId: ACPBrokerAdapterRequestID(rawValue: 7),
                     method: "session/prompt",
-                    params: .object(["prompt": .string("hi")]),
                     terminalOutcome: nil
                 )
             ]

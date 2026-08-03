@@ -1261,9 +1261,6 @@ private actor ForkRelaunchBrokerService: ACPBrokerServicing {
                     operationKey: Self.forkOperationKey,
                     adapterRequestId: ACPBrokerAdapterRequestID(rawValue: 1),
                     method: "session/fork",
-                    params: .object([
-                        "sessionId": .string("source-remote")
-                    ]),
                     terminalOutcome: forkOutcome
                 )
             ]
@@ -1558,7 +1555,6 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
                     operationKey: operationKey,
                     adapterRequestId: ACPBrokerAdapterRequestID(rawValue: event.cursor.rawValue),
                     method: sentOperationKeys.first == operationKey ? "session/fork" : "unknown",
-                    params: .object([:]),
                     terminalOutcome: outcome
                 )
             }
