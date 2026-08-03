@@ -12,6 +12,61 @@ struct EditorTextEdit: Sendable, Equatable {
 }
 
 enum TextEditCoordinates {
+    struct LineIndex {
+        private let starts: [Int]
+        private var textLength: Int
+        private var shiftedAfterLine: Int?
+        private var suffixShift = 0
+
+        init(_ text: String) {
+            let ns = text as NSString
+            var starts = [0]
+            for index in 0..<ns.length where ns.character(at: index) == 10 {
+                starts.append(index + 1)
+            }
+            self.starts = starts
+            textLength = ns.length
+        }
+
+        func adjustingOffsets(after offset: Int, by delta: Int) -> LineIndex? {
+            guard delta != 0 else { return self }
+            guard let line = lspPosition(utf16Offset: offset)?.line,
+                  shiftedAfterLine == nil || shiftedAfterLine == line else { return nil }
+            var adjusted = self
+            adjusted.shiftedAfterLine = line
+            adjusted.suffixShift += delta
+            adjusted.textLength += delta
+            return adjusted
+        }
+
+        func utf16Offset(from position: LSPPosition) -> Int? {
+            guard starts.indices.contains(position.line), position.character >= 0 else { return nil }
+            let lineEnd = position.line + 1 < starts.count ? lineStart(position.line + 1) - 1 : textLength
+            let offset = lineStart(position.line) + position.character
+            return offset <= lineEnd ? offset : nil
+        }
+
+        func lspPosition(utf16Offset target: Int) -> LSPPosition? {
+            guard target >= 0, target <= textLength else { return nil }
+            var lowerBound = 0
+            var upperBound = starts.count
+            while lowerBound < upperBound {
+                let middle = (lowerBound + upperBound) / 2
+                if lineStart(middle) <= target {
+                    lowerBound = middle + 1
+                } else {
+                    upperBound = middle
+                }
+            }
+            let line = lowerBound - 1
+            return LSPPosition(line: line, character: target - lineStart(line))
+        }
+
+        private func lineStart(_ line: Int) -> Int {
+            starts[line] + (shiftedAfterLine.map { line > $0 } == true ? suffixShift : 0)
+        }
+    }
+
     static func apply(_ edit: EditorTextEdit, to text: String) -> String? {
         let ns = text as NSString
         guard edit.location >= 0,
@@ -47,34 +102,11 @@ enum TextEditCoordinates {
     }
 
     static func lspPosition(utf16Offset target: Int, in text: String) -> LSPPosition? {
-        guard let point = point(utf16Offset: target, in: text) else { return nil }
-        return LSPPosition(line: point.line, character: point.character)
+        LineIndex(text).lspPosition(utf16Offset: target)
     }
 
     static func utf16Offset(from position: LSPPosition, in text: String) -> Int? {
-        guard position.line >= 0, position.character >= 0 else { return nil }
-        let ns = text as NSString
-        var line = 0
-        var lineStart = 0
-        var index = 0
-        while index < ns.length {
-            if ns.character(at: index) == 10 {
-                if line == position.line {
-                    let offset = lineStart + position.character
-                    guard offset <= index else { return nil }
-                    return offset
-                }
-                line += 1
-                lineStart = index + 1
-            }
-            index += 1
-        }
-        if line == position.line {
-            let offset = lineStart + position.character
-            guard offset <= ns.length else { return nil }
-            return offset
-        }
-        return nil
+        LineIndex(text).utf16Offset(from: position)
     }
 
     private static func point(utf16Offset target: Int, in text: String) -> (line: Int, character: Int, byteColumn: Int)? {

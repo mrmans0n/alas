@@ -37,6 +37,29 @@ struct CompletionEngineTests {
         #expect(candidates.isEmpty)
     }
 
+    @Test("matches Unicode buffer words case-insensitively")
+    func unicodeBufferWordFallback() {
+        let candidates = CompletionEngine.bufferWordCandidates(
+            in: "ÄbcWord",
+            prefix: CompletionPrefix(text: "äbc", range: NSRange(location: 0, length: 3))
+        )
+
+        #expect(candidates.map(\.label) == ["ÄbcWord"])
+    }
+
+    @Test("bounds cached buffer words for broadened prefixes")
+    func boundedBufferWordCache() {
+        let words = (0..<30).map { "openWord\($0)" }.joined(separator: " ")
+        let cache = CompletionEngine.bufferWordCandidateCache(
+            in: words,
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4))
+        )
+
+        #expect(cache["ope"]?.count == 24)
+        #expect(cache["open"]?.count == 24)
+        #expect(cache.values.allSatisfy { $0.count <= 24 })
+    }
+
     @Test("normalizes and ranks LSP items")
     func normalizeLSPItems() {
         let items = [
@@ -190,6 +213,316 @@ struct CompletionEngineTests {
         ])
         #expect(plan?.finalSelection == NSRange(location: 15, length: 0))
         #expect(plan.flatMap { apply($0, to: "tabs.op") } == "tabs.openEditor")
+
+        let retainedPlan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 5, length: 3)),
+            originalPrefix: CompletionPrefix(text: "op", range: NSRange(location: 5, length: 2)),
+            in: "tabs.ope"
+        )
+
+        #expect(retainedPlan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 5, length: 3), replacementText: "openEditor")
+        ])
+        #expect(retainedPlan.flatMap { apply($0, to: "tabs.ope") } == "tabs.openEditor")
+    }
+
+    @Test("rebases an older LSP textEdit onto the current prefix")
+    func plansStalePrefixTextEditAsCurrentPrefixReplacement() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 4)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "openA", range: NSRange(location: 0, length: 5)),
+            in: "openA"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 5), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "openA") } == "openAlpha")
+    }
+
+    @Test("shifts a retained textEdit that spans the old caret")
+    func plansRetainedTextEditSpanningOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 6)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            originalPrefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            in: "openXYZ"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 7), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "openXYZ") } == "openAlpha")
+    }
+
+    @Test("keeps a retained primary edit start before a grown prefix")
+    func plansRetainedPrimaryEditStartingAtOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "car",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "car",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 4),
+                    end: LSPPosition(line: 0, character: 7)
+                ),
+                newText: "car"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "c", range: NSRange(location: 4, length: 1)),
+            originalPrefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0)),
+            in: "foo.cBar"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 4, length: 4), replacementText: "car")
+        ])
+        #expect(plan.flatMap { apply($0, to: "foo.cBar") } == "foo.car")
+    }
+
+    @Test("shifts a retained textEdit when the prefix shrinks")
+    func plansRetainedTextEditAfterBackspace() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 4)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            originalPrefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            in: "opeXYZ"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 3), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "opeXYZ") } == "openAlphaXYZ")
+    }
+
+    @Test("clamps a retained textEdit inside a deleted prefix")
+    func plansRetainedTextEditAfterMultipleBackspaces() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 3),
+                    end: LSPPosition(line: 0, character: 7)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            originalPrefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            in: "opXYZ"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 2, length: 3), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "opXYZ") } == "opopenAlpha")
+    }
+
+    @Test("keeps an adjacent additional edit before a grown prefix")
+    func plansAdjacentAdditionalEditAtOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "count",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "count",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 4),
+                    end: LSPPosition(line: 0, character: 4)
+                ),
+                newText: "count"
+            ),
+            additionalTextEdits: [
+                LSPTextEdit(
+                    range: LSPRange(
+                        start: LSPPosition(line: 0, character: 0),
+                        end: LSPPosition(line: 0, character: 4)
+                    ),
+                    newText: "object."
+                )
+            ],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "c", range: NSRange(location: 4, length: 1)),
+            originalPrefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0)),
+            in: "foo.c"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 4), replacementText: "object."),
+            CompletionTextEdit(range: NSRange(location: 4, length: 1), replacementText: "count")
+        ])
+        #expect(plan.flatMap { apply($0, to: "foo.c") } == "object.count")
+    }
+
+    @Test("moves an adjacent additional edit with a shrinking prefix")
+    func plansAdjacentAdditionalEditAfterBackspace() {
+        let candidate = CompletionCandidate(
+            label: "value",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "value",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 4),
+                    end: LSPPosition(line: 0, character: 4)
+                ),
+                newText: "value"
+            ),
+            additionalTextEdits: [
+                LSPTextEdit(
+                    range: LSPRange(
+                        start: LSPPosition(line: 0, character: 0),
+                        end: LSPPosition(line: 0, character: 4)
+                    ),
+                    newText: "object."
+                )
+            ],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            originalPrefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            in: "opeX"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 3), replacementText: "object."),
+            CompletionTextEdit(range: NSRange(location: 3, length: 0), replacementText: "value")
+        ])
+        #expect(plan.flatMap { apply($0, to: "opeX") } == "object.valueX")
+    }
+
+    @Test("moves a zero-length additional edit with a grown prefix")
+    func plansAdditionalInsertionAtOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 3)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [
+                LSPTextEdit(
+                    range: LSPRange(
+                        start: LSPPosition(line: 0, character: 3),
+                        end: LSPPosition(line: 0, character: 3)
+                    ),
+                    newText: "!"
+                )
+            ],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            originalPrefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            in: "open"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 4), replacementText: "openAlpha"),
+            CompletionTextEdit(range: NSRange(location: 4, length: 0), replacementText: "!")
+        ])
+        #expect(plan.flatMap { apply($0, to: "open") } == "openAlpha!")
     }
 
     @Test("plans textEdit plus non-overlapping additional edits")
@@ -347,7 +680,7 @@ private func apply(_ plan: CompletionEditPlan, to text: String) -> String? {
     return storage as String
 }
 
-private extension LSPCompletionItem {
+extension LSPCompletionItem {
     static func testing(
         label: String,
         kind: Int? = nil,

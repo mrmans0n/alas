@@ -29,7 +29,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
     var completionManualTriggerHandler: (() -> Void)?
-    var completionChangeHandler: (() -> Void)?
+    var completionChangeHandler: ((NSRange?) -> Void)?
     var completionSelectionChangeHandler: (() -> Void)?
     var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
@@ -47,6 +47,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     private var possibleColumnSelectionDrag: ColumnSelectionDrag?
     private var suppressCompletionChangeNotifications = false
     private var suppressCompletionSelectionNotifications = false
+    private var pendingCompletionEditRange: NSRange?
     private var isApplyingSelectionChange = false
 
     private struct ColumnSelectionDrag {
@@ -278,6 +279,12 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         notifyCompletionChanged()
     }
 
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        let shouldChange = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        if shouldChange { pendingCompletionEditRange = affectedCharRange }
+        return shouldChange
+    }
+
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard isEditable else { return }
         guard let text = Self.string(from: insertString) else {
@@ -345,6 +352,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         }
 
         insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
+    }
+
+    override func deleteBackward(_ sender: Any?) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        super.deleteBackward(sender)
+        suppressCompletionSelectionNotifications = wasSuppressing
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        super.deleteForward(sender)
+        suppressCompletionSelectionNotifications = wasSuppressing
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -825,8 +846,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     // MARK: - Private helpers
 
     private func notifyCompletionChanged() {
+        let editRange = pendingCompletionEditRange
+        pendingCompletionEditRange = nil
         guard !suppressCompletionChangeNotifications else { return }
-        completionChangeHandler?()
+        completionChangeHandler?(editRange)
     }
 
     private func notifyCompletionSelectionChanged() {

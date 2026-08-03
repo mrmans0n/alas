@@ -5,7 +5,7 @@ struct CompletionPrefix: Equatable, Sendable {
     let range: NSRange
 }
 
-enum CompletionCandidateSource: Equatable, Sendable {
+enum CompletionCandidateSource: Hashable, Sendable {
     case lsp
     case buffer
 }
@@ -37,18 +37,20 @@ struct CompletionCandidate: Identifiable, Equatable, Sendable {
     }
 }
 
-struct CompletionTextEdit: Equatable, Sendable {
+struct CompletionTextEdit: Hashable, Sendable {
     let range: NSRange
     let replacementText: String
 }
 
-struct CompletionEditPlan: Equatable, Sendable {
+struct CompletionEditPlan: Hashable, Sendable {
     /// Original-buffer ranges sorted ascending; consumers must apply edits in reverse order.
     let edits: [CompletionTextEdit]
     let finalSelection: NSRange
 }
 
 enum CompletionEngine {
+    static let bufferWordMinimumPrefixLength = 3
+
     static func prefix(in text: String, caret: Int) -> CompletionPrefix? {
         let ns = text as NSString
         guard caret >= 0, caret <= ns.length else { return nil }
@@ -102,14 +104,25 @@ enum CompletionEngine {
     }
 
     static func bufferWordCandidates(in text: String, prefix: CompletionPrefix, limit: Int = 24) -> [CompletionCandidate] {
-        guard (prefix.text as NSString).length >= 3, limit > 0 else { return [] }
+        bufferWordCandidateCache(in: text, prefix: prefix, limit: limit)[prefix.text] ?? []
+    }
 
+    static func bufferWordCandidateCache(
+        in text: String,
+        prefix: CompletionPrefix,
+        limit: Int = 24
+    ) -> [String: [CompletionCandidate]] {
+        let prefixText = prefix.text as NSString
+        guard prefixText.length >= bufferWordMinimumPrefixLength, limit > 0 else { return [:] }
+
+        let prefixes = (bufferWordMinimumPrefixLength...prefixText.length).map { prefixText.substring(to: $0) }
         let ns = text as NSString
-        var seen = Set<String>()
-        var words: [String] = []
+        var seen = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, Set<String>()) })
+        var words = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, [String]()) })
+        var incompletePrefixCount = prefixes.count
         var index = 0
 
-        while index < ns.length {
+        while index < ns.length, incompletePrefixCount > 0 {
             guard isIdentifierChar(ns.character(at: index)) else {
                 index += 1
                 continue
@@ -121,26 +134,33 @@ enum CompletionEngine {
             }
 
             let word = ns.substring(with: NSRange(location: start, length: index - start))
-            if word != prefix.text,
-               hasCaseInsensitivePrefix(word, prefix.text),
-               seen.insert(word).inserted {
-                words.append(word)
+            guard let lastMatchingPrefix = lastMatchingPrefixIndex(for: word, prefixes: prefixes) else { continue }
+            for prefix in prefixes[...lastMatchingPrefix] {
+                guard words[prefix, default: []].count < limit,
+                      word != prefix,
+                      seen[prefix, default: []].insert(word).inserted else { continue }
+                words[prefix, default: []].append(word)
+                if words[prefix]?.count == limit {
+                    incompletePrefixCount -= 1
+                }
             }
         }
 
-        return words.prefix(limit).map { word in
-            CompletionCandidate(
-                label: word,
-                detail: "Current buffer",
-                kind: nil,
-                documentation: nil,
-                sortText: nil,
-                filterText: word,
-                replacementText: word,
-                textEdit: nil,
-                additionalTextEdits: [],
-                source: .buffer
-            )
+        return words.mapValues { words in
+            words.map { word in
+                CompletionCandidate(
+                    label: word,
+                    detail: "Current buffer",
+                    kind: nil,
+                    documentation: nil,
+                    sortText: nil,
+                    filterText: word,
+                    replacementText: word,
+                    textEdit: nil,
+                    additionalTextEdits: [],
+                    source: .buffer
+                )
+            }
         }
     }
 
@@ -166,11 +186,25 @@ enum CompletionEngine {
             }
     }
 
-    static func editPlan(accepting candidate: CompletionCandidate, prefix: CompletionPrefix, in text: String) -> CompletionEditPlan? {
+    static func editPlan(
+        accepting candidate: CompletionCandidate,
+        prefix: CompletionPrefix,
+        originalPrefix: CompletionPrefix? = nil,
+        in text: String,
+        coordinateIndex: TextEditCoordinates.LineIndex? = nil
+    ) -> CompletionEditPlan? {
+        let coordinateIndex = coordinateIndex ?? TextEditCoordinates.LineIndex(text)
         let primaryRange: NSRange
         if let textEdit = candidate.textEdit {
-            guard let range = nsRange(for: textEdit.range, in: text) else { return nil }
-            if shouldReplacePrefixForCaretInsertion(range: range, replacement: candidate.replacementText, prefix: prefix) {
+            guard let range = rebasedRange(
+                for: textEdit.range,
+                originalPrefix: originalPrefix,
+                prefix: prefix,
+                includeInsertedTextAtStart: true,
+                includeInsertedTextAtEnd: true,
+                coordinateIndex: coordinateIndex
+            ) else { return nil }
+            if shouldReplacePrefix(range: range, replacement: candidate.replacementText, prefix: prefix) {
                 primaryRange = prefix.range
             } else {
                 primaryRange = range
@@ -183,7 +217,14 @@ enum CompletionEngine {
         var edits: [CompletionTextEdit] = []
 
         for additional in candidate.additionalTextEdits {
-            guard let range = nsRange(for: additional.range, in: text) else { continue }
+            guard let range = rebasedRange(
+                for: additional.range,
+                originalPrefix: originalPrefix,
+                prefix: prefix,
+                includeInsertedTextAtStart: false,
+                includeInsertedTextAtEnd: false,
+                coordinateIndex: coordinateIndex
+            ) else { continue }
             let edit = CompletionTextEdit(range: range, replacementText: additional.newText)
             guard !overlaps(edit.range, primary.range),
                   edits.allSatisfy({ !overlaps($0.range, edit.range) }) else {
@@ -274,9 +315,12 @@ enum CompletionEngine {
         }
     }
 
-    private static func nsRange(for range: LSPRange, in text: String) -> NSRange? {
-        guard let start = TextEditCoordinates.utf16Offset(from: range.start, in: text),
-              let end = TextEditCoordinates.utf16Offset(from: range.end, in: text),
+    private static func nsRange(
+        for range: LSPRange,
+        coordinateIndex: TextEditCoordinates.LineIndex
+    ) -> NSRange? {
+        guard let start = coordinateIndex.utf16Offset(from: range.start),
+              let end = coordinateIndex.utf16Offset(from: range.end),
               start <= end else {
             return nil
         }
@@ -296,25 +340,90 @@ enum CompletionEngine {
         return NSIntersectionRange(lhs, rhs).length > 0
     }
 
-    private static func shouldReplacePrefixForCaretInsertion(
+    private static func rebasedRange(
+        for range: LSPRange,
+        originalPrefix: CompletionPrefix?,
+        prefix: CompletionPrefix,
+        includeInsertedTextAtStart: Bool,
+        includeInsertedTextAtEnd: Bool,
+        coordinateIndex: TextEditCoordinates.LineIndex
+    ) -> NSRange? {
+        guard let originalPrefix,
+              originalPrefix.range.location == prefix.range.location else {
+            return nsRange(for: range, coordinateIndex: coordinateIndex)
+        }
+
+        let growth = NSMaxRange(prefix.range) - NSMaxRange(originalPrefix.range)
+        guard growth != 0,
+              let prefixStart = coordinateIndex.lspPosition(utf16Offset: prefix.range.location) else {
+            return nsRange(for: range, coordinateIndex: coordinateIndex)
+        }
+        let oldCaretCharacter = prefixStart.character + originalPrefix.range.length
+        let newCaretCharacter = oldCaretCharacter + growth
+        let isInsertion = range.start.line == range.end.line &&
+            range.start.character == range.end.character
+
+        func shifted(_ position: LSPPosition, atEnd: Bool) -> LSPPosition {
+            guard position.line == prefixStart.line else { return position }
+            if growth < 0,
+               position.character > newCaretCharacter,
+               position.character < oldCaretCharacter {
+                return LSPPosition(line: position.line, character: newCaretCharacter)
+            }
+            let shiftsAtCaret = growth < 0 || (atEnd
+                ? includeInsertedTextAtEnd || isInsertion
+                : !includeInsertedTextAtStart || isInsertion)
+            guard position.character > oldCaretCharacter ||
+                  shiftsAtCaret && position.character == oldCaretCharacter else {
+                return position
+            }
+            return LSPPosition(line: position.line, character: position.character + growth)
+        }
+
+        return nsRange(
+            for: LSPRange(start: shifted(range.start, atEnd: false), end: shifted(range.end, atEnd: true)),
+            coordinateIndex: coordinateIndex
+        )
+    }
+
+    private static func shouldReplacePrefix(
         range: NSRange,
         replacement: String,
         prefix: CompletionPrefix
     ) -> Bool {
-        !prefix.text.isEmpty &&
-            range.length == 0 &&
-            range.location == NSMaxRange(prefix.range) &&
-            hasCaseInsensitivePrefix(replacement, prefix.text)
+        guard !prefix.text.isEmpty,
+              hasCaseInsensitivePrefix(replacement, prefix.text) else { return false }
+
+        return (range.length == 0 && range.location == NSMaxRange(prefix.range)) ||
+            (range.location == prefix.range.location && NSMaxRange(range) < NSMaxRange(prefix.range))
     }
 
-    private static func hasCaseInsensitivePrefix(_ text: String, _ prefix: String) -> Bool {
+    static func hasCaseInsensitivePrefix(_ text: String, _ prefix: String) -> Bool {
         prefix.isEmpty || text.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
     }
 
+    private static func lastMatchingPrefixIndex(for word: String, prefixes: [String]) -> Int? {
+        var lowerBound = 0
+        var upperBound = prefixes.count
+        while lowerBound < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if hasCaseInsensitivePrefix(word, prefixes[middle]) {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
+        }
+        return lowerBound > 0 ? lowerBound - 1 : nil
+    }
+
     private static func isIdentifierChar(_ character: unichar) -> Bool {
-        (character >= 0x41 && character <= 0x5A) ||
+        if (character >= 0x41 && character <= 0x5A) ||
         (character >= 0x61 && character <= 0x7A) ||
         (character >= 0x30 && character <= 0x39) ||
-        character == 0x5F
+        character == 0x5F {
+            return true
+        }
+        guard let scalar = UnicodeScalar(character) else { return false }
+        return CharacterSet.alphanumerics.contains(scalar)
     }
 }

@@ -90,6 +90,23 @@ struct TextEditCoordinatesTests {
         #expect(TextEditCoordinates.utf16Offset(from: LSPPosition(line: 0, character: -1), in: text) == nil)
     }
 
+    @Test func lineIndexReusesUtf16LineStartsForConversions() {
+        let index = TextEditCoordinates.LineIndex("first\n𐍈second\nthird")
+
+        #expect(index.utf16Offset(from: LSPPosition(line: 1, character: 2)) == 8)
+        #expect(index.lspPosition(utf16Offset: 15) == LSPPosition(line: 2, character: 0))
+        #expect(index.utf16Offset(from: LSPPosition(line: 1, character: 9)) == nil)
+    }
+
+    @Test func lineIndexAdjustsLaterLinesWithoutRebuilding() {
+        let index = TextEditCoordinates.LineIndex("one\ntwo\nthree")
+            .adjustingOffsets(after: 6, by: 2)!
+
+        #expect(index.utf16Offset(from: LSPPosition(line: 1, character: 2)) == 6)
+        #expect(index.utf16Offset(from: LSPPosition(line: 2, character: 0)) == 10)
+        #expect(index.lspPosition(utf16Offset: 10) == LSPPosition(line: 2, character: 0))
+    }
+
     @Test func applyLspTextEditSingleReplacement() {
         let text = "hello"
         let edit = LSPTextEdit(

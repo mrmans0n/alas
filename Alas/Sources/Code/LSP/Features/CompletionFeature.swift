@@ -3,6 +3,14 @@ import SwiftUI
 
 @MainActor
 final class CompletionFeature {
+    private struct CandidateIdentity: Hashable {
+        let label: String
+        let kind: Int?
+        let detail: String?
+        let source: CompletionCandidateSource
+        let editPlan: CompletionEditPlan
+    }
+
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
@@ -16,8 +24,18 @@ final class CompletionFeature {
     private var requestTask: Task<Void, Never>?
     private var requestID: UInt64 = 0
     private var candidates: [CompletionCandidate] = []
+    private var candidatePool: [CompletionCandidate] = []
     private var prefix: CompletionPrefix?
+    private var candidatePrefix: CompletionPrefix?
+    private var candidateOrigins: [UUID: CompletionPrefix] = [:]
+    private var candidateCoordinateIndex: TextEditCoordinates.LineIndex?
+    private var candidateBufferCache: [String: [CompletionCandidate]] = [:]
+    private var candidateItems: [LSPCompletionItem] = []
+    private var candidateAllowsBufferFallback = false
+    private var candidateMemberAccessOnly = false
+    private var candidateAllowsEmptyPrefix = false
     private var selection: Int = 0
+    private var selectedCandidateID: UUID?
     private let suggestionWindow = CompletionWindowController()
     private var isRefreshing = false
 
@@ -50,8 +68,8 @@ final class CompletionFeature {
         textView.completionManualTriggerHandler = { [weak self] in
             self?.triggerManual()
         }
-        textView.completionChangeHandler = { [weak self] in
-            self?.scheduleAutomatic()
+        textView.completionChangeHandler = { [weak self] editRange in
+            self?.scheduleAutomatic(editRange: editRange)
         }
         textView.completionSelectionChangeHandler = { [weak self] in
             self?.cancelAndDismiss()
@@ -68,8 +86,18 @@ final class CompletionFeature {
         requestTask = nil
         requestID &+= 1
         candidates.removeAll()
+        candidatePool.removeAll()
         prefix = nil
+        candidatePrefix = nil
+        candidateOrigins.removeAll()
+        candidateCoordinateIndex = nil
+        candidateBufferCache.removeAll()
+        candidateItems.removeAll()
+        candidateAllowsBufferFallback = false
+        candidateMemberAccessOnly = false
+        candidateAllowsEmptyPrefix = false
         selection = 0
+        selectedCandidateID = nil
         isRefreshing = false
         closeUI()
     }
@@ -80,14 +108,14 @@ final class CompletionFeature {
         startCompletion(trigger: .invoked, triggerCharacter: nil, allowEmptyPrefix: true, allowBufferFallback: true)
     }
 
-    private func scheduleAutomatic() {
+    private func scheduleAutomatic(editRange: NSRange?) {
         guard hasSessionPreconditions() else {
             cancelAndDismiss()
             return
         }
 
         debounceTask?.cancel()
-        invalidateActiveSessionForChange()
+        invalidateActiveSessionForChange(editRange: editRange)
         debounceTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: automaticDebounceNanos)
@@ -186,6 +214,7 @@ final class CompletionFeature {
                     items: lspItems,
                     prefix: prefix,
                     bufferText: activeTextView.string,
+                    allowEmptyPrefix: allowEmptyPrefix,
                     allowBufferFallback: allowBufferFallback,
                     memberAccessOnly: memberAccessOnly
                 )
@@ -219,31 +248,178 @@ final class CompletionFeature {
         items: [LSPCompletionItem],
         prefix: CompletionPrefix,
         bufferText: String,
+        allowEmptyPrefix: Bool,
         allowBufferFallback: Bool,
         memberAccessOnly: Bool
     ) {
-        var next = CompletionEngine.lspCandidates(
+        let coordinateIndex = TextEditCoordinates.LineIndex(bufferText)
+        let retainedMemberAccessOnly = candidateMemberAccessOnly || memberAccessOnly
+        let retainedBufferFallback = allowBufferFallback && !retainedMemberAccessOnly
+        let bufferCache = retainedBufferFallback
+            ? CompletionEngine.bufferWordCandidateCache(in: bufferText, prefix: prefix)
+            : [:]
+        let next = Self.candidates(
+            items: items,
+            prefix: prefix,
+            bufferCandidates: bufferCache[prefix.text] ?? [],
+            allowBufferFallback: retainedBufferFallback,
+            memberAccessOnly: retainedMemberAccessOnly
+        )
+
+        let selectedCandidate = candidates.indices.contains(selection)
+            ? candidates[selection]
+            : candidatePool.first { $0.id == selectedCandidateID }
+        let selectedEditPlan = selectedCandidate.flatMap { candidate in
+            CompletionEngine.editPlan(
+                accepting: candidate,
+                prefix: prefix,
+                originalPrefix: candidateOrigins[candidate.id],
+                in: bufferText,
+                coordinateIndex: coordinateIndex
+            )
+        }
+        let merged = Self.mergingCandidates(
+            next,
+            originPrefix: prefix,
+            with: candidatePool,
+            origins: candidateOrigins,
+            prefix: prefix,
+            text: bufferText,
+            coordinateIndex: coordinateIndex
+        )
+        let visible = merged.candidates.filter { Self.isVisible($0, for: prefix) }
+
+        candidates = visible
+        candidatePool = merged.candidates
+        self.prefix = prefix
+        candidateOrigins = merged.origins
+        candidateCoordinateIndex = coordinateIndex
+        let keepsBroaderResponse = candidatePrefix.map {
+            $0.range.location == prefix.range.location && $0.range.length < prefix.range.length
+        } ?? false
+        candidateBufferCache.merge(bufferCache) { _, latest in latest }
+        if !keepsBroaderResponse {
+            candidatePrefix = prefix
+            candidateItems = items
+        }
+        candidateAllowsBufferFallback = retainedBufferFallback
+        candidateMemberAccessOnly = retainedMemberAccessOnly
+        candidateAllowsEmptyPrefix = candidateAllowsEmptyPrefix || allowEmptyPrefix
+        isRefreshing = false
+        selection = selectedCandidate.flatMap { selected in
+            visible.firstIndex {
+                $0.label == selected.label &&
+                    $0.kind == selected.kind &&
+                    $0.detail == selected.detail &&
+                    $0.source == selected.source &&
+                    selectedEditPlan != nil &&
+                    CompletionEngine.editPlan(
+                        accepting: $0,
+                        prefix: prefix,
+                        originalPrefix: candidateOrigins[$0.id],
+                        in: bufferText,
+                        coordinateIndex: coordinateIndex
+                    ) == selectedEditPlan
+            }
+        } ?? 0
+        if candidates.indices.contains(selection) {
+            selectedCandidateID = candidates[selection].id
+        }
+        if candidates.isEmpty {
+            closeUI()
+        } else {
+            showPopup()
+        }
+    }
+
+    private static func candidates(
+        items: [LSPCompletionItem],
+        prefix: CompletionPrefix,
+        bufferCandidates: [CompletionCandidate],
+        allowBufferFallback: Bool,
+        memberAccessOnly: Bool
+    ) -> [CompletionCandidate] {
+        var candidates = CompletionEngine.lspCandidates(
             from: items,
             prefix: prefix,
             memberAccessOnly: memberAccessOnly
         )
         if allowBufferFallback {
-            let buffer = CompletionEngine.bufferWordCandidates(in: bufferText, prefix: prefix)
-            next.append(contentsOf: buffer.filter { bufferCandidate in
-                !next.contains { $0.label == bufferCandidate.label }
+            candidates.append(contentsOf: bufferCandidates.filter { bufferCandidate in
+                !candidates.contains { $0.label == bufferCandidate.label }
             })
         }
+        return candidates
+    }
 
-        guard !next.isEmpty else {
-            cancelAndDismiss()
-            return
+    private static func mergingCandidates(
+        _ candidates: [CompletionCandidate],
+        originPrefix: CompletionPrefix,
+        with retained: [CompletionCandidate],
+        origins: [UUID: CompletionPrefix],
+        prefix: CompletionPrefix,
+        text: String,
+        coordinateIndex: TextEditCoordinates.LineIndex
+    ) -> (candidates: [CompletionCandidate], origins: [UUID: CompletionPrefix]) {
+        var merged: [CompletionCandidate] = []
+        var mergedOrigins: [UUID: CompletionPrefix] = [:]
+        var identities = Set<CandidateIdentity>()
+        for candidate in candidates {
+            guard let identity = candidateIdentity(
+                for: candidate,
+                origin: originPrefix,
+                prefix: prefix,
+                text: text,
+                coordinateIndex: coordinateIndex
+            ), identities.insert(identity).inserted else { continue }
+            merged.append(candidate)
+            mergedOrigins[candidate.id] = originPrefix
         }
+        for candidate in retained {
+            guard let identity = candidateIdentity(
+                for: candidate,
+                origin: origins[candidate.id],
+                prefix: prefix,
+                text: text,
+                coordinateIndex: coordinateIndex
+            ), identities.insert(identity).inserted else { continue }
+            merged.append(candidate)
+            mergedOrigins[candidate.id] = origins[candidate.id]
+        }
+        return (merged, mergedOrigins)
+    }
 
-        candidates = next
-        self.prefix = prefix
-        isRefreshing = false
-        selection = min(max(selection, 0), next.count - 1)
-        showPopup()
+    private static func candidateIdentity(
+        for candidate: CompletionCandidate,
+        origin: CompletionPrefix?,
+        prefix: CompletionPrefix,
+        text: String,
+        coordinateIndex: TextEditCoordinates.LineIndex
+    ) -> CandidateIdentity? {
+        guard let editPlan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: prefix,
+            originalPrefix: origin,
+            in: text,
+            coordinateIndex: coordinateIndex
+        ) else { return nil }
+        return CandidateIdentity(
+            label: candidate.label,
+            kind: candidate.kind,
+            detail: candidate.detail,
+            source: candidate.source,
+            editPlan: editPlan
+        )
+    }
+
+    private static func isVisible(_ candidate: CompletionCandidate, for prefix: CompletionPrefix) -> Bool {
+        if candidate.source == .buffer,
+           (prefix.text as NSString).length < CompletionEngine.bufferWordMinimumPrefixLength {
+            return false
+        }
+        let filter = candidate.filterText ?? candidate.label
+        return CompletionEngine.hasCaseInsensitivePrefix(filter, prefix.text) ||
+            CompletionEngine.hasCaseInsensitivePrefix(candidate.label, prefix.text)
     }
 
     private func showPopup() {
@@ -286,7 +462,8 @@ final class CompletionFeature {
     }
 
     private func handleKey(_ action: CodeTextView.CompletionKeyAction) -> Bool {
-        if case .dismiss = action, suggestionWindow.isVisible || !candidates.isEmpty || isRefreshing {
+        if case .dismiss = action,
+           suggestionWindow.isVisible || !candidates.isEmpty || !candidatePool.isEmpty || isRefreshing {
             cancelAndDismiss()
             return true
         }
@@ -306,6 +483,7 @@ final class CompletionFeature {
             return true
         case .moveSelection(let delta):
             selection = min(max(0, selection + delta), candidates.count - 1)
+            selectedCandidateID = candidates[selection].id
             showPopup()
             return true
         case .dismiss:
@@ -323,7 +501,12 @@ final class CompletionFeature {
         }
 
         let candidate = candidates[index]
-        guard let plan = CompletionEngine.editPlan(accepting: candidate, prefix: prefix, in: textView.string) else {
+        guard let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: prefix,
+            originalPrefix: candidateOrigins[candidate.id],
+            in: textView.string
+        ) else {
             cancelAndDismiss()
             return
         }
@@ -336,15 +519,109 @@ final class CompletionFeature {
         suggestionWindow.hide()
     }
 
-    private func invalidateActiveSessionForChange() {
+    private func invalidateActiveSessionForChange(editRange: NSRange?) {
+        let previousPrefix = prefix
         requestTask?.cancel()
         requestTask = nil
         requestID &+= 1
-        candidates.removeAll()
-        prefix = nil
-        selection = 0
         isRefreshing = true
-        closeUI()
+
+        guard let textView,
+              let updatedPrefix = CompletionEngine.prefix(
+                in: textView.string,
+                caret: textView.selectedRange().location
+              ),
+              candidateAllowsEmptyPrefix || !updatedPrefix.text.isEmpty,
+              previousPrefix?.range.location == updatedPrefix.range.location,
+              let previousPrefix,
+              let editRange,
+              editRange.location >= previousPrefix.range.location,
+              NSMaxRange(editRange) <= NSMaxRange(previousPrefix.range) else {
+            candidates.removeAll()
+            candidatePool.removeAll()
+            prefix = nil
+            candidatePrefix = nil
+            candidateOrigins.removeAll()
+            candidateCoordinateIndex = nil
+            candidateBufferCache.removeAll()
+            candidateItems.removeAll()
+            candidateAllowsBufferFallback = false
+            candidateMemberAccessOnly = false
+            candidateAllowsEmptyPrefix = false
+            selection = 0
+            selectedCandidateID = nil
+            closeUI()
+            return
+        }
+
+        let bufferText = textView.string
+        let prefixDelta = updatedPrefix.range.length - previousPrefix.range.length
+        let coordinateIndex = candidateCoordinateIndex?
+            .adjustingOffsets(after: editRange.location, by: prefixDelta) ?? TextEditCoordinates.LineIndex(bufferText)
+        candidateCoordinateIndex = coordinateIndex
+        let selectedCandidate = candidates.indices.contains(selection)
+            ? candidates[selection]
+            : candidatePool.first { $0.id == selectedCandidateID }
+        let selectedEditPlan = selectedCandidate.flatMap { candidate in
+            CompletionEngine.editPlan(
+                accepting: candidate,
+                prefix: updatedPrefix,
+                originalPrefix: candidateOrigins[candidate.id],
+                in: bufferText,
+                coordinateIndex: coordinateIndex
+            )
+        }
+        if let candidatePrefix,
+           updatedPrefix.range.length < previousPrefix.range.length,
+           !candidateItems.isEmpty || candidateAllowsBufferFallback {
+            let rebuilt = Self.candidates(
+                items: candidateItems,
+                prefix: updatedPrefix,
+                bufferCandidates: candidateBufferCache[updatedPrefix.text] ?? [],
+                allowBufferFallback: candidateAllowsBufferFallback,
+                memberAccessOnly: candidateMemberAccessOnly
+            )
+            let merged = Self.mergingCandidates(
+                rebuilt,
+                originPrefix: candidatePrefix,
+                with: candidatePool,
+                origins: candidateOrigins,
+                prefix: updatedPrefix,
+                text: bufferText,
+                coordinateIndex: coordinateIndex
+            )
+            candidatePool = merged.candidates
+            candidateOrigins = merged.origins
+        }
+
+        candidates = candidatePool.filter { Self.isVisible($0, for: updatedPrefix) }
+        isRefreshing = candidates.isEmpty
+        prefix = updatedPrefix
+        selection = selectedCandidate.flatMap { selected in
+            candidates.firstIndex {
+                $0.label == selected.label &&
+                    $0.kind == selected.kind &&
+                    $0.detail == selected.detail &&
+                    $0.source == selected.source &&
+                    selectedEditPlan != nil &&
+                    CompletionEngine.editPlan(
+                        accepting: $0,
+                        prefix: updatedPrefix,
+                        originalPrefix: candidateOrigins[$0.id],
+                        in: bufferText,
+                        coordinateIndex: coordinateIndex
+                    ) == selectedEditPlan
+            }
+        } ?? 0
+        if candidates.indices.contains(selection) {
+            selectedCandidateID = candidates[selection].id
+        }
+
+        if candidates.isEmpty {
+            closeUI()
+        } else {
+            showPopup()
+        }
     }
 
     private func canAcceptCompletion(prefix: CompletionPrefix, in textView: CodeTextView) -> Bool {
@@ -386,24 +663,64 @@ extension CompletionFeature {
         let isRefreshing: Bool
     }
 
-    func testingSeedVisibleCandidates(labels: [String], prefix: CompletionPrefix, selection: Int = 0) {
-        candidates = labels.map {
+    func testingSeedVisibleCandidates(
+        labels: [String],
+        prefix: CompletionPrefix,
+        selection: Int = 0,
+        memberAccessOnly: Bool = false
+    ) {
+        candidates = labels.map { label in
             CompletionCandidate(
-                label: $0,
+                label: label,
                 detail: nil,
                 kind: nil,
                 documentation: nil,
                 sortText: nil,
-                filterText: $0,
-                replacementText: $0,
+                filterText: label,
+                replacementText: label,
                 textEdit: nil,
                 additionalTextEdits: [],
                 source: .lsp
             )
         }
+        candidatePool = candidates
         self.prefix = prefix
+        candidatePrefix = prefix
+        candidateOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, prefix) })
+        candidateCoordinateIndex = textView.map { TextEditCoordinates.LineIndex($0.string) }
+        candidateBufferCache.removeAll()
+        candidateMemberAccessOnly = memberAccessOnly
+        candidateAllowsEmptyPrefix = prefix.text.isEmpty
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
+        selectedCandidateID = candidates.indices.contains(self.selection) ? candidates[self.selection].id : nil
         isRefreshing = false
+    }
+
+    func testingShowPopup() {
+        showPopup()
+    }
+
+    func testingSetSelection(_ selection: Int) {
+        self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
+        selectedCandidateID = candidates.indices.contains(self.selection) ? candidates[self.selection].id : nil
+    }
+
+    func testingPresent(
+        items: [LSPCompletionItem],
+        prefix: CompletionPrefix,
+        bufferText: String,
+        allowEmptyPrefix: Bool = false,
+        allowBufferFallback: Bool = false,
+        memberAccessOnly: Bool = false
+    ) {
+        present(
+            items: items,
+            prefix: prefix,
+            bufferText: bufferText,
+            allowEmptyPrefix: allowEmptyPrefix,
+            allowBufferFallback: allowBufferFallback,
+            memberAccessOnly: memberAccessOnly
+        )
     }
 
     var testingSnapshot: TestingSnapshot {
