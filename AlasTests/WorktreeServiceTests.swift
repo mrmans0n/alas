@@ -45,6 +45,136 @@ struct WorktreeServiceTests {
         #expect(listed.count == 2)
     }
 
+    @Test func addRecreatesAPrunableWorktreeRegistration() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-prunable")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/prunable",
+            destination: dest,
+            projectId: "p"
+        )
+        try FileManager.default.removeItem(at: dest)
+
+        let recreated = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/prunable",
+            destination: dest,
+            projectId: "p"
+        )
+
+        #expect(recreated.branch == "feat/prunable")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    @Test func addRecreatesADetachedPrunableWorktreeRegistration() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-detached-prunable")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/detached-prunable",
+            destination: dest,
+            projectId: "p"
+        )
+        _ = try await Process.git(["checkout", "--detach"], cwd: dest)
+        _ = try await Process.git(["branch", "-D", "feat/detached-prunable"], cwd: repo)
+        try FileManager.default.removeItem(at: dest)
+
+        let recreated = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/detached-prunable",
+            destination: dest,
+            projectId: "p"
+        )
+
+        #expect(recreated.branch == "feat/detached-prunable")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    @Test func addRecreatesAnAbsentLockedWorktreeRegistration() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-locked-missing")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/locked-missing",
+            destination: dest,
+            projectId: "p"
+        )
+        _ = try await Process.git(["worktree", "lock", dest.path], cwd: repo)
+        try FileManager.default.removeItem(at: dest)
+
+        let recreated = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/locked-missing",
+            destination: dest,
+            projectId: "p"
+        )
+
+        #expect(recreated.branch == "feat/locked-missing")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    @Test func prunableRecoveryDoesNotOverrideALiveBranchCheckout() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let root = repo.deletingLastPathComponent()
+        let staleDest = root.appendingPathComponent("\(repo.lastPathComponent)-stale-registration")
+        let liveDest = root.appendingPathComponent("\(repo.lastPathComponent)-live-branch")
+        defer {
+            try? FileManager.default.removeItem(at: staleDest)
+            try? FileManager.default.removeItem(at: liveDest)
+        }
+        let svc = WorktreeService()
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/stale-registration",
+            destination: staleDest,
+            projectId: "p"
+        )
+        _ = try await Process.git(["checkout", "--detach"], cwd: staleDest)
+        try FileManager.default.removeItem(at: staleDest)
+        _ = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feat/live-branch",
+            destination: liveDest,
+            projectId: "p"
+        )
+
+        do {
+            _ = try await svc.add(
+                repoPath: repo,
+                base: "main",
+                branch: "feat/live-branch",
+                destination: staleDest,
+                projectId: "p"
+            )
+            Issue.record("expected the live branch checkout to remain protected")
+        } catch let error as WorktreeService.WorktreeError {
+            #expect(error.localizedDescription.contains("already used by worktree"))
+        }
+        #expect(FileManager.default.fileExists(atPath: liveDest.path))
+    }
+
     @Test func removeDeletesWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

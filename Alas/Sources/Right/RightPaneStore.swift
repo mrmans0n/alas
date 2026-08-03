@@ -22,6 +22,9 @@ final class RightPaneStore {
     /// retain the app.
     weak var appState: AppState?
 
+    @ObservationIgnored
+    var reviewSnapshotDidChange: ((String, String, ReviewLoopSnapshot) -> Void)?
+
     private let git: GitService
 
     init(git: GitService = GitService()) {
@@ -188,6 +191,12 @@ final class RightPaneStore {
                     targetSHA: entry.sha
                 )
             }
+            new.reviewSnapshotDidChange = { [weak self] snapshot in
+                self?.observeCompletedRemoteReviewRefresh(
+                    worktreeId: worktree.id,
+                    snapshot: snapshot
+                )
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in
@@ -284,6 +293,37 @@ final class RightPaneStore {
         states[worktreeId]?.markSnapshotUnknown()
     }
 
+    func observeCompletedRemoteReviewRefresh(
+        worktreeId: String,
+        snapshot: ReviewLoopSnapshot
+    ) {
+        reviewSnapshotDidChange?(worktreeId, snapshot.local.baseBranch, snapshot)
+    }
+
+    func reviewSnapshot(worktreeId: String, baseBranch: String) -> ReviewLoopSnapshot? {
+        guard let state = states[worktreeId],
+              state.reviewLoop.currentBaseBranch == baseBranch
+        else { return nil }
+        return state.reviewLoop.snapshot
+    }
+
+    /// Performs the one review lookup needed while restoring Missions before a
+    /// right pane has been activated. The temporary state never starts its
+    /// watcher or timer, so this does not introduce background polling.
+    func startupReviewSnapshot(
+        for worktree: Worktree,
+        baseBranch: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode
+    ) async -> ReviewLoopSnapshot? {
+        if let cached = reviewSnapshot(worktreeId: worktree.id, baseBranch: baseBranch) {
+            return cached
+        }
+        let temporary = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+        temporary.comparisonMode = comparisonMode
+        await temporary.refresh(forceReviewLoopRemote: true)
+        return temporary.reviewLoop.snapshot
+    }
+
     /// Re-evaluate the gg gate across all cached right-pane states after a
     /// stacked-diffs config change in Settings (master toggle or a
     /// project's ggMode), so stale stack styling and the sidebar badge
@@ -321,6 +361,13 @@ final class RightPaneStore {
     /// Used by `DraftCommitTabView` to observe staged-set changes.
     func activeState(worktreeId: String) -> RightPaneState? {
         states[worktreeId]
+    }
+
+    func activeState(worktreeId: String, baseBranch: String) -> RightPaneState? {
+        guard let state = states[worktreeId],
+              state.reviewLoop.currentBaseBranch == baseBranch
+        else { return nil }
+        return state
     }
 
     /// The first cached state currently reporting a merge failure, if any.

@@ -15,12 +15,14 @@ struct Worktree: Identifiable, Equatable, Codable {
     var status: WorktreeStatus
     var lastActivity: Date
     var createdAt: Date
+    /// Random identity persisted inside this concrete worktree's Git administrative directory.
+    var lineageID: String?
     var addedLines: Int = 0
     var deletedLines: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, projectId, name, branch, path, isMainWorktree, status,
-             lastActivity, createdAt, addedLines, deletedLines
+             lastActivity, createdAt, lineageID, addedLines, deletedLines
     }
 
     init(
@@ -33,6 +35,7 @@ struct Worktree: Identifiable, Equatable, Codable {
         status: WorktreeStatus,
         lastActivity: Date,
         createdAt: Date? = nil,
+        lineageID: String? = nil,
         addedLines: Int = 0,
         deletedLines: Int = 0
     ) {
@@ -45,6 +48,7 @@ struct Worktree: Identifiable, Equatable, Codable {
         self.status = status
         self.lastActivity = lastActivity
         self.createdAt = createdAt ?? lastActivity
+        self.lineageID = lineageID
         self.addedLines = addedLines
         self.deletedLines = deletedLines
     }
@@ -60,6 +64,7 @@ struct Worktree: Identifiable, Equatable, Codable {
         status = try c.decode(WorktreeStatus.self, forKey: .status)
         lastActivity = try c.decode(Date.self, forKey: .lastActivity)
         createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? lastActivity
+        lineageID = try? c.decode(String.self, forKey: .lineageID)
         addedLines = (try? c.decode(Int.self, forKey: .addedLines)) ?? 0
         deletedLines = (try? c.decode(Int.self, forKey: .deletedLines)) ?? 0
     }

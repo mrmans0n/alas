@@ -6,6 +6,15 @@ enum RightPaneSelectionState: Equatable {
     case creating(Worktree)
     case deleting(Worktree)
     case createFailed(Worktree)
+
+    var showsRightPane: Bool {
+        switch self {
+        case .empty:
+            false
+        case .active, .creating, .deleting, .createFailed:
+            true
+        }
+    }
 }
 
 struct RightPaneSelectionStateResolver {

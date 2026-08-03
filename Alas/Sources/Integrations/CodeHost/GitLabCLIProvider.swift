@@ -1,9 +1,10 @@
 import CryptoKit
 import Foundation
 
-struct GitLabCLIProvider: CodeHostProvider {
+struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     let kind: CodeHostKind = .gitlab
     let capabilities: CodeHostProviderCapabilities = .gitlabCLI
+    let executable = "glab"
 
     private let runner: any CodeHostCommandRunning
 
@@ -38,6 +39,24 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
     }
 
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+        let result = try await runner.run(
+            executable,
+            args: [
+                "api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))/issues/\(number)",
+                "--hostname", remote.host, "--output", "json",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            if let error = CodeHostIssueProviderError.classification(provider: kind, remote: remote, number: number, result: result) {
+                throw error
+            }
+            throw CodeHostProviderError.commandFailed(command: "glab api issue", stderr: result.stderr)
+        }
+        return try Self.parseIssue(result.stdout, remote: remote, requestedNumber: number)
+    }
+
     func currentReviewRequest(
         remote: CodeHostRemote,
         branch: String,
@@ -45,17 +64,63 @@ struct GitLabCLIProvider: CodeHostProvider {
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest? {
-        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            includeAllStates: false,
+            cwd: cwd
+        )
+    }
+
+    func missionReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        headSHA: String? = nil,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            headSHA: headSHA,
+            includeAllStates: true,
+            normalizeBaseBranch: false,
+            cwd: cwd
+        )
+    }
+
+    private func reviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        headSHA: String? = nil,
+        includeAllStates: Bool,
+        normalizeBaseBranch: Bool = true,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        let base = normalizeBaseBranch
+            ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+            : baseBranch
+        var args = [
+            "mr", "list",
+            "--source-branch", branch,
+            "--target-branch", base,
+            "--output", "json",
+            "--per-page", "20",
+        ]
+        if includeAllStates {
+            args.append("--all")
+        }
+        args += ["-R", remote.repositorySlug]
         let result = try await runner.run(
             "glab",
-            args: [
-                "mr", "list",
-                "--source-branch", branch,
-                "--target-branch", base,
-                "--output", "json",
-                "--per-page", "20",
-                "-R", remote.repositorySlug,
-            ],
+            args: args,
             cwd: cwd
         )
         guard result.exitCode == 0 else {
@@ -65,6 +130,7 @@ struct GitLabCLIProvider: CodeHostProvider {
         let sourceProjectPathsByID = try await sourceProjectPathsByID(
             fromMRListJSON: result.stdout,
             headOwner: headOwner,
+            headSHA: headSHA,
             remote: remote,
             cwd: cwd
         )
@@ -72,7 +138,9 @@ struct GitLabCLIProvider: CodeHostProvider {
             result.stdout,
             remote: remote,
             headOwner: headOwner,
-            sourceProjectPathsByID: sourceProjectPathsByID
+            headSHA: headSHA,
+            sourceProjectPathsByID: sourceProjectPathsByID,
+            preferMerged: includeAllStates
         ) else {
             return nil
         }
@@ -1086,6 +1154,7 @@ struct GitLabCLIProvider: CodeHostProvider {
     private func sourceProjectPathsByID(
         fromMRListJSON json: String,
         headOwner: String?,
+        headSHA: String?,
         remote: CodeHostRemote,
         cwd: URL
     ) async throws -> [Int: String] {
@@ -1093,7 +1162,10 @@ struct GitLabCLIProvider: CodeHostProvider {
             return [:]
         }
 
-        let items = try Self.decodeMRList(json)
+        let normalizedHeadSHA = Self.normalizedOptionalString(headSHA)
+        let items = try Self.decodeMRList(json).filter { item in
+            normalizedHeadSHA == nil || Self.normalizedOptionalString(item.sha) == normalizedHeadSHA
+        }
         var pathsByID: [Int: String] = [:]
         let idsToResolve = Set(items.compactMap { item -> Int? in
             guard item.sourceProjectNamespace(sourceProjectPathsByID: [:]) == nil else {
@@ -1103,15 +1175,14 @@ struct GitLabCLIProvider: CodeHostProvider {
         })
 
         for id in idsToResolve.sorted() {
-            let result = try await runner.run(
+            guard let result = try? await runner.run(
                 "glab",
                 args: ["api", "projects/\(id)", "--hostname", remote.host, "--output", "json"],
                 cwd: cwd
-            )
-            guard result.exitCode == 0 else {
-                throw CodeHostProviderError.commandFailed(command: "glab api projects/\(id)", stderr: result.stderr)
-            }
-            pathsByID[id] = try Self.parseProjectPath(result.stdout)
+            ), result.exitCode == 0,
+                let path = try? Self.parseProjectPath(result.stdout)
+            else { continue }
+            pathsByID[id] = path
         }
 
         return pathsByID
@@ -1170,34 +1241,36 @@ struct GitLabCLIProvider: CodeHostProvider {
         _ json: String,
         remote: CodeHostRemote,
         headOwner: String?,
-        sourceProjectPathsByID: [Int: String] = [:]
+        headSHA: String? = nil,
+        sourceProjectPathsByID: [Int: String] = [:],
+        preferMerged: Bool = false
     ) throws -> ReviewRequest? {
-        let items = try decodeMRList(json)
-
-        guard let item = items.first else {
-            return nil
+        let decodedItems = try decodeMRList(json)
+        let normalizedHeadSHA = normalizedOptionalString(headSHA)
+        let items = decodedItems.filter { item in
+            normalizedHeadSHA == nil || normalizedOptionalString(item.sha) == normalizedHeadSHA
         }
+        var matchingItems = items
 
         if let headOwner = headOwner?.trimmingCharacters(in: .whitespacesAndNewlines), !headOwner.isEmpty {
             let itemsWithSourceProject = items.filter { $0.sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) != nil }
             if !itemsWithSourceProject.isEmpty {
-                guard let item = itemsWithSourceProject.first(where: {
+                matchingItems = itemsWithSourceProject.filter {
                     $0.matchesSourceProjectOwner(headOwner, sourceProjectPathsByID: sourceProjectPathsByID)
-                }) else {
+                }
+                guard !matchingItems.isEmpty else {
                     return nil
                 }
-                return try reviewRequest(
-                    from: item,
-                    remote: remote,
-                    context: "glab mr list",
-                    sourceProjectPathsByID: sourceProjectPathsByID
-                )
-            }
-
-            guard items.count == 1 else {
+            } else {
                 return nil
             }
         }
+
+        let item = preferMerged
+            ? matchingItems.first(where: { $0.state.caseInsensitiveCompare("merged") == .orderedSame })
+                ?? matchingItems.first
+            : matchingItems.first
+        guard let item else { return nil }
 
         return try reviewRequest(
             from: item,
@@ -1606,10 +1679,57 @@ struct GitLabCLIProvider: CodeHostProvider {
         throw CodeHostProviderError.malformedOutput("Unable to parse GitLab date")
     }
 
+    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> MissionIssueSnapshot {
+        let response: GitLabIssueResponse
+        do {
+            response = try JSONDecoder().decode(GitLabIssueResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitLab issue output.")
+        }
+        guard response.iid == requestedNumber,
+              !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let url = try parseOptionalHTTPURL(response.webURL, context: "GitLab issue output is missing a valid URL.")
+        else {
+            throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")
+        }
+        guard case .url(let kind, let host, let repositorySlug, let number) = try MissionIssueInput.parse(url.absoluteString),
+              kind == .gitlab,
+              host.caseInsensitiveCompare(remote.host) == .orderedSame,
+              number == response.iid
+        else {
+            throw CodeHostProviderError.malformedOutput("GitLab issue output has an unexpected canonical URL.")
+        }
+        return MissionIssueSnapshot(
+            identity: MissionIssueIdentity(
+                provider: kind,
+                host: host,
+                repositorySlug: repositorySlug.lowercased(),
+                number: number
+            ),
+            canonicalURL: url,
+            title: response.title,
+            body: response.description ?? "",
+            state: issueState(response.state),
+            labels: response.labels.compactMap(normalizedOptionalString),
+            assignees: response.assignees.compactMap { normalizedOptionalString($0.username) },
+            providerUpdatedAt: try parseOptionalGitLabDate(response.updatedAt),
+            capturedAt: Date(),
+            refreshError: nil
+        )
+    }
+
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = formatOptions
         return formatter.date(from: value)
+    }
+
+    private static func issueState(_ rawValue: String) -> MissionIssueState {
+        switch rawValue.lowercased() {
+        case "open", "opened": .open
+        case "closed": .closed
+        default: .unknown
+        }
     }
 
     private static func normalizedOptionalString(_ value: String?) -> String? {
@@ -1846,10 +1966,12 @@ private struct MRListItem: Decodable {
     }
 
     func matchesSourceProjectOwner(_ headOwner: String, sourceProjectPathsByID: [Int: String]) -> Bool {
-        guard let sourceProjectNamespace = sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) else {
+        guard let sourceProjectPath = sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) else {
             return false
         }
-        return sourceProjectNamespace == headOwner || sourceProjectNamespace.hasPrefix("\(headOwner)/")
+        let components = sourceProjectPath.split(separator: "/")
+        guard components.count > 1 else { return false }
+        return components.dropLast().joined(separator: "/") == headOwner
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1888,6 +2010,37 @@ private struct GitLabProject: Decodable {
     private enum CodingKeys: String, CodingKey {
         case pathWithNamespace = "path_with_namespace"
     }
+}
+
+private struct GitLabIssueResponse: Decodable {
+    let iid: Int
+    let title: String
+    let description: String?
+    let state: String
+    let webURL: String?
+    let updatedAt: String?
+    let labels: [String]
+    let assignees: [Assignee]
+
+    private enum CodingKeys: String, CodingKey {
+        case iid, title, description, state, labels, assignees
+        case webURL = "web_url"
+        case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        iid = try container.decode(Int.self, forKey: .iid)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        state = try container.decode(String.self, forKey: .state)
+        webURL = try container.decodeIfPresent(String.self, forKey: .webURL)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        labels = try container.decodeIfPresent([String].self, forKey: .labels) ?? []
+        assignees = try container.decodeIfPresent([Assignee].self, forKey: .assignees) ?? []
+    }
+
+    struct Assignee: Decodable { let username: String? }
 }
 
 private struct GitLabPipeline: Decodable {

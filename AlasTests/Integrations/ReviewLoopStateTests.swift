@@ -5,6 +5,64 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
+    @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
+        let store = RightPaneStore()
+        let worktree = Worktree(
+            id: "worktree-1",
+            projectId: "project-1",
+            name: "feature/review",
+            branch: "feature/review",
+            path: URL(fileURLWithPath: "/tmp/alas-review-loop-callback"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let pane = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        let remote = Self.makeRemote()
+        let request = Self.makeReviewRequest(remote: remote, checks: [])
+        let snapshot = ReviewLoopSnapshot(
+            local: Self.makeLocal(needsPush: false),
+            remote: remote,
+            reviewRequest: request,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
+        var received: [(String, String, ReviewLoopSnapshot)] = []
+        store.reviewSnapshotDidChange = { worktreeID, baseRef, snapshot in
+            received.append((worktreeID, baseRef, snapshot))
+        }
+        pane.reviewLoop.updateBaseBranch("release")
+
+        store.observeCompletedRemoteReviewRefresh(
+            worktreeId: "worktree-1",
+            snapshot: snapshot
+        )
+
+        #expect(received.count == 1)
+        #expect(received.first?.0 == "worktree-1")
+        #expect(received.first?.1 == "main")
+        #expect(received.first?.2 == snapshot)
+    }
+
+    @Test func baseChangeInvalidatesAnInFlightRefresh() {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop-base-change"),
+            baseBranch: "main"
+        )
+        let stale = state.beginLocalRefresh(local: Self.makeLocal(baseBranch: "main"))
+
+        state.updateBaseBranch("release")
+        state.finishLocalRefresh(
+            stale,
+            preservingRemoteWith: Self.makeLocal(baseBranch: "main")
+        )
+
+        #expect(state.currentBaseBranch == "release")
+        #expect(state.snapshot == nil)
+        #expect(!state.isRefreshing)
+    }
+
     @Test func inFlightActionRejectsConcurrentReviewActions() {
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),

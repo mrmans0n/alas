@@ -3754,7 +3754,13 @@ extension ACPSessionManager {
         source: ACPDelegatedPromptSource,
         into sessionId: ACPSession.ID
     ) async -> Bool {
-        guard let session = sessions[sessionId] else { return false }
+        guard var session = sessions[sessionId] else { return false }
+        guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
+            return true
+        }
+        await awaitBackfill(id: sessionId)
+        guard let currentSession = sessions[sessionId] else { return false }
+        session = currentSession
         guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
             return true
         }
@@ -3773,6 +3779,52 @@ extension ACPSessionManager {
         }
         guard await task.value == true else {
             session.queue.removeAll { $0.delegatedSource == source }
+            return false
+        }
+        runners[sessionId]?.flushQueueIfIdle()
+        return true
+    }
+
+    @discardableResult
+    func enqueuePrompt(
+        id: UUID,
+        text: String,
+        into sessionId: ACPSession.ID
+    ) async -> Bool {
+        guard var session = sessions[sessionId] else { return false }
+        let source = ACPDelegatedPromptSource(
+            sessionId: "mission:\(sessionId)",
+            messageId: id.uuidString
+        )
+        guard !session.queue.contains(where: {
+            $0.id == id || $0.delegatedSource?.messageId == source.messageId
+        }) else { return true }
+        await awaitBackfill(id: sessionId)
+        guard let currentSession = sessions[sessionId] else { return false }
+        session = currentSession
+        guard !session.queue.contains(where: {
+            $0.id == id || $0.delegatedSource?.messageId == source.messageId
+        }) else { return true }
+        guard !session.transcript.messages.contains(where: { message in
+            guard case .user(_, _, _, _, let recordedSource) = message else { return false }
+            return recordedSource == source
+        }) else { return true }
+
+        let item = QueuedPrompt(
+            id: id,
+            blocks: ACPSessionRunner.blocks(text: text, attachments: []),
+            delegatedSource: source
+        )
+        session.queue.append(item)
+        let fence = leaseFence(sessionId: sessionId)
+        let items = session.queue
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }
+        guard await task.value == true else {
+            if let index = session.queue.firstIndex(where: { $0.id == item.id }) {
+                session.queue.remove(at: index)
+            }
             return false
         }
         runners[sessionId]?.flushQueueIfIdle()

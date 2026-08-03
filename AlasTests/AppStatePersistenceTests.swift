@@ -45,6 +45,355 @@ struct AppStatePersistenceTests {
         }
     }
 
+    @Test func missionBaseReferenceNormalizesOnlyKnownRemoteAliases() {
+        #expect(MissionBaseReference.remoteName(
+            in: "upstream/main",
+            knownRemoteNames: ["origin", "upstream"]
+        ) == "upstream")
+        #expect(MissionBaseReference.remoteName(
+            in: "release/1.0",
+            knownRemoteNames: ["origin", "upstream"]
+        ) == nil)
+        #expect(MissionBaseReference.remoteName(
+            in: "team/origin/main",
+            knownRemoteNames: ["team", "team/origin"]
+        ) == "team/origin")
+        #expect(MissionBaseReference.resolveLegacyRemoteName(
+            in: "upstream/main",
+            knownRemoteNames: ["canonical"],
+            localBranchNames: ["main"],
+            branchNames: ["main", "canonical/main"]
+        ) == "upstream")
+        #expect(MissionBaseReference.resolveLegacyRemoteName(
+            in: "release/1.0",
+            knownRemoteNames: ["origin"],
+            localBranchNames: [],
+            branchNames: ["origin/release/1.0"]
+        ) == "")
+        #expect(MissionBaseReference.resolveLegacyRemoteName(
+            in: "release/1.0",
+            knownRemoteNames: ["origin", "release"],
+            localBranchNames: ["release/1.0"],
+            branchNames: ["release/1.0", "origin/release/1.0"]
+        ) == "")
+        #expect(MissionBaseReference.resolveLegacyRemoteName(
+            in: "team/origin/main",
+            knownRemoteNames: ["team", "team/origin"],
+            localBranchNames: [],
+            branchNames: ["team/origin/main"]
+        ) == "team/origin")
+        #expect(MissionBaseReference.branchName(
+            "origin/main",
+            persistedRemoteName: "origin"
+        ) == "main")
+        #expect(MissionBaseReference.branchName(
+            "upstream/feature/release",
+            persistedRemoteName: "upstream"
+        ) == "feature/release")
+        #expect(MissionBaseReference.branchName(
+            "team/origin/main",
+            persistedRemoteName: "team/origin"
+        ) == "main")
+        #expect(MissionBaseReference.branchName(
+            "release/1.0",
+            persistedRemoteName: nil
+        ) == "release/1.0")
+    }
+
+    @Test func missionReviewRemoteUsesPersistedProviderForEnterpriseHost() throws {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.example.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let remote = try #require(AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "origin/main",
+            remotes: [GitRemote(name: "origin", url: "git@github.example.com:acme/alas.git")]
+        ))
+
+        #expect(remote.kind == .github)
+        #expect(remote.host == identity.host)
+        #expect(remote.repositorySlug == identity.repositorySlug)
+    }
+
+    @Test func missionReviewRemotePrefersTheLongestMatchingAlias() throws {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remote = try #require(AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "team/origin/main",
+            remotes: [
+                GitRemote(name: "team", url: "git@github.com:acme/alas.git"),
+                GitRemote(name: "team/origin", url: "git@github.com:acme/alas.git"),
+            ]
+        ))
+
+        #expect(remote.remoteName == "team/origin")
+    }
+
+    @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
+        let current = try #require(CodeHostRemoteDetector.detect(
+            from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],
+            matching: .github
+        ))
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let query = AppState.missionIssueQueryRemote(identity: identity, candidates: [current])
+
+        #expect(query.repositorySlug == "acme/alas")
+        #expect(query.host == "github.com")
+        #expect(query.remoteName == "origin")
+        #expect(query.webURL == URL(string: "https://github.com/acme/alas"))
+    }
+
+    @Test func missionIssueQueryKeepsAnExactCurrentRemote() throws {
+        let current = try #require(CodeHostRemoteDetector.detect(
+            from: [GitRemote(name: "upstream", url: "git@gitlab.example.com:platform/mobile/alas.git")],
+            matching: .gitlab
+        ))
+        let identity = MissionIssueIdentity(
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            repositorySlug: "platform/mobile/alas",
+            number: 77
+        )
+
+        let query = AppState.missionIssueQueryRemote(identity: identity, candidates: [current])
+
+        #expect(query == current)
+    }
+
+    @Test func startupCanonicalRefreshIsLimitedToSameHostSlugChanges() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        #expect(AppState.missionRepositoryNeedsCanonicalRefresh(
+            identity: identity,
+            remotes: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")]
+        ))
+        #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
+            identity: identity,
+            remotes: [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
+        ))
+        #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
+            identity: identity,
+            remotes: [GitRemote(name: "origin", url: "git@gitlab.com:acquired/renamed-alas.git")]
+        ))
+    }
+
+    @Test func missionBranchOwnerPrefersTheBranchTrackingRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "fork",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
+    @Test func missionBranchOwnerPrefersTheConfiguredPushRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "upstream/main",
+            branchRemoteName: "upstream",
+            pushRemoteName: "fork",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
+    @Test func effectiveMissionPushRemoteUsesGitPrecedence() {
+        #expect(AppState.effectiveMissionPushRemote(
+            branchPushRemoteName: "fork",
+            defaultPushRemoteName: "personal",
+            branchRemoteName: "upstream"
+        ) == "fork")
+        #expect(AppState.effectiveMissionPushRemote(
+            branchPushRemoteName: "",
+            defaultPushRemoteName: "personal",
+            branchRemoteName: "upstream"
+        ) == "personal")
+        #expect(AppState.effectiveMissionPushRemote(
+            branchPushRemoteName: "",
+            defaultPushRemoteName: "",
+            branchRemoteName: "upstream"
+        ) == "upstream")
+    }
+
+    @Test func missionBranchOwnerAcceptsRenamedForkTrackingRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/renamed-alas.git"),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "fork",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
+    @Test func missionBranchOwnerPrefersTheBranchTrackingRemotePushURL() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "origin",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
+    @Test func missionBranchOwnerPrefersOriginPushURLWithoutTrackingRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "",
+            remotes: remotes
+        )
+
+        #expect(owner == "nacho")
+    }
+
+    @Test func missionBranchOwnerFallsBackToTheBaseRemote() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
+
+        let owner = AppState.missionBranchOwner(
+            identity: identity,
+            baseRef: "origin/main",
+            branchRemoteName: "",
+            remotes: remotes
+        )
+
+        #expect(owner == "acme")
+    }
+
+    @Test func missionPaneBaseRefRequalifiesAStaleRemoteAlias() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let baseRef = AppState.missionPaneBaseRef(
+            identity: identity,
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
+        )
+
+        #expect(baseRef == "upstream/main")
+    }
+
+    @Test func missionPaneBaseRefPreservesAnUnqualifiedSlashBranch() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let baseRef = AppState.missionPaneBaseRef(
+            identity: identity,
+            baseRef: "release/1.0",
+            persistedRemoteName: "",
+            remotes: [GitRemote(name: "release", url: "git@github.com:acme/alas.git")]
+        )
+
+        #expect(baseRef == "release/1.0")
+    }
+
+    @Test func missionPaneCallbackUsesThePersistedBaseRef() {
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.legs[0].worktreeId = "worktree-1"
+
+        let baseRef = AppState.missionCallbackBaseRef(
+            worktreeID: "worktree-1",
+            paneBaseRef: "upstream/main",
+            aggregates: [aggregate]
+        )
+
+        #expect(baseRef == "origin/main")
+    }
+
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
         let state = AppState(store: FailingStore()) { title, message in
@@ -136,5 +485,330 @@ struct AppStatePersistenceTests {
         ]
         #expect(tracker.consumeChange(in: languageServerConfig) == true)
         #expect(tracker.consumeChange(in: languageServerConfig) == false)
+    }
+
+    @Test func archivingMissionWorktreeRecordsExplicitReadySignal() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence
+        )
+        let worktree = Self.worktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+        let aggregate = try await Self.waitForMissionState(.readyToComplete, persistence: persistence)
+
+        #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path))
+        #expect(aggregate.events.last?.kind == .ready)
+        #expect(aggregate.events.last?.message == "Worktree archived in Alas.")
+    }
+
+    @Test func archivingMissionWorktreeRecordsReadyBeforeSelectionCleanup() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence
+        )
+        let worktree = Self.worktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectedWorktreeId = worktree.id
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+
+        #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path))
+        #expect(state.selectedWorktreeId == worktree.id)
+
+        _ = try await Self.waitForMissionState(.readyToComplete, persistence: persistence)
+        #expect(state.selectedWorktreeId == nil)
+    }
+
+    @Test func deferredMissionArchiveKeepsANewerSelection() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let recorder = ArchiveRecorderGate()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence,
+            missionArchiveRecorder: { _ in await recorder.waitForRelease() }
+        )
+        let worktree = Self.worktree
+        let other = Self.otherWorktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.projectsManager.insertOptimisticWorktree(other)
+        state.tabs.appendTerminal(worktreeId: worktree.id, title: "term", sessionId: "session")
+        state.selectedWorktreeId = worktree.id
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+        await recorder.waitUntilStarted()
+        state.selectedWorktreeId = other.id
+        await recorder.release()
+        let tabsClosed = await Self.waitForTabsToClose(worktreeId: worktree.id, state: state)
+
+        #expect(tabsClosed)
+        #expect(state.selectedWorktreeId == other.id)
+    }
+
+    @Test func deferredMissionArchiveDoesNothingAfterUnarchive() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let recorder = ArchiveRecorderGate()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence,
+            missionArchiveRecorder: { _ in await recorder.waitForRelease() }
+        )
+        let worktree = Self.worktree
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.tabs.appendTerminal(worktreeId: worktree.id, title: "term", sessionId: "session")
+        state.selectedWorktreeId = worktree.id
+        await state.missions.load()
+
+        state.archiveWorktree(worktree)
+        await recorder.waitUntilStarted()
+        state.unarchiveWorktree(projectId: project.id, path: worktree.path)
+        await recorder.release()
+        await Task.yield()
+        await Task.yield()
+
+        #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path) == false)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).count == 1)
+        #expect(state.selectedWorktreeId == worktree.id)
+        let aggregate = try #require(try await persistence.aggregate(id: MissionID(rawValue: "mission-1")))
+        #expect(aggregate.mission.state == .running)
+    }
+
+    @Test func startupMissionReconciliationLoadsMergedReviewBeforePaneCreation() async throws {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("startup-mission-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        #expect(try await Process.git(["init"], cwd: repository).exitCode == 0)
+        #expect(try await Process.git([
+            "remote", "add", "upstream", "git@github.com:acme/alas.git",
+        ], cwd: repository).exitCode == 0)
+        let project = ProjectConfig(
+            id: Self.project.id,
+            name: Self.project.name,
+            path: repository.path,
+            color: Self.project.color,
+            addedAt: Self.project.addedAt
+        )
+        let worktree = Worktree(
+            id: Self.worktree.id,
+            projectId: Self.worktree.projectId,
+            name: Self.worktree.name,
+            branch: Self.worktree.branch,
+            path: repository,
+            status: Self.worktree.status,
+            lastActivity: Self.worktree.lastActivity,
+            lineageID: Self.worktree.lineageID
+        )
+        let persistence = try Self.makeMissionPersistence(worktree: worktree)
+        var requestedWorktreeIDs: [String] = []
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence,
+            missionStartupReviewSnapshot: { worktree, baseRef in
+                requestedWorktreeIDs.append(worktree.id)
+                #expect(baseRef == "upstream/main")
+                return Self.mergedReviewSnapshot()
+            },
+            missionBranchTipOverride: { projectID, branch in
+                #expect(projectID == project.id)
+                #expect(branch == worktree.branch)
+                return "abc123"
+            }
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+
+        #expect(state.rightPaneStore.reviewSnapshot(
+            worktreeId: worktree.id,
+            baseBranch: state.config.worktrees.baseBranch
+        ) == nil)
+        await state.reconcileMissionsForStartup()
+        let aggregate = try await Self.waitForMissionState(.readyToComplete, persistence: persistence)
+
+        #expect(requestedWorktreeIDs == [worktree.id])
+        #expect(aggregate.primaryLeg?.reviewIdentity?.number == 91)
+    }
+
+    @Test func removingMissionProjectRecordsAttentionWithoutDeletingMission() async throws {
+        let project = Self.project
+        let persistence = try Self.makeMissionPersistence()
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: .init(projects: [project])),
+            missionPersistence: persistence
+        )
+        await state.missions.load()
+
+        #expect(state.removeProject(id: project.id))
+        let aggregate = try await Self.waitForMissionState(.needsAttention, persistence: persistence)
+
+        #expect(aggregate.mission.attentionReason == "The Mission project is no longer available.")
+        #expect(aggregate.issue.identity == MissionFixtures.issue().identity)
+        #expect(aggregate.primaryLeg?.projectId == project.id)
+    }
+
+    private static let project = ProjectConfig(
+        id: "project-1",
+        name: "Alas",
+        path: "/tmp/alas",
+        color: "teal",
+        addedAt: Date(timeIntervalSince1970: 100)
+    )
+
+    private static let worktree = Worktree(
+        id: "worktree-1",
+        projectId: "project-1",
+        name: "fix/parser-crash",
+        branch: "fix/parser-crash",
+        path: URL(fileURLWithPath: "/tmp/alas-mission"),
+        status: .clean,
+        lastActivity: Date(timeIntervalSince1970: 100),
+        lineageID: "lineage-1"
+    )
+
+    private static let otherWorktree = Worktree(
+        id: "worktree-2",
+        projectId: "project-1",
+        name: "other",
+        branch: "other",
+        path: URL(fileURLWithPath: "/tmp/alas-other"),
+        status: .clean,
+        lastActivity: Date(timeIntervalSince1970: 100)
+    )
+
+    private static func makeMissionPersistence(worktree: Worktree = worktree) throws -> MissionPersistence {
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.mission.setupCheckpoint = .running
+        let leg = aggregate.legs[0]
+        aggregate.legs[0] = MissionLeg(
+            id: leg.id,
+            missionID: leg.missionID,
+            ordinal: leg.ordinal,
+            projectId: leg.projectId,
+            baseRef: leg.baseRef,
+            baseRemoteName: leg.baseRemoteName,
+            branch: leg.branch,
+            destinationPath: worktree.path.path,
+            worktreeId: worktree.id,
+            worktreeLineageID: worktree.lineageID,
+            agentId: leg.agentId,
+            acpSessionId: "session-1",
+            initialPromptId: leg.initialPromptId,
+            pendingInitialPrompt: nil,
+            reviewIdentity: leg.reviewIdentity
+        )
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("app-state-mission-\(UUID().uuidString).sqlite")
+            .path
+        let store = try MissionStore(path: path)
+        try store.insert(aggregate)
+        return MissionPersistence(path: path)
+    }
+
+    private static func waitForMissionState(
+        _ state: MissionState,
+        persistence: MissionPersistence
+    ) async throws -> MissionAggregate {
+        for _ in 0..<100 {
+            if let aggregate = try await persistence.aggregate(id: MissionID(rawValue: "mission-1")),
+               aggregate.mission.state == state {
+                return aggregate
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return try #require(try await persistence.aggregate(id: MissionID(rawValue: "mission-1")))
+    }
+
+    private static func waitForTabsToClose(worktreeId: String, state: AppState) async -> Bool {
+        for _ in 0..<100 {
+            if state.tabs.tabs(forWorktree: worktreeId).isEmpty {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return state.tabs.tabs(forWorktree: worktreeId).isEmpty
+    }
+
+    private static func mergedReviewSnapshot() -> ReviewLoopSnapshot {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "acme",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/acme/alas")!
+        )
+        return ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "fix/parser-crash",
+                headSHA: "abc123",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 1,
+                hasUpstream: true,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: ReviewRequest(
+                remote: remote,
+                number: 91,
+                title: "Mission review",
+                url: URL(string: "https://github.com/acme/alas/pull/91")!,
+                state: .merged,
+                isDraft: false,
+                headRefName: "fix/parser-crash",
+                baseRefName: "main",
+                headSHA: "abc123",
+                reviewDecision: .approved,
+                mergeState: .clean,
+                checks: [],
+                threads: []
+            ),
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
+    }
+}
+
+@MainActor
+private final class ArchiveRecorderGate {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        started = true
+        let waiters = startWaiters
+        startWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }

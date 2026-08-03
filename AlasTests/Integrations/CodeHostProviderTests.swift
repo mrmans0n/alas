@@ -40,6 +40,34 @@ struct CodeHostProviderTests {
         #expect(provider?.capabilities.canOpenReviewRequest == true)
     }
 
+    @Test func issueErrorClassificationRecognizesGitLabForbiddenPhrase() {
+        let remote = Self.remote(kind: .gitlab)
+        let result = ProcessResult(exitCode: 1, stdout: "", stderr: "glab: 403 Forbidden")
+
+        #expect(CodeHostIssueProviderError.classification(
+            provider: .gitlab,
+            remote: remote,
+            number: 77,
+            result: result
+        ) == .permissionDenied(host: remote.host))
+    }
+
+    @Test func issueErrorClassificationDoesNotTreatIssueNumbersAsStatuses() {
+        let remote = Self.remote(kind: .github)
+        let result = ProcessResult(
+            exitCode: 1,
+            stdout: "",
+            stderr: "failed while loading /repos/acme/alas/issues/404; see issue #403 for context"
+        )
+
+        #expect(CodeHostIssueProviderError.classification(
+            provider: .github,
+            remote: remote,
+            number: 77,
+            result: result
+        ) == nil)
+    }
+
     @Test func processRunnerUsesShellResolvedPath() async throws {
         let prior = ShellEnvResolver.shared.resolvedPath
         ShellEnvResolver.shared.resolvedPath = "/custom/provider/bin:/usr/bin:/bin"
@@ -183,6 +211,17 @@ struct CodeHostProviderTests {
 
     @Test func readOnlyCapabilitiesDisallowMerge() {
         #expect(!CodeHostProviderCapabilities.readOnly.canMerge)
+    }
+
+    private static func remote(kind: CodeHostKind) -> CodeHostRemote {
+        CodeHostRemote(
+            kind: kind,
+            host: "\(kind.displayName.lowercased()).example.com",
+            owner: "acme",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://\(kind.displayName.lowercased()).example.com/acme/alas")!
+        )
     }
 
     @Test func defaultFeedbackEvidenceSynthesizesChangesRequestedWhenThreadsAreMissing() async throws {

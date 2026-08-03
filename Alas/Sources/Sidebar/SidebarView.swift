@@ -9,6 +9,7 @@ struct SidebarView: View {
     let onEditProject: (_ projectId: String) -> Void
     let onRemoveProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
+    let onNewMission: () -> Void
     let onHideSidebar: () -> Void
     @Environment(\.theme) var theme
     @State private var spaceTitleVisible = false
@@ -32,6 +33,14 @@ struct SidebarView: View {
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
+                        MissionSidebarSection(
+                            model: missionSidebarModel,
+                            selectedMissionID: selectedMissionID,
+                            onOpenMission: { missionID in
+                                _ = state.openMission(id: missionID)
+                            },
+                            onNewMission: onNewMission
+                        )
                         ForEach(state.activeSpaceProjects) { project in
                             RepoGroupView(
                                 project: project,
@@ -257,5 +266,24 @@ struct SidebarView: View {
             guard !Task.isCancelled else { return }
             spaceTitleVisible = false
         }
+    }
+
+    private var missionSidebarModel: MissionSidebarModel {
+        state.missions.sidebarModel(
+            activeProjectIds: state.spacesManager.activeSpace?.projectIds ?? state.projects.map(\.id),
+            existingProjectIds: state.projects.map(\.id),
+            knownWorktreeIds: state.allWorktreeIds()
+        )
+    }
+
+    private var selectedMissionID: MissionID? {
+        if let tabState = state.missingMissionTab {
+            return tabState.missionID
+        }
+        guard let worktreeID = state.selectedWorktreeId,
+              let tab = state.tabs.activeTab(forWorktree: worktreeID),
+              case .mission(let tabState) = tab
+        else { return nil }
+        return tabState.missionID
     }
 }

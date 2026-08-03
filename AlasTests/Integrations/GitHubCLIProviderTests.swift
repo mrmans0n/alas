@@ -3,6 +3,107 @@ import Testing
 @testable import Alas
 
 struct GitHubCLIProviderTests {
+    @Test func issueUsesHostAwareAPIAndMapsSnapshot() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: ""),
+        ])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(
+            remote: Self.enterpriseRemote,
+            number: 1842,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.identity == MissionIssueIdentity(
+            provider: .github,
+            host: "github.example.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 1842
+        ))
+        #expect(issue.labels == ["bug", "remote"])
+        #expect(issue.assignees == ["nacho"])
+        #expect(issue.state == .open)
+        #expect(issue.canonicalURL == URL(string: "https://github.example.com/mrmans0n/alas/issues/1842"))
+        #expect(await runner.commands.first?.args == [
+            "api", "--hostname", "github.example.com", "repos/mrmans0n/alas/issues/1842",
+        ])
+    }
+
+    @Test func issueClassifiesNotFoundAndPermissionDenied() async {
+        let notFoundRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "{\"message\":\"Not Found\",\"status\":404}", stderr: "gh: Not Found (HTTP 404)"),
+        ])
+        let permissionRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "gh: Resource not accessible by integration (HTTP 403)"),
+        ])
+
+        await #expect(throws: CodeHostIssueProviderError.notFound(
+            provider: .github, repositorySlug: "mrmans0n/alas", number: 1842
+        )) {
+            try await GitHubCLIProvider(runner: notFoundRunner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+        await #expect(throws: CodeHostIssueProviderError.permissionDenied(host: "github.example.com")) {
+            try await GitHubCLIProvider(runner: permissionRunner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+    }
+
+    @Test func issueRejectsURLWithoutHost() async {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "https://github.example.com/mrmans0n/alas/issues/1842",
+            with: "https:///no-host"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("GitHub issue output is missing a valid URL.")) {
+            try await GitHubCLIProvider(runner: runner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+    }
+
+    @Test func issueNormalizesIdentityComponents() async throws {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "GITHUB.EXAMPLE.COM",
+            owner: "MrMans0n",
+            repository: "Alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.example.com/MrMans0n/Alas")!
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: "")])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(remote: remote, number: 1842, cwd: Self.cwd)
+
+        #expect(issue.identity.host == "github.example.com")
+        #expect(issue.identity.repositorySlug == "mrmans0n/alas")
+    }
+
+    @Test func issueUsesCanonicalURLIdentityAfterRepositoryRename() async throws {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "https://github.example.com/mrmans0n/alas/issues/1842",
+            with: "https://github.example.com/openai/renamed-alas/issues/1842"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(
+            remote: Self.enterpriseRemote,
+            number: 1842,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.identity.repositorySlug == "openai/renamed-alas")
+    }
+
+    @Test func issuePreservesGenericCommandFailureForUnstructuredNotFoundText() async {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "local cache entry not found"),
+        ])
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "gh api issue", stderr: "local cache entry not found"
+        )) {
+            try await GitHubCLIProvider(runner: runner).issue(remote: Self.enterpriseRemote, number: 1842, cwd: Self.cwd)
+        }
+    }
+
     @Test func prListJSONParsesReviewRequest() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """
@@ -243,6 +344,102 @@ struct GitHubCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
+    }
+
+    @Test func missionReviewRequestIncludesCompletedPullRequests() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(await runner.commands.first?.args.contains("all") == true)
+        #expect(await runner.commands.first?.args.contains("open") == false)
+    }
+
+    @Test func missionReviewRequestPreservesAnUnqualifiedSlashBaseMatchingTheRemoteName() async throws {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: Self.remote.host,
+            owner: Self.remote.owner,
+            repository: Self.remote.repository,
+            remoteName: "release",
+            webURL: Self.remote.webURL
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
+        ])
+
+        _ = try await GitHubCLIProvider(runner: runner).missionReviewRequest(
+            remote: remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "release/1.0",
+            cwd: Self.cwd
+        )
+
+        let args = try #require(await runner.commands.first?.args)
+        let baseIndex = try #require(args.firstIndex(of: "--base"))
+        #expect(args[baseIndex + 1] == "release/1.0")
+    }
+
+    @Test func missionReviewRequestPrefersMergedPullRequestOverClosedMatch() async throws {
+        let listOutput = """
+        [
+          {
+            "number": 43,
+            "title": "Closed replacement",
+            "url": "https://github.com/mrmans0n/alas/pull/43",
+            "state": "CLOSED",
+            "isDraft": false,
+            "headRefName": "feature/github-provider",
+            "headRefOid": "head-sha-42",
+            "baseRefName": "main",
+            "baseRefOid": "base-sha-42",
+            "reviewDecision": "",
+            "mergeStateStatus": "UNKNOWN"
+          },
+          {
+            "number": 42,
+            "title": "Merged change",
+            "url": "https://github.com/mrmans0n/alas/pull/42",
+            "state": "MERGED",
+            "isDraft": false,
+            "headRefName": "feature/github-provider",
+            "headRefOid": "head-sha-42",
+            "baseRefName": "main",
+            "baseRefOid": "base-sha-42",
+            "reviewDecision": "APPROVED",
+            "mergeStateStatus": "UNKNOWN"
+          }
+        ]
+        """
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: listOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            headSHA: "head-sha-42",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(request?.state == .merged)
     }
 
     @Test func currentReviewRequestEnrichesMergeQueueMetadata() async throws {
@@ -1125,6 +1322,72 @@ struct GitHubCLIProviderTests {
 
         #expect(request.number == 42)
         #expect(request.title == "My fork")
+    }
+
+    @Test func prListMatchesHeadOwnerIgnoringCase() throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(
+            """
+            [
+              {
+                "number": 42,
+                "title": "My fork",
+                "url": "https://github.com/mrmans0n/alas/pull/42",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRepositoryOwner": { "login": "myorg" },
+                "baseRefName": "main",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN"
+              }
+            ]
+            """,
+            remote: Self.remote,
+            headOwner: "MyOrg"
+        ))
+
+        #expect(request.number == 42)
+    }
+
+    @Test func prListFiltersByHeadSHAAmongMatchingOwners() throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(
+            """
+            [
+              {
+                "number": 41,
+                "title": "Newer stale review",
+                "url": "https://github.com/mrmans0n/alas/pull/41",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRefOid": "stale-sha",
+                "headRepositoryOwner": { "login": "nacho" },
+                "baseRefName": "main",
+                "reviewDecision": "REVIEW_REQUIRED",
+                "mergeStateStatus": "CLEAN"
+              },
+              {
+                "number": 42,
+                "title": "Matching merged review",
+                "url": "https://github.com/mrmans0n/alas/pull/42",
+                "state": "MERGED",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRefOid": "matching-sha",
+                "headRepositoryOwner": { "login": "nacho" },
+                "baseRefName": "main",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN"
+              }
+            ]
+            """,
+            remote: Self.remote,
+            headOwner: "nacho",
+            headSHA: "matching-sha"
+        ))
+
+        #expect(request.number == 42)
+        #expect(request.headSHA == "matching-sha")
     }
 
     @Test func prListReturnsNilWhenHeadOwnerDoesNotMatch() throws {
@@ -2522,6 +2785,28 @@ struct GitHubCLIProviderTests {
           "clientMutationId": "comment-1"
         }
       }
+    }
+    """
+
+    private static let enterpriseRemote = CodeHostRemote(
+        kind: .github,
+        host: "github.example.com",
+        owner: "mrmans0n",
+        repository: "alas",
+        remoteName: "origin",
+        webURL: URL(string: "https://github.example.com/mrmans0n/alas")!
+    )
+
+    private static let issueOutput = """
+    {
+      "number": 1842,
+      "title": "Fix remote issue loading",
+      "body": "Load the issue through the API.",
+      "state": "open",
+      "html_url": "https://github.example.com/mrmans0n/alas/issues/1842",
+      "updated_at": "2026-08-01T10:20:30Z",
+      "labels": [{ "name": "bug" }, { "name": "remote" }],
+      "assignees": [{ "login": "nacho" }]
     }
     """
 

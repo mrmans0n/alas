@@ -11,12 +11,19 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
     let message: String
 }
 
+enum RootWorkspaceVisibilityPolicy {
+    static func showsWorkspace(hasProjects: Bool, hasMissions: Bool) -> Bool {
+        hasProjects || hasMissions
+    }
+}
+
 struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
     @State private var newWorktreePresentation: NewWorktreePresentation?
+    @State private var newMissionPresentation: NewMissionPresentation?
     @State private var commitReviewSessionLaunchError: CommitReviewSessionLaunchError?
     @Environment(\.openWindow) private var openWindow
 
@@ -49,7 +56,8 @@ struct RootView: View {
                 showNewProject: $showNewProject,
                 editingProject: $editingProject,
                 removingProject: $removingProject,
-                newWorktreePresentation: $newWorktreePresentation
+                newWorktreePresentation: $newWorktreePresentation,
+                newMissionPresentation: $newMissionPresentation
             ))
             .alert(
                 "Could not open review session",
@@ -71,6 +79,7 @@ struct RootView: View {
                 // Worktrees now exist — load any persisted tab files for them. Init
                 // can't do this because refreshAll runs async after init.
                 state.reloadTabs()
+                await state.reconcileMissionsForStartup()
                 if state.selectedWorktreeId == nil {
                     state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
                 }
@@ -92,13 +101,17 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if state.projects.isEmpty {
+        if !RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: !state.projects.isEmpty,
+            hasMissions: !state.missions.aggregates.isEmpty
+        ) {
             EmptyState(
                 canCreateWorktree: false,
                 onAddProject: { showNewProject = true },
                 onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
             )
         } else {
+            let rightPaneSelection = rightPaneSelectionState
             ThreePaneLayout(
                 sidebarWidth: Binding(
                     get: { state.config.sidebarWidth },
@@ -109,11 +122,11 @@ struct RootView: View {
                     set: { state.config.rightPaneWidth = $0 }
                 ),
                 sidebarVisible: state.config.sidebarVisible,
-                rightVisible: state.config.rightPaneVisible,
+                rightVisible: state.config.rightPaneVisible && rightPaneSelection.showsRightPane,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { centerContent() },
-                right: { rightContent }
+                right: { rightContent(selection: rightPaneSelection) }
             )
         }
     }
@@ -139,6 +152,9 @@ struct RootView: View {
             onNewWorktree: { projectId in
                 newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
             },
+            onNewMission: {
+                newMissionPresentation = NewMissionPresentation()
+            },
             onHideSidebar: {
                 state.config.sidebarVisible = false
                 state.saveConfig()
@@ -147,13 +163,8 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private var rightContent: some View {
-        let resolver = RightPaneSelectionStateResolver(
-            selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
-        )
-        switch resolver.resolve() {
+    private func rightContent(selection: RightPaneSelectionState) -> some View {
+        switch selection {
         case .empty:
             EmptyView()
         case .active(let wt):
@@ -190,6 +201,14 @@ struct RootView: View {
         }
     }
 
+    private var rightPaneSelectionState: RightPaneSelectionState {
+        RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
+        ).resolve()
+    }
+
     private func openSettingsWindow() {
         openWindow(id: "settings")
     }
@@ -199,7 +218,8 @@ struct RootView: View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
+            projectsManager: state.projectsManager,
+            allowsHiddenSelectedWorktree: allowsHiddenSelectedWorktreeForMission
         )
         switch resolver.resolve() {
         case .worktree(let wt):
@@ -225,15 +245,27 @@ struct RootView: View {
         case .creating(let wt):
             CreatingWorktreeView(worktree: wt)
         case .empty:
-            EmptyTabView(
-                onNewTerminal: {},
-                onNewAgentTerminal: {},
-                onNewAgentChat: {},
-                newTerminalShortcut: nil,
-                newAgentTerminalShortcut: nil,
-                newAgentChatShortcut: nil
-            )
+            if let tabState = state.missingMissionTab {
+                MissionTabView(state: state, worktree: nil, tabState: tabState)
+            } else {
+                EmptyTabView(
+                    onNewTerminal: {},
+                    onNewAgentTerminal: {},
+                    onNewAgentChat: {},
+                    newTerminalShortcut: nil,
+                    newAgentTerminalShortcut: nil,
+                    newAgentChatShortcut: nil
+                )
+            }
         }
+    }
+
+    private var allowsHiddenSelectedWorktreeForMission: Bool {
+        guard let worktreeID = state.selectedWorktreeId,
+              let tab = state.tabs.activeTab(forWorktree: worktreeID),
+              case .mission = tab
+        else { return false }
+        return true
     }
 
     private func selectedWorktree() -> Worktree? {
@@ -331,6 +363,7 @@ private struct RootPresentationHandlers: ViewModifier {
     @Binding var editingProject: ProjectConfig?
     @Binding var removingProject: ProjectConfig?
     @Binding var newWorktreePresentation: NewWorktreePresentation?
+    @Binding var newMissionPresentation: NewMissionPresentation?
 
     func body(content: Content) -> some View {
         content
@@ -355,6 +388,16 @@ private struct RootPresentationHandlers: ViewModifier {
                     set: { if !$0 { newWorktreePresentation = nil } }
                 ),
                 presetProjectId: presentation.projectId
+            )
+        }
+        .sheet(item: $newMissionPresentation) { _ in
+            NewMissionDialog(
+                presented: Binding(
+                    get: { newMissionPresentation != nil },
+                    set: { if !$0 { newMissionPresentation = nil } }
+                ),
+                projects: state.projects,
+                environment: .live(state: state)
             )
         }
         .sheet(item: $state.pendingRunScriptCreation) { presentation in
@@ -744,7 +787,7 @@ private struct RootBaseHandlers: ViewModifier {
                 let beforeIds = state.allWorktreeIds()
                 Task {
                     _ = await state.refreshAllProjectTopologies()
-                    state.cleanupMissingWorktrees(beforeIds: beforeIds)
+                    await state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasTerminateAllTerminals)) { _ in

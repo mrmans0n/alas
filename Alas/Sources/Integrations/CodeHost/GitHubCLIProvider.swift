@@ -1,8 +1,9 @@
 import Foundation
 
-struct GitHubCLIProvider: CodeHostProvider {
+struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     let kind: CodeHostKind = .github
     let capabilities: CodeHostProviderCapabilities = .githubCLI
+    let executable = "gh"
     static let pullRequestNodeQuery = """
     query($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
@@ -273,6 +274,21 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+        let result = try await runner.run(
+            executable,
+            args: ["api", "--hostname", remote.host, "repos/\(remote.repositorySlug)/issues/\(number)"],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            if let error = CodeHostIssueProviderError.classification(provider: kind, remote: remote, number: number, result: result) {
+                throw error
+            }
+            throw CodeHostProviderError.commandFailed(command: "gh api issue", stderr: result.stderr)
+        }
+        return try Self.parseIssue(result.stdout, remote: remote, requestedNumber: number)
+    }
+
     func currentReviewRequest(
         remote: CodeHostRemote,
         branch: String,
@@ -280,14 +296,56 @@ struct GitHubCLIProvider: CodeHostProvider {
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest? {
-        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            state: "open",
+            cwd: cwd
+        )
+    }
+
+    func missionReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        headSHA: String? = nil,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        try await reviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            headSHA: headSHA,
+            state: "all",
+            normalizeBaseBranch: false,
+            cwd: cwd
+        )
+    }
+
+    private func reviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        headSHA: String? = nil,
+        state: String,
+        normalizeBaseBranch: Bool = true,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        let base = normalizeBaseBranch
+            ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+            : baseBranch
         let result = try await runner.run(
             "gh",
             args: [
                 "pr", "list",
                 "--head", branch,
                 "--base", base,
-                "--state", "open",
+                "--state", state,
                 "--limit", "20",
                 "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
@@ -298,7 +356,13 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
         }
 
-        guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
+        guard let request = try Self.parsePRList(
+            result.stdout,
+            remote: remote,
+            headOwner: headOwner,
+            headSHA: headSHA,
+            preferMerged: state == "all"
+        ) else {
             return nil
         }
         let queueMetadata = await mergeQueueMetadata(remote: remote, number: request.number, cwd: cwd)
@@ -1324,7 +1388,13 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
-    static func parsePRList(_ json: String, remote: CodeHostRemote, headOwner: String? = nil) throws -> ReviewRequest? {
+    static func parsePRList(
+        _ json: String,
+        remote: CodeHostRemote,
+        headOwner: String? = nil,
+        headSHA: String? = nil,
+        preferMerged: Bool = false
+    ) throws -> ReviewRequest? {
         let data = Data(json.utf8)
         let items: [PRListItem]
         do {
@@ -1333,12 +1403,18 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh pr list output")
         }
 
-        let item: PRListItem?
-        if let headOwner, !headOwner.isEmpty {
-            item = items.first { $0.headRepositoryOwner?.login == headOwner }
-        } else {
-            item = items.first
+        let normalizedHeadSHA = normalizedOptionalString(headSHA)
+        let matchingItems = items.filter { item in
+            let ownerMatches = headOwner?.isEmpty != false
+                || item.headRepositoryOwner?.login.caseInsensitiveCompare(headOwner ?? "") == .orderedSame
+            let shaMatches = normalizedHeadSHA == nil
+                || normalizedOptionalString(item.headRefOid) == normalizedHeadSHA
+            return ownerMatches && shaMatches
         }
+        let item = preferMerged
+            ? matchingItems.first(where: { $0.state.caseInsensitiveCompare("merged") == .orderedSame })
+                ?? matchingItems.first
+            : matchingItems.first
         guard let item else {
             return nil
         }
@@ -1792,6 +1868,48 @@ struct GitHubCLIProvider: CodeHostProvider {
             return date
         }
         throw CodeHostProviderError.malformedOutput("Unable to parse GitHub date")
+    }
+
+    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> MissionIssueSnapshot {
+        let response: GitHubIssueResponse
+        do {
+            response = try JSONDecoder().decode(GitHubIssueResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitHub issue output.")
+        }
+        guard response.number == requestedNumber,
+              !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let url = try parseOptionalHTTPURL(response.htmlURL, context: "GitHub issue output is missing a valid URL.")
+        else {
+            throw CodeHostProviderError.malformedOutput("GitHub issue output is missing required fields.")
+        }
+        guard response.pullRequest == nil else {
+            throw CodeHostProviderError.malformedOutput("GitHub issue output describes a pull request, not an issue.")
+        }
+        guard case .url(let kind, let host, let repositorySlug, let number) = try MissionIssueInput.parse(url.absoluteString),
+              kind == .github,
+              host.caseInsensitiveCompare(remote.host) == .orderedSame,
+              number == response.number
+        else {
+            throw CodeHostProviderError.malformedOutput("GitHub issue output has an unexpected canonical URL.")
+        }
+        return MissionIssueSnapshot(
+            identity: MissionIssueIdentity(
+                provider: kind,
+                host: host,
+                repositorySlug: repositorySlug.lowercased(),
+                number: number
+            ),
+            canonicalURL: url,
+            title: response.title,
+            body: response.body ?? "",
+            state: MissionIssueState(rawValue: response.state.lowercased()) ?? .unknown,
+            labels: response.labels.compactMap { normalizedOptionalString($0.name) },
+            assignees: response.assignees.compactMap { normalizedOptionalString($0.login) },
+            providerUpdatedAt: try parseOptionalDate(response.updatedAt),
+            capturedAt: Date(),
+            refreshError: nil
+        )
     }
 
     private static func parseOptionalHTTPURL(_ value: String?, context: String) throws -> URL? {
@@ -2326,8 +2444,44 @@ private struct GitHubAnnotationResponse: Decodable {
     let raw_details: String?
 }
 
+private struct GitHubIssueResponse: Decodable {
+    let number: Int
+    let title: String
+    let body: String?
+    let state: String
+    let htmlURL: String?
+    let updatedAt: String?
+    let labels: [Label]
+    let assignees: [Assignee]
+    let pullRequest: PullRequestMarker?
+
+    private enum CodingKeys: String, CodingKey {
+        case number, title, body, state, labels, assignees
+        case htmlURL = "html_url"
+        case updatedAt = "updated_at"
+        case pullRequest = "pull_request"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        number = try container.decode(Int.self, forKey: .number)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decodeIfPresent(String.self, forKey: .body)
+        state = try container.decode(String.self, forKey: .state)
+        htmlURL = try container.decodeIfPresent(String.self, forKey: .htmlURL)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        labels = try container.decodeIfPresent([Label].self, forKey: .labels) ?? []
+        assignees = try container.decodeIfPresent([Assignee].self, forKey: .assignees) ?? []
+        pullRequest = try container.decodeIfPresent(PullRequestMarker.self, forKey: .pullRequest)
+    }
+
+    struct Label: Decodable { let name: String? }
+    struct Assignee: Decodable { let login: String? }
+    struct PullRequestMarker: Decodable {}
+}
+
 private extension URL {
     var isHTTPOrHTTPS: Bool {
-        scheme == "http" || scheme == "https"
+        (scheme == "http" || scheme == "https") && !(host ?? "").isEmpty
     }
 }

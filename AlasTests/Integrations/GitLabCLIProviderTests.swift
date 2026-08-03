@@ -4,6 +4,71 @@ import Testing
 @testable import Alas
 
 struct GitLabCLIProviderTests {
+    @Test func issueUsesEncodedSubgroupProjectAndMapsSnapshot() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: ""),
+        ])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+
+        #expect(issue.identity.repositorySlug == "platform/mobile/alas")
+        #expect(issue.labels == ["bug", "remote"])
+        #expect(issue.assignees == ["nacho"])
+        #expect(issue.state == .closed)
+        #expect(await runner.commands.first?.args == [
+            "api", "projects/platform%2Fmobile%2Falas/issues/77",
+            "--hostname", "gitlab.example.com", "--output", "json",
+        ])
+    }
+
+    @Test func issueMapsGitLabOpenedStateToOpen() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(
+                exitCode: 0,
+                stdout: Self.issueOutput.replacingOccurrences(of: "\"closed\"", with: "\"opened\""),
+                stderr: ""
+            ),
+        ])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+
+        #expect(issue.state == .open)
+    }
+
+    @Test func issueUsesCanonicalURLIdentityAfterRepositoryTransfer() async throws {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "https://gitlab.example.com/platform/mobile/alas/-/issues/77",
+            with: "https://gitlab.example.com/acquired/mobile/renamed-alas/-/issues/77"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(
+            remote: Self.remote,
+            number: 77,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.identity.repositorySlug == "acquired/mobile/renamed-alas")
+    }
+
+    @Test func issueClassifiesNotFoundAndPermissionDenied() async {
+        let notFoundRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "{\"message\":\"404 Project Not Found\"}", stderr: ""),
+        ])
+        let permissionRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "glab: 403 Forbidden"),
+        ])
+
+        await #expect(throws: CodeHostIssueProviderError.notFound(
+            provider: .gitlab, repositorySlug: "platform/mobile/alas", number: 77
+        )) {
+            try await GitLabCLIProvider(runner: notFoundRunner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+        }
+        await #expect(throws: CodeHostIssueProviderError.permissionDenied(host: "gitlab.example.com")) {
+            try await GitLabCLIProvider(runner: permissionRunner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+        }
+    }
+
     @Test func isAvailableReturnsTrueOnlyForVersionExitZero() async {
         let successRunner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "glab 1.101.0", stderr: ""),
@@ -499,6 +564,46 @@ struct GitLabCLIProviderTests {
         #expect(request.headRepositorySlug == "nacho/alas")
     }
 
+    @Test func mrListMatchesTheCompleteSourceProjectParentNamespace() throws {
+        let output = """
+        [
+          {
+            "iid": 42,
+            "title": "Nested subgroup MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "group/team/alas"
+          },
+          {
+            "iid": 43,
+            "title": "Exact namespace MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "opened",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "group/alas"
+          }
+        ]
+        """
+
+        let request = try #require(try GitLabCLIProvider.parseMRList(
+            output,
+            remote: Self.remote,
+            headOwner: "group",
+            headSHA: "matching-sha",
+            preferMerged: true
+        ))
+
+        #expect(request.number == 43)
+        #expect(request.headRepositoryOwner == "group")
+    }
+
     @Test func mrListReturnsNilWhenHeadOwnerMetadataDoesNotMatch() throws {
         let output = """
         [
@@ -528,6 +633,45 @@ struct GitLabCLIProviderTests {
         #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
     }
 
+    @Test func mrListFiltersByHeadSHAAmongMatchingOwners() throws {
+        let output = """
+        [
+          {
+            "iid": 41,
+            "title": "Newer stale review",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/41",
+            "state": "opened",
+            "draft": false,
+            "sha": "stale-sha",
+            "source_branch": "fix-ci",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "nacho/alas"
+          },
+          {
+            "iid": 42,
+            "title": "Matching merged review",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "fix-ci",
+            "target_branch": "main",
+            "source_project_path_with_namespace": "nacho/alas"
+          }
+        ]
+        """
+
+        let request = try #require(try GitLabCLIProvider.parseMRList(
+            output,
+            remote: Self.remote,
+            headOwner: "nacho",
+            headSHA: "matching-sha"
+        ))
+
+        #expect(request.number == 42)
+        #expect(request.headSHA == "matching-sha")
+    }
+
     @Test func mrListReturnsNilForAmbiguousHeadOwnerWithoutSourceProjectMetadata() throws {
         let output = """
         [
@@ -553,6 +697,41 @@ struct GitLabCLIProviderTests {
         """
 
         #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
+    }
+
+    @Test func mrListReturnsNilWhenSHAFilteringLeavesUnverifiableHeadOwner() throws {
+        let output = """
+        [
+          {
+            "iid": 42,
+            "title": "Stale fork MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "closed",
+            "draft": false,
+            "sha": "stale-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main"
+          },
+          {
+            "iid": 43,
+            "title": "Unverifiable merged MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main"
+          }
+        ]
+        """
+
+        #expect(try GitLabCLIProvider.parseMRList(
+            output,
+            remote: Self.remote,
+            headOwner: "nacho",
+            headSHA: "matching-sha",
+            preferMerged: true
+        ) == nil)
     }
 
     @Test func mrListFiltersByResolvedSourceProjectID() throws {
@@ -863,6 +1042,108 @@ struct GitLabCLIProviderTests {
             ],
             cwd: Self.cwd
         ))
+    }
+
+    @Test func missionReviewRequestIncludesCompletedMergeRequests() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+
+        let request = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(await runner.commands.first?.args.contains("--all") == true)
+    }
+
+    @Test func missionReviewRequestPreservesAnUnqualifiedSlashBaseMatchingTheRemoteName() async throws {
+        let remote = CodeHostRemote(
+            kind: .gitlab,
+            host: Self.remote.host,
+            owner: Self.remote.owner,
+            repository: Self.remote.repository,
+            remoteName: "release",
+            webURL: Self.remote.webURL
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
+        ])
+
+        _ = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: remote,
+            branch: "feature/gitlab-provider",
+            headOwner: nil,
+            baseBranch: "release/1.0",
+            cwd: Self.cwd
+        )
+
+        let args = try #require(await runner.commands.first?.args)
+        let baseIndex = try #require(args.firstIndex(of: "--target-branch"))
+        #expect(args[baseIndex + 1] == "release/1.0")
+    }
+
+    @Test func missionReviewRequestPrefersMergedMergeRequestOverClosedMatch() async throws {
+        let listOutput = """
+        [
+          {
+            "iid": 43,
+            "title": "Closed replacement",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "closed",
+            "draft": false,
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "sha": "head123",
+            "merge_status": "cannot_be_merged",
+            "detailed_merge_status": "not_open"
+          },
+          {
+            "iid": 42,
+            "title": "Merged change",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "merged",
+            "draft": false,
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "sha": "head123",
+            "merge_status": "can_be_merged",
+            "detailed_merge_status": "mergeable"
+          }
+        ]
+        """
+        let mergedViewOutput = Self.mrViewOutput.replacingOccurrences(
+            of: #""state": "opened""#,
+            with: #""state": "merged""#
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: listOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: mergedViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+
+        let request = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            headSHA: "head123",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(request?.state == .merged)
+        #expect(await runner.commands[1].args.contains("42"))
     }
 
     @Test func reviewDiffUsesMRDiffCommand() async throws {
@@ -1503,6 +1784,25 @@ struct GitLabCLIProviderTests {
             args: ["mr", "view", "43", "--output", "json", "-R", "platform/mobile/alas"],
             cwd: Self.cwd
         ))
+    }
+
+    @Test func missionReviewRequestSkipsInaccessibleSameSHASourceProjects() async throws {
+        let runner = SHAFilteringRunner()
+
+        let request = try? await GitLabCLIProvider(runner: runner).missionReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: "nacho",
+            baseBranch: "origin/main",
+            headSHA: "matching-sha",
+            cwd: Self.cwd
+        )
+        let commands = await runner.commands
+
+        #expect(request?.number == 43)
+        #expect(request?.headSHA == "matching-sha")
+        #expect(commands.contains { $0.starts(with: ["api", "projects/1001"]) })
+        #expect(commands.contains { $0.starts(with: ["api", "projects/1002"]) })
     }
 
     @Test func currentReviewRequestResolvesSingleSourceProjectIDBeforeFiltering() async throws {
@@ -2949,6 +3249,19 @@ struct GitLabCLIProviderTests {
     }
     """
 
+    private static let issueOutput = """
+    {
+      "iid": 77,
+      "title": "Fix subgroup issue loading",
+      "description": "Load an issue from a subgroup.",
+      "state": "closed",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/issues/77",
+      "updated_at": "2026-08-01T10:20:30.123Z",
+      "labels": ["bug", "remote"],
+      "assignees": [{ "username": "nacho" }]
+    }
+    """
+
     private actor FakeRunner: CodeHostCommandRunning {
         struct Command: Equatable {
             let executable: String
@@ -2978,5 +3291,79 @@ struct GitLabCLIProviderTests {
             }
             return results.removeFirst()
         }
+    }
+
+    private actor SHAFilteringRunner: CodeHostCommandRunning {
+        private(set) var commands: [[String]] = []
+
+        func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+            _ = executable
+            _ = cwd
+            _ = stdin
+            commands.append(args)
+            if args.starts(with: ["mr", "list"]) {
+                return ProcessResult(exitCode: 0, stdout: Self.listOutput, stderr: "")
+            }
+            if args.starts(with: ["api", "projects/1001"]) {
+                return ProcessResult(exitCode: 1, stdout: "", stderr: "project unavailable")
+            }
+            if args.starts(with: ["api", "projects/1002"]) {
+                return ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"nacho/alas"}"#, stderr: "")
+            }
+            if args.starts(with: ["mr", "view", "43"]) {
+                return ProcessResult(exitCode: 0, stdout: Self.viewOutput, stderr: "")
+            }
+            if args.starts(with: ["mr", "note", "list"]) {
+                return ProcessResult(exitCode: 0, stdout: "[]", stderr: "")
+            }
+            if args.starts(with: ["api", "user"]) {
+                return ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: "")
+            }
+            if args.starts(with: ["ci", "get"]) {
+                return ProcessResult(exitCode: 0, stdout: #"{"id":1,"status":"success","jobs":[]}"#, stderr: "")
+            }
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
+        }
+
+        private static let listOutput = """
+        [
+          {
+            "iid": 42,
+            "title": "Unrelated stale MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+            "state": "opened",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_id": 1001
+          },
+          {
+            "iid": 43,
+            "title": "Matching merged MR",
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+            "state": "merged",
+            "draft": false,
+            "sha": "matching-sha",
+            "source_branch": "feature/gitlab-provider",
+            "target_branch": "main",
+            "source_project_id": 1002
+          }
+        ]
+        """
+
+        private static let viewOutput = """
+        {
+          "iid": 43,
+          "title": "Matching merged MR",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+          "state": "merged",
+          "draft": false,
+          "sha": "matching-sha",
+          "source_branch": "feature/gitlab-provider",
+          "target_branch": "main",
+          "source_project_path_with_namespace": "nacho/alas"
+        }
+        """
     }
 }

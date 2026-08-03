@@ -34,6 +34,19 @@ enum CodeHostRemoteDetector {
         ).first
     }
 
+    static func detect(from remotes: [GitRemote], matching kind: CodeHostKind) -> CodeHostRemote? {
+        remotes
+            .filter { $0.direction == .fetch }
+            .sorted { lhs, rhs in
+                let lhsPriority = priority(for: lhs.name, preferredRemoteName: nil)
+                let rhsPriority = priority(for: rhs.name, preferredRemoteName: nil)
+                if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+                return lhs.name < rhs.name
+            }
+            .compactMap { parse(remote: $0, supportedKinds: nil, kindOverride: kind) }
+            .first
+    }
+
     static func detectAll(
         from remotes: [GitRemote],
         supportedKinds: Set<CodeHostKind>? = nil,
@@ -49,7 +62,7 @@ enum CodeHostRemoteDetector {
                 }
                 return lhs.name < rhs.name
             }
-            .compactMap { parse(remote: $0, supportedKinds: supportedKinds) }
+            .compactMap { parse(remote: $0, supportedKinds: supportedKinds, kindOverride: nil) }
     }
 
     private static func priority(for remoteName: String, preferredRemoteName: String?) -> Int {
@@ -60,10 +73,11 @@ enum CodeHostRemoteDetector {
 
     private static func parse(
         remote: GitRemote,
-        supportedKinds: Set<CodeHostKind>?
+        supportedKinds: Set<CodeHostKind>?,
+        kindOverride: CodeHostKind?
     ) -> CodeHostRemote? {
         guard let components = parseComponents(from: remote.url),
-              let kind = kind(for: components.host)
+              let kind = kindOverride ?? kind(for: components.host)
         else {
             return nil
         }

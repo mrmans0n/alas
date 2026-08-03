@@ -3,6 +3,106 @@ import Foundation
 @testable import Alas
 
 @Suite struct WorktreeServiceCreatedAtTests {
+    @Test func parsePorcelainOmitsPrunableWorktrees() {
+        let porcelain = """
+        worktree /tmp/main
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree /tmp/deleted
+        HEAD def456
+        branch refs/heads/feature/deleted
+        prunable gitdir file points to non-existent location
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1")
+
+        #expect(parsed.map(\.branch) == ["main"])
+        #expect(parsed.map(\.path.path) == ["/tmp/main"])
+    }
+
+    @Test func parsePorcelainOmitsAbsentLockedWorktrees() {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-locked-missing-\(UUID().uuidString)")
+        let porcelain = """
+        worktree /tmp/main
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree \(missing.path)
+        HEAD def456
+        branch refs/heads/feature/locked
+        locked
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1")
+
+        #expect(parsed.map(\.branch) == ["main"])
+    }
+
+    @Test func parsePorcelainPreservesRemoteLockedWorktreesWithoutLocalPaths() {
+        let porcelain = """
+        worktree /srv/alas/main
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree /srv/alas/worktrees/feature
+        HEAD def456
+        branch refs/heads/feature/locked
+        locked
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p1", isRemote: true)
+
+        #expect(parsed.map(\.branch) == ["main", "feature/locked"])
+    }
+
+    @Test func parsePorcelainOmitsRemoteLockedWorktreesConfirmedAbsent() {
+        let missingPath = "/srv/alas/worktrees/missing"
+        let porcelain = """
+        worktree /srv/alas/main
+        branch refs/heads/main
+
+        worktree \(missingPath)
+        branch refs/heads/feature/missing
+        locked
+
+        """
+
+        let parsed = WorktreeService.parsePorcelain(
+            porcelain,
+            projectId: "p1",
+            isRemote: true,
+            absentLockedPaths: [missingPath]
+        )
+
+        #expect(parsed.map(\.branch) == ["main"])
+    }
+
+    @Test func remoteMissingLockedRegistrationIsEligibleForRecovery() {
+        let destination = URL(fileURLWithPath: "/srv/alas/worktrees/missing")
+        let porcelain = """
+        worktree \(destination.path)
+        branch refs/heads/feature/missing
+        locked
+
+        """
+
+        #expect(WorktreeService.staleRegistration(
+            porcelain,
+            destination: destination,
+            lockedDestinationIsMissing: true
+        ) == .locked)
+        #expect(WorktreeService.staleRegistration(
+            porcelain,
+            destination: destination,
+            lockedDestinationIsMissing: false
+        ) == nil)
+    }
+
     @Test func parsePorcelainMarksOnlyGitsFirstWorktreeAsMain() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-main-identity-\(UUID().uuidString)")
@@ -42,6 +142,42 @@ import Foundation
         // and within the last 60 seconds.
         #expect(wt.createdAt > Date(timeIntervalSinceNow: -60))
         #expect(wt.createdAt <= Date().addingTimeInterval(1))
+    }
+
+    @Test func localLineageUsesTheStableGitMarkerIdentity() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("alas-lineage-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let marker = root.appendingPathComponent(".git")
+        try fm.createDirectory(at: marker, withIntermediateDirectories: true)
+
+        let original = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+        #expect(UUID(uuidString: original) != nil)
+        #expect(fm.createFile(atPath: root.appendingPathComponent("new-file").path, contents: Data()))
+        #expect(WorktreeService.localLineageID(forWorktreeAt: root) == original)
+
+        try fm.removeItem(at: marker)
+        try fm.createDirectory(at: marker, withIntermediateDirectories: true)
+        #expect(WorktreeService.localLineageID(forWorktreeAt: root) != original)
+    }
+
+    @Test func localLineageResolvesRelativeGitdirsFromTheWorktree() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("alas-linked-lineage-\(UUID().uuidString)")
+        let worktree = root.appendingPathComponent("worktree")
+        let admin = root.appendingPathComponent("admin")
+        try fm.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try fm.createDirectory(at: admin, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data("gitdir: ../admin\n".utf8).write(to: worktree.appendingPathComponent(".git"))
+
+        let lineageID = try #require(WorktreeService.localLineageID(forWorktreeAt: worktree))
+
+        let stored = try String(contentsOf: admin.appendingPathComponent("alas-worktree-lineage"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(stored == lineageID)
+        #expect(!fm.fileExists(atPath: root.appendingPathComponent("alas-worktree-lineage").path))
     }
 
     @Test func lastActivityFollowsSymbolicHeadToBranchRefMain() throws {

@@ -35,9 +35,20 @@ struct WorktreeService {
     func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        var trees = Self.parsePorcelain(result.stdout, projectId: projectId)
-        if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
-            trees = await Self.fillingRemoteLastActivity(trees, host: host)
+        let host = RemoteHostRegistry.shared.host(forPath: repoPath.path)
+        let absentLockedPaths = if let host {
+            await Self.absentRemoteLockedPaths(in: result.stdout, host: host)
+        } else {
+            Set<String>()
+        }
+        var trees = Self.parsePorcelain(
+            result.stdout,
+            projectId: projectId,
+            isRemote: host != nil,
+            absentLockedPaths: absentLockedPaths
+        )
+        if let host {
+            trees = await Self.fillingRemoteMetadata(trees, host: host)
         }
         return trees
     }
@@ -122,8 +133,63 @@ struct WorktreeService {
         TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)).map(Date.init(timeIntervalSince1970:))
     }
 
-    private static func fillingRemoteLastActivity(_ trees: [Worktree], host: String) async -> [Worktree] {
-        await withTaskGroup(of: (Int, Date?).self) { group in
+    static func remoteCreationDate(fromEpochOutput output: String) -> Date? {
+        guard let seconds = TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)),
+              seconds > 0
+        else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func remoteCreationDateCommand(path: String) -> String {
+        let dotGit = URL(fileURLWithPath: path).appendingPathComponent(".git").path
+        return "f=\(SSHCommand.shellQuote(dotGit)); "
+            + "if b=$(stat -c %W -- \"$f\" 2>/dev/null); then "
+            + "[ \"$b\" -gt 0 ] || b=$(stat -c %Z -- \"$f\") || exit 1; "
+            + "else b=$(stat -f %B \"$f\") || exit 1; "
+            + "[ \"$b\" -gt 0 ] || b=$(stat -f %c \"$f\") || exit 1; fi; "
+            + "printf '%s\\n' \"$b\""
+    }
+
+    static func localLineageID(forWorktreeAt path: URL) -> String? {
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
+        let marker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
+        if let existing = try? String(contentsOf: marker, encoding: .utf8),
+           let normalized = normalizedLineageID(existing) {
+            return normalized
+        }
+        let candidate = UUID().uuidString.lowercased()
+        try? Data("\(candidate)\n".utf8).write(to: marker, options: .withoutOverwriting)
+        guard let stored = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
+        return normalizedLineageID(stored)
+    }
+
+    private static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
+        let dotGit = path.appendingPathComponent(".git")
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) else { return nil }
+        if isDirectory.boolValue { return dotGit }
+        guard let contents = try? String(contentsOf: dotGit, encoding: .utf8),
+              contents.hasPrefix("gitdir:")
+        else { return nil }
+        let rawPath = contents.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else { return nil }
+        if (rawPath as NSString).isAbsolutePath {
+            return URL(fileURLWithPath: rawPath).standardizedFileURL
+        }
+        return path.appendingPathComponent(rawPath).standardizedFileURL
+    }
+
+    static func remoteLineageIDCommand(path: String, candidateID: String = UUID().uuidString.lowercased()) -> String {
+        "p=\(SSHCommand.shellQuote(path)); c=\(SSHCommand.shellQuote(candidateID)); "
+            + "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 1; "
+            + "f=\"$d/alas-worktree-lineage\"; "
+            + "if [ ! -s \"$f\" ]; then "
+            + "(umask 077; set -C; printf '%s\\n' \"$c\" > \"$f\") 2>/dev/null || true; fi; "
+            + "head -n 1 \"$f\""
+    }
+
+    private static func fillingRemoteMetadata(_ trees: [Worktree], host: String) async -> [Worktree] {
+        await withTaskGroup(of: (Int, Date?, Date?, String?).self) { group in
             for (index, tree) in trees.enumerated() {
                 group.addTask {
                     let invocation = GitInvocation.build(
@@ -131,28 +197,67 @@ struct WorktreeService {
                         cwd: tree.path,
                         host: host
                     )
-                    let result = try? await Process.run(
+                    async let activityResult: ProcessResult? = try? await Process.run(
                         invocation.executable,
                         args: invocation.args,
                         cwd: invocation.cwd,
                         env: invocation.env
                     )
-                    return (index, result.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil })
+                    async let creationResult: ProcessResult? = try? await RemoteExec.run(
+                        host: host,
+                        cwd: nil,
+                        command: remoteCreationDateCommand(path: tree.path.path)
+                    )
+                    async let lineageResult: ProcessResult? = try? await RemoteExec.run(
+                        host: host,
+                        cwd: nil,
+                        command: remoteLineageIDCommand(path: tree.path.path)
+                    )
+                    let (activity, creation, lineage) = await (activityResult, creationResult, lineageResult)
+                    return (
+                        index,
+                        activity.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil },
+                        creation.flatMap { $0.exitCode == 0 ? remoteCreationDate(fromEpochOutput: $0.stdout) : nil },
+                        lineage.flatMap { $0.exitCode == 0 ? normalizedLineageID($0.stdout) : nil }
+                    )
                 }
             }
             var trees = trees
-            for await (index, date) in group where date != nil { trees[index].lastActivity = date! }
+            for await (index, lastActivity, createdAt, lineageID) in group {
+                if let lastActivity { trees[index].lastActivity = lastActivity }
+                if let createdAt { trees[index].createdAt = createdAt }
+                if let lineageID { trees[index].lineageID = lineageID }
+            }
             return trees
         }
     }
 
-    static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
+    static func normalizedLineageID(_ output: String) -> String? {
+        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return value
+    }
+
+    static func parsePorcelain(
+        _ out: String,
+        projectId: String,
+        isRemote: Bool = false,
+        absentLockedPaths: Set<String> = []
+    ) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
         var currentBranch: String?
+        var currentPrunable = false
+        var currentLocked = false
 
         func flush() {
-            if let path = currentPath {
+            let absentLockedPath = currentPath.map { path in
+                currentLocked
+                    && (isRemote
+                        ? absentLockedPaths.contains(path.standardizedFileURL.path)
+                        : !path.isRemoteAlasPath && !FileManager.default.fileExists(atPath: path.path))
+            } ?? false
+            if let path = currentPath, !currentPrunable, !absentLockedPath {
                 let branch = currentBranch ?? "(detached)"
                 let dirAttrs = try? FileManager.default.attributesOfItem(atPath: path.path)
                 let dirMtime = (dirAttrs?[.modificationDate] as? Date) ?? Date()
@@ -167,11 +272,14 @@ struct WorktreeService {
                     isMainWorktree: result.isEmpty,
                     status: .clean,
                     lastActivity: lastActivity,
-                    createdAt: ctime
+                    createdAt: ctime,
+                    lineageID: isRemote ? nil : WorktreeService.localLineageID(forWorktreeAt: path)
                 ))
             }
             currentPath = nil
             currentBranch = nil
+            currentPrunable = false
+            currentLocked = false
         }
 
         for line in out.split(separator: "\n") {
@@ -182,10 +290,38 @@ struct WorktreeService {
                 let raw = String(line.dropFirst("branch ".count))
                 // refs/heads/foo → foo
                 currentBranch = raw.replacingOccurrences(of: "refs/heads/", with: "")
+            } else if line.hasPrefix("prunable") {
+                currentPrunable = true
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
             }
         }
         flush()
         return result
+    }
+
+    private static func absentRemoteLockedPaths(in porcelain: String, host: String) async -> Set<String> {
+        var lockedPaths: [String] = []
+        var currentPath: String?
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                currentPath = String(line.dropFirst("worktree ".count))
+            } else if line.hasPrefix("locked"), let currentPath {
+                lockedPaths.append(URL(fileURLWithPath: currentPath).standardizedFileURL.path)
+            }
+        }
+        return await withTaskGroup(of: String?.self) { group in
+            for path in lockedPaths {
+                group.addTask {
+                    await RemoteFileAccess.existence(host: host, path: path) == .missing ? path : nil
+                }
+            }
+            var absent: Set<String> = []
+            for await path in group {
+                if let path { absent.insert(path) }
+            }
+            return absent
+        }
     }
 
     func add(
@@ -206,6 +342,46 @@ struct WorktreeService {
             cwd: repoPath
         )
         let branchExists = refCheck.exitCode == 0
+        var staleRegistration: StaleWorktreeRegistration?
+        if let registration = try? await Process.git(
+               ["worktree", "list", "--porcelain"],
+               cwd: repoPath
+           ),
+           registration.exitCode == 0 {
+            let lockedDestinationIsMissing: Bool
+            if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+                lockedDestinationIsMissing = await RemoteFileAccess.existence(
+                    host: host,
+                    path: destination.path
+                ) == .missing
+            } else {
+                lockedDestinationIsMissing = !FileManager.default.fileExists(atPath: destination.path)
+            }
+            staleRegistration = Self.staleRegistration(
+                registration.stdout,
+                destination: destination,
+                lockedDestinationIsMissing: lockedDestinationIsMissing
+            )
+        }
+
+        if staleRegistration == .locked {
+            let unlock = try await Process.git(
+                ["worktree", "unlock", destination.path],
+                cwd: repoPath
+            )
+            guard unlock.exitCode == 0 else {
+                throw WorktreeError.gitFailed(unlock.stderr)
+            }
+        }
+        if staleRegistration != nil {
+            let removal = try await Process.git(
+                ["worktree", "remove", destination.path],
+                cwd: repoPath
+            )
+            guard removal.exitCode == 0 else {
+                throw WorktreeError.gitFailed(removal.stderr)
+            }
+        }
 
         let args: [String]
         if branchExists {
@@ -251,6 +427,54 @@ struct WorktreeService {
         )
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
         return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+    }
+
+    enum StaleWorktreeRegistration {
+        case prunable
+        case locked
+    }
+
+    static func staleRegistration(
+        _ porcelain: String,
+        destination: URL,
+        lockedDestinationIsMissing: Bool
+    ) -> StaleWorktreeRegistration? {
+        func canonicalPath(_ url: URL) -> String {
+            url.deletingLastPathComponent()
+                .resolvingSymlinksInPath()
+                .appendingPathComponent(url.lastPathComponent)
+                .standardizedFileURL.path
+        }
+
+        let destinationPath = canonicalPath(destination)
+        var currentPath: String?
+        var currentPrunable = false
+        var currentLocked = false
+
+        func currentRegistration() -> StaleWorktreeRegistration? {
+            guard let currentPath,
+                  canonicalPath(URL(fileURLWithPath: currentPath)) == destinationPath
+            else { return nil }
+            if currentPrunable { return .prunable }
+            if currentLocked, lockedDestinationIsMissing {
+                return .locked
+            }
+            return nil
+        }
+
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                if let registration = currentRegistration() { return registration }
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentPrunable = false
+                currentLocked = false
+            } else if line.hasPrefix("prunable") {
+                currentPrunable = true
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
+            }
+        }
+        return currentRegistration()
     }
 
     /// Remove a worktree. Pass the full `Worktree` (not just a path) so we can

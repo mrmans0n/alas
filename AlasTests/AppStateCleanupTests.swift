@@ -165,7 +165,7 @@ struct AppStateCleanupTests {
         state.projectsManager.removeProject(id: project.id)
         #expect(state.allWorktreeIds().isEmpty)
 
-        state.cleanupMissingWorktrees(beforeIds: beforeIds)
+        await state.cleanupMissingWorktrees(beforeIds: beforeIds)
 
         #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
     }
@@ -201,7 +201,7 @@ struct AppStateCleanupTests {
         state.projectsManager.removeProject(id: projectA.id)
         #expect(!state.allWorktreeIds().contains(treesA[0].id))
 
-        state.cleanupMissingWorktrees(beforeIds: beforeIds)
+        await state.cleanupMissingWorktrees(beforeIds: beforeIds)
 
         #expect(state.selectedWorktreeId == treesB[0].id)
     }
@@ -238,7 +238,7 @@ struct AppStateCleanupTests {
 
         state.projectsManager.removeProject(id: projectA.id)
 
-        state.cleanupMissingWorktrees(beforeIds: beforeIds)
+        await state.cleanupMissingWorktrees(beforeIds: beforeIds)
 
         #expect(state.tabs.tabs(forWorktree: treesA[0].id).isEmpty)
         #expect(state.tabs.tabs(forWorktree: treesB[0].id).count == 1)

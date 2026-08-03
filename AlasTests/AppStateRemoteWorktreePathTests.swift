@@ -1,7 +1,25 @@
+import Foundation
 import Testing
 @testable import Alas
 
 struct AppStateRemoteWorktreePathTests {
+    @Test func missionDestinationSkipsRemoteFilesystemCollisions() async throws {
+        let requested = URL(fileURLWithPath: "/home/remote/worktrees/fixed")
+        var checked: [String] = []
+
+        let available = try await AppState.firstAvailableMissionDestination(
+            requested: requested,
+            occupiedPaths: [],
+            pathExists: { path in
+                checked.append(path)
+                return path == requested.path
+            }
+        )
+
+        #expect(available.path == "\(requested.path)-2")
+        #expect(checked == [requested.path, "\(requested.path)-2"])
+    }
+
     @Test func remoteWorktreeDestinationReplacesLocalHomePrefix() {
         let path = AppState.destinationPathReplacingLocalHome(
             "/Users/local/.alas/worktrees/repo-feature",

@@ -12,6 +12,7 @@ struct CenterSelectionStateResolver {
     let selectedWorktreeId: String?
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
+    var allowsHiddenSelectedWorktree = false
 
     @MainActor
     func resolve() -> CenterSelectionState {
@@ -38,7 +39,7 @@ struct CenterSelectionStateResolver {
     @MainActor
     private func findWorktree(by id: String) -> Worktree? {
         for project in projects {
-            if let wt = projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
+            if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return wt
             }
         }
@@ -49,7 +50,7 @@ struct CenterSelectionStateResolver {
     private func selectedWorktree() -> Worktree? {
         guard let id = selectedWorktreeId else { return nil }
         for project in projects {
-            if let wt = projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
+            if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
                 if let op = projectsManager.operationState(for: wt.id) {
                     switch op {
                     case .creating, .deleting, .createFailed:
@@ -62,5 +63,14 @@ struct CenterSelectionStateResolver {
             }
         }
         return nil
+    }
+
+    @MainActor
+    private func candidateWorktrees(projectId: String) -> [Worktree] {
+        if allowsHiddenSelectedWorktree {
+            projectsManager.worktrees(projectId: projectId)
+        } else {
+            projectsManager.visibleWorktrees(projectId: projectId)
+        }
     }
 }

@@ -402,6 +402,22 @@ extension ProjectsManagerTests {
         #expect(!gcDropped)
     }
 
+    @Test func refreshAllRetainsPerProjectDiscoveryFailure() async {
+        let project = ProjectConfig(
+            id: "offline-project",
+            name: "Offline",
+            path: FileManager.default.temporaryDirectory
+                .appendingPathComponent("missing-project-\(UUID().uuidString)").path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        _ = await manager.refreshAll()
+
+        #expect(!manager.worktreeDiscoverySucceeded(projectId: project.id))
+    }
+
     @Test func refreshAllReturnsTrueWhenAnyProjectGarbageCollects() async throws {
         let repoA = try await makeRepo(name: "iota")
         defer { try? FileManager.default.removeItem(at: repoA) }
