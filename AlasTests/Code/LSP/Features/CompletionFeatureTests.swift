@@ -195,6 +195,38 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refresh retains matching candidates introduced by a narrow response")
+    func refreshRetainsNarrowResponseCandidates() {
+        let textView = makeTextView("o")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingPresent(
+            items: [.testing(label: "openAlpha", sortText: "001", filterText: nil)],
+            prefix: CompletionPrefix(text: "o", range: NSRange(location: 0, length: 1)),
+            bufferText: "o"
+        )
+
+        textView.insertText("p", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [
+                .testing(label: "openAlpha", sortText: "001", filterText: nil),
+                .testing(label: "operate", sortText: "002", filterText: nil)
+            ],
+            prefix: CompletionPrefix(text: "op", range: NSRange(location: 0, length: 2)),
+            bufferText: "op"
+        )
+        feature.testingSetSelection(1)
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "operate"])
+        #expect(feature.testingSnapshot.selection == 1)
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh discards candidates when text changes outside the prefix")
     func refreshDiscardsCandidatesAfterForwardDelete() {
         let textView = makeTextView("opeXYZ tail")

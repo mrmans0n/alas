@@ -19,7 +19,7 @@ final class CompletionFeature {
     private var candidatePool: [CompletionCandidate] = []
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
-    private var candidatePoolPrefix: CompletionPrefix?
+    private var candidateOrigins: [UUID: CompletionPrefix] = [:]
     private var candidateBufferText: String?
     private var candidateItems: [LSPCompletionItem] = []
     private var candidateAllowsBufferFallback = false
@@ -79,7 +79,7 @@ final class CompletionFeature {
         candidatePool.removeAll()
         prefix = nil
         candidatePrefix = nil
-        candidatePoolPrefix = nil
+        candidateOrigins.removeAll()
         candidateBufferText = nil
         candidateItems.removeAll()
         candidateAllowsBufferFallback = false
@@ -260,14 +260,14 @@ final class CompletionFeature {
             CompletionEngine.editPlan(
                 accepting: candidate,
                 prefix: prefix,
-                originalPrefix: candidatePoolPrefix,
+                originalPrefix: candidateOrigins[candidate.id],
                 in: bufferText
             )
         }
         candidates = next
         candidatePool = next
         self.prefix = prefix
-        candidatePoolPrefix = prefix
+        candidateOrigins = Dictionary(uniqueKeysWithValues: next.map { ($0.id, prefix) })
         let keepsBroaderResponse = candidatePrefix.map {
             $0.range.location == prefix.range.location && $0.range.length < prefix.range.length
         } ?? false
@@ -290,7 +290,7 @@ final class CompletionFeature {
                     CompletionEngine.editPlan(
                         accepting: $0,
                         prefix: prefix,
-                        originalPrefix: prefix,
+                        originalPrefix: candidateOrigins[$0.id],
                         in: bufferText
                     ) == selectedEditPlan
             }
@@ -399,7 +399,7 @@ final class CompletionFeature {
         guard let plan = CompletionEngine.editPlan(
             accepting: candidate,
             prefix: prefix,
-            originalPrefix: candidatePoolPrefix,
+            originalPrefix: candidateOrigins[candidate.id],
             in: textView.string
         ) else {
             cancelAndDismiss()
@@ -433,7 +433,7 @@ final class CompletionFeature {
             candidatePool.removeAll()
             prefix = nil
             candidatePrefix = nil
-            candidatePoolPrefix = nil
+            candidateOrigins.removeAll()
             candidateBufferText = nil
             candidateItems.removeAll()
             candidateAllowsBufferFallback = false
@@ -449,7 +449,7 @@ final class CompletionFeature {
             CompletionEngine.editPlan(
                 accepting: candidate,
                 prefix: updatedPrefix,
-                originalPrefix: candidatePoolPrefix,
+                originalPrefix: candidateOrigins[candidate.id],
                 in: textView.string
             )
         }
@@ -465,10 +465,38 @@ final class CompletionFeature {
                 allowBufferFallback: candidateAllowsBufferFallback,
                 memberAccessOnly: candidateMemberAccessOnly
             )
-            candidatePool = rebuilt.map { candidate in
-                candidatePool.first { $0 == candidate } ?? candidate
+            var merged = rebuilt
+            var mergedOrigins = Dictionary(uniqueKeysWithValues: rebuilt.map { ($0.id, candidatePrefix) })
+            for candidate in candidatePool {
+                let filter = candidate.filterText ?? candidate.label
+                guard CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) ||
+                    CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text) else { continue }
+                let plan = CompletionEngine.editPlan(
+                    accepting: candidate,
+                    prefix: updatedPrefix,
+                    originalPrefix: candidateOrigins[candidate.id],
+                    in: textView.string
+                )
+                let isDuplicate = merged.contains {
+                    $0.label == candidate.label &&
+                        $0.kind == candidate.kind &&
+                        $0.detail == candidate.detail &&
+                        $0.source == candidate.source &&
+                        plan != nil &&
+                        CompletionEngine.editPlan(
+                            accepting: $0,
+                            prefix: updatedPrefix,
+                            originalPrefix: mergedOrigins[$0.id],
+                            in: textView.string
+                        ) == plan
+                }
+                if !isDuplicate {
+                    merged.append(candidate)
+                    mergedOrigins[candidate.id] = candidateOrigins[candidate.id]
+                }
             }
-            candidatePoolPrefix = candidatePrefix
+            candidatePool = merged
+            candidateOrigins = mergedOrigins
         }
 
         candidates = candidatePool.filter { candidate in
@@ -488,7 +516,7 @@ final class CompletionFeature {
                     CompletionEngine.editPlan(
                         accepting: $0,
                         prefix: updatedPrefix,
-                        originalPrefix: candidatePoolPrefix,
+                        originalPrefix: candidateOrigins[$0.id],
                         in: textView.string
                     ) == selectedEditPlan
             }
@@ -583,7 +611,7 @@ extension CompletionFeature {
         candidatePool = candidates
         self.prefix = prefix
         candidatePrefix = prefix
-        candidatePoolPrefix = prefix
+        candidateOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, prefix) })
         candidateBufferText = textView?.string
         candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
