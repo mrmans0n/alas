@@ -7,6 +7,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Budget for the polling helpers below. These waits used to be bounded by
+/// iteration count, which measures round trips rather than time: the suite
+/// runs its integration tests in parallel, each driving its own helper,
+/// broker and adapter processes, so on a loaded machine a healthy-but-slow
+/// broker could exhaust the count and fail the test. A wall-clock budget
+/// still catches a genuinely stuck broker, without failing a slow one.
+const POLL_BUDGET: Duration = Duration::from_secs(20);
+
+fn poll_deadline() -> std::time::Instant {
+    std::time::Instant::now() + POLL_BUDGET
+}
+
 struct Helper {
     child: Child,
     stdin: ChildStdin,
@@ -368,7 +380,8 @@ fn load_updates_do_not_mark_turn_as_streaming() {
     let generation = open["snapshot"]["metadata"]["generation"].clone();
 
     let mut loaded = Value::Null;
-    for _ in 0..20 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let result = send(
             &mut helper,
             "broker-load-update",
@@ -864,7 +877,8 @@ fn drive_until_operation_completed(
     operation_key: &str,
     params: Value,
 ) -> Value {
-    for _ in 0..60 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let result = send(
             helper,
             broker_id,
@@ -891,7 +905,8 @@ fn drive_until_pending_request(
 ) -> Value {
     let mut acknowledged_cursor = 0;
     let mut last_attached = Value::Null;
-    for _ in 0..60 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let progress = send(
             helper,
             broker_id,
@@ -940,7 +955,8 @@ fn wait_for_pending_request_visible(
     request_id: Value,
 ) -> Value {
     let mut last_attached = Value::Null;
-    for _ in 0..60 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         last_attached = helper.request(
             "acp/attach",
             json!({
@@ -971,7 +987,8 @@ fn drive_until_prompt_completed(
     operation_key: &str,
     params: Value,
 ) -> Value {
-    for _ in 0..20 {
+    let deadline = poll_deadline();
+    while std::time::Instant::now() < deadline {
         let result = send(
             helper,
             broker_id,
@@ -997,6 +1014,71 @@ fn attached_has_pending_request(attached: &Value) -> bool {
     }) || attached["snapshot"]["pendingRequests"]
         .as_array()
         .is_some_and(|requests| !requests.is_empty())
+}
+
+/// A client that connects to a broker's socket and then goes quiet — killed
+/// between `connect()` and `write()`, or just slow — used to stall the
+/// supervisor's accept loop forever, because the request line is read on that
+/// thread with no timeout. The helper then blocked forever too: it talks to
+/// brokers over the same unbounded socket, inline on its single-threaded serve
+/// loop, so every other ACP session (and every file, watch and search request)
+/// died with it. Both reads are bounded now, so one silent client costs a
+/// bounded stall and the broker recovers on its own.
+#[cfg(unix)]
+#[test]
+fn a_silent_client_on_the_broker_socket_does_not_wedge_the_helper() {
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+
+    let fixture = Fixture::new("silent-ipc-client");
+    let mut helper = Helper::start(&fixture.home);
+    let opened = helper.request("acp/open", fixture.open_params("broker-silent", 0));
+    assert_eq!(opened["adopted"], false);
+
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-silent/broker.sock");
+    let silent = UnixStream::connect(&socket).expect("silent client connects");
+
+    let (sender, receiver) = mpsc::channel();
+    let params = fixture.open_params("broker-silent", 0);
+    let probe = std::thread::spawn(move || {
+        // Whatever this answers, it must answer: an error is a recoverable
+        // outcome the UI can surface and retry, a hang is not.
+        let contested = helper.raw_request("acp/open", params.clone());
+        // The decisive check. `ping` never touches a broker, so if it stops
+        // being served, one bad broker has taken the whole helper down.
+        let ping = helper.request("ping", json!({}));
+        let _ = sender.send((contested, ping));
+        // Once the broker times out the silent reader it accepts again, with
+        // no restart and no intervention. Poll for that rather than sleeping
+        // out the timeout, so this test costs only as long as recovery
+        // actually takes.
+        let deadline = poll_deadline();
+        loop {
+            let attempt = helper.raw_request("acp/open", params.clone());
+            if attempt["result"]["adopted"] == true || std::time::Instant::now() >= deadline {
+                return attempt;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let (contested, ping) = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("helper keeps answering while a silent client holds the broker socket");
+    assert!(
+        contested.get("result").is_some() || contested.get("error").is_some(),
+        "contested acp/open produced neither result nor error: {contested}"
+    );
+    assert_eq!(ping["ok"], true);
+
+    let recovered = probe.join().expect("probe thread");
+    assert_eq!(
+        recovered["result"]["adopted"], true,
+        "broker did not recover after the silent client timed out: {recovered}"
+    );
+    drop(silent);
 }
 
 struct Fixture {
@@ -1044,7 +1126,7 @@ impl Fixture {
     }
 
     fn wait_for_log(&self, needle: &str) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = poll_deadline();
         while std::time::Instant::now() < deadline {
             if std::fs::read_to_string(&self.log)
                 .map(|log| log.contains(needle))

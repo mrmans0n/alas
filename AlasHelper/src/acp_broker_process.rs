@@ -18,6 +18,25 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 
+/// How long the supervisor waits for an accepted client to deliver a complete
+/// request line. The read happens on the accept thread, so a client that
+/// connects and then goes quiet — a stalled writer, or one killed between
+/// `connect()` and `write()` — would otherwise stop the broker from ever
+/// accepting another connection.
+const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a caller waits on a single broker IPC round trip. Generous
+/// compared to the work a broker actually does per request (`close` is the
+/// slowest at ~2.5s, and it may queue behind one `IPC_REQUEST_TIMEOUT` read),
+/// but bounded: `send_ipc` runs inline on the helper's single-threaded serve
+/// loop, so an unbounded wait here stalls every session the helper serves.
+const BROKER_IPC_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Floor for a single retried attempt, so a nearly-spent deadline cannot
+/// shrink the per-attempt budget down to something a healthy broker on a busy
+/// machine would miss.
+const BROKER_IPC_MIN_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
     pub code: i64,
@@ -336,7 +355,11 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
         if !dir.is_dir() || !broker_is_running(&dir) {
             continue;
         }
-        if let Ok(snapshot) = send_ipc(&dir, "snapshot", json!({})) {
+        // This sweeps every broker dir on disk, including leftovers from
+        // earlier app runs, so it must not pay the full per-request budget
+        // for each unresponsive one. A live broker answers `snapshot` from
+        // memory; anything slower than this is not worth listing.
+        if let Ok(snapshot) = send_ipc_within(&dir, "snapshot", json!({}), Duration::from_secs(2)) {
             if snapshot
                 .get("adapterExited")
                 .and_then(Value::as_bool)
@@ -363,6 +386,19 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
                 Ok(stream) => stream,
                 Err(_) => continue,
             };
+            // Bound both directions before touching the stream. The request
+            // line is read on this thread, so an unbounded read lets a single
+            // silent client wedge `accept()` for every other caller; dropping
+            // the stream on timeout gives that client a clean EOF to fail on
+            // instead of a hang. The write gets the larger budget on purpose:
+            // it guards against a client that stops reading, but an `attach`
+            // replay can be a large response, and cutting one short would
+            // corrupt a legitimate reply rather than rescue a stuck one.
+            if stream.set_read_timeout(Some(IPC_REQUEST_TIMEOUT)).is_err()
+                || stream.set_write_timeout(Some(BROKER_IPC_TIMEOUT)).is_err()
+            {
+                continue;
+            }
             let mut line = String::new();
             {
                 let mut reader = BufReader::new(&stream);
@@ -904,10 +940,30 @@ fn sorted_env_keys(env: &HashMap<String, String>) -> Vec<String> {
 }
 
 fn send_ipc(dir: &Path, method: &str, params: Value) -> Result<Value, AcpBrokerProcessError> {
+    send_ipc_within(dir, method, params, BROKER_IPC_TIMEOUT)
+}
+
+fn send_ipc_within(
+    dir: &Path,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value, AcpBrokerProcessError> {
     #[cfg(unix)]
     {
         let mut stream = UnixStream::connect(dir.join("broker.sock"))
             .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
+        // Without these, a broker that accepted the connection but never
+        // answered would block this call forever. That matters more than it
+        // looks: every `acp/*` request is handled inline on the helper's
+        // single-threaded serve loop, so one unresponsive broker would take
+        // down file, watch, search and *every other ACP session* with it.
+        stream.set_read_timeout(Some(timeout)).map_err(|error| {
+            broker_error(-32072, format!("broker read timeout failed: {error}"))
+        })?;
+        stream.set_write_timeout(Some(timeout)).map_err(|error| {
+            broker_error(-32072, format!("broker write timeout failed: {error}"))
+        })?;
         let request = BrokerIpcRequest {
             method: method.to_string(),
             params: Some(params),
@@ -958,7 +1014,18 @@ fn send_ipc_with_retry(
         if let Some(message) = read_startup_error(dir) {
             return Err(broker_error(-32072, message));
         }
-        match send_ipc(dir, method, params.clone()) {
+        // Bound each attempt, not just the gaps between attempts. A broker
+        // that accepts and then never answers never produces the error this
+        // loop checks the deadline on, so a per-attempt bound is the only
+        // thing that makes `timeout` mean anything for a wedged broker.
+        // The floor keeps a slow-but-healthy broker on a loaded machine from
+        // being declared dead just because the deadline is nearly spent — it
+        // can overshoot `timeout`, which is the right trade: this bound
+        // exists to rule out hangs, not to hit a precise deadline.
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .max(BROKER_IPC_MIN_ATTEMPT_TIMEOUT);
+        match send_ipc_within(dir, method, params.clone(), remaining) {
             Ok(value) => return Ok(value),
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
