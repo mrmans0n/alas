@@ -361,55 +361,64 @@ struct MissionTabView: View {
             }
             .environment(\.theme, theme)
         }
-        .task(id: rightPaneActivationKey) {
-            guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-                  let worktree = state.missionWorktree(worktree, for: aggregate),
-                  !worktreeIsArchived
-            else { return }
-            await state.activateMissionRightPane(worktree: worktree, aggregate: aggregate)
-        }
-        .onDisappear {
-            guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-                  let worktree = state.missionWorktree(worktree, for: aggregate)
-            else { return }
-            state.restoreDefaultRightPaneBaseAfterMission(worktree: worktree)
-        }
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
-        let worktree = state.missionWorktree(worktree, for: aggregate)
-        let rightPane = worktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
+        let primaryWorktree = state.missionWorktree(worktree, for: aggregate)
+        let primaryRightPane = primaryWorktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
-            worktree: worktree,
+            worktree: primaryWorktree,
             acpSummary: session.map {
                 MissionACPSummary(session: $0, agentName: agentName(for: $0.agentId))
             },
-            diffCounts: rightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
-            reviewSnapshot: rightPane?.reviewLoop.snapshot,
+            diffCounts: primaryRightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
+            reviewSnapshot: primaryRightPane?.reviewLoop.snapshot,
             worktreeArchived: worktreeIsArchived,
-            worktreeRecoveryAvailable: worktree == nil
+            worktreeRecoveryAvailable: primaryWorktree == nil
                 && aggregate.primaryLeg.map { leg in state.projects.contains { $0.id == leg.projectId } } == true,
             availableACPAgentIDs: Set(enabledACPAgents.map(\.id))
         )
+        let legPresentations = aggregate.legs.map { leg in
+            let legWorktree = worktree(for: leg, aggregate: aggregate)
+            let legRightPane = legWorktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
+            let legSession = linkedSession(aggregate: aggregate, leg: leg, worktree: legWorktree)
+            return MissionLegPresentation(
+                aggregate: aggregate,
+                leg: leg,
+                worktree: legWorktree,
+                acpSummary: legSession.map {
+                    MissionACPSummary(session: $0, agentName: agentName(for: $0.agentId))
+                },
+                diffCounts: legRightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
+                reviewSnapshot: legRightPane?.reviewLoop.snapshot,
+                worktreeArchived: legWorktree.map { worktreeIsArchived($0) } ?? false,
+                worktreeRecoveryAvailable: legWorktree == nil && state.projects.contains { $0.id == leg.projectId },
+                availableACPAgentIDs: Set(enabledACPAgents.map(\.id))
+            )
+        }
+        let summary = MissionAggregateSummary(aggregate: aggregate, legs: legPresentations)
 
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                MissionHeaderSection(presentation: presentation)
-                MissionLegSection(
-                    presentation: presentation,
-                    session: session,
-                    agentName: session.map { agentName(for: $0.agentId) },
-                    onOpenAgent: openAgent,
-                    onOpenChanges: openChanges,
-                    onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
-                    onOpenReview: {
-                        if let url = presentation.reviewDestination {
-                            NSWorkspace.shared.open(url)
+                MissionHeaderSection(presentation: presentation, summary: summary)
+                ForEach(summary.legs) { leg in
+                    let legSession = linkedSession(for: leg, aggregate: aggregate)
+                    MissionLegSection(
+                        presentation: leg,
+                        session: legSession,
+                        agentName: legSession.map { agentName(for: $0.agentId) },
+                        onOpenAgent: { openAgent(legID: leg.id) },
+                        onOpenChanges: { openChanges(legID: leg.id) },
+                        onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
+                        onOpenReview: {
+                            if let url = leg.reviewDestination {
+                                NSWorkspace.shared.open(url)
+                            }
                         }
-                    }
-                )
+                    )
+                }
                 MissionIssueContextSection(presentation: presentation, onRefresh: refresh)
                 MissionActivitySection(events: presentation.events)
                 MissionReadinessSection(
@@ -433,29 +442,25 @@ struct MissionTabView: View {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
               let worktree = state.missionWorktree(worktree, for: aggregate)
         else { return false }
-        return state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
-    }
-
-    private var rightPaneActivationKey: String {
-        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = state.missionWorktree(worktree, for: aggregate)
-        else { return tabState.id }
-        let baseRef = MissionTabContext.baseBranch(
-            for: aggregate,
-            fallback: state.config.worktrees.baseBranch
-        )
-        return MissionTabContext.rightPaneActivationKey(
-            worktreeID: worktree.id,
-            branch: worktree.branch,
-            baseRef: baseRef,
-            comparisonMode: state.config.changes.comparisonMode.rawValue,
-            worktreeArchived: worktreeIsArchived
-        )
+        return worktreeIsArchived(worktree)
     }
 
     private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {
         guard let worktree = state.missionWorktree(worktree, for: aggregate),
               let id = aggregate.primaryLeg?.acpSessionId,
+              let manager = state.acpManager(forWorktreeId: worktree.id)
+        else { return nil }
+        return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
+    }
+
+    private func linkedSession(for presentation: MissionLegPresentation, aggregate: MissionAggregate) -> ACPSession? {
+        guard let leg = aggregate.legs.first(where: { $0.id == presentation.id }) else { return nil }
+        return linkedSession(aggregate: aggregate, leg: leg, worktree: worktree(for: leg, aggregate: aggregate))
+    }
+
+    private func linkedSession(aggregate _: MissionAggregate, leg: MissionLeg, worktree: Worktree?) -> ACPSession? {
+        guard let worktree,
+              let id = leg.acpSessionId,
               let manager = state.acpManager(forWorktreeId: worktree.id)
         else { return nil }
         return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
@@ -467,19 +472,21 @@ struct MissionTabView: View {
             ?? id
     }
 
-    private func openAgent() {
+    private func openAgent(legID: MissionLegID? = nil) {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = state.missionWorktree(worktree, for: aggregate),
-              !worktreeIsArchived,
-              let sessionID = state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.acpSessionId
+              let leg = leg(in: aggregate, id: legID),
+              let worktree = worktree(for: leg, aggregate: aggregate),
+              !worktreeIsArchived(worktree),
+              let sessionID = leg.acpSessionId
         else { return }
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         Task { await state.openExistingACPSession(sessionId: sessionID) }
     }
 
-    private func openChanges() {
+    private func openChanges(legID: MissionLegID? = nil) {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = state.missionWorktree(worktree, for: aggregate)
+              let leg = leg(in: aggregate, id: legID),
+              let worktree = worktree(for: leg, aggregate: aggregate)
         else { return }
         Task { await state.openMissionChanges(worktree: worktree, missionID: tabState.missionID) }
     }
@@ -502,10 +509,56 @@ struct MissionTabView: View {
         state.unarchiveWorktree(projectId: worktree.projectId, path: worktree.path)
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
     }
+
+    private func leg(in aggregate: MissionAggregate, id: MissionLegID?) -> MissionLeg? {
+        guard let id else { return aggregate.primaryLeg }
+        return aggregate.legs.first { $0.id == id }
+    }
+
+    private func worktree(for leg: MissionLeg, aggregate: MissionAggregate) -> Worktree? {
+        let candidate: Worktree?
+        if let worktree,
+           worktree.projectId == leg.projectId,
+           worktree.branch == leg.branch,
+           leg.worktreeId == nil || worktree.id == leg.worktreeId {
+            candidate = worktree
+        } else {
+            candidate = state.missionWorktreeAtDestination(
+                projectID: leg.projectId,
+                destinationPath: leg.destinationPath
+            )
+        }
+        guard let candidate,
+              candidate.projectId == leg.projectId,
+              candidate.branch == leg.branch,
+              leg.worktreeId == nil || candidate.id == leg.worktreeId
+        else { return nil }
+        guard let persistedLineageID = leg.worktreeLineageID,
+              candidate.lineageID == persistedLineageID
+        else { return nil }
+        guard aggregate.mission.state == .completed else { return candidate }
+        let candidatePath = candidate.path.standardizedFileURL.path
+        let ownedByALaterMission = state.missions.aggregates.contains { other in
+            guard other.mission.id != aggregate.mission.id,
+                  other.mission.createdAt > aggregate.mission.createdAt
+            else { return false }
+            return other.legs.contains { otherLeg in
+                guard otherLeg.projectId == candidate.projectId else { return false }
+                return otherLeg.worktreeId == candidate.id
+                    || URL(fileURLWithPath: otherLeg.destinationPath).standardizedFileURL.path == candidatePath
+            }
+        }
+        return ownedByALaterMission ? nil : candidate
+    }
+
+    private func worktreeIsArchived(_ worktree: Worktree) -> Bool {
+        state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
+    }
 }
 
 private struct MissionHeaderSection: View {
     let presentation: MissionTabPresentation
+    let summary: MissionAggregateSummary
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -525,6 +578,12 @@ private struct MissionHeaderSection: View {
                     .foregroundStyle(theme.color("fg-dim"))
                     .accessibilityIdentifier("mission-header-captured-at")
                     .background(MissionAccessibilityMarker(identifier: "mission-header-captured-at"))
+                HStack(spacing: 8) {
+                    Text(summary.statusCopy)
+                    Text(summary.diffCopy)
+                }
+                .font(.caption)
+                .foregroundStyle(theme.color("fg-dim"))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
@@ -559,7 +618,7 @@ private struct MissionStateChip: View {
 }
 
 private struct MissionLegSection: View {
-    let presentation: MissionTabPresentation
+    let presentation: MissionLegPresentation
     let session: ACPSession?
     let agentName: String?
     let onOpenAgent: () -> Void
@@ -571,9 +630,10 @@ private struct MissionLegSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .firstTextBaseline) {
-                Text(presentation.repositoryName)
+                Text(presentation.projectID)
                     .font(.headline)
                 Spacer()
+                MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
                 Text(presentation.branchCopy)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))

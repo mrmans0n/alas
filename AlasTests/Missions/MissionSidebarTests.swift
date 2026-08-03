@@ -25,6 +25,21 @@ struct MissionSidebarTests {
         ))
     }
 
+    @Test func multiLegMissionAppearsInAnySpaceContainingALegProject() {
+        let mission = Self.multiLegMission()
+
+        #expect(MissionSpaceFilter.isVisible(
+            mission,
+            activeProjectIds: ["sdk"],
+            existingProjectIds: ["app", "sdk", "server"]
+        ))
+        #expect(!MissionSpaceFilter.isVisible(
+            mission,
+            activeProjectIds: ["docs"],
+            existingProjectIds: ["app", "sdk", "server", "docs"]
+        ))
+    }
+
     @Test func orphanedMissionRemainsReachableInEverySpace() {
         let mission = Self.mission(projectId: "removed", state: .needsAttention)
 
@@ -77,9 +92,16 @@ struct MissionSidebarTests {
         #expect(creating.providerIconName == "github")
         #expect(creating.issueNumber == "#42")
         #expect(creating.status == .creating("Creating worktree"))
-        #expect(running.status == .running)
-        #expect(needsAttention.status == .needsAttention)
+        #expect(running.status == .aggregate("1 working"))
+        #expect(needsAttention.status == .aggregate("1 needs attention"))
         #expect(ready.status == .readyToComplete)
+    }
+
+    @Test func runningRowUsesAggregateLegStatusCopy() {
+        let row = MissionSidebarRow(aggregate: Self.multiLegMission())
+
+        #expect(row.status == .aggregate("1 working · 1 needs attention · 1 ready"))
+        #expect(row.helpText.contains("1 working · 1 needs attention · 1 ready"))
     }
 
     @Test func creatingMissionNavigatesBeforeAWorktreeIsKnown() {
@@ -110,7 +132,7 @@ struct MissionSidebarTests {
         ).active.first
 
         #expect(row?.isNavigationEnabled == true)
-        #expect(row?.helpText.contains("Running") == true)
+        #expect(row?.helpText.contains("1 working") == true)
     }
 
     @Test func missingWorktreeAttentionMissionStillNavigatesToRecoveryDetails() {
@@ -154,10 +176,122 @@ struct MissionSidebarTests {
                 acpSessionId: leg.acpSessionId,
                 initialPromptId: leg.initialPromptId,
                 pendingInitialPrompt: leg.pendingInitialPrompt,
-                reviewIdentity: leg.reviewIdentity
+                reviewIdentity: leg.reviewIdentity,
+                state: Self.legState(for: state),
+                setupCheckpoint: state == .creating ? .creatingWorktree : .running,
+                attentionReason: state == .needsAttention ? MissionReadinessEvaluator.missingWorktreeMessage : nil,
+                readinessEvidence: state == .readyToComplete
+                    ? .init(kind: .legacy, observedAt: Date(timeIntervalSince1970: updatedAt))
+                    : nil,
+                createdAt: leg.createdAt,
+                updatedAt: leg.updatedAt
             )
             aggregate.legs = [leg]
         }
         return aggregate
+    }
+
+    private static func legState(for missionState: MissionState) -> MissionLegState {
+        switch missionState {
+        case .creating:
+            .creating
+        case .running:
+            .running
+        case .needsAttention:
+            .needsAttention
+        case .readyToComplete:
+            .ready
+        case .completed:
+            .running
+        }
+    }
+
+    private static func multiLegMission() -> MissionAggregate {
+        let missionID = MissionID(rawValue: "mission-1")
+        let appLegID = MissionLegID(rawValue: "mission-1-leg-app")
+        let sdkLegID = MissionLegID(rawValue: "mission-1-leg-sdk")
+        let serverLegID = MissionLegID(rawValue: "mission-1-leg-server")
+        let primary = Self.leg(
+            id: appLegID,
+            missionID: missionID,
+            ordinal: 0,
+            projectId: "app",
+            state: .running
+        )
+        return MissionAggregate(
+            mission: MissionRecord(
+                id: missionID,
+                title: "Fix parser crash",
+                state: .running,
+                primaryLegID: appLegID,
+                createdAt: Date(timeIntervalSince1970: 100),
+                updatedAt: Date(timeIntervalSince1970: 120),
+                completedAt: nil
+            ),
+            issue: MissionFixtures.issue(),
+            legs: [
+                primary,
+                Self.leg(
+                    id: sdkLegID,
+                    missionID: missionID,
+                    ordinal: 1,
+                    projectId: "sdk",
+                    state: .needsAttention,
+                    attentionReason: "Agent authentication is required."
+                ),
+                Self.leg(
+                    id: serverLegID,
+                    missionID: missionID,
+                    ordinal: 2,
+                    projectId: "server",
+                    state: .ready,
+                    readinessEvidence: .init(
+                        kind: .mergedReview,
+                        observedAt: Date(timeIntervalSince1970: 130)
+                    )
+                ),
+            ],
+            events: [
+                MissionFixtures.event(
+                    id: "mission-1-event-1",
+                    missionID: missionID,
+                    legID: appLegID,
+                    kind: .created
+                )
+            ]
+        )
+    }
+
+    private static func leg(
+        id: MissionLegID,
+        missionID: MissionID,
+        ordinal: Int,
+        projectId: String,
+        state: MissionLegState,
+        attentionReason: String? = nil,
+        readinessEvidence: MissionLegReadinessEvidence? = nil
+    ) -> MissionLeg {
+        MissionLeg(
+            id: id,
+            missionID: missionID,
+            ordinal: ordinal,
+            projectId: projectId,
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "mission/42-\(projectId)",
+            destinationPath: "/tmp/\(projectId)",
+            worktreeId: "wt-\(projectId)",
+            agentId: "codex",
+            acpSessionId: nil,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: state,
+            setupCheckpoint: .running,
+            attentionReason: attentionReason,
+            readinessEvidence: readinessEvidence,
+            createdAt: Date(timeIntervalSince1970: 100 + TimeInterval(ordinal)),
+            updatedAt: Date(timeIntervalSince1970: 120 + TimeInterval(ordinal))
+        )
     }
 }

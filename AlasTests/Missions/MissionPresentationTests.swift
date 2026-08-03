@@ -4,6 +4,37 @@ import Testing
 
 @MainActor
 struct MissionPresentationTests {
+    @Test func aggregateSummaryFoldsOrderedLegCards() {
+        let aggregate = Self.threeLegAggregate()
+        let presentations = aggregate.legs.map { leg in
+            MissionLegPresentation(
+                aggregate: aggregate,
+                leg: leg,
+                worktree: Self.worktree(for: leg),
+                acpSummary: leg.id.rawValue == "mission-1-leg-app"
+                    ? .init(agentID: "codex", agentName: "Codex", activity: .working)
+                    : nil,
+                diffCounts: Self.diffCounts(for: leg),
+                availableACPAgentIDs: ["codex"]
+            )
+        }
+
+        let summary = MissionAggregateSummary(aggregate: aggregate, legs: presentations)
+
+        #expect(summary.statusCopy == "1 working · 1 needs attention · 1 ready")
+        #expect(summary.diffCopy == "5 files · +15 −7")
+        #expect(summary.legs.map(\.id.rawValue) == [
+            "mission-1-leg-app",
+            "mission-1-leg-sdk",
+            "mission-1-leg-server",
+        ])
+        #expect(summary.attentionLegIDs.map(\.rawValue) == ["mission-1-leg-sdk"])
+        #expect(summary.legs[0].agentCopy == "Codex · Working")
+        #expect(summary.legs[1].stateLabel == "Needs attention")
+        #expect(summary.legs[1].actions.retryAgent)
+        #expect(summary.legs[2].stateLabel == "Ready")
+    }
+
     @Test func tabContextRejectsReplacementBranchAndUsesMissionBase() {
         let aggregate = Self.runningAggregate()
         var replacement = Self.worktree
@@ -276,6 +307,133 @@ struct MissionPresentationTests {
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
         return aggregate
+    }
+
+    private static func threeLegAggregate() -> MissionAggregate {
+        let missionID = MissionID(rawValue: "mission-1")
+        let appLegID = MissionLegID(rawValue: "mission-1-leg-app")
+        let sdkLegID = MissionLegID(rawValue: "mission-1-leg-sdk")
+        let serverLegID = MissionLegID(rawValue: "mission-1-leg-server")
+        return MissionAggregate(
+            mission: MissionRecord(
+                id: missionID,
+                title: "Fix parser crash",
+                state: .running,
+                setupCheckpoint: .running,
+                primaryLegID: appLegID,
+                createdAt: Date(timeIntervalSince1970: 100),
+                updatedAt: Date(timeIntervalSince1970: 120),
+                completedAt: nil
+            ),
+            issue: MissionFixtures.issue(),
+            legs: [
+                Self.leg(
+                    id: appLegID,
+                    missionID: missionID,
+                    ordinal: 0,
+                    projectId: "app",
+                    branch: "mission/42-app",
+                    worktreeId: "wt-app",
+                    state: .running,
+                    setupCheckpoint: .running,
+                    acpSessionId: "session-app"
+                ),
+                Self.leg(
+                    id: sdkLegID,
+                    missionID: missionID,
+                    ordinal: 1,
+                    projectId: "sdk",
+                    branch: "mission/42-sdk",
+                    worktreeId: "wt-sdk",
+                    state: .needsAttention,
+                    setupCheckpoint: .startingAgent,
+                    attentionReason: "Agent authentication is required."
+                ),
+                Self.leg(
+                    id: serverLegID,
+                    missionID: missionID,
+                    ordinal: 2,
+                    projectId: "server",
+                    branch: "mission/42-server",
+                    worktreeId: "wt-server",
+                    state: .ready,
+                    setupCheckpoint: .running,
+                    readinessEvidence: .init(
+                        kind: .mergedReview,
+                        observedAt: Date(timeIntervalSince1970: 130)
+                    )
+                ),
+            ],
+            events: [
+                MissionFixtures.event(
+                    id: "mission-1-event-1",
+                    missionID: missionID,
+                    legID: appLegID,
+                    kind: .created
+                )
+            ]
+        )
+    }
+
+    private static func leg(
+        id: MissionLegID,
+        missionID: MissionID,
+        ordinal: Int,
+        projectId: String,
+        branch: String,
+        worktreeId: String?,
+        state: MissionLegState,
+        setupCheckpoint: MissionSetupCheckpoint,
+        attentionReason: String? = nil,
+        acpSessionId: String? = nil,
+        readinessEvidence: MissionLegReadinessEvidence? = nil
+    ) -> MissionLeg {
+        MissionLeg(
+            id: id,
+            missionID: missionID,
+            ordinal: ordinal,
+            projectId: projectId,
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: branch,
+            destinationPath: "/tmp/\(projectId)",
+            worktreeId: worktreeId,
+            agentId: "codex",
+            acpSessionId: acpSessionId,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: state,
+            setupCheckpoint: setupCheckpoint,
+            attentionReason: attentionReason,
+            readinessEvidence: readinessEvidence,
+            createdAt: Date(timeIntervalSince1970: 100 + TimeInterval(ordinal)),
+            updatedAt: Date(timeIntervalSince1970: 120 + TimeInterval(ordinal))
+        )
+    }
+
+    private static func worktree(for leg: MissionLeg) -> Worktree? {
+        guard let worktreeId = leg.worktreeId else { return nil }
+        return Worktree(
+            id: worktreeId,
+            projectId: leg.projectId,
+            name: leg.branch,
+            branch: leg.branch,
+            path: URL(fileURLWithPath: leg.destinationPath),
+            status: .dirty,
+            lastActivity: Date(timeIntervalSince1970: 100)
+        )
+    }
+
+    private static func diffCounts(for leg: MissionLeg) -> MissionDiffCounts? {
+        switch leg.projectId {
+        case "app":
+            .init(fileCount: 2, additions: 10, deletions: 4)
+        case "sdk":
+            .init(fileCount: 3, additions: 5, deletions: 3)
+        default:
+            nil
+        }
     }
 
     private static func reviewSnapshot(
