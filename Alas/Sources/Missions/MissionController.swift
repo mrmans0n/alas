@@ -147,13 +147,12 @@ final class MissionController {
         do {
             var didChange = false
             for aggregate in try await persistence.list(includeCompleted: true) {
-                guard var leg = aggregate.primaryLeg,
-                      leg.baseRemoteName == nil,
-                      let resolvedRemoteName = await resolver(leg.projectId, leg.baseRef)
-                else { continue }
-                leg.baseRemoteName = resolvedRemoteName
-                try await persistence.updateLeg(leg, event: nil)
-                didChange = true
+                for var leg in aggregate.legs where leg.baseRemoteName == nil {
+                    guard let resolvedRemoteName = await resolver(leg.projectId, leg.baseRef) else { continue }
+                    leg.baseRemoteName = resolvedRemoteName
+                    try await persistence.updateLeg(leg, event: nil)
+                    didChange = true
+                }
             }
             if didChange { await load() }
         } catch {
@@ -167,7 +166,18 @@ final class MissionController {
         return id
     }
 
+    func addLeg(_ draft: MissionLegDraft, to missionID: MissionID) async throws -> MissionLegID {
+        let legID = try await coordinator.addLeg(missionID: missionID, draft: draft)
+        loadError = nil
+        return legID
+    }
+
     func retry(_ id: MissionID, agentId: String? = nil) async {
+        guard let legID = aggregate(id: id)?.mission.primaryLegID else { return }
+        await retry(id, legID: legID, agentId: agentId)
+    }
+
+    func retry(_ id: MissionID, legID: MissionLegID, agentId: String? = nil) async {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
@@ -176,32 +186,27 @@ final class MissionController {
                    var aggregate = try await persistence.aggregate(id: id),
                    aggregate.mission.state == .needsAttention,
                    aggregate.mission.setupCheckpoint == .startingAgent,
-                   var leg = aggregate.primaryLeg {
+                   var leg = aggregate.legs.first(where: { $0.id == legID }) {
                     if leg.agentId != agentId {
                         leg.agentId = agentId
                         // ACP sessions retain their original agent identity. A replacement
                         // therefore needs a fresh, durable session ID instead of mutating
                         // the prior session or accidentally hydrating it for the new agent.
                         leg.acpSessionId = environment.makeID()
-                        // A prompt consumed by the prior session cannot be transferred by
-                        // its durable receipt. Explicit replacement starts a new delegation,
-                        // so restore issue-derived input for the replacement session.
-                        if leg.pendingInitialPrompt == nil {
-                            leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
-                        }
+                        // Retry input is a prepared, persisted draft. Do not rebuild it from
+                        // current issue state after a session has consumed it.
                         try await persistence.updateLeg(leg, event: nil)
-                        aggregate.legs = [leg]
+                        aggregate.legs = aggregate.legs.map { $0.id == leg.id ? leg : $0 }
                         environment.notifyChanged(aggregate)
                         replace(aggregate)
                     }
                 }
                 if let aggregate = try await persistence.aggregate(id: id) {
-                    recreateWorktree = aggregate.mission.state == .needsAttention
-                        && aggregate.mission.setupCheckpoint == .running
-                        && aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+                    recreateWorktree = aggregate.legs.first(where: { $0.id == legID })?.attentionReason
+                        == MissionReadinessEvaluator.missingWorktreeMessage
                 }
                 loadError = nil
-                await coordinator.retry(id: id, recreateWorktree: recreateWorktree)
+                await coordinator.retry(id: id, legID: legID, recreateWorktree: recreateWorktree)
             } catch {
                 loadError = error.localizedDescription
             }
@@ -218,8 +223,8 @@ final class MissionController {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
-            for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
-                guard let leg = aggregate.primaryLeg else { continue }
+            for aggregate in active {
+                for leg in aggregate.legs where leg.worktreeId == worktreeId {
                 guard leg.baseRef == baseRef else { continue }
                 guard let currentWorktree = environment.worktreeAtDestination(
                     leg.projectId,
@@ -276,7 +281,7 @@ final class MissionController {
                 guard request.state != .merged
                     || (!snapshot.local.headSHA.isEmpty && request.headSHA == snapshot.local.headSHA)
                 else { continue }
-                if let linked = aggregate.primaryLeg?.reviewIdentity,
+                if let linked = leg.reviewIdentity,
                    !Self.sameReviewIdentity(linked, identity),
                    !replacesLinkedReview {
                     continue
@@ -285,8 +290,10 @@ final class MissionController {
                     request,
                     identity: identity,
                     to: aggregate.mission.id,
+                    legID: leg.id,
                     replaceReviewIdentity: replacesLinkedReview
                 )
+                }
             }
         } catch {
             loadError = error.localizedDescription
@@ -297,9 +304,9 @@ final class MissionController {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
-            for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
-                guard let leg = aggregate.primaryLeg,
-                      leg.baseRef == baseRef,
+            for aggregate in active {
+                for leg in aggregate.legs where leg.worktreeId == worktreeId {
+                guard leg.baseRef == baseRef,
                       let currentWorktree = environment.worktreeAtDestination(
                           leg.projectId,
                           leg.destinationPath
@@ -318,8 +325,10 @@ final class MissionController {
                     request,
                     identity: Self.reviewIdentity(for: request),
                     to: aggregate.mission.id,
+                    legID: leg.id,
                     replaceReviewIdentity: replacesLinkedReview
                 )
+                }
             }
         } catch {
             loadError = error.localizedDescription
@@ -335,16 +344,17 @@ final class MissionController {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
-            for aggregate in active where aggregate.primaryLeg?.worktreeId == worktreeId {
-                guard let leg = aggregate.primaryLeg,
-                      let currentWorktree = environment.worktreeAtDestination(
+            for aggregate in active {
+                for leg in aggregate.legs where leg.worktreeId == worktreeId {
+                guard let currentWorktree = environment.worktreeAtDestination(
                           leg.projectId,
                           leg.destinationPath
                       ), currentWorktree.id == worktreeId,
                       currentWorktree.branch == leg.branch,
                       worktreeArchived(leg.projectId, leg.destinationPath)
                 else { continue }
-                await applyArchive(to: aggregate.mission.id)
+                await applyArchive(to: aggregate.mission.id, legID: leg.id)
+                }
             }
         } catch {
             loadError = error.localizedDescription
@@ -352,7 +362,16 @@ final class MissionController {
     }
 
     func recordMissingWorktree(_ id: MissionID, projectRemoved: Bool = false) async {
-        await apply(signal: projectRemoved ? .projectRemoved : .worktreeMissing, to: id)
+        guard let legID = aggregate(id: id)?.mission.primaryLegID else { return }
+        await recordMissingWorktree(id, legID: legID, projectRemoved: projectRemoved)
+    }
+
+    func recordMissingWorktree(_ id: MissionID, legID: MissionLegID, projectRemoved: Bool = false) async {
+        await apply(
+            signal: projectRemoved ? .projectRemoved : .worktreeMissing,
+            to: id,
+            legID: legID
+        )
     }
 
     func recordAvailableWorktree(_ id: MissionID) async {
@@ -363,11 +382,14 @@ final class MissionController {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
-            for aggregate in active where aggregate.primaryLeg?.projectId == projectId {
-                await recordMissingWorktree(
-                    aggregate.mission.id,
-                    projectRemoved: projectRemoved
-                )
+            for aggregate in active {
+                for leg in aggregate.legs where leg.projectId == projectId {
+                    await recordMissingWorktree(
+                        aggregate.mission.id,
+                        legID: leg.id,
+                        projectRemoved: projectRemoved
+                    )
+                }
             }
         } catch {
             loadError = error.localizedDescription
@@ -412,8 +434,19 @@ final class MissionController {
 
     func refreshLinkedReview(_ id: MissionID) async {
         do {
+            guard let aggregate = try await persistence.aggregate(id: id) else { return }
+            for leg in aggregate.legs where leg.reviewIdentity != nil {
+                await refreshLinkedReview(id, legID: leg.id)
+            }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    func refreshLinkedReview(_ id: MissionID, legID: MissionLegID) async {
+        do {
             guard let aggregate = try await persistence.aggregate(id: id),
-                  let leg = aggregate.primaryLeg,
+                  let leg = aggregate.legs.first(where: { $0.id == legID }),
                   let identity = leg.reviewIdentity,
                   let request = await linkedReviewRequest(identity, leg.projectId, Self.baseBranch(for: leg)),
                   Self.review(request, matches: leg, issueIdentity: aggregate.issue.identity)
@@ -424,7 +457,7 @@ final class MissionController {
                       request.headSHA == currentTip
                 else { return }
             }
-            await applyReview(request, identity: identity, to: id)
+            await applyReview(request, identity: identity, to: id, legID: legID)
         } catch {
             loadError = error.localizedDescription
         }
@@ -433,7 +466,9 @@ final class MissionController {
     func refreshReviewWithoutWorktree(_ id: MissionID) async {
         do {
             guard let aggregate = try await persistence.aggregate(id: id) else { return }
-            await refreshReviewWithoutWorktree(for: aggregate)
+            for leg in aggregate.legs {
+                await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
+            }
         } catch {
             loadError = error.localizedDescription
         }
@@ -443,12 +478,13 @@ final class MissionController {
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
-            let matching = active.filter { $0.primaryLeg?.worktreeId == worktreeID }
-            for aggregate in matching {
-                await refreshReviewWithoutWorktree(for: aggregate)
-                guard let refreshed = try await persistence.aggregate(id: aggregate.mission.id),
-                      refreshed.mission.state == .readyToComplete
-                else { return false }
+            for aggregate in active {
+                for leg in aggregate.legs where leg.worktreeId == worktreeID {
+                    await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
+                    guard let refreshed = try await persistence.aggregate(id: aggregate.mission.id),
+                          refreshed.legs.first(where: { $0.id == leg.id })?.readinessEvidence != nil
+                    else { return false }
+                }
             }
             return true
         } catch {
@@ -503,7 +539,7 @@ final class MissionController {
     func hasActiveMission(worktreeId: String) -> Bool {
         aggregates.contains { aggregate in
             aggregate.mission.state != .completed
-                && aggregate.primaryLeg?.worktreeId == worktreeId
+                && aggregate.legs.contains { $0.worktreeId == worktreeId }
         }
     }
 
@@ -525,40 +561,41 @@ final class MissionController {
         do {
             let active = try await persistence.list(includeCompleted: false)
             for aggregate in active {
-                guard let leg = aggregate.primaryLeg,
-                      aggregate.mission.state != .creating,
-                      aggregate.mission.setupCheckpoint != .creatingWorktree
+                for leg in aggregate.legs {
+                guard aggregate.mission.state != .completed,
+                      leg.state != .creating,
+                      leg.setupCheckpoint != .creatingWorktree
                 else { continue }
                 if !projectExists(leg.projectId) {
-                    await recordMissingWorktree(aggregate.mission.id, projectRemoved: true)
+                    await recordMissingWorktree(aggregate.mission.id, legID: leg.id, projectRemoved: true)
                     continue
                 }
                 guard let worktree = environment.worktreeAtDestination(leg.projectId, leg.destinationPath) else {
                     if worktreeDiscoverySucceeded(leg.projectId) {
-                        await recordMissingWorktree(aggregate.mission.id)
+                        await recordMissingWorktree(aggregate.mission.id, legID: leg.id)
                     }
-                    await refreshReviewWithoutWorktree(for: aggregate)
+                    await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
                     continue
                 }
                 guard worktree.branch == leg.branch else {
                     if worktreeDiscoverySucceeded(leg.projectId) {
-                        await recordMissingWorktree(aggregate.mission.id)
+                        await recordMissingWorktree(aggregate.mission.id, legID: leg.id)
                     }
-                    await refreshReviewWithoutWorktree(for: aggregate)
+                    await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
                     continue
                 }
                 guard let worktreeLineageID = leg.worktreeLineageID,
                       worktree.lineageID == worktreeLineageID
                 else {
                     if worktreeDiscoverySucceeded(leg.projectId) {
-                        await recordMissingWorktree(aggregate.mission.id)
+                        await recordMissingWorktree(aggregate.mission.id, legID: leg.id)
                     }
-                    await refreshReviewWithoutWorktree(for: aggregate)
+                    await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
                     continue
                 }
                 await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
                 if worktreeArchived(leg.projectId, leg.destinationPath) {
-                    await applyArchive(to: aggregate.mission.id)
+                    await applyArchive(to: aggregate.mission.id, legID: leg.id)
                     continue
                 }
                 let snapshot: ReviewLoopSnapshot?
@@ -583,6 +620,7 @@ final class MissionController {
                         baseRef: leg.baseRef,
                         snapshot: snapshot
                     )
+                }
                 }
             }
         } catch {
@@ -642,8 +680,7 @@ final class MissionController {
         return request
     }
 
-    private func refreshReviewWithoutWorktree(for aggregate: MissionAggregate) async {
-        guard let leg = aggregate.primaryLeg else { return }
+    private func refreshReviewWithoutWorktree(for aggregate: MissionAggregate, leg: MissionLeg) async {
         if let currentWorktree = environment.worktreeAtDestination(
             leg.projectId,
             leg.destinationPath
@@ -673,13 +710,13 @@ final class MissionController {
                               !currentTip.isEmpty,
                               linked.headSHA == currentTip
                         else { return }
-                        await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                        await applyReview(linked, identity: identity, to: aggregate.mission.id, legID: leg.id)
                         return
                     }
-                    await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                    await applyReview(linked, identity: identity, to: aggregate.mission.id, legID: leg.id)
                 }
                 if linked.state == .closed {
-                    await applyReview(linked, identity: identity, to: aggregate.mission.id)
+                    await applyReview(linked, identity: identity, to: aggregate.mission.id, legID: leg.id)
                 }
             }
             replacesLinkedReview = true
@@ -704,6 +741,7 @@ final class MissionController {
             request,
             identity: Self.reviewIdentity(for: request),
             to: aggregate.mission.id,
+            legID: leg.id,
             replaceReviewIdentity: replacesLinkedReview
         )
     }
@@ -764,16 +802,19 @@ final class MissionController {
         _ request: ReviewRequest,
         identity: MissionReviewIdentity,
         to id: MissionID,
+        legID: MissionLegID? = nil,
         replaceReviewIdentity: Bool = false
     ) async {
         await apply(
             signal: .review(state: request.state, identity: identity),
             to: id,
+            legID: legID,
             replaceReviewIdentity: replaceReviewIdentity,
             validate: { [weak self] aggregate in
                 guard request.state == .merged else { return true }
                 guard let self,
-                      let leg = aggregate.primaryLeg,
+                      let leg = legID.flatMap({ target in aggregate.legs.first { $0.id == target } })
+                        ?? aggregate.primaryLeg,
                       let currentTip = await branchTip(leg.projectId, leg.branch),
                       !currentTip.isEmpty
                 else { return false }
@@ -783,13 +824,15 @@ final class MissionController {
         )
     }
 
-    private func applyArchive(to id: MissionID) async {
+    private func applyArchive(to id: MissionID, legID: MissionLegID? = nil) async {
         await apply(
             signal: .worktreeArchived,
             to: id,
+            legID: legID,
             validate: { [weak self] aggregate in
                 guard let self,
-                      let leg = aggregate.primaryLeg,
+                      let leg = legID.flatMap({ target in aggregate.legs.first { $0.id == target } })
+                        ?? aggregate.primaryLeg,
                       let currentWorktree = environment.worktreeAtDestination(
                           leg.projectId,
                           leg.destinationPath
@@ -807,6 +850,7 @@ final class MissionController {
     private func apply(
         signal: MissionReadinessSignal,
         to id: MissionID,
+        legID: MissionLegID? = nil,
         replaceReviewIdentity: Bool = false,
         validate: @escaping @MainActor (MissionAggregate) async -> Bool = { _ in true }
     ) async {
@@ -814,29 +858,27 @@ final class MissionController {
             guard let self else { return }
             do {
                 guard var aggregate = try await persistence.aggregate(id: id) else { return }
-                let setupWasCreating = aggregate.mission.state == .creating
+                guard let targetLegID = legID ?? aggregate.primaryLeg?.id else { return }
+                let setupWasCreating = aggregate.legs.first(where: { $0.id == targetLegID })?.state == .creating
                 if setupWasCreating {
-                    await coordinator.advance(id: id)
+                    await coordinator.advance(id: id, legID: targetLegID)
                     guard let settled = try await persistence.aggregate(id: id),
-                          settled.mission.state != .creating
+                          settled.legs.first(where: { $0.id == targetLegID })?.state != .creating
                     else { return }
                     aggregate = settled
                 }
                 guard await validate(aggregate) else { return }
+                guard let targetLeg = aggregate.legs.first(where: { $0.id == targetLegID }) else { return }
                 let decision = MissionReadinessEvaluator.evaluate(
-                    currentState: aggregate.mission.state,
-                    signal: signal
+                    currentState: targetLeg.state,
+                    signal: signal,
+                    observedAt: environment.now()
                 )
-                if setupWasCreating,
-                   aggregate.mission.state != .running,
-                   case .ready = decision {
-                    return
-                }
                 switch decision {
                 case .unchanged(let reviewIdentity):
                     guard aggregate.mission.state != .completed,
                           let reviewIdentity,
-                          var leg = aggregate.primaryLeg,
+                          var leg = aggregate.legs.first(where: { $0.id == targetLegID }),
                           leg.reviewIdentity != reviewIdentity,
                           leg.reviewIdentity == nil || replaceReviewIdentity
                     else { return }
@@ -845,48 +887,53 @@ final class MissionController {
                         leg,
                         event: makeEvent(
                             aggregate: aggregate,
+                            legID: targetLegID,
                             kind: .reviewLinked,
                             message: "\(reviewIdentity.provider.reviewRequestLabel) \(reviewIdentity.provider.reviewRequestNumberPrefix)\(reviewIdentity.number) linked."
                         )
                     )
 
-                case .ready(let reviewIdentity, let message):
+                case .ready(let reviewIdentity, let evidence, let message):
                     let linkedIdentity = replaceReviewIdentity
                         ? reviewIdentity
-                        : aggregate.primaryLeg?.reviewIdentity ?? reviewIdentity
-                    try await persistence.markReady(
-                        id: id,
-                        reviewIdentity: linkedIdentity,
-                        event: makeEvent(aggregate: aggregate, kind: .ready, message: message)
+                        : targetLeg.reviewIdentity ?? reviewIdentity
+                    var leg = targetLeg
+                    leg.reviewIdentity = linkedIdentity
+                    leg.state = .ready
+                    leg.setupCheckpoint = .running
+                    leg.attentionReason = nil
+                    leg.readinessEvidence = evidence
+                    leg.updatedAt = evidence.observedAt
+                    try await persistence.updateLeg(
+                        leg,
+                        event: makeEvent(
+                            aggregate: aggregate,
+                            legID: targetLegID,
+                            kind: .ready,
+                            message: message
+                        )
                     )
 
                 case .needsAttention(let message):
-                    if case .worktreeMissing = signal,
-                       var leg = aggregate.primaryLeg,
-                       leg.pendingInitialPrompt == nil {
-                        // This is a new durable delegation caused by losing the
-                        // worktree, not a retry-time prompt reconstruction.
-                        leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
-                        leg.updatedAt = environment.now()
-                        try await persistence.updateLeg(leg, event: nil)
-                        aggregate.legs = aggregate.legs.map { $0.id == leg.id ? leg : $0 }
-                    }
-                    let checkpoint: MissionSetupCheckpoint = if case .worktreeMissing = signal {
-                        .running
-                    } else {
-                        aggregate.mission.setupCheckpoint
-                    }
-                    guard aggregate.mission.state != .needsAttention
-                            || aggregate.mission.attentionReason != message
-                            || aggregate.mission.setupCheckpoint != checkpoint
+                    guard targetLeg.state != .needsAttention
+                            || targetLeg.attentionReason != message
                     else { return }
-                    try await persistence.updateSetup(
-                        id: id,
-                        state: .needsAttention,
-                        checkpoint: checkpoint,
-                        attentionReason: message,
+                    var leg = targetLeg
+                    if case .worktreeMissing = signal,
+                       leg.pendingInitialPrompt == nil {
+                        // Losing the worktree creates a fresh delegation target; the
+                        // prior prompt receipt belongs to the vanished session.
+                        leg.pendingInitialPrompt = MissionPromptBuilder.build(snapshot: aggregate.issue)
+                    }
+                    leg.state = .needsAttention
+                    leg.setupCheckpoint = if case .worktreeMissing = signal { .running } else { targetLeg.setupCheckpoint }
+                    leg.attentionReason = message
+                    leg.updatedAt = environment.now()
+                    try await persistence.updateLeg(
+                        leg,
                         event: makeEvent(
                             aggregate: aggregate,
+                            legID: targetLegID,
                             kind: .attentionRequired,
                             message: message
                         )
@@ -902,13 +949,14 @@ final class MissionController {
 
     private func makeEvent(
         aggregate: MissionAggregate,
+        legID: MissionLegID? = nil,
         kind: MissionEventKind,
         message: String
     ) -> MissionEvent {
         MissionEvent(
             id: environment.makeID(),
             missionID: aggregate.mission.id,
-            legID: aggregate.primaryLeg?.id,
+            legID: legID ?? aggregate.primaryLeg?.id,
             kind: kind,
             message: message,
             createdAt: environment.now()

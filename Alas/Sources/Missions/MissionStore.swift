@@ -476,10 +476,7 @@ final class MissionStore {
         try validate(event: event, for: id)
         if let leg, leg.missionID != id { throw Error.malformedRecord }
         try immediateTransaction {
-            let aggregate = try requireAggregate(id)
-            guard aggregate.legs.allSatisfy({ $0.readinessEvidence != nil }) else {
-                throw Error.invalidLegCollection
-            }
+            _ = try requireAggregate(id)
             if let leg {
                 let changed = try db.execChanges("""
                 UPDATE mission_legs

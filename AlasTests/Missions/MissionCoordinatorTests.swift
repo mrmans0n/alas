@@ -353,6 +353,8 @@ struct MissionCoordinatorTests {
         var retrying = MissionFixtures.creatingMission()
         retrying.mission.state = .needsAttention
         retrying.mission.setupCheckpoint = .startingAgent
+        retrying.legs[0].state = .needsAttention
+        retrying.legs[0].setupCheckpoint = .startingAgent
         retrying.legs[0].worktreeId = "worktree-1"
         retrying.legs[0].acpSessionId = "session-1"
         let fake = MissionCoordinatorFake(existing: [retrying])
@@ -360,12 +362,12 @@ struct MissionCoordinatorTests {
         fake.worktreeAtDestination = fake.worktree
         let controller = MissionController(environment: fake.environment)
 
-        await controller.retry(retrying.mission.id)
+        await controller.retry(retrying.mission.id, legID: retrying.legs[0].id)
         let aggregate = try #require(try await fake.persistence.aggregate(id: retrying.mission.id))
 
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test("missing worktree recovery restarts the worktree checkpoint")
@@ -373,6 +375,8 @@ struct MissionCoordinatorTests {
         var missing = MissionFixtures.creatingMission()
         missing.mission.state = .running
         missing.mission.setupCheckpoint = .running
+        missing.legs[0].state = .running
+        missing.legs[0].setupCheckpoint = .running
         missing.legs[0].worktreeId = "missing-worktree"
         missing.legs[0].acpSessionId = "missing-session"
         missing.legs[0].pendingInitialPrompt = nil
@@ -383,19 +387,19 @@ struct MissionCoordinatorTests {
         fake.worktreeAtDestination = nil
         let controller = MissionController(environment: fake.environment)
 
-        await controller.recordMissingWorktree(missing.mission.id)
+        await controller.recordMissingWorktree(missing.mission.id, legID: missing.legs[0].id)
         let marked = try #require(try await fake.persistence.aggregate(id: missing.mission.id))
-        #expect(marked.mission.state == .needsAttention)
-        #expect(marked.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(marked.primaryLeg?.state == .needsAttention)
+        #expect(marked.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
 
-        await controller.retry(missing.mission.id)
+        await controller.retry(missing.mission.id, legID: missing.legs[0].id)
         let recovered = await fake.waitUntilSettled(missing.mission.id)
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 1)
         #expect(fake.startedPromptIDs == [missing.legs[0].initialPromptId])
-        #expect(recovered.mission.state == .needsAttention)
-        #expect(recovered.mission.setupCheckpoint == .startingAgent)
+        #expect(recovered.primaryLeg?.state == .needsAttention)
+        #expect(recovered.primaryLeg?.setupCheckpoint == .startingAgent)
         #expect(recovered.primaryLeg?.worktreeId == fake.worktree.id)
         #expect(recovered.primaryLeg?.acpSessionId != "missing-session")
         #expect(recovered.primaryLeg?.pendingInitialPrompt != nil)
@@ -407,6 +411,9 @@ struct MissionCoordinatorTests {
         missing.mission.state = .needsAttention
         missing.mission.setupCheckpoint = .running
         missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].state = .needsAttention
+        missing.legs[0].setupCheckpoint = .running
+        missing.legs[0].attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
         missing.legs[0].worktreeId = "worktree-1"
         missing.legs[0].worktreeLineageID = "lineage-1"
         missing.legs[0].acpSessionId = "session-1"
@@ -414,13 +421,13 @@ struct MissionCoordinatorTests {
         let fake = MissionCoordinatorFake(existing: [missing])
         let controller = MissionController(environment: fake.environment)
 
-        await controller.retry(missing.mission.id)
+        await controller.retry(missing.mission.id, legID: missing.legs[0].id)
         let recovered = try #require(try await fake.persistence.aggregate(id: missing.mission.id))
 
         #expect(fake.createWorktreeCalls == 0)
         #expect(fake.startACPCalls == 0)
-        #expect(recovered.mission.state == .running)
-        #expect(recovered.mission.setupCheckpoint == .running)
+        #expect(recovered.primaryLeg?.state == .running)
+        #expect(recovered.primaryLeg?.setupCheckpoint == .running)
         #expect(recovered.primaryLeg?.worktreeId == "worktree-1")
         #expect(recovered.primaryLeg?.worktreeLineageID == "lineage-1")
         #expect(recovered.primaryLeg?.acpSessionId == "session-1")
@@ -731,7 +738,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.startACPCalls == 2)
         #expect(fake.startedAgentIDs == ["codex", "claude"])
-        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId, Self.draft.initialPromptId])
+        #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
         #expect(recovered.primaryLeg?.agentId == "claude")
         #expect(recovered.primaryLeg?.acpSessionId != "started-session")
         #expect(recovered.primaryLeg?.pendingInitialPrompt == nil)

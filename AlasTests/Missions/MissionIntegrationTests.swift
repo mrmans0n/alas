@@ -114,6 +114,65 @@ struct MissionIntegrationTests {
         #expect(ready.events.last?.kind == .ready)
     }
 
+    @Test("Mission becomes ready only after every leg is ready")
+    func allLegsReady() async throws {
+        let fake = try MissionControllerFake(existing: MissionFixtures.twoLegMission())
+        await fake.controller.load()
+
+        await fake.controller.observeReview(
+            worktreeId: "sdk-worktree",
+            baseRef: "origin/main",
+            snapshot: .mergedFixture
+        )
+        let afterReview = try #require(try await fake.persistence.aggregate(id: .fixture))
+        #expect(afterReview.mission.state == .running)
+        #expect(afterReview.legs.first(where: { $0.id == .sdk })?.readinessEvidence?.kind == .mergedReview)
+
+        await fake.controller.recordArchive(worktreeId: "app-worktree")
+        #expect(try await fake.persistence.aggregate(id: .fixture)?.mission.state == .readyToComplete)
+    }
+
+    @Test("A missing worktree affects only its matching leg")
+    func missingWorktreeAffectsOnlyMatchingLeg() async throws {
+        let fake = try MissionControllerFake(existing: MissionFixtures.twoLegMission())
+        await fake.controller.load()
+
+        await fake.controller.recordMissingWorktree(projectId: "sdk-project", projectRemoved: false)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: .fixture))
+
+        #expect(aggregate.legs.first(where: { $0.id == .sdk })?.state == .needsAttention)
+        #expect(aggregate.legs.first(where: { $0.id == .app })?.state == .running)
+    }
+
+    @Test("Project removal affects only matching legs")
+    func projectRemovalAffectsOnlyMatchingLegs() async throws {
+        let fake = try MissionControllerFake(existing: MissionFixtures.twoLegMission())
+        await fake.controller.load()
+
+        await fake.controller.recordMissingWorktree(projectId: "app-project", projectRemoved: true)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: .fixture))
+
+        #expect(aggregate.legs.first(where: { $0.id == .app })?.state == .needsAttention)
+        #expect(aggregate.legs.first(where: { $0.id == .sdk })?.state == .running)
+    }
+
+    @Test("Provider refresh failure preserves prior leg readiness")
+    func providerRefreshFailurePreservesPriorLegReadiness() async throws {
+        let fake = try MissionControllerFake(
+            existing: MissionFixtures.twoLegMission(),
+            issueRefresh: { _, _ in throw CodeHostProviderError.unauthenticated("github.com") }
+        )
+        await fake.controller.load()
+        await fake.controller.recordArchive(worktreeId: "app-worktree")
+        let before = try #require(try await fake.persistence.aggregate(id: .fixture))
+
+        await fake.controller.refreshIssue(.fixture)
+        let after = try #require(try await fake.persistence.aggregate(id: .fixture))
+
+        #expect(after.legs.first(where: { $0.id == .app })?.readinessEvidence == before.legs.first(where: { $0.id == .app })?.readinessEvidence)
+        #expect(after.mission.state == .running)
+    }
+
     @Test("complete persists completion and has no external side effects")
     func completeHasNoExternalSideEffects() async throws {
         let harness = try MissionIntegrationHarness(running: true)
@@ -154,6 +213,215 @@ struct MissionIntegrationTests {
         #expect(duplicate.mission.state == .running)
         #expect(harness.worktreeCreateCount == 1)
         #expect(harness.sessionIDs.count == 1)
+    }
+}
+
+private extension MissionID {
+    static let fixture = MissionID(rawValue: "fixture-mission")
+}
+
+private extension MissionLegID {
+    static let app = MissionLegID(rawValue: "fixture-app-leg")
+    static let sdk = MissionLegID(rawValue: "fixture-sdk-leg")
+}
+
+private extension ReviewLoopSnapshot {
+    static let mergedFixture = MissionControllerFake.reviewSnapshot(
+        branch: "sdk-fix",
+        number: 92,
+        state: .merged
+    )
+}
+
+private extension MissionFixtures {
+    static func twoLegMission() -> MissionAggregate {
+        let createdAt = Date(timeIntervalSince1970: 100)
+        let app = fixtureLeg(
+            id: .app,
+            ordinal: 0,
+            projectID: "app-project",
+            branch: "app-fix",
+            destinationPath: "/tmp/fixture-app",
+            worktreeID: "app-worktree",
+            lineageID: "app-lineage"
+        )
+        let sdk = fixtureLeg(
+            id: .sdk,
+            ordinal: 1,
+            projectID: "sdk-project",
+            branch: "sdk-fix",
+            destinationPath: "/tmp/fixture-sdk",
+            worktreeID: "sdk-worktree",
+            lineageID: "sdk-lineage"
+        )
+        return MissionAggregate(
+            mission: .init(
+                id: .fixture,
+                title: "Fixture Mission",
+                state: .running,
+                setupCheckpoint: .running,
+                primaryLegID: .app,
+                createdAt: createdAt,
+                updatedAt: createdAt,
+                completedAt: nil
+            ),
+            issue: issue(),
+            legs: [app, sdk],
+            events: []
+        )
+    }
+
+    static func fixtureLeg(
+        id: MissionLegID,
+        ordinal: Int,
+        projectID: String,
+        branch: String,
+        destinationPath: String,
+        worktreeID: String,
+        lineageID: String
+    ) -> MissionLeg {
+        let timestamp = Date(timeIntervalSince1970: 100)
+        return MissionLeg(
+            id: id,
+            missionID: .fixture,
+            ordinal: ordinal,
+            projectId: projectID,
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: branch,
+            destinationPath: destinationPath,
+            worktreeId: worktreeID,
+            worktreeLineageID: lineageID,
+            agentId: "codex",
+            acpSessionId: "session-\(ordinal)",
+            initialPromptId: UUID(uuidString: ordinal == 0
+                ? "00000000-0000-0000-0000-000000000010"
+                : "00000000-0000-0000-0000-000000000011")!,
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: .running,
+            setupCheckpoint: .running,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+    }
+}
+
+@MainActor
+private final class MissionControllerFake {
+    let persistence: MissionPersistence
+    let controller: MissionController
+
+    init(
+        existing: MissionAggregate,
+        issueRefresh: @escaping MissionIssueRefresh = { _, _ in
+            throw CodeHostProviderError.malformedOutput("No refresh configured.")
+        }
+    ) throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-controller-fixture-\(UUID().uuidString).sqlite")
+            .path
+        let store = try MissionStore(path: path)
+        var seed = existing
+        let extraLegs = Array(seed.legs.dropFirst())
+        seed.legs = Array(seed.legs.prefix(1))
+        seed.events = seed.events.filter { event in
+            event.legID == nil || seed.legs.contains { $0.id == event.legID }
+        }
+        try store.insert(seed)
+        for leg in extraLegs {
+            try store.addLeg(
+                leg,
+                event: MissionFixtures.event(
+                    id: "fixture-add-\(leg.ordinal)",
+                    missionID: leg.missionID,
+                    legID: leg.id,
+                    kind: .legAdded,
+                    createdAt: 100 + Double(leg.ordinal)
+                )
+            )
+        }
+        persistence = MissionPersistence(path: path)
+        var timestamp: TimeInterval = 200
+        var eventID = 0
+        controller = MissionController(
+            environment: .init(
+                persistence: persistence,
+                now: {
+                    timestamp += 1
+                    return Date(timeIntervalSince1970: timestamp)
+                },
+                makeID: {
+                    eventID += 1
+                    return "fixture-event-\(eventID)"
+                },
+                worktreeAtDestination: { projectID, destinationPath in
+                    existing.legs.first { $0.projectId == projectID && $0.destinationPath == destinationPath }.map {
+                        Worktree(
+                            id: $0.worktreeId!,
+                            projectId: $0.projectId,
+                            name: $0.branch,
+                            branch: $0.branch,
+                            path: URL(fileURLWithPath: $0.destinationPath),
+                            status: .clean,
+                            lastActivity: Date(timeIntervalSince1970: 100),
+                            lineageID: $0.worktreeLineageID
+                        )
+                    }
+                },
+                createWorktree: { _ in .failure(.init(message: "Unexpected worktree creation.")) },
+                startACP: { _, _ in .failure(.init(message: "Unexpected ACP startup.")) },
+                notifyChanged: { _ in }
+            ),
+            issueRefresh: issueRefresh,
+            branchTip: { _, _ in "abc123" },
+            projectExists: { _ in true },
+            worktreeArchived: { projectID, _ in projectID == "app-project" }
+        )
+    }
+
+    static func reviewSnapshot(branch: String, number: Int, state: ReviewRequestState) -> ReviewLoopSnapshot {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "acme",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/acme/alas")!
+        )
+        let request = ReviewRequest(
+            remote: remote,
+            number: number,
+            title: "Fixture review",
+            url: remote.reviewRequestURL(number: number),
+            state: state,
+            isDraft: false,
+            headRefName: branch,
+            baseRefName: "main",
+            headSHA: "abc123",
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [],
+            threads: []
+        )
+        return ReviewLoopSnapshot(
+            local: .init(
+                branchName: branch,
+                headSHA: "abc123",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 1,
+                hasUpstream: true,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: request,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
     }
 }
 

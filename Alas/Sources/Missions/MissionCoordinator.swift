@@ -180,17 +180,25 @@ final class MissionCoordinator {
         }
     }
 
+    func advance(id: MissionID, legID: MissionLegID) async {
+        await legCoordinator.advance(missionID: id, legID: legID)
+    }
+
     func retry(id: MissionID, recreateWorktree: Bool = false) async {
         do {
             guard let aggregate = try await environment.persistence.aggregate(id: id) else { return }
-            await legCoordinator.retry(
-                missionID: id,
-                legID: aggregate.mission.primaryLegID,
-                recreateWorktree: recreateWorktree
-            )
+            await retry(id: id, legID: aggregate.mission.primaryLegID, recreateWorktree: recreateWorktree)
         } catch {
             reportPersistenceFailure(id: id, operation: "load Mission setup progress", error: error)
         }
+    }
+
+    func retry(id: MissionID, legID: MissionLegID, recreateWorktree: Bool = false) async {
+        await legCoordinator.retry(
+            missionID: id,
+            legID: legID,
+            recreateWorktree: recreateWorktree
+        )
     }
 
     func reconcileInterrupted() async {
