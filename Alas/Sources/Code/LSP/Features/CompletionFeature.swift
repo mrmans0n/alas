@@ -35,6 +35,7 @@ final class CompletionFeature {
     private var candidateMemberAccessOnly = false
     private var candidateAllowsEmptyPrefix = false
     private var selection: Int = 0
+    private var selectedCandidateID: UUID?
     private let suggestionWindow = CompletionWindowController()
     private var isRefreshing = false
 
@@ -96,6 +97,7 @@ final class CompletionFeature {
         candidateMemberAccessOnly = false
         candidateAllowsEmptyPrefix = false
         selection = 0
+        selectedCandidateID = nil
         isRefreshing = false
         closeUI()
     }
@@ -264,7 +266,9 @@ final class CompletionFeature {
             memberAccessOnly: retainedMemberAccessOnly
         )
 
-        let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
+        let selectedCandidate = candidates.indices.contains(selection)
+            ? candidates[selection]
+            : candidatePool.first { $0.id == selectedCandidateID }
         let selectedEditPlan = selectedCandidate.flatMap { candidate in
             CompletionEngine.editPlan(
                 accepting: candidate,
@@ -318,6 +322,9 @@ final class CompletionFeature {
                     ) == selectedEditPlan
             }
         } ?? 0
+        if candidates.indices.contains(selection) {
+            selectedCandidateID = candidates[selection].id
+        }
         if candidates.isEmpty {
             closeUI()
         } else {
@@ -474,6 +481,7 @@ final class CompletionFeature {
             return true
         case .moveSelection(let delta):
             selection = min(max(0, selection + delta), candidates.count - 1)
+            selectedCandidateID = candidates[selection].id
             showPopup()
             return true
         case .dismiss:
@@ -539,6 +547,7 @@ final class CompletionFeature {
             candidateMemberAccessOnly = false
             candidateAllowsEmptyPrefix = false
             selection = 0
+            selectedCandidateID = nil
             closeUI()
             return
         }
@@ -548,7 +557,9 @@ final class CompletionFeature {
         let coordinateIndex = candidateCoordinateIndex?
             .adjustingOffsets(after: editRange.location, by: prefixDelta) ?? TextEditCoordinates.LineIndex(bufferText)
         candidateCoordinateIndex = coordinateIndex
-        let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
+        let selectedCandidate = candidates.indices.contains(selection)
+            ? candidates[selection]
+            : candidatePool.first { $0.id == selectedCandidateID }
         let selectedEditPlan = selectedCandidate.flatMap { candidate in
             CompletionEngine.editPlan(
                 accepting: candidate,
@@ -600,6 +611,9 @@ final class CompletionFeature {
                     ) == selectedEditPlan
             }
         } ?? 0
+        if candidates.indices.contains(selection) {
+            selectedCandidateID = candidates[selection].id
+        }
 
         if candidates.isEmpty {
             closeUI()
@@ -676,6 +690,7 @@ extension CompletionFeature {
         candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
+        selectedCandidateID = candidates.indices.contains(self.selection) ? candidates[self.selection].id : nil
         isRefreshing = false
     }
 
@@ -685,6 +700,7 @@ extension CompletionFeature {
 
     func testingSetSelection(_ selection: Int) {
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
+        selectedCandidateID = candidates.indices.contains(self.selection) ? candidates[self.selection].id : nil
     }
 
     func testingPresent(

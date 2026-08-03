@@ -487,6 +487,31 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("empty local filter preserves the selected candidate")
+    func emptyLocalFilterPreservesSelection() {
+        let textView = makeTextView("ap")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingSeedVisibleCandidates(
+            labels: ["apple", "apricot"],
+            prefix: CompletionPrefix(text: "ap", range: NSRange(location: 0, length: 2)),
+            selection: 1
+        )
+
+        textView.insertText("z", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["apple", "apricot"])
+        #expect(feature.testingSnapshot.selection == 1)
+        #expect(textView.completionKeyHandler?(.acceptSelected) == true)
+        #expect(textView.string == "apricot")
+        feature.cancelAndDismiss()
+    }
+
     @Test("refreshed results preserve the selected candidate")
     func refreshedResultsPreserveSelectedCandidate() {
         let textView = makeTextView("apTail")

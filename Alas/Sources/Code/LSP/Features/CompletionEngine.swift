@@ -119,9 +119,10 @@ enum CompletionEngine {
         let ns = text as NSString
         var seen = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, Set<String>()) })
         var words = Dictionary(uniqueKeysWithValues: prefixes.map { ($0, [String]()) })
+        var incompletePrefixCount = prefixes.count
         var index = 0
 
-        while index < ns.length {
+        while index < ns.length, incompletePrefixCount > 0 {
             guard isIdentifierChar(ns.character(at: index)) else {
                 index += 1
                 continue
@@ -133,11 +134,18 @@ enum CompletionEngine {
             }
 
             let word = ns.substring(with: NSRange(location: start, length: index - start))
-            for prefix in prefixes where words[prefix, default: []].count < limit {
-                guard word != prefix,
-                      hasCaseInsensitivePrefix(word, prefix),
+            let wordText = word as NSString
+            let commonLength = caseInsensitiveCommonPrefixLength(wordText, prefixText)
+            guard commonLength >= bufferWordMinimumPrefixLength else { continue }
+            for length in bufferWordMinimumPrefixLength...commonLength {
+                let prefix = prefixes[length - bufferWordMinimumPrefixLength]
+                guard words[prefix, default: []].count < limit,
+                      wordText.length != length,
                       seen[prefix, default: []].insert(word).inserted else { continue }
                 words[prefix, default: []].append(word)
+                if words[prefix]?.count == limit {
+                    incompletePrefixCount -= 1
+                }
             }
         }
 
@@ -395,6 +403,20 @@ enum CompletionEngine {
 
     static func hasCaseInsensitivePrefix(_ text: String, _ prefix: String) -> Bool {
         prefix.isEmpty || text.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
+    }
+
+    private static func caseInsensitiveCommonPrefixLength(_ lhs: NSString, _ rhs: NSString) -> Int {
+        let maximum = min(lhs.length, rhs.length)
+        var length = 0
+        while length < maximum {
+            let lhsCharacter = lhs.character(at: length)
+            let rhsCharacter = rhs.character(at: length)
+            let foldedLHS = lhsCharacter >= 0x41 && lhsCharacter <= 0x5A ? lhsCharacter + 0x20 : lhsCharacter
+            let foldedRHS = rhsCharacter >= 0x41 && rhsCharacter <= 0x5A ? rhsCharacter + 0x20 : rhsCharacter
+            guard foldedLHS == foldedRHS else { break }
+            length += 1
+        }
+        return length
     }
 
     private static func isIdentifierChar(_ character: unichar) -> Bool {
