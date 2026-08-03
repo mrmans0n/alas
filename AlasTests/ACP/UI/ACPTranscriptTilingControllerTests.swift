@@ -95,3 +95,68 @@ struct ACPTranscriptTilingControllerTests {
         #expect(c.row(withId: "d")?.minY == c.rowLayout(at: 1).minY)
     }
 }
+
+@MainActor
+@Suite("ACPTranscriptTilingController height updates")
+struct ACPTranscriptTilingHeightTests {
+    private func controller() -> ACPTranscriptTilingController {
+        let c = ACPTranscriptTilingController(metrics: .init(rowSpacing: 10, topPadding: 20))
+        c.replaceAll(rows: [("a", 100), ("b", 50), ("c", 80), ("d", 40)])
+        // minY: a=20, b=130, c=190, d=280 ; documentHeight=320
+        return c
+    }
+
+    @Test("growing a row above the viewport returns the growth as compensation")
+    func growthAboveViewport() {
+        let c = controller()
+        let delta = c.updateHeight(id: "a", to: 150, viewportMinY: 190)
+        #expect(delta == 50)
+        #expect(c.row(withId: "b")?.minY == 180)
+        #expect(c.documentHeight == 370)
+    }
+
+    @Test("shrinking a row above the viewport returns negative compensation")
+    func shrinkAboveViewport() {
+        let c = controller()
+        let delta = c.updateHeight(id: "a", to: 60, viewportMinY: 190)
+        #expect(delta == -40)
+        #expect(c.documentHeight == 280)
+    }
+
+    @Test("growing a row visible in or below the viewport needs no compensation")
+    func growthBelowViewport() {
+        let c = controller()
+        let delta = c.updateHeight(id: "c", to: 120, viewportMinY: 100)
+        #expect(delta == 0)
+        #expect(c.row(withId: "d")?.minY == 320)
+        #expect(c.documentHeight == 360)
+    }
+
+    @Test("unchanged height is a no-op")
+    func unchangedNoop() {
+        let c = controller()
+        let delta = c.updateHeight(id: "b", to: 50, viewportMinY: 0)
+        #expect(delta == 0)
+        #expect(c.documentHeight == 320)
+    }
+
+    @Test("unknown id is a no-op")
+    func unknownId() {
+        let c = controller()
+        #expect(c.updateHeight(id: "zz", to: 99, viewportMinY: 0) == 0)
+        #expect(c.documentHeight == 320)
+    }
+
+    @Test("a row whose bottom edge exactly meets the viewport top counts as above")
+    func exactBoundaryIsAbove() {
+        let c = controller()
+        // b occupies the half-open range [minY, maxY) = [130, 180). When
+        // viewportMinY == 180, the first visible pixel is row b's old maxY:
+        // none of b's pixels are actually on screen, so it is entirely above
+        // the viewport (not "visible"), and its growth must be compensated.
+        let delta = c.updateHeight(id: "b", to: 70, viewportMinY: 180)
+        let expectedDelta: CGFloat = 70 - 50
+        #expect(delta == expectedDelta)
+        #expect(c.documentHeight == 340)
+    }
+}

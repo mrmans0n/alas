@@ -75,6 +75,30 @@ final class ACPTranscriptTilingController {
         rebuildIndex()
     }
 
+    /// Apply a re-measured height. Returns the scroll-offset compensation the
+    /// caller must add to keep the viewport visually still: non-zero only when
+    /// the row lies entirely above the viewport top (its resize would otherwise
+    /// push/pull everything the user is looking at).
+    ///
+    /// Height changes never alter row identity or order, so this does not call
+    /// `rebuildIndex()` — that would be wasted work re-deriving an id → index
+    /// map that hasn't changed.
+    func updateHeight(id: String, to height: CGFloat, viewportMinY: CGFloat) -> CGFloat {
+        guard let index = indexById[id] else { return 0 }
+        let old = rows[index]
+        guard old.height != height else { return 0 }
+        let delta = height - old.height
+        // A row's extent is the half-open range [minY, maxY): it occupies
+        // every y up to, but not including, maxY. When old.maxY <= viewportMinY,
+        // none of the row's pixels are at or past the viewport's top edge, so
+        // it is entirely above the viewport (not merely "at" the boundary) and
+        // its resize must be compensated to keep the visible content still.
+        let isEntirelyAboveViewport = old.maxY <= viewportMinY
+        rows[index].height = height
+        retile(from: index)
+        return isEntirelyAboveViewport ? delta : 0
+    }
+
     /// Recompute minY for rows[from...] and the document height.
     private func retile(from index: Int) {
         var y: CGFloat
