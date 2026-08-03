@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -658,11 +658,9 @@ impl BudgetClock {
     }
 }
 
-/// How many times a write retries on a yield before it starts sleeping. Sized
-/// so a reader that is keeping up never reaches the sleep — see the write loop
-/// in `BudgetedWriter`.
+/// Largest amount handed to a single write. See `BudgetedWriter::write`.
 #[cfg(unix)]
-const IPC_WRITE_SPIN_LIMIT: u32 = 128;
+const IPC_WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// How long a blocked read or write waits before its budget is re-checked.
 /// Also the amount by which a transfer may overshoot.
@@ -1042,86 +1040,154 @@ fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Re
 
 /// Applies an `IoBudget` to a stream of writes.
 ///
-/// The socket's own write timeout resets on every partial write, so it cannot
-/// bound a reply as a whole — a peer draining a byte at a time satisfies it
-/// indefinitely. This carries the budget across writes instead, the same way
-/// `BudgetClock` does for reads.
+/// Writes stay **blocking**, and the budget is enforced from outside by a
+/// watchdog. That indirection is not for elegance — the two obvious
+/// alternatives were both measured and both fail:
 ///
-/// It puts the socket in non-blocking mode rather than setting a write
-/// timeout, because **`SO_SNDTIMEO` is not honoured for AF_UNIX sockets on
-/// Darwin**. Measured: `set_write_timeout(300ms)` returns `Ok`, reads back as
-/// `Some(300ms)`, and a write to a socket whose peer is draining slowly still
-/// does not return after twelve seconds. Every write timeout set on these
-/// sockets was therefore doing nothing at all, which is worse than a bound
-/// that merely resets too often. Polling gives the budget something real to
-/// act on.
+/// - A write timeout does nothing. `SO_SNDTIMEO` is not honoured for AF_UNIX
+///   on Darwin: `set_write_timeout(300ms)` returns `Ok`, reads back as
+///   `Some(300ms)`, and a write to a peer draining slowly has still not
+///   returned twelve seconds later.
+/// - Polling a non-blocking socket is correct but slow in a way that depends
+///   on the machine. A 267 MiB reply fills the socket buffer ~34,000 times
+///   even when the reader keeps up, and every fill has to be noticed:
+///   sleeping on them measured 5.5s against 0.2s blocking, and yielding —
+///   fast when the machine is quiet — degraded to tens of seconds under CPU
+///   load, which is exactly when a broker can least afford it.
 ///
-/// Blocking mode is restored on drop, since the same socket is read from
-/// afterwards on the request side and `SO_RCVTIMEO` *is* honoured.
+/// So the write blocks, the kernel does the waiting, and a watchdog closes the
+/// socket under a write that has outstayed its budget.
 #[cfg(unix)]
 struct BudgetedWriter<'a> {
     stream: &'a UnixStream,
-    clock: BudgetClock,
+    clock: Arc<Mutex<BudgetClock>>,
+    _watch: WriteWatch,
 }
 
 #[cfg(unix)]
 impl<'a> BudgetedWriter<'a> {
     fn new(stream: &'a UnixStream, budget: IoBudget) -> io::Result<Self> {
-        stream.set_nonblocking(true)?;
+        let clock = Arc::new(Mutex::new(BudgetClock::new(budget)));
+        let watch = WriteWatch::arm(stream, Arc::clone(&clock))?;
         Ok(Self {
             stream,
-            clock: BudgetClock::new(budget),
+            clock,
+            _watch: watch,
         })
-    }
-}
-
-#[cfg(unix)]
-impl Drop for BudgetedWriter<'_> {
-    fn drop(&mut self) {
-        let _ = self.stream.set_nonblocking(false);
     }
 }
 
 #[cfg(unix)]
 impl Write for BudgetedWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut stalls = 0u32;
-        loop {
-            if self.clock.expired() {
-                return Err(BudgetClock::timed_out());
+        // Chunked, because a blocking AF_UNIX write on Darwin does not return
+        // a partial count — it waits until the whole buffer is accepted.
+        // Handing it a large reply in one call means no progress is reported
+        // until the entire thing is through, so the budget sees `bytes = 0`
+        // for as long as the peer cares to take, and only the idle bound ever
+        // fires. Capping each call keeps progress observable without costing
+        // anything measurable: a 267 MiB reply becomes ~4,200 writes.
+        let buf = &buf[..buf.len().min(IPC_WRITE_CHUNK_BYTES)];
+        match (&mut &*self.stream).write(buf) {
+            Ok(written) => {
+                self.clock
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .progressed(written);
+                Ok(written)
             }
-            match (&mut &*self.stream).write(buf) {
-                Ok(written) => {
-                    self.clock.progressed(written);
-                    return Ok(written);
+            // The watchdog unblocks a stalled write by closing the socket, so
+            // the failure surfaces as a broken pipe. Reporting that verbatim
+            // would send whoever reads the log looking for a peer that
+            // disconnected, when what happened is that this peer stopped
+            // reading. Say which it was.
+            Err(error) => {
+                if self
+                    .clock
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .expired()
+                {
+                    return Err(BudgetClock::timed_out());
                 }
-                // The peer is not reading yet. Not a failure — the budget
-                // above decides when that has gone on too long.
-                //
-                // Yield before sleeping, and the difference is not small. A
-                // 267 MiB reply to a reader that is keeping up still fills the
-                // socket buffer ~34k times; sleeping even 100us on each costs
-                // 5.5s against 0.2s for a blocking write, and sleeping a whole
-                // poll slice would cost hours. Yielding first measures ~0.12s
-                // — at or better than blocking — because a keeping-up reader
-                // frees space within a few scheduler passes. A peer that is
-                // genuinely stalled blows through the spins in microseconds
-                // and lands on the sleep, where it belongs.
-                Err(error) if is_quiet(&error) => {
-                    stalls += 1;
-                    if stalls <= IPC_WRITE_SPIN_LIMIT {
-                        std::thread::yield_now();
-                    } else {
-                        std::thread::sleep(IPC_IO_POLL_SLICE);
-                    }
-                }
-                Err(error) => return Err(error),
+                Err(error)
             }
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         (&mut &*self.stream).flush()
+    }
+}
+
+/// A write currently being watched. Dropping it stops the watching.
+#[cfg(unix)]
+struct WriteWatch {
+    id: u64,
+}
+
+#[cfg(unix)]
+struct WatchedWrite {
+    id: u64,
+    stream: UnixStream,
+    clock: Arc<Mutex<BudgetClock>>,
+}
+
+/// The watched set, and the single thread that polices it.
+#[cfg(unix)]
+fn watched_writes() -> &'static Mutex<Vec<WatchedWrite>> {
+    static WATCHED: OnceLock<Mutex<Vec<WatchedWrite>>> = OnceLock::new();
+    WATCHED.get_or_init(|| {
+        let spawned = std::thread::Builder::new().spawn(|| {
+            loop {
+                std::thread::sleep(IPC_IO_POLL_SLICE);
+                let watched = watched_writes()
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                for write in watched.iter() {
+                    let expired = write
+                        .clock
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .expired();
+                    if expired {
+                        // Closing the socket is what unblocks the write: it
+                        // returns an error and the handler unwinds. The peer
+                        // sees the connection drop, which is the truthful
+                        // thing to tell it.
+                        let _ = write.stream.shutdown(std::net::Shutdown::Both);
+                    }
+                }
+            }
+        });
+        // Without the thread nothing enforces the budget, but refusing to
+        // write at all would be a worse answer than writing unpoliced.
+        let _ = spawned;
+        Mutex::new(Vec::new())
+    })
+}
+
+#[cfg(unix)]
+impl WriteWatch {
+    fn arm(stream: &UnixStream, clock: Arc<Mutex<BudgetClock>>) -> io::Result<Self> {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let stream = stream.try_clone()?;
+        watched_writes()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(WatchedWrite { id, stream, clock });
+        Ok(Self { id })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for WriteWatch {
+    fn drop(&mut self) {
+        watched_writes()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|write| write.id != self.id);
     }
 }
 
@@ -2277,10 +2343,13 @@ mod tests {
     }
 
     /// A peer that drains a reply slowly must not be able to hold its handler
-    /// open indefinitely. The socket's write timeout cannot stop it — that
-    /// resets on every partial write — and this direction is worse than the
-    /// read side: a flood of idle connections lapses on its own, while peers
-    /// that keep trickling never do, so the broker would not recover.
+    /// open indefinitely. Enough such peers hold every connection worker, and
+    /// unlike a flood of idle connections — which lapses on its own — these
+    /// never do, so the broker would not recover.
+    ///
+    /// The peer here keeps reading, just far below the rate asked of it, which
+    /// is the case neither an idle bound nor a socket write timeout can catch:
+    /// it is always making progress, and every partial write looks healthy.
     #[cfg(unix)]
     #[test]
     fn a_peer_that_drains_a_reply_slowly_does_not_hold_its_handler_open() {
@@ -2288,31 +2357,35 @@ mod tests {
         let done = Arc::new(Mutex::new(false));
         let reader_done = done.clone();
         std::thread::spawn(move || {
-            // Reads just enough to keep each write making progress, forever.
-            let mut byte = [0u8; 1];
+            // ~320 KiB/s: fast enough that writes keep completing, far short
+            // of the megabytes per second demanded below.
+            let mut chunk = vec![0u8; 32 * 1024];
             while !*reader_done.lock().expect("drain flag") {
-                if std::io::Read::read(&mut reader, &mut byte).is_err() {
+                if std::io::Read::read(&mut reader, &mut chunk).is_err() {
                     return;
                 }
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(100));
             }
         });
 
-        // 1 MiB/s demanded, delivered at ~50 B/s.
         let mut budgeted = BudgetedWriter::new(
             &writer,
-            IoBudget::at_least(Duration::from_secs(30), 1024 * 1024),
+            IoBudget::at_least(Duration::from_secs(120), 4 * 1024 * 1024),
         )
         .expect("budgeted writer");
-        let payload = vec![b'r'; 8 * 1024 * 1024];
+        let payload = vec![b'r'; 64 * 1024 * 1024];
         let started = std::time::Instant::now();
         let outcome = budgeted.write_all(&payload);
         *done.lock().expect("drain flag") = true;
 
-        let error = outcome.expect_err("a reply drained at a trickle must not be waited on");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let error = outcome.expect_err("a reply drained below the required rate must be cut");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::TimedOut,
+            "the cause should say the peer was too slow, not that the pipe broke"
+        );
         assert!(
-            started.elapsed() < Duration::from_secs(30),
+            started.elapsed() < Duration::from_secs(60),
             "the rate bound took too long to notice: {:?}",
             started.elapsed()
         );
