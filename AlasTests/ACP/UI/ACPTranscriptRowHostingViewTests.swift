@@ -80,4 +80,25 @@ struct ACPTranscriptRowHostingViewTests {
         #expect(measuredView.measuredHeight(forWidth: -10) == 0)
         #expect(measuredView.lastMeasuredWidth == 320)
     }
+
+    @Test("updateRootView replaces the pristine base, so a later measurement reflects the new content")
+    func updateRootViewReplacesPristineBase() {
+        let view = ACPTranscriptRowHostingView(
+            rootView: AnyView(Text("short").frame(maxWidth: .infinity, alignment: .leading))
+        )
+        let shortHeight = view.measuredHeight(forWidth: 300)
+
+        view.updateRootView(
+            AnyView(
+                Text(String(repeating: "a fairly long sentence that will wrap. ", count: 20))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            )
+        )
+        let longHeight = view.measuredHeight(forWidth: 300)
+
+        // If updateRootView failed to refresh the internal pristine copy,
+        // this second measurement would re-pin the ORIGINAL short content
+        // and longHeight would equal shortHeight.
+        #expect(longHeight > shortHeight)
+    }
 }

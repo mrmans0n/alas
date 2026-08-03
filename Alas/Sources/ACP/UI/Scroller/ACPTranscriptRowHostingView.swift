@@ -13,8 +13,11 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
     /// wrapper `measuredHeight(forWidth:)` applies for measurement. Kept
     /// separately because `fittingSize`/constraint-based measurement does not
     /// pick up SwiftUI's text-wrapping width dependency reliably; pinning the
-    /// width directly on the root view does.
-    private let baseRootView: AnyView
+    /// width directly on the root view does. Mutable so `updateRootView(_:)`
+    /// can replace it: callers MUST go through that method rather than
+    /// assigning `rootView` directly, or this pristine copy goes stale and
+    /// the next `measuredHeight(forWidth:)` call re-pins the OLD content.
+    private var baseRootView: AnyView
 
     /// The width this view's displayed content is currently pinned to, i.e.
     /// the argument of the last successful `measuredHeight(forWidth:)` call.
@@ -43,6 +46,25 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
     override func invalidateIntrinsicContentSize() {
         super.invalidateIntrinsicContentSize()
         onIntrinsicSizeInvalidated?()
+    }
+
+    /// Replaces the row's content. This is the ONLY correct way to swap in
+    /// new SwiftUI content on an already-mounted row: assigning `rootView`
+    /// directly (AppKit's own setter) leaves `baseRootView` stale, so the
+    /// next `measuredHeight(forWidth:)` call would re-pin the OLD content,
+    /// silently reverting the update.
+    ///
+    /// If the view has already been measured at some width, the new content
+    /// is immediately re-pinned to that same width so the displayed view
+    /// stays consistent with `lastMeasuredWidth` until the next measurement;
+    /// otherwise the new content is shown unpinned.
+    func updateRootView(_ newRootView: AnyView) {
+        baseRootView = newRootView
+        if let width = lastMeasuredWidth {
+            rootView = AnyView(newRootView.frame(width: width, alignment: .topLeading))
+        } else {
+            rootView = newRootView
+        }
     }
 
     /// Height the row wants at `width`. Re-wraps the root view in a
