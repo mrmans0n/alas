@@ -73,6 +73,21 @@ const MIN_IPC_REQUEST_RATE: u64 = 16 * 1024;
 const IPC_REQUEST_HEAD_BUDGET: IoBudget =
     IoBudget::at_least(IPC_REQUEST_IDLE_TIMEOUT, MIN_IPC_REQUEST_RATE);
 
+/// Largest framed body accepted.
+///
+/// A rate bound limits how long a body may take, not how much of it is held:
+/// a peer declaring a hundred gigabytes and delivering at the required rate is
+/// retained byte for byte until the broker dies. Time was never the dimension
+/// that ran out.
+///
+/// So there is a ceiling again — chosen the way the pre-first-byte bound is,
+/// from what a sender can physically produce rather than from what feels
+/// large. The biggest legitimate request is an `acp/respond` carrying a whole
+/// file, which `ACPSessionRunner.serveRead` builds holding the file, a
+/// `String` copy and the encoded JSON at once; a maximal image prompt is
+/// ~267 MiB by comparison.
+const MAX_IPC_FRAME_BYTES: usize = 8 * 1024 * 1024 * 1024;
+
 /// Slowest a caller may deliver a framed body before we stop waiting.
 ///
 /// An idle budget alone is not enough once a length is known: a caller can
@@ -782,7 +797,7 @@ fn read_exact_within(
 /// the original newline-delimited JSON, kept because a helper can adopt a
 /// broker that a previous build started and which is still speaking it.
 #[cfg(unix)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Framing {
     Legacy,
     Framed,
@@ -859,6 +874,14 @@ fn read_ipc_message(
             format!("invalid IPC frame length: {}", len.trim()),
         )
     })?;
+    // Refused before a byte of the body is read, so an outsized claim costs
+    // nothing to turn away.
+    if len > MAX_IPC_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("IPC frame length {len} exceeds {MAX_IPC_FRAME_BYTES}"),
+        ));
+    }
     let body = read_exact_within(reader, len, body_for_len(len))?;
     Ok((body, Framing::Framed))
 }
@@ -907,6 +930,7 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
         write_restrictive_bytes(&dir.join("ready"), b"1\n")?;
 
         let inflight = Arc::new(AtomicUsize::new(0));
+        let order = Arc::new(RequestOrder::default());
         while !runtime_is_closing(&runtime) {
             // Stop accepting rather than spawning without limit. Every
             // connection owns a thread that can sit for the whole head
@@ -945,11 +969,12 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
                 continue;
             }
             let request_runtime = runtime.clone();
+            let request_order = Arc::clone(&order);
             let request_inflight = Arc::clone(&inflight);
             request_inflight.fetch_add(1, Ordering::AcqRel);
             if std::thread::Builder::new()
                 .spawn(move || {
-                    let _ = handle_connection(request_runtime, stream);
+                    let _ = handle_connection(request_runtime, stream, request_order);
                     request_inflight.fetch_sub(1, Ordering::AcqRel);
                 })
                 .is_err()
@@ -980,15 +1005,85 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
     }
 }
 
+/// Hands out turns so requests are dispatched in the order they finished
+/// arriving, rather than in whatever order the scheduler wakes their threads.
+///
+/// One helper already orders its own calls per broker, but a broker outlives
+/// the app that started it and more than one helper can adopt the same one —
+/// two Alas builds side by side is ordinary here. Their requests arrive on
+/// separate connections, and without this a later `session/cancel` can be
+/// applied before the `session/prompt` it was sent to stop, the same silent
+/// failure the helper's queue prevents within one process.
+///
+/// The turn is taken once a request has finished arriving, not at accept.
+/// Ordering by acceptance would mean holding it across a read allowed to take
+/// minutes for a legacy sender still encoding, letting one slow caller stall
+/// every other client of the broker — reintroducing at the supervisor exactly
+/// what moving dispatch off the serve loop removed at the helper.
+#[cfg(unix)]
+#[derive(Default)]
+struct RequestOrder {
+    state: Mutex<(u64, u64)>,
+    turn: Condvar,
+}
+
+#[cfg(unix)]
+impl RequestOrder {
+    /// Claims the next place in line and waits for it. The returned guard
+    /// advances the queue on drop, including on panic — otherwise one failed
+    /// handler would stall every later request for this broker for good.
+    fn take_turn(&self) -> RequestTurn<'_> {
+        let ticket = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let ticket = state.0;
+            state.0 += 1;
+            ticket
+        };
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        while state.1 != ticket {
+            state = self
+                .turn
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        RequestTurn { order: self }
+    }
+}
+
+#[cfg(unix)]
+struct RequestTurn<'a> {
+    order: &'a RequestOrder,
+}
+
+#[cfg(unix)]
+impl Drop for RequestTurn<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .order
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.1 += 1;
+        self.order.turn.notify_all();
+    }
+}
+
 /// Reads one request off an accepted connection and answers it, in whichever
 /// framing the caller used. Runs on its own thread, so a caller that is slow
 /// to deliver its request costs only that thread.
 #[cfg(unix)]
-fn handle_connection(runtime: Runtime, stream: UnixStream) -> io::Result<()> {
+fn handle_connection(
+    runtime: Runtime,
+    stream: UnixStream,
+    order: Arc<RequestOrder>,
+) -> io::Result<()> {
     let (line, _framing) = {
         let mut reader = ipc_reader(&stream)?;
         read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
     };
+    // Ticketed here, not before the read: a caller allowed minutes to finish
+    // arriving must not hold the turn of one that already has.
+    let _turn = order.take_turn();
     handle_ipc_line(runtime, stream, line)
 }
 
@@ -2362,6 +2457,77 @@ mod tests {
             elapsed < Duration::from_secs(10),
             "budgeted writes collapsed throughput: 64 MiB took {elapsed:?}"
         );
+    }
+
+    /// An advertised length is refused before any of the body is read, so a
+    /// peer cannot make the broker hold gigabytes simply by claiming them.
+    /// The rate bound does not cover this: a peer delivering at the required
+    /// rate is retained byte for byte, and time was never what ran out.
+    #[cfg(unix)]
+    #[test]
+    fn an_oversized_declared_frame_is_refused_before_its_body_is_read() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let oversized = MAX_IPC_FRAME_BYTES + 1;
+        std::thread::spawn(move || {
+            // Header only. If the length were accepted this would block
+            // forever waiting for a body that never comes.
+            let _ = writeln!(writer, "{IPC_FRAME_HEADER}{oversized}");
+            let _ = writer.flush();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+
+        let mut reader = ipc_reader(&reader).expect("reader");
+        let started = std::time::Instant::now();
+        let error = read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)
+            .expect_err("an outsized declared length must be refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "refusal should not wait on the body: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Turns are handed out in the order they are claimed, not in whatever
+    /// order the scheduler wakes the waiters. A mutex would satisfy the
+    /// mutual-exclusion half of this and still let a `session/cancel` overtake
+    /// the `session/prompt` it was sent to stop.
+    ///
+    /// Each worker holds its turn for a spell that *shrinks* with its ticket,
+    /// so the two behaviours produce different answers: granted in order, the
+    /// holds are serial and the record comes out ascending; granted freely,
+    /// they overlap and the shortest holds finish first.
+    #[cfg(unix)]
+    #[test]
+    fn request_turns_are_granted_in_the_order_they_are_claimed() {
+        const WORKERS: u64 = 8;
+        let order = Arc::new(RequestOrder::default());
+        let observed = Arc::new(Mutex::new(Vec::new()));
+
+        // Held so every worker is queued behind it before any can proceed.
+        let first = order.take_turn();
+        let mut workers = Vec::new();
+        for index in 0..WORKERS {
+            let order = Arc::clone(&order);
+            let observed = Arc::clone(&observed);
+            workers.push(std::thread::spawn(move || {
+                let _turn = order.take_turn();
+                std::thread::sleep(Duration::from_millis(30 * (WORKERS - index)));
+                observed
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(index);
+            }));
+            // Sequences the claims only; it does not sequence the grants.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(first);
+        for worker in workers {
+            worker.join().expect("worker");
+        }
+
+        let observed = observed.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(*observed, (0..WORKERS).collect::<Vec<_>>());
     }
 
     /// A peer that drains a reply slowly must not be able to hold its handler
