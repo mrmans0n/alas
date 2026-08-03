@@ -574,6 +574,15 @@ impl AcpJob {
 /// the queue rather than from which worker happens to win a mutex. A job that
 /// names no broker (`acp/list`) has nothing to order against and runs on its
 /// own thread.
+///
+/// Queues are not reaped, and that is deliberate rather than overlooked.
+/// Dropping one when its broker closes would let a later `acp/open` for the
+/// same id build a fresh queue that runs ahead of the close still draining on
+/// the old one — reintroducing exactly the reordering this exists to prevent.
+/// The cost of keeping them is one thread per distinct broker seen during this
+/// helper's life, each parked on `recv` using no CPU, which is bounded by how
+/// many sessions the user opens and is strictly cheaper than the
+/// thread-per-request it replaced.
 fn dispatch_acp_job(
     job: AcpJob,
     responses: &Sender<ServerMessage>,
