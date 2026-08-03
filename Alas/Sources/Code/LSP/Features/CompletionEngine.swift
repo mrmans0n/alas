@@ -170,8 +170,10 @@ enum CompletionEngine {
         accepting candidate: CompletionCandidate,
         prefix: CompletionPrefix,
         originalPrefix: CompletionPrefix? = nil,
-        in text: String
+        in text: String,
+        coordinateIndex: TextEditCoordinates.LineIndex? = nil
     ) -> CompletionEditPlan? {
+        let coordinateIndex = coordinateIndex ?? TextEditCoordinates.LineIndex(text)
         let primaryRange: NSRange
         if let textEdit = candidate.textEdit {
             guard let range = rebasedRange(
@@ -180,7 +182,7 @@ enum CompletionEngine {
                 prefix: prefix,
                 includeInsertedTextAtStart: true,
                 includeInsertedTextAtEnd: true,
-                in: text
+                coordinateIndex: coordinateIndex
             ) else { return nil }
             if shouldReplacePrefix(range: range, replacement: candidate.replacementText, prefix: prefix) {
                 primaryRange = prefix.range
@@ -201,7 +203,7 @@ enum CompletionEngine {
                 prefix: prefix,
                 includeInsertedTextAtStart: false,
                 includeInsertedTextAtEnd: false,
-                in: text
+                coordinateIndex: coordinateIndex
             ) else { continue }
             let edit = CompletionTextEdit(range: range, replacementText: additional.newText)
             guard !overlaps(edit.range, primary.range),
@@ -293,9 +295,12 @@ enum CompletionEngine {
         }
     }
 
-    private static func nsRange(for range: LSPRange, in text: String) -> NSRange? {
-        guard let start = TextEditCoordinates.utf16Offset(from: range.start, in: text),
-              let end = TextEditCoordinates.utf16Offset(from: range.end, in: text),
+    private static func nsRange(
+        for range: LSPRange,
+        coordinateIndex: TextEditCoordinates.LineIndex
+    ) -> NSRange? {
+        guard let start = coordinateIndex.utf16Offset(from: range.start),
+              let end = coordinateIndex.utf16Offset(from: range.end),
               start <= end else {
             return nil
         }
@@ -321,20 +326,17 @@ enum CompletionEngine {
         prefix: CompletionPrefix,
         includeInsertedTextAtStart: Bool,
         includeInsertedTextAtEnd: Bool,
-        in text: String
+        coordinateIndex: TextEditCoordinates.LineIndex
     ) -> NSRange? {
         guard let originalPrefix,
               originalPrefix.range.location == prefix.range.location else {
-            return nsRange(for: range, in: text)
+            return nsRange(for: range, coordinateIndex: coordinateIndex)
         }
 
         let growth = NSMaxRange(prefix.range) - NSMaxRange(originalPrefix.range)
         guard growth != 0,
-              let prefixStart = TextEditCoordinates.lspPosition(
-                utf16Offset: prefix.range.location,
-                in: text
-              ) else {
-            return nsRange(for: range, in: text)
+              let prefixStart = coordinateIndex.lspPosition(utf16Offset: prefix.range.location) else {
+            return nsRange(for: range, coordinateIndex: coordinateIndex)
         }
         let oldCaretCharacter = prefixStart.character + originalPrefix.range.length
         let newCaretCharacter = oldCaretCharacter + growth
@@ -360,7 +362,7 @@ enum CompletionEngine {
 
         return nsRange(
             for: LSPRange(start: shifted(range.start, atEnd: false), end: shifted(range.end, atEnd: true)),
-            in: text
+            coordinateIndex: coordinateIndex
         )
     }
 

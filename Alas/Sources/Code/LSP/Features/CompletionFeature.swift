@@ -248,6 +248,7 @@ final class CompletionFeature {
         allowBufferFallback: Bool,
         memberAccessOnly: Bool
     ) {
+        let coordinateIndex = TextEditCoordinates.LineIndex(bufferText)
         let retainedMemberAccessOnly = candidateMemberAccessOnly || memberAccessOnly
         let retainedBufferFallback = allowBufferFallback && !retainedMemberAccessOnly
         let next = Self.candidates(
@@ -264,7 +265,8 @@ final class CompletionFeature {
                 accepting: candidate,
                 prefix: prefix,
                 originalPrefix: candidateOrigins[candidate.id],
-                in: bufferText
+                in: bufferText,
+                coordinateIndex: coordinateIndex
             )
         }
         let merged = Self.mergingCandidates(
@@ -273,7 +275,8 @@ final class CompletionFeature {
             with: candidatePool,
             origins: candidateOrigins,
             prefix: prefix,
-            text: bufferText
+            text: bufferText,
+            coordinateIndex: coordinateIndex
         )
         let visible = merged.candidates.filter { candidate in
             let filter = candidate.filterText ?? candidate.label
@@ -312,7 +315,8 @@ final class CompletionFeature {
                         accepting: $0,
                         prefix: prefix,
                         originalPrefix: candidateOrigins[$0.id],
-                        in: bufferText
+                        in: bufferText,
+                        coordinateIndex: coordinateIndex
                     ) == selectedEditPlan
             }
         } ?? 0
@@ -346,7 +350,8 @@ final class CompletionFeature {
         with retained: [CompletionCandidate],
         origins: [UUID: CompletionPrefix],
         prefix: CompletionPrefix,
-        text: String
+        text: String,
+        coordinateIndex: TextEditCoordinates.LineIndex
     ) -> (candidates: [CompletionCandidate], origins: [UUID: CompletionPrefix]) {
         var merged = candidates
         var mergedOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, originPrefix) })
@@ -355,7 +360,8 @@ final class CompletionFeature {
                 for: $0,
                 origin: mergedOrigins[$0.id],
                 prefix: prefix,
-                text: text
+                text: text,
+                coordinateIndex: coordinateIndex
             )
         })
         for candidate in retained {
@@ -363,7 +369,8 @@ final class CompletionFeature {
                 for: candidate,
                 origin: origins[candidate.id],
                 prefix: prefix,
-                text: text
+                text: text,
+                coordinateIndex: coordinateIndex
             )
             guard identity.map({ !identities.contains($0) }) ?? true else { continue }
             merged.append(candidate)
@@ -377,13 +384,15 @@ final class CompletionFeature {
         for candidate: CompletionCandidate,
         origin: CompletionPrefix?,
         prefix: CompletionPrefix,
-        text: String
+        text: String,
+        coordinateIndex: TextEditCoordinates.LineIndex
     ) -> CandidateIdentity? {
         guard let editPlan = CompletionEngine.editPlan(
             accepting: candidate,
             prefix: prefix,
             originalPrefix: origin,
-            in: text
+            in: text,
+            coordinateIndex: coordinateIndex
         ) else { return nil }
         return CandidateIdentity(
             label: candidate.label,
@@ -522,13 +531,16 @@ final class CompletionFeature {
             return
         }
 
+        let bufferText = textView.string
+        let coordinateIndex = TextEditCoordinates.LineIndex(bufferText)
         let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
         let selectedEditPlan = selectedCandidate.flatMap { candidate in
             CompletionEngine.editPlan(
                 accepting: candidate,
                 prefix: updatedPrefix,
                 originalPrefix: candidateOrigins[candidate.id],
-                in: textView.string
+                in: bufferText,
+                coordinateIndex: coordinateIndex
             )
         }
         if let candidatePrefix,
@@ -548,7 +560,8 @@ final class CompletionFeature {
                 with: candidatePool,
                 origins: candidateOrigins,
                 prefix: updatedPrefix,
-                text: textView.string
+                text: bufferText,
+                coordinateIndex: coordinateIndex
             )
             candidatePool = merged.candidates
             candidateOrigins = merged.origins
@@ -572,7 +585,8 @@ final class CompletionFeature {
                         accepting: $0,
                         prefix: updatedPrefix,
                         originalPrefix: candidateOrigins[$0.id],
-                        in: textView.string
+                        in: bufferText,
+                        coordinateIndex: coordinateIndex
                     ) == selectedEditPlan
             }
         } ?? 0
