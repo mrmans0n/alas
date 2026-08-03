@@ -434,6 +434,37 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("narrow responses extend the retained buffer cache")
+    func narrowResponseExtendsBufferCache() {
+        let text = "operate openEditor\no"
+        let textView = makeTextView(text)
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        let item = LSPCompletionItem.testing(label: "openAlpha", sortText: "001", filterText: nil)
+        feature.testingPresent(
+            items: [item],
+            prefix: CompletionEngine.prefix(in: text, caret: (text as NSString).length)!,
+            bufferText: text,
+            allowBufferFallback: true
+        )
+
+        textView.insertText("pen", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [item],
+            prefix: CompletionEngine.prefix(in: textView.string, caret: textView.selectedRange().location)!,
+            bufferText: textView.string,
+            allowBufferFallback: true
+        )
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels.contains("operate"))
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh preserves the selected matching candidate")
     func refreshPreservesSelectedMatchingCandidate() {
         let textView = makeTextView("a")

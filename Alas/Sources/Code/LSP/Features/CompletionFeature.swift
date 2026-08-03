@@ -293,9 +293,9 @@ final class CompletionFeature {
         let keepsBroaderResponse = candidatePrefix.map {
             $0.range.location == prefix.range.location && $0.range.length < prefix.range.length
         } ?? false
+        candidateBufferCache.merge(bufferCache) { _, latest in latest }
         if !keepsBroaderResponse {
             candidatePrefix = prefix
-            candidateBufferCache = bufferCache
             candidateItems = items
         }
         candidateAllowsBufferFallback = retainedBufferFallback
