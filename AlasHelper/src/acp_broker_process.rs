@@ -37,10 +37,18 @@ const BROKER_IPC_TIMEOUT: Duration = Duration::from_secs(20);
 /// machine would miss.
 const BROKER_IPC_MIN_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Upper bound on one broker IPC line. Far above any real request or response
-/// — a prompt carrying an embedded image is the large case — while stopping a
-/// peer that never sends a newline from growing the buffer without limit.
-const MAX_IPC_LINE_BYTES: usize = 32 * 1024 * 1024;
+/// Upper bound on one broker IPC line, so a peer that never sends a newline
+/// cannot grow the buffer without limit.
+///
+/// This has to clear the largest payload the UI actually permits, or it
+/// rejects valid input instead of catching abuse. The composer allows
+/// `ACPComposer.maxImagesPerMessage` (10) images of `ACPImageStaging.maxBytes`
+/// (20 MiB) each, and ACP embeds images as base64 inside `session/prompt`,
+/// which travels this socket as one `acp/send` line — 200 MiB of image
+/// becoming ~267 MiB on the wire, before prompt text and the JSON envelope.
+/// The value below leaves room above that; `ipc_line_cap_admits_the_largest_
+/// composer_payload` fails if those UI limits ever outgrow it.
+const MAX_IPC_LINE_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
@@ -385,54 +393,87 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
 /// read for *inactivity*, while `read_line` keeps issuing fresh reads until it
 /// finds a newline. A peer that trickles bytes faster than the timeout renews
 /// its budget indefinitely, holding the caller — and growing the buffer —
-/// without limit. Re-arming the socket timeout with the remaining budget
-/// before each read is what makes the deadline apply to the line as a whole.
+/// without limit.
+///
+/// The socket timeout is therefore set once, to a short slice that just wakes
+/// a blocked read periodically; the deadline checked on each pass is what
+/// actually bounds the line. (Re-arming the socket per read would express the
+/// deadline more directly, but `setsockopt` starts failing with `EINVAL` once
+/// the peer goes away mid-stream, which would turn an otherwise complete read
+/// into an error.)
 #[cfg(unix)]
 fn read_line_within(
     stream: &UnixStream,
     deadline: std::time::Instant,
     max_len: usize,
 ) -> io::Result<String> {
+    /// How long a blocked read waits before the deadline is re-checked. Also
+    /// the amount by which a read may overshoot its deadline.
+    const POLL_SLICE: Duration = Duration::from_millis(500);
+
+    enum Step {
+        Complete(usize),
+        Partial(usize),
+        Retry,
+    }
+
+    stream.set_read_timeout(Some(POLL_SLICE))?;
     let mut reader = BufReader::new(stream);
     let mut line: Vec<u8> = Vec::new();
     loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
+        if std::time::Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "timed out reading IPC line",
             ));
         }
-        reader.get_ref().set_read_timeout(Some(remaining))?;
-        let (finished, consumed) = {
-            let available = reader.fill_buf()?;
-            if available.is_empty() {
+        let step = match reader.fill_buf() {
+            Ok([]) => {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "peer closed before completing the IPC line",
                 ));
             }
-            match available.iter().position(|byte| *byte == b'\n') {
+            Ok(available) => match available.iter().position(|byte| *byte == b'\n') {
                 Some(index) => {
                     line.extend_from_slice(&available[..=index]);
-                    (true, index + 1)
+                    Step::Complete(index + 1)
                 }
                 None => {
                     line.extend_from_slice(available);
-                    (false, available.len())
+                    Step::Partial(available.len())
+                }
+            },
+            // A quiet peer, not a failed one — the deadline above decides
+            // when quiet has gone on too long.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Step::Retry
+            }
+            Err(error) => return Err(error),
+        };
+        match step {
+            Step::Complete(consumed) => {
+                reader.consume(consumed);
+                return String::from_utf8(line)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+            }
+            Step::Partial(consumed) => {
+                reader.consume(consumed);
+                if line.len() > max_len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "IPC line exceeded the maximum length",
+                    ));
                 }
             }
-        };
-        reader.consume(consumed);
-        if finished {
-            return String::from_utf8(line)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
-        }
-        if line.len() > max_len {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "IPC line exceeded the maximum length",
-            ));
+            Step::Retry => {}
         }
     }
 }
@@ -1366,5 +1407,80 @@ mod tests {
         assert!(!pending_kind_awaits_user(
             PendingClientRequestKind::Terminal
         ));
+    }
+
+    /// The IPC line cap is a guard against abuse, so it must sit above what
+    /// the composer legitimately produces — otherwise a user attaching the
+    /// permitted number of full-size images has their prompt dropped at the
+    /// socket with a broker read error. Raising the UI limits without raising
+    /// this cap should fail here rather than in someone's chat.
+    #[test]
+    fn ipc_line_cap_admits_the_largest_composer_payload() {
+        // Alas/Sources/ACP/UI/ACPImageStaging.swift: maxBytes = 20 MiB
+        // Alas/Sources/ACP/UI/ACPComposer.swift: maxImagesPerMessage = 10
+        const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+        const MAX_IMAGES_PER_MESSAGE: usize = 10;
+        let raw = MAX_IMAGE_BYTES * MAX_IMAGES_PER_MESSAGE;
+        let base64 = raw.div_ceil(3) * 4;
+        assert!(
+            MAX_IPC_LINE_BYTES > base64,
+            "IPC line cap {MAX_IPC_LINE_BYTES} would reject a permitted \
+             {MAX_IMAGES_PER_MESSAGE}-image prompt ({base64} base64 bytes)"
+        );
+    }
+
+    /// The whole fix rests on this: a peer that keeps the connection alive and
+    /// keeps sending, but never ends the line, must still hit the deadline.
+    /// A per-read inactivity timeout never would.
+    #[cfg(unix)]
+    #[test]
+    fn read_line_within_stops_a_peer_that_drips_without_ever_ending_the_line() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let done = Arc::new(Mutex::new(false));
+        let writer_done = done.clone();
+        std::thread::spawn(move || {
+            while !*writer_done.lock().expect("drip flag") {
+                if writer.write_all(b" ").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let outcome = read_line_within(
+            &reader,
+            started + Duration::from_secs(2),
+            MAX_IPC_LINE_BYTES,
+        );
+        let elapsed = started.elapsed();
+        *done.lock().expect("drip flag") = true;
+
+        let error = outcome.expect_err("a line that never ends must not read forever");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "deadline overshot badly: {elapsed:?}"
+        );
+    }
+
+    /// Guards the cap against the read path itself: a line well past the
+    /// previous 32 MiB limit must still arrive intact rather than being cut
+    /// short mid-request.
+    #[cfg(unix)]
+    #[test]
+    fn read_line_within_accepts_a_line_larger_than_a_typical_request() {
+        let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+        let payload = vec![b'x'; 40 * 1024 * 1024];
+        let expected = payload.len();
+        std::thread::spawn(move || {
+            let _ = writer.write_all(&payload);
+            let _ = writer.write_all(b"\n");
+            let _ = writer.flush();
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let line = read_line_within(&reader, deadline, MAX_IPC_LINE_BYTES).expect("large line");
+        assert_eq!(line.len(), expected + 1);
     }
 }
