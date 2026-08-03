@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
@@ -106,6 +107,57 @@ struct ACPTranscriptScrollerRowSpecsTests {
         expected.append("__composer_spacer__")
 
         #expect(ids == expected)
+    }
+}
+
+@MainActor
+@Suite("ACPTranscriptScroller restore latch")
+struct ACPTranscriptScrollerRestoreLatchTests {
+    /// Regression test for the review's fix-round-2 finding: `attach()`
+    /// (mirroring `makeNSView`, which builds the scroller at `frame: .zero`)
+    /// always runs its first `update(host:)` at `contentWidth == 0`, where
+    /// `reconciler.apply` defers and the tiling map stays empty even though
+    /// `hasNonSyntheticRow` is already true from the spec list alone. A
+    /// non-tail-following host with real messages and no remembered anchor
+    /// must NOT latch `didRestoreInitialPosition` on that width-0 pass —
+    /// otherwise the real restore, once actual rows exist, is skipped
+    /// forever and the transcript opens at `scrollY == 0` instead of at the
+    /// bottom (the correct fallback when there is nothing to restore).
+    @Test("the restore latch waits for a positive-width apply before consuming itself")
+    func restoreLatchWaitsForPositiveWidth() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.followsTranscriptTail = false
+        let host = makeHost(session: session)
+        // Enough real content that the measured document is taller than the
+        // eventual 400pt viewport, so `scrollToBottom()` is distinguishable
+        // from "nothing happened, still at 0".
+        let messages = (0..<40).map { _ in
+            ACPMessage.systemNotice(id: UUID(), text: String(repeating: "line ", count: 20))
+        }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        // `makeHost`'s `rememberedScrollAnchor` always returns nil — no
+        // anchor to restore, so the correct outcome is `scrollToBottom()`.
+
+        // Mirrors `makeNSView`'s `ACPTranscriptScrollerView(frame: .zero)`.
+        let scroller = ACPTranscriptScrollerView(frame: .zero)
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+
+        // Width-0 pass: `reconciler.apply` deferred, tiling map is empty.
+        // Nothing should have latched or moved.
+        #expect(scroller.scrollY == 0)
+
+        // The view is laid out for real (as SwiftUI does once the
+        // representable actually gets placed), and `update` runs again.
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        scroller.layoutSubtreeIfNeeded()
+        coordinator.update(host: host)
+
+        // The restore must actually run on this first positive-width pass —
+        // if the latch had been consumed prematurely, this would still be 0.
+        #expect(scroller.distanceFromBottom < 1)
     }
 }
 

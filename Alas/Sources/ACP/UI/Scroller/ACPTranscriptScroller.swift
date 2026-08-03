@@ -442,8 +442,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // this once it's safe — see `isApplyingSpecs`'s doc comment.
             // Other programmatic scrolls that happen OUTSIDE of `apply()`
             // (`resumeTailFollow`, `restoreInitialPositionIfNeeded`) are not
-            // covered by that trailing call, so they invoke
-            // `layoutMountedRows()` explicitly themselves.
+            // covered by that trailing call, but `isApplyingSpecs` is false
+            // at those sites too, so this same guard still lets their
+            // `onScroll` callback run `layoutMountedRows()` normally — no
+            // explicit call is needed at either site.
             if !reconciler.isApplyingSpecs {
                 reconciler.layoutMountedRows()
             }
@@ -533,8 +535,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// definite. `__composer_spacer__` and other synthetic rows are
         /// unconditionally present in `rowSpecs`, so `tiling.rowCount > 0`
         /// alone is true on the very first `apply()` even with zero
-        /// messages — gating on `hasNonSyntheticRow` instead avoids latching
+        /// messages — gating on `hasNonSyntheticRow` too avoids latching
         /// before there's any real content to restore a position within.
+        /// Both checks are required: `hasNonSyntheticRow` alone is not
+        /// enough, because `makeNSView` builds the scroller at `frame:
+        /// .zero` and `attach` calls `update(host:)` immediately, so the
+        /// very first `update` always runs with `contentWidth == 0` — a
+        /// width `reconciler.apply` deliberately defers on, leaving the
+        /// tiling map empty even though `hasNonSyntheticRow` is already
+        /// true from the spec list. Without also requiring
+        /// `tiling.rowCount > 0`, a non-tail-following session with no
+        /// remembered anchor would hit the "nothing to restore" branch
+        /// below on that width-0 pass, latch, and call `scrollToBottom()`
+        /// on an empty (zero-height) document — a no-op — permanently
+        /// skipping the real restore once actual rows exist.
         /// Beyond that: tail-follow and "no remembered anchor" are definite
         /// outcomes (latch immediately); a remembered anchor that isn't yet
         /// in the tiling map (e.g. the render window hasn't reached it yet)
@@ -545,7 +559,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// instead of permanently falling back to `scrollToBottom()`.
         private func restoreInitialPositionIfNeeded() {
             guard !didRestoreInitialPosition, let host, let scroller,
-                  hasNonSyntheticRow
+                  hasNonSyntheticRow, tiling.rowCount > 0
             else { return }
             if host.session.followsTranscriptTail {
                 didRestoreInitialPosition = true
