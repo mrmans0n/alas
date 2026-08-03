@@ -315,7 +315,7 @@ final class MissionCoordinator {
                 aggregate: aggregate,
                 leg: leg,
                 checkpoint: .creatingWorktree,
-                message: "Could not establish a durable identity for the Mission worktree. Retry this Mission."
+                message: Self.worktreeIdentityFailureMessage
             )
             return false
         }
@@ -364,9 +364,18 @@ final class MissionCoordinator {
             )
             return false
         }
+        guard let worktreeLineageID = worktree.lineageID else {
+            await persistFailure(
+                aggregate: aggregate,
+                leg: leg,
+                checkpoint: .startingAgent,
+                message: Self.worktreeIdentityFailureMessage
+            )
+            return false
+        }
 
         if leg.worktreeLineageID == nil {
-            leg.worktreeLineageID = worktree.lineageID
+            leg.worktreeLineageID = worktreeLineageID
             do {
                 try await environment.persistence.updateLeg(leg, event: nil)
                 await notify(id: aggregate.mission.id)
@@ -490,9 +499,10 @@ final class MissionCoordinator {
         guard canReuseExistingWorktree(worktree, for: leg) else {
             return
         }
+        guard let worktreeLineageID = worktree.lineageID else { return }
 
         leg.worktreeId = worktree.id
-        leg.worktreeLineageID = worktree.lineageID
+        leg.worktreeLineageID = worktreeLineageID
         let now = environment.now()
         let checkpointEvent = event(
             missionID: aggregate.mission.id,
@@ -614,4 +624,5 @@ final class MissionCoordinator {
     }
 
     private static let persistenceFailureMessage = "Could not persist Mission setup progress. Retry this Mission."
+    private static let worktreeIdentityFailureMessage = "Could not establish a durable identity for the Mission worktree. Retry this Mission."
 }

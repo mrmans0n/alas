@@ -558,6 +558,33 @@ struct MissionCoordinatorTests {
         #expect(aggregate.mission.state == .running)
     }
 
+    @Test("restart does not recover a worktree without durable lineage")
+    func interruptedWorktreeRejectsLineageLessDestinationArtifact() async throws {
+        var existing = MissionFixtures.creatingMission()
+        existing.mission.state = .needsAttention
+        existing.mission.attentionReason = "Git response was lost."
+        existing.legs[0].worktreeId = "worktree-1"
+        let fake = MissionCoordinatorFake(existing: [existing])
+        fake.worktree.lineageID = nil
+        fake.worktreeAtDestination = fake.worktree
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        await coordinator.reconcileInterrupted()
+        let reconciled = try #require(try await fake.persistence.aggregate(id: existing.mission.id))
+
+        #expect(reconciled.mission.setupCheckpoint == .creatingWorktree)
+        #expect(reconciled.primaryLeg?.worktreeLineageID == nil)
+
+        await coordinator.retry(id: existing.mission.id)
+        let retried = await fake.waitUntilSettled(existing.mission.id)
+
+        #expect(fake.startACPCalls == 0)
+        #expect(retried.mission.state == .needsAttention)
+        #expect(retried.mission.setupCheckpoint == .creatingWorktree)
+        #expect(retried.mission.attentionReason == "Could not establish a durable identity for the Mission worktree. Retry this Mission.")
+        #expect(retried.primaryLeg?.worktreeLineageID == nil)
+    }
+
     @Test("restart reuses a reserved ACP session ID")
     func interruptedACPReconcilesBySessionID() async throws {
         var existing = MissionFixtures.creatingMission()
