@@ -66,7 +66,19 @@ struct MissionIssueResolver {
             var lastError: Error?
             for remote in candidates {
                 do {
-                    return try await resolve(number: number, remote: remote, candidates: [project.id], selectedProjectId: project.id, cwd: project.path)
+                    let probed = try await resolve(
+                        number: number,
+                        remote: remote,
+                        candidates: [project.id],
+                        selectedProjectId: project.id,
+                        cwd: project.path
+                    )
+                    return try Self.canonicalResult(
+                        probed,
+                        number: number,
+                        projectRemotes: [(project, candidates)],
+                        preferredProjectID: project.id
+                    )
                 } catch {
                     lastError = error
                 }

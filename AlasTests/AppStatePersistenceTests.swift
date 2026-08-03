@@ -119,6 +119,25 @@ struct AppStatePersistenceTests {
         #expect(remote.repositorySlug == identity.repositorySlug)
     }
 
+    @Test func missionReviewRemotePrefersTheLongestMatchingAlias() throws {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remote = try #require(AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "team/origin/main",
+            remotes: [
+                GitRemote(name: "team", url: "git@github.com:acme/alas.git"),
+                GitRemote(name: "team/origin", url: "git@github.com:acme/alas.git"),
+            ]
+        ))
+
+        #expect(remote.remoteName == "team/origin")
+    }
+
     @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
         let current = try #require(CodeHostRemoteDetector.detect(
             from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],

@@ -82,7 +82,7 @@ struct MissionSidebarTests {
         #expect(ready.status == .readyToComplete)
     }
 
-    @Test func navigationIsDisabledUntilAWorktreeIsKnown() {
+    @Test func creatingMissionNavigatesBeforeAWorktreeIsKnown() {
         let creating = Self.mission(id: "creating", state: .creating, worktreeId: nil)
         let running = Self.mission(id: "running", state: .running, worktreeId: "wt-1")
         let archived = Self.mission(id: "archived", state: .readyToComplete, worktreeId: "archived-wt")
@@ -95,7 +95,7 @@ struct MissionSidebarTests {
         )
 
         let byID = Dictionary(uniqueKeysWithValues: rows.active.map { ($0.id.rawValue, $0) })
-        #expect(byID[creating.mission.id.rawValue]?.isNavigationEnabled == false)
+        #expect(byID[creating.mission.id.rawValue]?.isNavigationEnabled == true)
         #expect(byID[running.mission.id.rawValue]?.isNavigationEnabled == true)
         #expect(byID[archived.mission.id.rawValue]?.isNavigationEnabled == true)
     }

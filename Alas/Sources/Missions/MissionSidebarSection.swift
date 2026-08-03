@@ -107,11 +107,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
         updatedAt = aggregate.mission.updatedAt
         status = Self.status(for: aggregate.mission)
 
-        if aggregate.mission.state == .creating, aggregate.primaryLeg?.worktreeId == nil {
-            isNavigationEnabled = false
-        } else {
-            isNavigationEnabled = true
-        }
+        isNavigationEnabled = true
     }
 
     var isCompleted: Bool {

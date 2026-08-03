@@ -183,6 +183,22 @@ struct MissionIssueResolverTests {
         #expect(resolved.snapshot.identity.repositorySlug == "mrmans0n/alas")
     }
 
+    @Test func shortReferenceRejectsAnUnconfiguredRedirectTarget() async {
+        let provider = FakeIssueProvider(canonicalRepositorySlug: "openai/renamed-alas")
+        let resolver = MissionIssueResolver(environment: .init(
+            projects: { [Self.cloneA] },
+            selectedProjectId: { Self.cloneA.id },
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")] },
+            providers: .init([provider])
+        ))
+
+        await #expect(throws: CodeHostProviderError.malformedOutput(
+            "The redirected issue repository does not match a configured project."
+        )) {
+            try await resolver.resolve("#1842")
+        }
+    }
+
     private static func environment(provider: FakeIssueProvider) -> MissionIssueResolver.Environment {
         .init(
             projects: { [cloneA] },

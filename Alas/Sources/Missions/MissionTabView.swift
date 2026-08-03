@@ -372,10 +372,7 @@ struct MissionTabView: View {
             guard let aggregate = state.missions.aggregate(id: tabState.missionID),
                   let worktree = state.missionWorktree(worktree, for: aggregate)
             else { return }
-            state.restoreDefaultRightPaneBaseAfterMission(
-                worktree: worktree,
-                missionBaseRef: aggregate.primaryLeg?.baseRef ?? ""
-            )
+            state.restoreDefaultRightPaneBaseAfterMission(worktree: worktree)
         }
     }
 

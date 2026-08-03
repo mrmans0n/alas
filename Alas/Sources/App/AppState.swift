@@ -1002,14 +1002,9 @@ final class AppState {
         }?.primaryLeg?.baseRef ?? paneBaseRef
     }
 
-    func restoreDefaultRightPaneBaseAfterMission(
-        worktree: Worktree,
-        missionBaseRef: String
-    ) {
+    func restoreDefaultRightPaneBaseAfterMission(worktree: Worktree) {
         let defaultBase = config.worktrees.baseBranch
-        guard selectedWorktreeId == worktree.id,
-              missionBaseRef != defaultBase
-        else { return }
+        guard selectedWorktreeId == worktree.id else { return }
         _ = rightPaneStore.state(
             for: worktree,
             baseBranch: defaultBase,
@@ -1202,7 +1197,11 @@ final class AppState {
             forBaseBranch: baseRef,
             remotes: remotes
         )
-        return matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
+        let longestPrefixMatch = matchingRemotes
+            .filter { baseRef.hasPrefix("\($0.remoteName)/") }
+            .max { $0.remoteName.count < $1.remoteName.count }
+        return longestPrefixMatch
+            ?? matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
             ?? matchingRemotes.first
     }
 
