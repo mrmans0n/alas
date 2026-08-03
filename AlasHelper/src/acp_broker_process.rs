@@ -281,6 +281,13 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
         created_at_millis: current_millis(),
     };
     write_restrictive_json(&dir.join("metadata.json"), &metadata)?;
+    // Advertise framing here, before anything can connect, and stamp it with
+    // this generation so it cannot be mistaken for a later broker's — see
+    // `broker_supports_framing`.
+    write_restrictive_bytes(
+        &dir.join(IPC_FRAMING_MARKER),
+        format!("{}\n", metadata.generation.value()).as_bytes(),
+    )?;
     write_broker_pid(&dir)?;
 
     let mut command = Command::new(&launch.command);
@@ -775,18 +782,28 @@ const IPC_FRAMING_MARKER: &str = "framing";
 /// know to remove a file it has never heard of — so the marker outlives the
 /// broker that meant it. Framed requests would then go to a broker that only
 /// understands newlines, which rejects them, and `acp/open` will not replace it
-/// because its pid is live: the session cannot be reopened at all. Recording
-/// the pid the marker was written for makes it expire with its broker, since
-/// any replacement writes a new `pid.json`.
+/// because its pid is live: the session cannot be reopened at all.
+///
+/// Matched against the generation rather than the pid. A pid is recycled, so a
+/// replacement can be handed the very number a stale marker names — unlikely,
+/// but the failure it produces is an unreopenable session, and the generation
+/// is a nanosecond stamp written by every build into `metadata.json`, so there
+/// is nothing to trade for using it.
 #[cfg(unix)]
 fn broker_supports_framing(dir: &Path) -> bool {
     let Ok(marker) = std::fs::read_to_string(dir.join(IPC_FRAMING_MARKER)) else {
         return false;
     };
-    let Ok(marked_pid) = marker.trim().parse::<u32>() else {
+    let Ok(marked_generation) = marker.trim().parse::<u64>() else {
         return false;
     };
-    read_broker_pid_metadata(dir).is_some_and(|metadata| metadata.pid == marked_pid)
+    read_broker_metadata(dir)
+        .is_some_and(|metadata| metadata.generation.value() == marked_generation)
+}
+
+#[cfg(unix)]
+fn read_broker_metadata(dir: &Path) -> Option<ACPBrokerMetadata> {
+    serde_json::from_slice(&std::fs::read(dir.join("metadata.json")).ok()?).ok()
 }
 
 /// Reads one message, in whichever framing the peer used.
@@ -853,14 +870,6 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
 
         let socket_path = dir.join("broker.sock");
         let _ = std::fs::remove_file(&socket_path);
-        // Advertise framing before the socket exists, not after: a caller that
-        // connected in between would find no marker and fall back to the
-        // legacy encoding for that request. Stamped with this process's pid so
-        // it cannot outlive this broker — see `broker_supports_framing`.
-        write_restrictive_bytes(
-            &dir.join(IPC_FRAMING_MARKER),
-            format!("{}\n", std::process::id()).as_bytes(),
-        )?;
         let listener = UnixListener::bind(&socket_path)
             .map_err(|error| broker_error(-32072, format!("socket bind failed: {error}")))?;
         // Non-blocking so the loop can notice `close` without waiting for
@@ -2060,27 +2069,41 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_framing_marker_is_only_trusted_for_the_live_broker() {
+        fn write_metadata(dir: &Path, generation: u64) {
+            let metadata = ACPBrokerMetadata {
+                broker_id: BrokerId::new("marker-broker"),
+                generation: BrokerGeneration::new(generation),
+                alas_session_id: "marker-session".to_string(),
+                adapter_program: "adapter".to_string(),
+                adapter_args: vec![],
+                cwd: "/tmp".to_string(),
+                env_keys: vec![],
+                created_at_millis: 0,
+            };
+            write_restrictive_json(&dir.join("metadata.json"), &metadata).expect("metadata");
+        }
+
         let dir = PathBuf::from(format!("/tmp/alas-marker-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("marker dir");
-        write_broker_pid(&dir).expect("pid metadata");
-        let live = std::process::id();
+        write_metadata(&dir, 1_000);
 
         assert!(
             !broker_supports_framing(&dir),
             "no marker should mean no framing"
         );
 
-        std::fs::write(dir.join(IPC_FRAMING_MARKER), format!("{live}\n")).expect("marker");
+        std::fs::write(dir.join(IPC_FRAMING_MARKER), "1000\n").expect("marker");
         assert!(
             broker_supports_framing(&dir),
             "a marker written by the live broker should be trusted"
         );
 
-        // Stands in for a marker left behind by a broker that has since been
-        // replaced: present, but naming a process that is no longer the one
-        // serving this directory.
-        std::fs::write(dir.join(IPC_FRAMING_MARKER), format!("{}\n", live + 1)).expect("marker");
+        // Stands in for a broker replaced by one from an earlier build: the
+        // marker survives its cleanup, but the generation moved on. Matching
+        // on the pid instead would let this through whenever the replacement
+        // happened to be handed the same pid.
+        write_metadata(&dir, 2_000);
         assert!(
             !broker_supports_framing(&dir),
             "a marker from a replaced broker must not be trusted"
