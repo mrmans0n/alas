@@ -32,11 +32,6 @@ const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// loop, so an unbounded wait here stalls every session the helper serves.
 const BROKER_IPC_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Floor for a single retried attempt, so a nearly-spent deadline cannot
-/// shrink the per-attempt budget down to something a healthy broker on a busy
-/// machine would miss.
-const BROKER_IPC_MIN_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
-
 /// Upper bound on a *request* line arriving at a broker, so a peer that never
 /// sends a newline cannot grow the buffer without limit.
 ///
@@ -1148,25 +1143,25 @@ fn send_ipc_with_retry(
     dir: &Path,
     method: &str,
     params: Value,
-    timeout: Duration,
+    retry_budget: Duration,
 ) -> Result<Value, AcpBrokerProcessError> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = std::time::Instant::now() + retry_budget;
     loop {
         if let Some(message) = read_startup_error(dir) {
             return Err(broker_error(-32072, message));
         }
-        // Bound each attempt, not just the gaps between attempts. A broker
-        // that accepts and then never answers never produces the error this
-        // loop checks the deadline on, so a per-attempt bound is the only
-        // thing that makes `timeout` mean anything for a wedged broker.
-        // The floor keeps a slow-but-healthy broker on a loaded machine from
-        // being declared dead just because the deadline is nearly spent — it
-        // can overshoot `timeout`, which is the right trade: this bound
-        // exists to rule out hangs, not to hit a precise deadline.
-        let remaining = deadline
-            .saturating_duration_since(std::time::Instant::now())
-            .max(BROKER_IPC_MIN_ATTEMPT_TIMEOUT);
-        match send_ipc_within(dir, method, params.clone(), remaining) {
+        // Each attempt gets the ordinary response budget, NOT what is left of
+        // `retry_budget`. The two measure different things: `retry_budget` is
+        // how long to keep re-trying a broker that is not answering *yet* —
+        // typically one still starting up, whose socket does not exist — while
+        // `BROKER_IPC_TIMEOUT` is how long a single legitimate response may
+        // take once the broker does answer. Those are far apart: `acp_open`
+        // adopts a live broker on a 2s retry budget, and a snapshot carrying a
+        // retained large-image prompt takes ~7.4s just to serialize on the
+        // broker side. Deriving the response deadline from the retry budget
+        // makes adopting such a broker fail permanently, since every retry
+        // hits the same wall.
+        match send_ipc_within(dir, method, params.clone(), BROKER_IPC_TIMEOUT) {
             Ok(value) => return Ok(value),
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
@@ -1504,6 +1499,43 @@ mod tests {
             elapsed < Duration::from_secs(10),
             "deadline overshot badly: {elapsed:?}"
         );
+    }
+
+    /// The retry budget governs how long to keep retrying a broker that is not
+    /// answering *yet* — its socket may not exist while it starts up. It must
+    /// not double as the deadline for a single legitimate response, which can
+    /// take far longer: `acp_open` adopts with a 2s retry budget, while a
+    /// snapshot carrying a retained large-image prompt takes ~7.4s just to
+    /// serialize broker-side. Conflating the two makes adoption of a live
+    /// broker fail permanently, every retry hitting the same wall.
+    #[cfg(unix)]
+    #[test]
+    fn a_retry_budget_does_not_cap_how_long_one_response_may_take() {
+        let dir = PathBuf::from(format!("/tmp/alas-slow-broker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("broker dir");
+        let listener = UnixListener::bind(dir.join("broker.sock")).expect("listener binds");
+
+        let responder = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut line = String::new();
+            BufReader::new(&stream)
+                .read_line(&mut line)
+                .expect("request");
+            // Stands in for a broker serializing a large snapshot: answers
+            // correctly, just well past the caller's retry budget.
+            std::thread::sleep(Duration::from_secs(4));
+            let mut stream = stream;
+            writeln!(stream, r#"{{"ok":true,"result":{{"slow":true}}}}"#).expect("response");
+            stream.flush().expect("flush");
+        });
+
+        let outcome = send_ipc_with_retry(&dir, "snapshot", json!({}), Duration::from_secs(2));
+        let _ = responder.join();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let value = outcome.expect("a slow but healthy broker must not be given up on");
+        assert_eq!(value["slow"], json!(true));
     }
 
     /// `send_ipc_within` connects with a blocking socket, which is only safe
