@@ -483,6 +483,64 @@ struct MissionStoreTests {
         #expect(loadedSecond.events.map(\.id) == ["second-mission-event-1"])
     }
 
+    @Test("completed mission refresh rejects a rename that collides with an active cohort")
+    func completedMissionRefreshRejectsRepositoryRenameCollision() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let completed = MissionFixtures.creatingMission(id: "completed-mission")
+        try store.insert(completed)
+        try store.complete(
+            id: completed.mission.id,
+            at: Date(timeIntervalSince1970: 125),
+            event: MissionFixtures.event(
+                id: "completed",
+                missionID: completed.mission.id,
+                kind: .completed,
+                createdAt: 125
+            )
+        )
+        let activeLegacy = MissionFixtures.creatingMission(id: "active-legacy")
+        try store.insert(activeLegacy)
+        let canonicalIssue = MissionIssueSnapshot(
+            identity: .init(
+                provider: completed.issue.identity.provider,
+                host: completed.issue.identity.host,
+                repositorySlug: "acquired/renamed-alas",
+                number: completed.issue.identity.number
+            ),
+            canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
+            title: "Canonical issue",
+            body: completed.issue.body,
+            state: completed.issue.state,
+            labels: completed.issue.labels,
+            assignees: completed.issue.assignees,
+            providerUpdatedAt: completed.issue.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 150),
+            refreshError: nil
+        )
+        let activeCanonical = MissionFixtures.creatingMission(
+            id: "active-canonical",
+            issue: canonicalIssue
+        )
+        try store.insert(activeCanonical)
+
+        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+            try store.replaceIssueSnapshot(
+                missionID: completed.mission.id,
+                snapshot: canonicalIssue,
+                event: MissionFixtures.event(
+                    id: "rename-refresh",
+                    missionID: completed.mission.id,
+                    kind: .sourceRefreshed,
+                    createdAt: 150
+                )
+            )
+        }
+
+        #expect(try store.aggregate(id: completed.mission.id)?.issue == completed.issue)
+        #expect(try store.aggregate(id: activeLegacy.mission.id)?.issue == activeLegacy.issue)
+        #expect(try store.aggregate(id: activeCanonical.mission.id)?.issue == canonicalIssue)
+    }
+
     @Test("lists active missions before completed missions")
     func ordersActiveMissionsBeforeCompletedMissions() throws {
         let store = try MissionStore(path: temporaryPath())

@@ -256,7 +256,8 @@ final class MissionStore {
             if repositoryRenamed,
                try hasActiveIssueIdentityCollision(
                    missionID: missionID,
-                   identity: snapshot.identity
+                   storedIdentity: storedIdentity,
+                   replacementIdentity: snapshot.identity
                ) {
                 throw Error.duplicateActiveIssueIdentity
             }
@@ -300,12 +301,26 @@ final class MissionStore {
 
     private func hasActiveIssueIdentityCollision(
         missionID: MissionID,
-        identity: MissionIssueIdentity
+        storedIdentity: MissionIssueIdentity,
+        replacementIdentity: MissionIssueIdentity
     ) throws -> Bool {
         let rows = try db.query("""
         SELECT 1
-        FROM missions AS source
-        WHERE source.id = ? AND source.state != ?
+        WHERE (
+            EXISTS (
+              SELECT 1
+              FROM missions AS source
+              WHERE source.id = ? AND source.state != ?
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM missions AS cohort
+              JOIN mission_issue_sources AS issue ON issue.mission_id = cohort.id
+              WHERE cohort.id != ? AND cohort.state != ?
+                AND issue.provider = ? AND issue.host = ? COLLATE NOCASE
+                AND issue.repository_slug = ? COLLATE NOCASE AND issue.issue_number = ?
+            )
+          )
           AND EXISTS (
             SELECT 1
             FROM missions AS duplicate
@@ -320,10 +335,16 @@ final class MissionStore {
             MissionState.completed.rawValue,
             missionID.rawValue,
             MissionState.completed.rawValue,
-            identity.provider.rawValue,
-            identity.host,
-            identity.repositorySlug,
-            identity.number,
+            storedIdentity.provider.rawValue,
+            storedIdentity.host,
+            storedIdentity.repositorySlug,
+            storedIdentity.number,
+            missionID.rawValue,
+            MissionState.completed.rawValue,
+            replacementIdentity.provider.rawValue,
+            replacementIdentity.host,
+            replacementIdentity.repositorySlug,
+            replacementIdentity.number,
         ])
         return !rows.isEmpty
     }
