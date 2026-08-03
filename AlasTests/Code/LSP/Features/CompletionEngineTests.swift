@@ -225,6 +225,40 @@ struct CompletionEngineTests {
         #expect(plan.flatMap { apply($0, to: "openA") } == "openAlpha")
     }
 
+    @Test("shifts a retained textEdit that spans the old caret")
+    func plansRetainedTextEditSpanningOldCaret() {
+        let candidate = CompletionCandidate(
+            label: "openAlpha",
+            detail: nil,
+            kind: nil,
+            documentation: nil,
+            sortText: nil,
+            filterText: nil,
+            replacementText: "openAlpha",
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 6)
+                ),
+                newText: "openAlpha"
+            ),
+            additionalTextEdits: [],
+            source: .lsp
+        )
+
+        let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            originalPrefix: CompletionPrefix(text: "ope", range: NSRange(location: 0, length: 3)),
+            in: "openXYZ"
+        )
+
+        #expect(plan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 0, length: 7), replacementText: "openAlpha")
+        ])
+        #expect(plan.flatMap { apply($0, to: "openXYZ") } == "openAlpha")
+    }
+
     @Test("plans textEdit plus non-overlapping additional edits")
     func plansAdditionalTextEdits() {
         let text = "let value = op\n"
@@ -380,7 +414,7 @@ private func apply(_ plan: CompletionEditPlan, to text: String) -> String? {
     return storage as String
 }
 
-private extension LSPCompletionItem {
+extension LSPCompletionItem {
     static func testing(
         label: String,
         kind: Int? = nil,

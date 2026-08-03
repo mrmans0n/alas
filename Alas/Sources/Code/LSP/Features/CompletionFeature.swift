@@ -17,6 +17,7 @@ final class CompletionFeature {
     private var requestID: UInt64 = 0
     private var candidates: [CompletionCandidate] = []
     private var prefix: CompletionPrefix?
+    private var candidatePrefix: CompletionPrefix?
     private var selection: Int = 0
     private let suggestionWindow = CompletionWindowController()
     private var isRefreshing = false
@@ -69,6 +70,7 @@ final class CompletionFeature {
         requestID &+= 1
         candidates.removeAll()
         prefix = nil
+        candidatePrefix = nil
         selection = 0
         isRefreshing = false
         closeUI()
@@ -239,10 +241,19 @@ final class CompletionFeature {
             return
         }
 
+        let selectedCandidate = candidates.indices.contains(selection) ? candidates[selection] : nil
         candidates = next
         self.prefix = prefix
+        candidatePrefix = prefix
         isRefreshing = false
-        selection = min(max(selection, 0), next.count - 1)
+        selection = selectedCandidate.flatMap { selected in
+            next.firstIndex {
+                $0.label == selected.label &&
+                    $0.kind == selected.kind &&
+                    $0.detail == selected.detail &&
+                    $0.source == selected.source
+            }
+        } ?? 0
         showPopup()
     }
 
@@ -323,7 +334,12 @@ final class CompletionFeature {
         }
 
         let candidate = candidates[index]
-        guard let plan = CompletionEngine.editPlan(accepting: candidate, prefix: prefix, in: textView.string) else {
+        guard let plan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: prefix,
+            originalPrefix: candidatePrefix,
+            in: textView.string
+        ) else {
             cancelAndDismiss()
             return
         }
@@ -352,6 +368,7 @@ final class CompletionFeature {
               previousPrefix?.range.location == updatedPrefix.range.location else {
             candidates.removeAll()
             prefix = nil
+            candidatePrefix = nil
             selection = 0
             closeUI()
             return
@@ -429,12 +446,23 @@ extension CompletionFeature {
             )
         }
         self.prefix = prefix
+        candidatePrefix = prefix
         self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
         isRefreshing = false
     }
 
     func testingShowPopup() {
         showPopup()
+    }
+
+    func testingPresent(items: [LSPCompletionItem], prefix: CompletionPrefix, bufferText: String) {
+        present(
+            items: items,
+            prefix: prefix,
+            bufferText: bufferText,
+            allowBufferFallback: false,
+            memberAccessOnly: false
+        )
     }
 
     var testingSnapshot: TestingSnapshot {

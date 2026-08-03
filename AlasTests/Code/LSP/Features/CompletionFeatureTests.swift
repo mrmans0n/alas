@@ -112,6 +112,37 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refreshed results preserve the selected candidate")
+    func refreshedResultsPreserveSelectedCandidate() {
+        let textView = makeTextView("ap")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        let prefix = CompletionPrefix(text: "ap", range: NSRange(location: 0, length: 2))
+        feature.testingSeedVisibleCandidates(
+            labels: ["apple", "apricot"],
+            prefix: prefix,
+            selection: 1
+        )
+
+        feature.testingPresent(
+            items: [
+                .testing(label: "apartment", sortText: "001", filterText: nil),
+                .testing(label: "apricot", sortText: "002", filterText: nil),
+                .testing(label: "apple", sortText: "003", filterText: nil)
+            ],
+            prefix: prefix,
+            bufferText: "ap"
+        )
+
+        #expect(feature.testingSnapshot.candidateLabels == ["apartment", "apricot", "apple"])
+        #expect(feature.testingSnapshot.selection == 1)
+        feature.cancelAndDismiss()
+    }
+
     private func waitForCompletionRequest(events: () -> [String]) async throws {
         let deadline = Date().addingTimeInterval(2)
         while !events().contains("completion"), Date() < deadline {

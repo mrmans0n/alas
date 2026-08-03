@@ -166,10 +166,20 @@ enum CompletionEngine {
             }
     }
 
-    static func editPlan(accepting candidate: CompletionCandidate, prefix: CompletionPrefix, in text: String) -> CompletionEditPlan? {
+    static func editPlan(
+        accepting candidate: CompletionCandidate,
+        prefix: CompletionPrefix,
+        originalPrefix: CompletionPrefix? = nil,
+        in text: String
+    ) -> CompletionEditPlan? {
         let primaryRange: NSRange
         if let textEdit = candidate.textEdit {
-            guard let range = nsRange(for: textEdit.range, in: text) else { return nil }
+            guard let range = rebasedRange(
+                for: textEdit.range,
+                originalPrefix: originalPrefix,
+                prefix: prefix,
+                in: text
+            ) else { return nil }
             if shouldReplacePrefix(range: range, replacement: candidate.replacementText, prefix: prefix) {
                 primaryRange = prefix.range
             } else {
@@ -183,7 +193,12 @@ enum CompletionEngine {
         var edits: [CompletionTextEdit] = []
 
         for additional in candidate.additionalTextEdits {
-            guard let range = nsRange(for: additional.range, in: text) else { continue }
+            guard let range = rebasedRange(
+                for: additional.range,
+                originalPrefix: originalPrefix,
+                prefix: prefix,
+                in: text
+            ) else { continue }
             let edit = CompletionTextEdit(range: range, replacementText: additional.newText)
             guard !overlaps(edit.range, primary.range),
                   edits.allSatisfy({ !overlaps($0.range, edit.range) }) else {
@@ -294,6 +309,38 @@ enum CompletionEngine {
             return lhs.location <= rhs.location && rhs.location < NSMaxRange(lhs)
         }
         return NSIntersectionRange(lhs, rhs).length > 0
+    }
+
+    private static func rebasedRange(
+        for range: LSPRange,
+        originalPrefix: CompletionPrefix?,
+        prefix: CompletionPrefix,
+        in text: String
+    ) -> NSRange? {
+        guard let originalPrefix,
+              originalPrefix.range.location == prefix.range.location else {
+            return nsRange(for: range, in: text)
+        }
+
+        let growth = NSMaxRange(prefix.range) - NSMaxRange(originalPrefix.range)
+        guard growth > 0,
+              let oldCaret = TextEditCoordinates.lspPosition(
+                utf16Offset: NSMaxRange(originalPrefix.range),
+                in: text
+              ) else {
+            return nsRange(for: range, in: text)
+        }
+
+        func shifted(_ position: LSPPosition) -> LSPPosition {
+            guard position.line == oldCaret.line,
+                  position.character >= oldCaret.character else { return position }
+            return LSPPosition(line: position.line, character: position.character + growth)
+        }
+
+        return nsRange(
+            for: LSPRange(start: shifted(range.start), end: shifted(range.end)),
+            in: text
+        )
     }
 
     private static func shouldReplacePrefix(
