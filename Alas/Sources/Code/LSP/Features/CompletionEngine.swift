@@ -338,7 +338,8 @@ enum CompletionEngine {
         func shifted(_ position: LSPPosition, atEnd: Bool) -> LSPPosition {
             guard position.line == prefixStart.line,
                   position.character > oldCaretCharacter ||
-                  (!atEnd || includeInsertedTextAtEnd) && position.character == oldCaretCharacter else {
+                  (!atEnd || includeInsertedTextAtEnd || growth < 0) &&
+                  position.character == oldCaretCharacter else {
                 return position
             }
             return LSPPosition(line: position.line, character: position.character + growth)
