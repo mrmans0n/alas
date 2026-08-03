@@ -77,7 +77,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.recordMissingWorktree(Self.missionID)
         var aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
 
@@ -838,7 +838,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
         #expect(aggregate.events.last?.kind != .retryStarted)
@@ -860,7 +860,7 @@ struct MissionReadinessEvaluatorTests {
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
         #expect(fake.externalOperations == ["startACP"])
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
     }
 
@@ -1593,15 +1593,17 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
     @Test func startupPreservesWorktreeCreationFailureWhenNoArtifactExists() async throws {
         var failed = MissionFixtures.creatingMission()
-        failed.mission.state = .needsAttention
-        failed.mission.setupCheckpoint = .creatingWorktree
-        failed.mission.attentionReason = "branch exists retry later"
+        failed.mission.state = .running
+        failed.markPrimaryLegNeedsAttention(
+            checkpoint: .creatingWorktree,
+            reason: "branch exists retry later"
+        )
         failed.legs[0].worktreeId = "worktree-1"
         let fake = try MissionLifecycleFake(aggregate: failed, worktreeAvailable: false)
         await fake.controller.load()
@@ -1609,7 +1611,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch exists retry later")
     }
@@ -1626,7 +1628,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
@@ -1638,7 +1640,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
@@ -1657,7 +1659,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
@@ -1680,7 +1682,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
         #expect(linkedReviewCalls == 0)
     }
@@ -1695,7 +1697,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
@@ -1720,7 +1722,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission project is no longer available.")
     }
 

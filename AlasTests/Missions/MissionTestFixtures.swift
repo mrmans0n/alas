@@ -107,3 +107,86 @@ enum MissionFixtures {
         )
     }
 }
+
+extension MissionID {
+    static let fixture = MissionID(rawValue: "fixture-mission")
+}
+
+extension MissionLegID {
+    static let app = MissionLegID(rawValue: "fixture-app-leg")
+    static let sdk = MissionLegID(rawValue: "fixture-sdk-leg")
+}
+
+extension MissionFixtures {
+    static func twoLegMission() -> MissionAggregate {
+        let createdAt = Date(timeIntervalSince1970: 100)
+        let app = fixtureLeg(
+            id: .app,
+            ordinal: 0,
+            projectID: "app-project",
+            branch: "app-fix",
+            destinationPath: "/tmp/fixture-app",
+            worktreeID: "app-worktree",
+            lineageID: "app-lineage"
+        )
+        let sdk = fixtureLeg(
+            id: .sdk,
+            ordinal: 1,
+            projectID: "sdk-project",
+            branch: "sdk-fix",
+            destinationPath: "/tmp/fixture-sdk",
+            worktreeID: "sdk-worktree",
+            lineageID: "sdk-lineage"
+        )
+        return MissionAggregate(
+            mission: .init(
+                id: .fixture,
+                title: "Fixture Mission",
+                state: .running,
+                setupCheckpoint: .running,
+                primaryLegID: .app,
+                createdAt: createdAt,
+                updatedAt: createdAt,
+                completedAt: nil
+            ),
+            issue: issue(),
+            legs: [app, sdk],
+            events: []
+        )
+    }
+
+    static func fixtureLeg(
+        id: MissionLegID,
+        ordinal: Int,
+        projectID: String,
+        branch: String,
+        destinationPath: String,
+        worktreeID: String,
+        lineageID: String
+    ) -> MissionLeg {
+        let timestamp = Date(timeIntervalSince1970: 100)
+        return MissionLeg(
+            id: id,
+            missionID: .fixture,
+            ordinal: ordinal,
+            projectId: projectID,
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: branch,
+            destinationPath: destinationPath,
+            worktreeId: worktreeID,
+            worktreeLineageID: lineageID,
+            agentId: "codex",
+            acpSessionId: "session-\(ordinal)",
+            initialPromptId: UUID(uuidString: ordinal == 0
+                ? "00000000-0000-0000-0000-000000000010"
+                : "00000000-0000-0000-0000-000000000011")!,
+            pendingInitialPrompt: nil,
+            reviewIdentity: nil,
+            state: .running,
+            setupCheckpoint: .running,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+    }
+}

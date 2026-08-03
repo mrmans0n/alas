@@ -777,8 +777,7 @@ final class MissionStore {
             // an isolated secondary failure must not take the aggregate out of
             // its running state.
             if !legacySetup {
-                aggregate.mission.state = (aggregate.legs.count == 1
-                    && (legacyAttention || primaryLeg.state == .needsAttention))
+                aggregate.mission.state = (aggregate.legs.count == 1 && legacyAttention)
                     ? .needsAttention
                     : Self.globalMissionState(for: aggregate.legs)
             }

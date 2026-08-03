@@ -271,7 +271,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch exists retry later")
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
@@ -291,7 +291,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "Could not establish a durable identity for the Mission worktree. Retry this Mission.")
         #expect(aggregate.primaryLeg?.worktreeLineageID == nil)
@@ -308,7 +308,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 0)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "A worktree already exists at the Mission destination. Choose a different branch or remove the existing worktree.")
         #expect(aggregate.primaryLeg?.worktreeId == nil)
@@ -324,7 +324,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 1)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
         #expect(aggregate.primaryLeg?.acpSessionId == fake.startedSessionIDs.first)
@@ -643,7 +643,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "Could not persist Mission setup progress. Retry this Mission.")
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
@@ -671,7 +671,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.startACPCalls == 1)
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
-        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.state == .running)
         #expect(failed.mission.setupCheckpoint == .startingAgent)
         #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
 
@@ -700,7 +700,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.startACPCalls == 1)
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
-        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.state == .running)
         #expect(failed.mission.setupCheckpoint == .startingAgent)
         #expect(failed.mission.attentionReason == "Install Codex")
         #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
@@ -838,7 +838,7 @@ struct MissionCoordinatorTests {
         let retried = await fake.waitUntilSettled(existing.mission.id)
 
         #expect(fake.startACPCalls == 0)
-        #expect(retried.mission.state == .needsAttention)
+        #expect(retried.mission.state == .running)
         #expect(retried.mission.setupCheckpoint == .creatingWorktree)
         #expect(retried.mission.attentionReason == "Could not establish a durable identity for the Mission worktree. Retry this Mission.")
         #expect(retried.primaryLeg?.worktreeLineageID == nil)
@@ -878,7 +878,7 @@ struct MissionCoordinatorTests {
         #expect(fake.createWorktreeCalls == 0)
         #expect(fake.startACPCalls == 0)
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
     }
 

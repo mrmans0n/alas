@@ -62,7 +62,7 @@ struct MissionIntegrationTests {
         #expect(harness.worktreeCreateCount == 1)
         #expect(harness.sessionIDs.isEmpty)
         #expect(harness.promptIDs.isEmpty)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch already exists retry later")
         #expect(aggregate.primaryLeg?.worktreeId == harness.worktree.id)
@@ -77,7 +77,7 @@ struct MissionIntegrationTests {
         let id = try await harness.create()
         let failed = await harness.waitUntilSettled(id)
 
-        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.state == .running)
         #expect(failed.mission.setupCheckpoint == .startingAgent)
         #expect(failed.primaryLeg?.worktreeId == harness.worktree.id)
         #expect(failed.primaryLeg?.acpSessionId == harness.sessionIDs.first)
@@ -251,95 +251,12 @@ struct MissionIntegrationTests {
     }
 }
 
-private extension MissionID {
-    static let fixture = MissionID(rawValue: "fixture-mission")
-}
-
-private extension MissionLegID {
-    static let app = MissionLegID(rawValue: "fixture-app-leg")
-    static let sdk = MissionLegID(rawValue: "fixture-sdk-leg")
-}
-
 private extension ReviewLoopSnapshot {
     static let mergedFixture = MissionControllerFake.reviewSnapshot(
         branch: "sdk-fix",
         number: 92,
         state: .merged
     )
-}
-
-private extension MissionFixtures {
-    static func twoLegMission() -> MissionAggregate {
-        let createdAt = Date(timeIntervalSince1970: 100)
-        let app = fixtureLeg(
-            id: .app,
-            ordinal: 0,
-            projectID: "app-project",
-            branch: "app-fix",
-            destinationPath: "/tmp/fixture-app",
-            worktreeID: "app-worktree",
-            lineageID: "app-lineage"
-        )
-        let sdk = fixtureLeg(
-            id: .sdk,
-            ordinal: 1,
-            projectID: "sdk-project",
-            branch: "sdk-fix",
-            destinationPath: "/tmp/fixture-sdk",
-            worktreeID: "sdk-worktree",
-            lineageID: "sdk-lineage"
-        )
-        return MissionAggregate(
-            mission: .init(
-                id: .fixture,
-                title: "Fixture Mission",
-                state: .running,
-                setupCheckpoint: .running,
-                primaryLegID: .app,
-                createdAt: createdAt,
-                updatedAt: createdAt,
-                completedAt: nil
-            ),
-            issue: issue(),
-            legs: [app, sdk],
-            events: []
-        )
-    }
-
-    static func fixtureLeg(
-        id: MissionLegID,
-        ordinal: Int,
-        projectID: String,
-        branch: String,
-        destinationPath: String,
-        worktreeID: String,
-        lineageID: String
-    ) -> MissionLeg {
-        let timestamp = Date(timeIntervalSince1970: 100)
-        return MissionLeg(
-            id: id,
-            missionID: .fixture,
-            ordinal: ordinal,
-            projectId: projectID,
-            baseRef: "origin/main",
-            baseRemoteName: "origin",
-            branch: branch,
-            destinationPath: destinationPath,
-            worktreeId: worktreeID,
-            worktreeLineageID: lineageID,
-            agentId: "codex",
-            acpSessionId: "session-\(ordinal)",
-            initialPromptId: UUID(uuidString: ordinal == 0
-                ? "00000000-0000-0000-0000-000000000010"
-                : "00000000-0000-0000-0000-000000000011")!,
-            pendingInitialPrompt: nil,
-            reviewIdentity: nil,
-            state: .running,
-            setupCheckpoint: .running,
-            createdAt: timestamp,
-            updatedAt: timestamp
-        )
-    }
 }
 
 @MainActor

@@ -943,14 +943,9 @@ private extension MissionTabState {
     )
 
     static let crossRepoFixture = MissionTabState(
-        missionID: MissionID(rawValue: "cross-repo-mission"),
-        title: "Fix parser crash"
+        missionID: .fixture,
+        title: "Fixture Mission"
     )
-}
-
-private extension MissionLegID {
-    static let app = MissionLegID(rawValue: "fixture-app-leg")
-    static let sdk = MissionLegID(rawValue: "fixture-sdk-leg")
 }
 
 @MainActor
@@ -1009,65 +1004,11 @@ private struct MissionCrossSpaceNavigationFixture {
                 ),
             ]
         )
-        let missionID = MissionTabState.crossRepoFixture.missionID
-        let timestamp = Date(timeIntervalSince1970: 100)
-        let appLeg = MissionLeg(
-            id: .app,
-            missionID: missionID,
-            ordinal: 0,
-            projectId: appProject.id,
-            baseRef: "origin/main",
-            baseRemoteName: "origin",
-            branch: "fix/parser-crash",
-            destinationPath: "/tmp/alas-mission",
-            worktreeId: "app-worktree",
-            worktreeLineageID: "app-lineage",
-            agentId: "codex",
-            acpSessionId: "app-session",
-            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!,
-            pendingInitialPrompt: nil,
-            reviewIdentity: nil,
-            state: .running,
-            setupCheckpoint: .running,
-            createdAt: timestamp,
-            updatedAt: timestamp
-        )
-        let sdkLeg = MissionLeg(
-            id: .sdk,
-            missionID: missionID,
-            ordinal: 1,
-            projectId: sdkProject.id,
-            baseRef: "origin/main",
-            baseRemoteName: "origin",
-            branch: "fix/sdk-parser-crash",
-            destinationPath: "/tmp/alas-sdk-mission",
-            worktreeId: "sdk-worktree",
-            worktreeLineageID: "sdk-lineage",
-            agentId: "codex",
-            acpSessionId: "sdk-session",
-            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
-            pendingInitialPrompt: nil,
-            reviewIdentity: nil,
-            state: .running,
-            setupCheckpoint: .running,
-            createdAt: timestamp,
-            updatedAt: timestamp
-        )
-        aggregate = MissionAggregate(
-            mission: MissionRecord(
-                id: missionID,
-                title: MissionTabState.crossRepoFixture.title,
-                state: .running,
-                setupCheckpoint: .running,
-                primaryLegID: .app,
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                completedAt: nil
-            ),
-            issue: MissionFixtures.issue(),
-            legs: [appLeg, sdkLeg],
-            events: []
-        )
+        aggregate = MissionFixtures.twoLegMission()
+        let timestamp = aggregate.mission.createdAt
+        let appLeg = aggregate.legs[0]
+        let sdkLeg = aggregate.legs[1]
+        let missionID = aggregate.mission.id
         appWorktree = Worktree(
             id: "app-worktree",
             projectId: appProject.id,

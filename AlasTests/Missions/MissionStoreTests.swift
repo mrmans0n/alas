@@ -64,9 +64,7 @@ struct MissionStoreTests {
         let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
 
         #expect(try store.currentSchemaVersion() == 4)
-        // The stored v4 state is normalized to running, while the one-leg
-        // compatibility projection preserves the v1 Needs Attention UI.
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.primaryLeg?.state == .needsAttention)
         #expect(aggregate.primaryLeg?.setupCheckpoint == .startingAgent)
         #expect(aggregate.primaryLeg?.attentionReason == "Install Codex")
@@ -77,7 +75,7 @@ struct MissionStoreTests {
         let cases: [(state: String, checkpoint: String, mission: MissionState, leg: MissionLegState, readiness: MissionLegReadinessKind?)] = [
             ("creating", "creatingWorktree", .creating, .creating, nil),
             ("running", "running", .running, .running, nil),
-            ("needsAttention", "startingAgent", .needsAttention, .needsAttention, nil),
+            ("needsAttention", "startingAgent", .running, .needsAttention, nil),
             ("readyToComplete", "running", .readyToComplete, .ready, .legacy),
             ("completed", "running", .completed, .running, nil),
             ("completed", "creatingWorktree", .completed, .creating, nil),
