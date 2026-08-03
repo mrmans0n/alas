@@ -259,6 +259,13 @@ final class MissionStore {
                ) {
                 throw Error.duplicateActiveIssueIdentity
             }
+            if repositoryRenamed {
+                try migrateActiveDuplicateIssueIdentities(
+                    excluding: missionID,
+                    from: storedIdentity,
+                    to: snapshot
+                )
+            }
             let snapshot = repositoryRenamed
                 ? snapshot
                 : Self.snapshot(snapshot, preserving: storedIdentity)
@@ -314,6 +321,50 @@ final class MissionStore {
             identity.number,
         ])
         return !rows.isEmpty
+    }
+
+    private func migrateActiveDuplicateIssueIdentities(
+        excluding missionID: MissionID,
+        from storedIdentity: MissionIssueIdentity,
+        to snapshot: MissionIssueSnapshot
+    ) throws {
+        let duplicateIDs = try db.query("""
+        SELECT missions.id
+        FROM missions
+        JOIN mission_issue_sources AS issue ON issue.mission_id = missions.id
+        WHERE missions.id != ? AND missions.state != ?
+          AND issue.provider = ? AND issue.host = ? COLLATE NOCASE
+          AND issue.repository_slug = ? COLLATE NOCASE AND issue.issue_number = ?
+        """, bindings: [
+            missionID.rawValue,
+            MissionState.completed.rawValue,
+            storedIdentity.provider.rawValue,
+            storedIdentity.host,
+            storedIdentity.repositorySlug,
+            storedIdentity.number,
+        ]).compactMap { $0["id"] as? String }
+
+        for duplicateID in duplicateIDs {
+            let duplicateMissionID = MissionID(rawValue: duplicateID)
+            let changed = try db.execChanges("""
+            UPDATE mission_issue_sources
+            SET provider = ?, host = ?, repository_slug = ?, issue_number = ?, canonical_url = ?
+            WHERE mission_id = ?
+            """, bindings: [
+                snapshot.identity.provider.rawValue,
+                snapshot.identity.host,
+                snapshot.identity.repositorySlug,
+                snapshot.identity.number,
+                snapshot.canonicalURL.absoluteString,
+                duplicateID,
+            ])
+            guard changed == 1 else { throw Error.malformedRecord }
+            try migrateReviewIdentities(
+                missionID: duplicateMissionID,
+                from: storedIdentity,
+                to: snapshot.identity
+            )
+        }
     }
 
     func updateIssueRefreshError(

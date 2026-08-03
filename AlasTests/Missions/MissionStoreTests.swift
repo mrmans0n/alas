@@ -431,6 +431,58 @@ struct MissionStoreTests {
         #expect(loaded.events.map(\.id) == ["legacy-mission-event-1"])
     }
 
+    @Test("repository rename migrates an explicitly duplicated mission cohort")
+    func repositoryRenameMigratesExplicitDuplicateCohort() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let first = MissionFixtures.creatingMission(id: "first-mission")
+        var second = MissionFixtures.creatingMission(id: "second-mission")
+        second.legs[0].reviewIdentity = MissionReviewIdentity(
+            provider: second.issue.identity.provider,
+            host: second.issue.identity.host,
+            repositorySlug: second.issue.identity.repositorySlug,
+            number: 17,
+            url: URL(string: "https://github.com/acme/alas/pull/17")!
+        )
+        try store.insert(first)
+        try store.insert(second, allowDuplicate: true)
+        let renamed = MissionIssueSnapshot(
+            identity: .init(
+                provider: first.issue.identity.provider,
+                host: first.issue.identity.host,
+                repositorySlug: "acquired/renamed-alas",
+                number: first.issue.identity.number
+            ),
+            canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
+            title: "Fresh after rename",
+            body: first.issue.body,
+            state: first.issue.state,
+            labels: first.issue.labels,
+            assignees: first.issue.assignees,
+            providerUpdatedAt: first.issue.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 150),
+            refreshError: nil
+        )
+
+        try store.replaceIssueSnapshot(
+            missionID: first.mission.id,
+            snapshot: renamed,
+            event: MissionFixtures.event(
+                id: "rename-refresh",
+                missionID: first.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 150
+            )
+        )
+
+        let loadedFirst = try #require(try store.aggregate(id: first.mission.id))
+        let loadedSecond = try #require(try store.aggregate(id: second.mission.id))
+        #expect(loadedFirst.issue.identity == renamed.identity)
+        #expect(loadedSecond.issue.identity == renamed.identity)
+        #expect(loadedSecond.issue.canonicalURL == renamed.canonicalURL)
+        #expect(loadedSecond.primaryLeg?.reviewIdentity?.repositorySlug == "acquired/renamed-alas")
+        #expect(loadedSecond.events.map(\.id) == ["second-mission-event-1"])
+    }
+
     @Test("lists active missions before completed missions")
     func ordersActiveMissionsBeforeCompletedMissions() throws {
         let store = try MissionStore(path: temporaryPath())
