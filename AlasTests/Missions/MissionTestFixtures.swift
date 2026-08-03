@@ -41,9 +41,7 @@ enum MissionFixtures {
                 id: missionID,
                 title: issue.title,
                 state: .creating,
-                setupCheckpoint: .creatingWorktree,
                 primaryLegID: legID,
-                attentionReason: nil,
                 createdAt: Date(timeIntervalSince1970: createdAt),
                 updatedAt: Date(timeIntervalSince1970: createdAt),
                 completedAt: nil
@@ -76,11 +74,18 @@ enum MissionFixtures {
             branch: "fix/parser-crash",
             destinationPath: "/tmp/alas-mission",
             worktreeId: nil,
+            worktreeLineageID: nil,
             agentId: "codex",
             acpSessionId: nil,
             initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             pendingInitialPrompt: "Fix issue #42.",
-            reviewIdentity: nil
+            reviewIdentity: nil,
+            state: .creating,
+            setupCheckpoint: .creatingWorktree,
+            attentionReason: nil,
+            readinessEvidence: nil,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
         )
     }
 

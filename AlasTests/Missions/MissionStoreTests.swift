@@ -48,6 +48,212 @@ struct MissionStoreTests {
         #expect(try v1.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 1)
     }
 
+    @Test("v4 migrates legacy Mission attention onto its leg")
+    func migratesLegacyAttentionToLeg() throws {
+        let path = temporaryPath()
+        let legacy = try MissionStoreTestDatabase.v3(
+            path: URL(fileURLWithPath: path),
+            missionState: "needsAttention",
+            checkpoint: "startingAgent",
+            attentionReason: "Install Codex"
+        )
+
+        let store = try MissionStore(path: path)
+        let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
+
+        #expect(try store.currentSchemaVersion() == 4)
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.setupCheckpoint == .startingAgent)
+        #expect(aggregate.primaryLeg?.attentionReason == "Install Codex")
+    }
+
+    @Test("v4 migrates each legacy Mission lifecycle state")
+    func migratesLegacyMissionLifecycleStates() throws {
+        let cases: [(state: String, checkpoint: String, mission: MissionState, leg: MissionLegState, readiness: MissionLegReadinessKind?)] = [
+            ("creating", "creatingWorktree", .creating, .creating, nil),
+            ("running", "running", .running, .running, nil),
+            ("needsAttention", "startingAgent", .running, .needsAttention, nil),
+            ("readyToComplete", "running", .readyToComplete, .ready, .legacy),
+            ("completed", "running", .completed, .running, nil),
+            ("completed", "creatingWorktree", .completed, .creating, nil),
+            ("completed", "startingAgent", .completed, .creating, nil),
+        ]
+
+        for (index, legacyCase) in cases.enumerated() {
+            let path = temporaryPath()
+            let legacy = try MissionStoreTestDatabase.v3(
+                path: URL(fileURLWithPath: path),
+                missionState: legacyCase.state,
+                checkpoint: legacyCase.checkpoint,
+                attentionReason: "Legacy reason"
+            )
+
+            let store = try MissionStore(path: path)
+            let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
+
+            #expect(aggregate.mission.state == legacyCase.mission, "case \(index)")
+            #expect(aggregate.primaryLeg?.state == legacyCase.leg, "case \(index)")
+            #expect(aggregate.primaryLeg?.setupCheckpoint.rawValue == legacyCase.checkpoint, "case \(index)")
+            #expect(aggregate.primaryLeg?.attentionReason == "Legacy reason", "case \(index)")
+            #expect(aggregate.primaryLeg?.readinessEvidence?.kind == legacyCase.readiness, "case \(index)")
+            if legacyCase.readiness != nil {
+                #expect(aggregate.primaryLeg?.readinessEvidence?.observedAt == Date(timeIntervalSince1970: 101))
+            }
+        }
+    }
+
+    @Test("persists two independently addressed legs")
+    func persistsTwoLegs() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].state = .running
+        aggregate.legs[0].setupCheckpoint = .running
+        let secondLeg = MissionLeg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"),
+            missionID: aggregate.mission.id,
+            ordinal: 1,
+            projectId: "project-2",
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "fix/parser-crash-project-2",
+            destinationPath: "/tmp/alas-mission-project-2",
+            worktreeId: nil,
+            worktreeLineageID: nil,
+            agentId: "codex",
+            acpSessionId: nil,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            pendingInitialPrompt: "Fix issue #42 in project 2.",
+            reviewIdentity: nil,
+            state: .creating,
+            setupCheckpoint: .creatingWorktree,
+            attentionReason: nil,
+            readinessEvidence: nil,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        aggregate.legs.append(secondLeg)
+        aggregate.events.append(MissionFixtures.event(
+            id: "leg-added",
+            missionID: aggregate.mission.id,
+            legID: secondLeg.id,
+            kind: .legAdded,
+            createdAt: 102
+        ))
+
+        try store.insert(aggregate)
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.legs.map(\.id) == [aggregate.primaryLeg!.id, secondLeg.id])
+        #expect(try store.leg(missionID: aggregate.mission.id, legID: secondLeg.id) == secondLeg)
+    }
+
+    @Test("adds a leg atomically to a running Mission")
+    func addsLegToRunningMission() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].state = .running
+        aggregate.legs[0].setupCheckpoint = .running
+        try store.insert(aggregate)
+        let leg = MissionLeg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"),
+            missionID: aggregate.mission.id,
+            ordinal: 1,
+            projectId: "project-2",
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "fix/parser-crash-project-2",
+            destinationPath: "/tmp/alas-mission-project-2",
+            worktreeId: nil,
+            worktreeLineageID: nil,
+            agentId: "codex",
+            acpSessionId: nil,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            pendingInitialPrompt: "Fix issue #42 in project 2.",
+            reviewIdentity: nil,
+            state: .creating,
+            setupCheckpoint: .creatingWorktree,
+            attentionReason: nil,
+            readinessEvidence: nil,
+            createdAt: Date(timeIntervalSince1970: 101),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+        let event = MissionFixtures.event(
+            id: "leg-added",
+            missionID: aggregate.mission.id,
+            legID: leg.id,
+            kind: .legAdded,
+            createdAt: 102
+        )
+
+        try store.addLeg(leg, event: event)
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.legs == [aggregate.legs[0], leg])
+        #expect(loaded.events.last == event)
+        #expect(loaded.mission.updatedAt == event.createdAt)
+    }
+
+    @Test("rejects duplicate leg projects")
+    func rejectsDuplicateLegProjects() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].state = .running
+        aggregate.legs[0].setupCheckpoint = .running
+        var duplicate = aggregate.legs[0]
+        duplicate = MissionLeg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"), missionID: duplicate.missionID, ordinal: 1,
+            projectId: duplicate.projectId, baseRef: duplicate.baseRef, baseRemoteName: duplicate.baseRemoteName,
+            branch: "other", destinationPath: "/tmp/other", worktreeId: nil, worktreeLineageID: nil,
+            agentId: duplicate.agentId, acpSessionId: nil,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            pendingInitialPrompt: duplicate.pendingInitialPrompt, reviewIdentity: nil,
+            state: .creating, setupCheckpoint: .creatingWorktree, attentionReason: nil,
+            readinessEvidence: nil, createdAt: duplicate.createdAt, updatedAt: duplicate.updatedAt
+        )
+        aggregate.legs.append(duplicate)
+
+        #expect(throws: MissionStore.Error.duplicateLegProject) { try store.insert(aggregate) }
+    }
+
+    @Test("rejects noncontiguous leg ordinals")
+    func rejectsNoncontiguousLegOrdinals() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        var leg = aggregate.legs[0]
+        leg = MissionLeg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"), missionID: leg.missionID, ordinal: 2,
+            projectId: "project-2", baseRef: leg.baseRef, baseRemoteName: leg.baseRemoteName,
+            branch: "other", destinationPath: "/tmp/other", worktreeId: nil, worktreeLineageID: nil,
+            agentId: leg.agentId, acpSessionId: nil,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            pendingInitialPrompt: leg.pendingInitialPrompt, reviewIdentity: nil,
+            state: .creating, setupCheckpoint: .creatingWorktree, attentionReason: nil,
+            readinessEvidence: nil, createdAt: leg.createdAt, updatedAt: leg.updatedAt
+        )
+        aggregate.legs.append(leg)
+
+        #expect(throws: MissionStore.Error.invalidLegCollection) { try store.insert(aggregate) }
+    }
+
+    @Test("rejects events addressed to legs outside the Mission")
+    func rejectsEventForAnotherMissionLeg() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.events.append(MissionFixtures.event(
+            id: "wrong-leg",
+            missionID: aggregate.mission.id,
+            legID: MissionLegID(rawValue: "other-mission-leg-1"),
+            kind: .agentStarted,
+            createdAt: 102
+        ))
+
+        #expect(throws: MissionStore.Error.invalidEventLeg) { try store.insert(aggregate) }
+    }
+
     @Test("creates schema and persists ordered events across reopen")
     func persistsAggregateAndOrderedEventsAcrossReopen() throws {
         let path = temporaryPath()
@@ -57,11 +263,13 @@ struct MissionStoreTests {
             let store = try MissionStore(path: path)
             #expect(try store.currentSchemaVersion() == MissionStore.targetSchemaVersion)
             try store.insert(aggregate)
-            try store.updateSetup(
-                id: aggregate.mission.id,
-                state: .running,
-                checkpoint: .running,
-                attentionReason: nil,
+            var leg = try #require(aggregate.primaryLeg)
+            leg.state = .running
+            leg.setupCheckpoint = .running
+            leg.updatedAt = Date(timeIntervalSince1970: 102)
+            try store.updateLegSetup(
+                missionID: aggregate.mission.id,
+                leg: leg,
                 event: MissionFixtures.event(
                     id: "event-2",
                     missionID: aggregate.mission.id,
@@ -75,18 +283,18 @@ struct MissionStoreTests {
         let reopened = try MissionStore(path: path)
         let loaded = try #require(try reopened.aggregate(id: aggregate.mission.id))
         #expect(loaded.mission.state == .running)
-        #expect(loaded.mission.setupCheckpoint == .running)
+        #expect(loaded.primaryLeg?.setupCheckpoint == .running)
         #expect(loaded.primaryLeg?.baseRemoteName == "origin")
         #expect(loaded.events.map(\.id) == ["mission-1-event-1", "event-2"])
     }
 
-    @Test("rejects aggregates without exactly one primary leg")
-    func validatesExactlyOneLeg() throws {
+    @Test("rejects aggregates without a primary leg")
+    func rejectsMissingPrimaryLeg() throws {
         let store = try MissionStore(path: temporaryPath())
         var aggregate = MissionFixtures.creatingMission()
         aggregate.legs = []
 
-        #expect(throws: MissionStore.Error.exactlyOneLeg) {
+        #expect(throws: MissionStore.Error.invalidLegCollection) {
             try store.insert(aggregate)
         }
     }
@@ -154,16 +362,19 @@ struct MissionStoreTests {
         #expect(try store.activeMission(issueIdentity: aggregate.issue.identity)?.mission.id == MissionID(rawValue: "mission-2"))
     }
 
-    @Test("setup state and its event are committed together")
-    func updatesSetupStateAndEventAtomically() throws {
+    @Test("leg setup state and its event are committed together")
+    func updatesLegSetupStateAndEventAtomically() throws {
         let store = try MissionStore(path: temporaryPath())
         let aggregate = MissionFixtures.creatingMission()
         try store.insert(aggregate)
-        try store.updateSetup(
-            id: aggregate.mission.id,
-            state: .needsAttention,
-            checkpoint: .startingAgent,
-            attentionReason: "Agent authentication is required.",
+        var leg = try #require(aggregate.primaryLeg)
+        leg.state = .needsAttention
+        leg.setupCheckpoint = .startingAgent
+        leg.attentionReason = "Agent authentication is required."
+        leg.updatedAt = Date(timeIntervalSince1970: 120)
+        try store.updateLegSetup(
+            missionID: aggregate.mission.id,
+            leg: leg,
             event: MissionFixtures.event(
                 id: "attention",
                 missionID: aggregate.mission.id,
@@ -173,8 +384,8 @@ struct MissionStoreTests {
         )
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(loaded.mission.state == .needsAttention)
-        #expect(loaded.mission.attentionReason == "Agent authentication is required.")
+        #expect(loaded.primaryLeg?.state == .needsAttention)
+        #expect(loaded.primaryLeg?.attentionReason == "Agent authentication is required.")
         #expect(loaded.events.last?.id == "attention")
     }
 
@@ -565,5 +776,117 @@ struct MissionStoreTests {
             MissionID(rawValue: "newer-active"),
             MissionID(rawValue: "older-active"),
         ])
+    }
+}
+
+private enum MissionStoreTestDatabase {
+    static func v3(
+        path: URL,
+        missionState: String,
+        checkpoint: String,
+        attentionReason: String?
+    ) throws -> SQLiteDatabase {
+        let database = try SQLiteDatabase(path: path.path)
+        try database.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        try database.exec("INSERT INTO schema_version (version) VALUES (3)")
+        try database.exec("""
+        CREATE TABLE missions (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          source_kind TEXT NOT NULL CHECK (source_kind = 'issue'),
+          state TEXT NOT NULL,
+          setup_checkpoint TEXT NOT NULL,
+          primary_leg_id TEXT NOT NULL,
+          attention_reason TEXT,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          completed_at REAL
+        )
+        """)
+        try database.exec("""
+        CREATE TABLE mission_issue_sources (
+          mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          host TEXT NOT NULL,
+          repository_slug TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          canonical_url TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          provider_state TEXT NOT NULL,
+          labels BLOB NOT NULL,
+          assignees BLOB NOT NULL,
+          provider_updated_at REAL,
+          captured_at REAL NOT NULL,
+          refresh_error TEXT
+        )
+        """)
+        try database.exec("""
+        CREATE TABLE mission_legs (
+          id TEXT PRIMARY KEY,
+          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          project_id TEXT NOT NULL,
+          base_ref TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          destination_path TEXT NOT NULL,
+          worktree_id TEXT,
+          agent_id TEXT NOT NULL,
+          acp_session_id TEXT,
+          initial_prompt_id TEXT NOT NULL,
+          pending_initial_prompt TEXT,
+          review_identity BLOB,
+          UNIQUE(mission_id, ordinal)
+        )
+        """)
+        try database.exec("ALTER TABLE mission_legs ADD COLUMN base_remote_name TEXT")
+        try database.exec("ALTER TABLE mission_legs ADD COLUMN worktree_lineage_id TEXT")
+        try database.exec("""
+        CREATE TABLE mission_events (
+          id TEXT PRIMARY KEY,
+          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          leg_id TEXT,
+          kind TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at REAL NOT NULL
+        )
+        """)
+
+        let encoded = JSONEncoder()
+        try database.exec("""
+        INSERT INTO missions (
+          id, title, source_kind, state, setup_checkpoint, primary_leg_id,
+          attention_reason, created_at, updated_at, completed_at
+        ) VALUES (?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?)
+        """, bindings: [
+            "mission-1", "Fix parser crash", missionState, checkpoint, "leg-1", attentionReason,
+            100.0, 101.0, missionState == "completed" ? 101.0 : nil,
+        ])
+        try database.exec("""
+        INSERT INTO mission_issue_sources (
+          mission_id, provider, host, repository_slug, issue_number, canonical_url,
+          title, body, provider_state, labels, assignees, provider_updated_at, captured_at, refresh_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, bindings: [
+            "mission-1", "github", "github.com", "acme/alas", 42,
+            "https://github.com/acme/alas/issues/42", "Fix parser crash", "The parser crashes.", "open",
+            try encoded.encode(["bug"]), try encoded.encode(["nacho"]), 90.0, 100.0, nil,
+        ])
+        try database.exec("""
+        INSERT INTO mission_legs (
+          id, mission_id, ordinal, project_id, base_ref, base_remote_name, branch, destination_path,
+          worktree_id, worktree_lineage_id, agent_id, acp_session_id, initial_prompt_id,
+          pending_initial_prompt, review_identity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, bindings: [
+            "leg-1", "mission-1", 0, "project-1", "origin/main", "origin", "fix/parser-crash",
+            "/tmp/alas-mission", nil, nil, "codex", nil,
+            "00000000-0000-0000-0000-000000000001", "Fix issue #42.", nil,
+        ])
+        try database.exec("""
+        INSERT INTO mission_events (id, mission_id, leg_id, kind, message, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, bindings: ["event-1", "mission-1", "leg-1", "created", "Mission created.", 100.0])
+        return database
     }
 }

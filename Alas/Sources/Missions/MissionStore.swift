@@ -2,15 +2,20 @@ import Foundation
 
 final class MissionStore {
     enum Error: Swift.Error, Equatable {
+        // Temporary source compatibility while callers migrate to the explicit
+        // multi-leg validation errors below.
         case exactlyOneLeg
         case duplicateActiveIssueIdentity
         case issueIdentityChanged
         case malformedRecord
         case missionNotFound
         case invalidEvent
+        case invalidLegCollection
+        case duplicateLegProject
+        case invalidEventLeg
     }
 
-    static let targetSchemaVersion = 3
+    static let targetSchemaVersion = 4
 
     let path: String
     let db: SQLiteDatabase
@@ -62,7 +67,9 @@ final class MissionStore {
 
             try insertMission(aggregate.mission)
             try insertIssue(aggregate.issue, missionID: aggregate.mission.id)
-            try insertLeg(aggregate.legs[0])
+            for leg in aggregate.legs.sorted(by: { $0.ordinal < $1.ordinal }) {
+                try insertLeg(leg)
+            }
             for event in aggregate.events { try insertEvent(event) }
         }
     }
@@ -138,6 +145,32 @@ final class MissionStore {
         return try aggregate(id: MissionID(rawValue: id))
     }
 
+    func leg(missionID: MissionID, legID: MissionLegID) throws -> MissionLeg? {
+        let rows = try db.query(
+            "SELECT * FROM mission_legs WHERE id = ? AND mission_id = ?",
+            bindings: [legID.rawValue, missionID.rawValue]
+        )
+        return try rows.first.map(decodeLeg)
+    }
+
+    func addLeg(_ leg: MissionLeg, event: MissionEvent) throws {
+        guard event.missionID == leg.missionID, event.legID == leg.id else { throw Error.invalidEventLeg }
+        try immediateTransaction {
+            let aggregate = try requireAggregate(leg.missionID)
+            guard aggregate.mission.state == .running else { throw Error.invalidLegCollection }
+            guard leg.ordinal == aggregate.legs.count else { throw Error.invalidLegCollection }
+            guard !aggregate.legs.contains(where: { $0.projectId == leg.projectId }) else {
+                throw Error.duplicateLegProject
+            }
+            try insertLeg(leg)
+            try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
+                event.createdAt.timeIntervalSince1970,
+                leg.missionID.rawValue,
+            ])
+            try insertEvent(event)
+        }
+    }
+
     func updateSetup(
         id: MissionID,
         state: MissionState,
@@ -147,7 +180,7 @@ final class MissionStore {
     ) throws {
         try validate(event: event, for: id)
         try immediateTransaction {
-            try requireMission(id)
+            let aggregate = try requireAggregate(id)
             try db.exec("""
             UPDATE missions
             SET state = ?, setup_checkpoint = ?, attention_reason = ?, updated_at = ?
@@ -159,30 +192,21 @@ final class MissionStore {
                 event.createdAt.timeIntervalSince1970,
                 id.rawValue,
             ])
+            if var leg = aggregate.primaryLeg {
+                leg.state = Self.legState(for: state, checkpoint: checkpoint)
+                leg.setupCheckpoint = checkpoint
+                leg.attentionReason = attentionReason
+                leg.updatedAt = event.createdAt
+                try updateLegRecord(leg)
+            }
             try insertEvent(event)
         }
     }
 
     func updateLeg(_ leg: MissionLeg, event: MissionEvent?) throws {
-        if let event { try validate(event: event, for: leg.missionID) }
+        if let event { try validate(event: event, for: leg.missionID, legID: leg.id) }
         try immediateTransaction {
-            let changed = try db.execChanges("""
-            UPDATE mission_legs
-            SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, agent_id = ?, acp_session_id = ?,
-                pending_initial_prompt = ?, review_identity = ?
-            WHERE id = ? AND mission_id = ?
-            """, bindings: [
-                leg.baseRemoteName,
-                leg.worktreeId,
-                leg.worktreeLineageID,
-                leg.agentId,
-                leg.acpSessionId,
-                leg.pendingInitialPrompt,
-                try leg.reviewIdentity.map(encoder.encode),
-                leg.id.rawValue,
-                leg.missionID.rawValue,
-            ])
-            guard changed == 1 else { throw Error.missionNotFound }
+            try updateLegRecord(leg)
             if let event {
                 try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
                     event.createdAt.timeIntervalSince1970,
@@ -190,6 +214,25 @@ final class MissionStore {
                 ])
                 try insertEvent(event)
             }
+        }
+    }
+
+    func updateLegSetup(
+        missionID: MissionID,
+        leg: MissionLeg,
+        event: MissionEvent?
+    ) throws {
+        guard leg.missionID == missionID else { throw Error.invalidLegCollection }
+        if let event { try validate(event: event, for: missionID, legID: leg.id) }
+        try immediateTransaction {
+            try requireMission(missionID)
+            try updateLegRecord(leg)
+            let updatedAt = event?.createdAt ?? leg.updatedAt
+            try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
+                updatedAt.timeIntervalSince1970,
+                missionID.rawValue,
+            ])
+            if let event { try insertEvent(event) }
         }
     }
 
@@ -201,27 +244,16 @@ final class MissionStore {
         attentionReason: String?,
         event: MissionEvent
     ) throws {
-        try validate(event: event, for: id)
-        guard leg.missionID == id else { throw Error.malformedRecord }
+        try validate(event: event, for: id, legID: leg.id)
+        guard leg.missionID == id else { throw Error.invalidLegCollection }
         try immediateTransaction {
             try requireMission(id)
-            let changed = try db.execChanges("""
-            UPDATE mission_legs
-            SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, agent_id = ?, acp_session_id = ?,
-                pending_initial_prompt = ?, review_identity = ?
-            WHERE id = ? AND mission_id = ?
-            """, bindings: [
-                leg.baseRemoteName,
-                leg.worktreeId,
-                leg.worktreeLineageID,
-                leg.agentId,
-                leg.acpSessionId,
-                leg.pendingInitialPrompt,
-                try leg.reviewIdentity.map(encoder.encode),
-                leg.id.rawValue,
-                leg.missionID.rawValue,
-            ])
-            guard changed == 1 else { throw Error.missionNotFound }
+            var updatedLeg = leg
+            updatedLeg.state = Self.legState(for: state, checkpoint: checkpoint)
+            updatedLeg.setupCheckpoint = checkpoint
+            updatedLeg.attentionReason = attentionReason
+            updatedLeg.updatedAt = event.createdAt
+            try updateLegRecord(updatedLeg)
             try db.exec("""
             UPDATE missions
             SET state = ?, setup_checkpoint = ?, attention_reason = ?, updated_at = ?
@@ -424,10 +456,20 @@ final class MissionStore {
         try immediateTransaction {
             let rows = try db.query("SELECT primary_leg_id FROM missions WHERE id = ?", bindings: [id.rawValue])
             guard let primaryLegID = rows.first?["primary_leg_id"] as? String else { throw Error.missionNotFound }
-            let changed = try db.execChanges(
-                "UPDATE mission_legs SET review_identity = ? WHERE id = ? AND mission_id = ?",
-                bindings: [try reviewIdentity.map(encoder.encode), primaryLegID, id.rawValue]
-            )
+            let changed = try db.execChanges("""
+            UPDATE mission_legs
+            SET review_identity = ?, state = ?, setup_checkpoint = ?, attention_reason = NULL,
+                readiness_evidence = ?, updated_at = ?
+            WHERE id = ? AND mission_id = ?
+            """, bindings: [
+                try reviewIdentity.map(encoder.encode),
+                MissionLegState.ready.rawValue,
+                MissionSetupCheckpoint.running.rawValue,
+                try encoder.encode(MissionLegReadinessEvidence(kind: .mergedReview, observedAt: event.createdAt)),
+                event.createdAt.timeIntervalSince1970,
+                primaryLegID,
+                id.rawValue,
+            ])
             guard changed == 1 else { throw Error.malformedRecord }
             try db.exec("""
             UPDATE missions
@@ -487,6 +529,10 @@ final class MissionStore {
         }
         if current < 3 {
             try migrate(to: 3, migrateToV3)
+            current = 3
+        }
+        if current < 4 {
+            try migrate(to: 4, migrateToV4)
         }
     }
 
@@ -580,6 +626,53 @@ final class MissionStore {
         try db.exec("ALTER TABLE mission_legs ADD COLUMN worktree_lineage_id TEXT")
     }
 
+    private func migrateToV4() throws {
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN state TEXT NOT NULL DEFAULT 'creating'")
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN setup_checkpoint TEXT NOT NULL DEFAULT 'creatingWorktree'")
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN attention_reason TEXT")
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN readiness_evidence BLOB")
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN created_at REAL NOT NULL DEFAULT 0")
+        try db.exec("ALTER TABLE mission_legs ADD COLUMN updated_at REAL NOT NULL DEFAULT 0")
+
+        let missionColumns = try db.query("PRAGMA table_info(missions)")
+            .compactMap { $0["name"] as? String }
+        guard !missionColumns.isEmpty else { return }
+        let missions = try db.query("""
+        SELECT id, state, setup_checkpoint, attention_reason, created_at, updated_at
+        FROM missions
+        """)
+        for mission in missions {
+            guard let id = mission["id"] as? String,
+                  let legacyState = mission["state"] as? String,
+                  let checkpoint = mission["setup_checkpoint"] as? String,
+                  let createdAt = date(from: mission["created_at"]),
+                  let updatedAt = date(from: mission["updated_at"])
+            else { throw Error.malformedRecord }
+            let migration = try Self.legacyLegMigration(
+                state: legacyState,
+                checkpoint: checkpoint,
+                updatedAt: updatedAt
+            )
+            try db.exec("""
+            UPDATE mission_legs
+            SET state = ?, setup_checkpoint = ?, attention_reason = ?, readiness_evidence = ?,
+                created_at = ?, updated_at = ?
+            WHERE mission_id = ?
+            """, bindings: [
+                migration.legState.rawValue,
+                checkpoint,
+                mission["attention_reason"] as? String,
+                try migration.readinessEvidence.map(encoder.encode),
+                createdAt.timeIntervalSince1970,
+                updatedAt.timeIntervalSince1970,
+                id,
+            ])
+            if migration.missionState != legacyState {
+                try db.exec("UPDATE missions SET state = ? WHERE id = ?", bindings: [migration.missionState, id])
+            }
+        }
+    }
+
     private func immediateTransaction<T>(_ work: () throws -> T) throws -> T {
         try db.exec("BEGIN IMMEDIATE")
         do {
@@ -593,20 +686,73 @@ final class MissionStore {
     }
 
     private func validate(_ aggregate: MissionAggregate) throws {
-        guard aggregate.legs.count == 1,
-              let leg = aggregate.primaryLeg,
-              leg.missionID == aggregate.mission.id
-        else { throw Error.exactlyOneLeg }
-        for event in aggregate.events { try validate(event: event, for: aggregate.mission.id) }
+        guard !aggregate.legs.isEmpty,
+              aggregate.primaryLeg != nil
+        else { throw Error.invalidLegCollection }
+        let legIDs = Set(aggregate.legs.map(\.id))
+        let projectIDs = Set(aggregate.legs.map(\.projectId))
+        guard legIDs.count == aggregate.legs.count,
+              projectIDs.count == aggregate.legs.count,
+              aggregate.legs.allSatisfy({ $0.missionID == aggregate.mission.id }),
+              Set(aggregate.legs.map(\.ordinal)).count == aggregate.legs.count,
+              aggregate.legs.map(\.ordinal).sorted() == Array(0 ..< aggregate.legs.count)
+        else {
+            if projectIDs.count != aggregate.legs.count { throw Error.duplicateLegProject }
+            throw Error.invalidLegCollection
+        }
+        for event in aggregate.events {
+            try validate(event: event, for: aggregate.mission.id)
+            if let legID = event.legID, !legIDs.contains(legID) { throw Error.invalidEventLeg }
+        }
     }
 
-    private func validate(event: MissionEvent, for missionID: MissionID) throws {
+    private func validate(event: MissionEvent, for missionID: MissionID, legID: MissionLegID? = nil) throws {
         guard event.missionID == missionID else { throw Error.invalidEvent }
+        if let legID, event.legID != legID { throw Error.invalidEventLeg }
     }
 
     private func requireMission(_ id: MissionID) throws {
         let rows = try db.query("SELECT id FROM missions WHERE id = ?", bindings: [id.rawValue])
         guard !rows.isEmpty else { throw Error.missionNotFound }
+    }
+
+    private func requireAggregate(_ id: MissionID) throws -> MissionAggregate {
+        guard let aggregate = try aggregate(id: id) else { throw Error.missionNotFound }
+        return aggregate
+    }
+
+    private static func legState(
+        for missionState: MissionState,
+        checkpoint: MissionSetupCheckpoint
+    ) -> MissionLegState {
+        switch missionState {
+        case .creating:
+            .creating
+        case .running:
+            .running
+        case .needsAttention:
+            .needsAttention
+        case .readyToComplete:
+            .ready
+        case .completed:
+            checkpoint == .running ? .running : .creating
+        }
+    }
+
+    private static func legacyLegMigration(
+        state: String,
+        checkpoint: String,
+        updatedAt: Date
+    ) throws -> (missionState: String, legState: MissionLegState, readinessEvidence: MissionLegReadinessEvidence?) {
+        guard let missionState = MissionState(rawValue: state),
+              let setupCheckpoint = MissionSetupCheckpoint(rawValue: checkpoint)
+        else { throw Error.malformedRecord }
+        let legState = legState(for: missionState, checkpoint: setupCheckpoint)
+        let normalizedMissionState = missionState == .needsAttention ? MissionState.running.rawValue : state
+        let readinessEvidence = missionState == .readyToComplete
+            ? MissionLegReadinessEvidence(kind: .legacy, observedAt: updatedAt)
+            : nil
+        return (normalizedMissionState, legState, readinessEvidence)
     }
 
     private func issueIdentity(missionID: MissionID) throws -> MissionIssueIdentity {
@@ -739,8 +885,9 @@ final class MissionStore {
         INSERT INTO mission_legs (
             id, mission_id, ordinal, project_id, base_ref, base_remote_name, branch, destination_path,
             worktree_id, worktree_lineage_id, agent_id, acp_session_id, initial_prompt_id,
-            pending_initial_prompt, review_identity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            pending_initial_prompt, review_identity, state, setup_checkpoint, attention_reason,
+            readiness_evidence, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, bindings: [
             leg.id.rawValue,
             leg.missionID.rawValue,
@@ -757,7 +904,39 @@ final class MissionStore {
             leg.initialPromptId.uuidString,
             leg.pendingInitialPrompt,
             try leg.reviewIdentity.map(encoder.encode),
+            leg.state.rawValue,
+            leg.setupCheckpoint.rawValue,
+            leg.attentionReason,
+            try leg.readinessEvidence.map(encoder.encode),
+            leg.createdAt.timeIntervalSince1970,
+            leg.updatedAt.timeIntervalSince1970,
         ])
+    }
+
+    private func updateLegRecord(_ leg: MissionLeg) throws {
+        let changed = try db.execChanges("""
+        UPDATE mission_legs
+        SET base_remote_name = ?, worktree_id = ?, worktree_lineage_id = ?, agent_id = ?, acp_session_id = ?,
+            pending_initial_prompt = ?, review_identity = ?, state = ?, setup_checkpoint = ?,
+            attention_reason = ?, readiness_evidence = ?, updated_at = ?
+        WHERE id = ? AND mission_id = ?
+        """, bindings: [
+            leg.baseRemoteName,
+            leg.worktreeId,
+            leg.worktreeLineageID,
+            leg.agentId,
+            leg.acpSessionId,
+            leg.pendingInitialPrompt,
+            try leg.reviewIdentity.map(encoder.encode),
+            leg.state.rawValue,
+            leg.setupCheckpoint.rawValue,
+            leg.attentionReason,
+            try leg.readinessEvidence.map(encoder.encode),
+            leg.updatedAt.timeIntervalSince1970,
+            leg.id.rawValue,
+            leg.missionID.rawValue,
+        ])
+        guard changed == 1 else { throw Error.missionNotFound }
     }
 
     private func insertEvent(_ event: MissionEvent) throws {
@@ -832,7 +1011,13 @@ final class MissionStore {
               let missionID = row["mission_id"] as? String,
               let ordinal = row["ordinal"] as? Int64,
               let initialPromptIDRaw = row["initial_prompt_id"] as? String,
-              let initialPromptID = UUID(uuidString: initialPromptIDRaw)
+              let initialPromptID = UUID(uuidString: initialPromptIDRaw),
+              let stateRaw = row["state"] as? String,
+              let state = MissionLegState(rawValue: stateRaw),
+              let checkpointRaw = row["setup_checkpoint"] as? String,
+              let setupCheckpoint = MissionSetupCheckpoint(rawValue: checkpointRaw),
+              let createdAt = date(from: row["created_at"]),
+              let updatedAt = date(from: row["updated_at"])
         else { throw Error.malformedRecord }
         let reviewIdentity: MissionReviewIdentity?
         if let reviewData = row["review_identity"] as? Data {
@@ -842,6 +1027,15 @@ final class MissionStore {
             reviewIdentity = decoded
         } else {
             reviewIdentity = nil
+        }
+        let readinessEvidence: MissionLegReadinessEvidence?
+        if let readinessData = row["readiness_evidence"] as? Data {
+            guard let decoded = try? decoder.decode(MissionLegReadinessEvidence.self, from: readinessData) else {
+                throw Error.malformedRecord
+            }
+            readinessEvidence = decoded
+        } else {
+            readinessEvidence = nil
         }
         return .init(
             id: MissionLegID(rawValue: id),
@@ -858,7 +1052,13 @@ final class MissionStore {
             acpSessionId: row["acp_session_id"] as? String,
             initialPromptId: initialPromptID,
             pendingInitialPrompt: row["pending_initial_prompt"] as? String,
-            reviewIdentity: reviewIdentity
+            reviewIdentity: reviewIdentity,
+            state: state,
+            setupCheckpoint: setupCheckpoint,
+            attentionReason: row["attention_reason"] as? String,
+            readinessEvidence: readinessEvidence,
+            createdAt: createdAt,
+            updatedAt: updatedAt
         )
     }
 
