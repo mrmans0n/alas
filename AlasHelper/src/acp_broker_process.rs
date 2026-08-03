@@ -37,6 +37,11 @@ const BROKER_IPC_TIMEOUT: Duration = Duration::from_secs(20);
 /// machine would miss.
 const BROKER_IPC_MIN_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Upper bound on one broker IPC line. Far above any real request or response
+/// — a prompt carrying an embedded image is the large case — while stopping a
+/// peer that never sends a newline from growing the buffer without limit.
+const MAX_IPC_LINE_BYTES: usize = 32 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
     pub code: i64,
@@ -373,6 +378,65 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
     Ok(json!({ "brokers": brokers }))
 }
 
+/// Reads one newline-terminated line, bounded by a deadline covering the whole
+/// line and by a maximum length.
+///
+/// `set_read_timeout` on its own does not give that: it bounds each underlying
+/// read for *inactivity*, while `read_line` keeps issuing fresh reads until it
+/// finds a newline. A peer that trickles bytes faster than the timeout renews
+/// its budget indefinitely, holding the caller — and growing the buffer —
+/// without limit. Re-arming the socket timeout with the remaining budget
+/// before each read is what makes the deadline apply to the line as a whole.
+#[cfg(unix)]
+fn read_line_within(
+    stream: &UnixStream,
+    deadline: std::time::Instant,
+    max_len: usize,
+) -> io::Result<String> {
+    let mut reader = BufReader::new(stream);
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out reading IPC line",
+            ));
+        }
+        reader.get_ref().set_read_timeout(Some(remaining))?;
+        let (finished, consumed) = {
+            let available = reader.fill_buf()?;
+            if available.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "peer closed before completing the IPC line",
+                ));
+            }
+            match available.iter().position(|byte| *byte == b'\n') {
+                Some(index) => {
+                    line.extend_from_slice(&available[..=index]);
+                    (true, index + 1)
+                }
+                None => {
+                    line.extend_from_slice(available);
+                    (false, available.len())
+                }
+            }
+        };
+        reader.consume(consumed);
+        if finished {
+            return String::from_utf8(line)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+        }
+        if line.len() > max_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "IPC line exceeded the maximum length",
+            ));
+        }
+    }
+}
+
 fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProcessError> {
     #[cfg(unix)]
     {
@@ -386,26 +450,22 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
                 Ok(stream) => stream,
                 Err(_) => continue,
             };
-            // Bound both directions before touching the stream. The request
-            // line is read on this thread, so an unbounded read lets a single
-            // silent client wedge `accept()` for every other caller; dropping
-            // the stream on timeout gives that client a clean EOF to fail on
+            // The request line is read on this thread, so a client that never
+            // completes one would stop `accept()` for every other caller.
+            // `read_line_within` bounds the whole line, not just each read, so
+            // neither silence nor a slow trickle can hold this loop; dropping
+            // the stream afterwards gives that client a clean EOF to fail on
             // instead of a hang. The write gets the larger budget on purpose:
             // it guards against a client that stops reading, but an `attach`
             // replay can be a large response, and cutting one short would
             // corrupt a legitimate reply rather than rescue a stuck one.
-            if stream.set_read_timeout(Some(IPC_REQUEST_TIMEOUT)).is_err()
-                || stream.set_write_timeout(Some(BROKER_IPC_TIMEOUT)).is_err()
-            {
+            if stream.set_write_timeout(Some(BROKER_IPC_TIMEOUT)).is_err() {
                 continue;
             }
-            let mut line = String::new();
-            {
-                let mut reader = BufReader::new(&stream);
-                if reader.read_line(&mut line).is_err() {
-                    continue;
-                }
-            }
+            let deadline = std::time::Instant::now() + IPC_REQUEST_TIMEOUT;
+            let Ok(line) = read_line_within(&stream, deadline, MAX_IPC_LINE_BYTES) else {
+                continue;
+            };
             if ipc_line_is_close(&line) {
                 let _ = handle_ipc_line(runtime.clone(), stream, line);
             } else {
@@ -953,14 +1013,14 @@ fn send_ipc_within(
     {
         let mut stream = UnixStream::connect(dir.join("broker.sock"))
             .map_err(|error| broker_error(-32072, format!("broker connect failed: {error}")))?;
-        // Without these, a broker that accepted the connection but never
+        // Without a bound, a broker that accepted the connection but never
         // answered would block this call forever. That matters more than it
         // looks: every `acp/*` request is handled inline on the helper's
         // single-threaded serve loop, so one unresponsive broker would take
         // down file, watch, search and *every other ACP session* with it.
-        stream.set_read_timeout(Some(timeout)).map_err(|error| {
-            broker_error(-32072, format!("broker read timeout failed: {error}"))
-        })?;
+        // The response read is bounded below by `read_line_within`, whose
+        // deadline covers the whole line rather than each read.
+        let deadline = std::time::Instant::now() + timeout;
         stream.set_write_timeout(Some(timeout)).map_err(|error| {
             broker_error(-32072, format!("broker write timeout failed: {error}"))
         })?;
@@ -977,9 +1037,7 @@ fn send_ipc_within(
         stream
             .flush()
             .map_err(|error| broker_error(-32072, format!("broker flush failed: {error}")))?;
-        let mut line = String::new();
-        BufReader::new(stream)
-            .read_line(&mut line)
+        let line = read_line_within(&stream, deadline, MAX_IPC_LINE_BYTES)
             .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?;
         let response: BrokerIpcResponse = serde_json::from_str(&line)
             .map_err(|error| broker_error(-32072, format!("broker response failed: {error}")))?;

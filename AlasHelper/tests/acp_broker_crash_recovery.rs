@@ -1017,6 +1017,74 @@ fn attached_has_pending_request(attached: &Value) -> bool {
 }
 
 /// A client that connects to a broker's socket and then goes quiet — killed
+/// A socket read timeout is an *inactivity* timeout on each underlying read,
+/// and `read_line` keeps issuing reads until it sees a newline. So a client
+/// that dribbles a byte at a time, faster than the timeout but never ending
+/// the line, renews its budget forever and holds the accept thread just as
+/// effectively as one that sends nothing — while growing the line buffer
+/// without limit. Only a deadline across the whole line catches this.
+#[cfg(unix)]
+#[test]
+fn a_client_dripping_bytes_cannot_renew_the_request_read_forever() {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+
+    let fixture = Fixture::new("dripping-ipc-client");
+    let mut helper = Helper::start(&fixture.home);
+    let opened = helper.request("acp/open", fixture.open_params("broker-drip", 0));
+    assert_eq!(opened["adopted"], false);
+
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-drip/broker.sock");
+    let mut drip = UnixStream::connect(&socket).expect("dripping client connects");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dripper_stop = stop.clone();
+    let dripper = std::thread::spawn(move || {
+        // Never a newline: valid JSON padding, one byte at a time, well
+        // inside any per-read inactivity window.
+        while !dripper_stop.load(Ordering::Relaxed) {
+            if drip.write_all(b" ").is_err() || drip.flush().is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+
+    // The helper survives either way — its own socket reads are bounded, so
+    // it answers with an error rather than hanging. What is at stake here is
+    // the broker: its accept loop is stuck mid-line, so until that read is
+    // bounded in total it never serves anyone again and this session is
+    // permanently dead. Recovery must happen while the client is STILL
+    // dripping, which is what a per-read timeout can never deliver.
+    let (sender, receiver) = mpsc::channel();
+    let params = fixture.open_params("broker-drip", 0);
+    std::thread::spawn(move || {
+        let deadline = poll_deadline();
+        loop {
+            let attempt = helper.raw_request("acp/open", params.clone());
+            if attempt["result"]["adopted"] == true || std::time::Instant::now() >= deadline {
+                let ping = helper.request("ping", json!({}));
+                let _ = sender.send((attempt, ping));
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+
+    let result = receiver.recv_timeout(Duration::from_secs(60));
+    stop.store(true, Ordering::Relaxed);
+    let _ = dripper.join();
+
+    let (recovered, ping) = result.expect("probe finished");
+    assert_eq!(
+        recovered["result"]["adopted"], true,
+        "broker never accepted again while a client dripped bytes without a newline: {recovered}"
+    );
+    assert_eq!(ping["ok"], true);
+}
+
 /// between `connect()` and `write()`, or just slow — used to stall the
 /// supervisor's accept loop forever, because the request line is read on that
 /// thread with no timeout. The helper then blocked forever too: it talks to
