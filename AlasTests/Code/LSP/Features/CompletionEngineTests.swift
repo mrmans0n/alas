@@ -190,6 +190,18 @@ struct CompletionEngineTests {
         ])
         #expect(plan?.finalSelection == NSRange(location: 15, length: 0))
         #expect(plan.flatMap { apply($0, to: "tabs.op") } == "tabs.openEditor")
+
+        let retainedPlan = CompletionEngine.editPlan(
+            accepting: candidate,
+            prefix: CompletionPrefix(text: "ope", range: NSRange(location: 5, length: 3)),
+            originalPrefix: CompletionPrefix(text: "op", range: NSRange(location: 5, length: 2)),
+            in: "tabs.ope"
+        )
+
+        #expect(retainedPlan?.edits == [
+            CompletionTextEdit(range: NSRange(location: 5, length: 3), replacementText: "openEditor")
+        ])
+        #expect(retainedPlan.flatMap { apply($0, to: "tabs.ope") } == "tabs.openEditor")
     }
 
     @Test("rebases an older LSP textEdit onto the current prefix")

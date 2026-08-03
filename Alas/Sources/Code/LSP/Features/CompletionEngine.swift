@@ -350,7 +350,7 @@ enum CompletionEngine {
             }
             let shiftsAtCaret = growth < 0 || (atEnd
                 ? includeInsertedTextAtEnd || isInsertion
-                : !includeInsertedTextAtStart)
+                : !includeInsertedTextAtStart || isInsertion)
             guard position.character > oldCaretCharacter ||
                   shiftsAtCaret && position.character == oldCaretCharacter else {
                 return position
