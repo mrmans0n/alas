@@ -1114,7 +1114,13 @@ fn a_broker_answers_a_legacy_caller_in_the_legacy_encoding() {
 /// indistinguishable from an older helper still encoding its request. The
 /// property that matters is that the stall is survivable and self-healing, not
 /// that service continues throughout.
-#[cfg(unix)]
+///
+/// Darwin-only, for the same reason as
+/// `connect_does_not_block_on_a_full_backlog`: saturating the listen backlog
+/// is how this test bounds itself, and that only returns an error here. On
+/// Linux the connects would block instead, and the loop would sit for a head
+/// timeout rather than reaching `drop`.
+#[cfg(target_os = "macos")]
 #[test]
 fn a_flood_of_idle_connections_does_not_take_the_broker_down() {
     use std::os::unix::net::UnixStream;
