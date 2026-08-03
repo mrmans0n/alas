@@ -1,5 +1,113 @@
+import Foundation
 import Testing
 @testable import Alas
+
+/// Fabricates a fully-wired `ACPTranscriptScroller` host with no-op
+/// callbacks, for tests that only care about the emitted row-spec id list —
+/// not about what any particular callback does when invoked.
+@MainActor
+private func makeHost(
+    session: ACPSession = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+) -> ACPTranscriptScroller {
+    ACPTranscriptScroller(
+        session: session,
+        transcript: session.transcript,
+        contentMaxWidth: 800,
+        typography: .default,
+        trustedImageRoot: nil,
+        onOpenDiff: { _ in },
+        onLoadFullToolCallContent: { _ in nil },
+        forkTargets: [],
+        onFork: { _, _ in },
+        rememberedScrollAnchor: { nil },
+        onRememberScrollAnchor: { _, _, _ in },
+        onOpenTranscriptLink: { _ in true },
+        policy: nil,
+        scopeKey: "scope",
+        onUserInputResponse: { _, _ in },
+        onOpenElicitationURL: { _ in true },
+        onDismissElicitationURLWait: { _ in },
+        onQueueEdit: { _ in },
+        onQueueForceSend: { _ in },
+        onQueueRemove: { _ in },
+        onQueueRetry: { _ in },
+        onQueueReorder: { _, _ in },
+        onQueueClearAll: {},
+        onRetryContextRecovery: {},
+        onOpenForkSource: { _ in },
+        agentDisplayName: { $0 }
+    )
+}
+
+@MainActor
+@Suite("ACPTranscriptScroller rowSpecs id list")
+struct ACPTranscriptScrollerRowSpecsTests {
+    private func message() -> ACPMessage {
+        .systemNotice(id: UUID(), text: "hello")
+    }
+
+    @Test("plain transcript: message rows followed by the composer spacer, no head sentinel")
+    func plainTranscriptIdList() {
+        let host = makeHost()
+        let messages = (0..<3).map { _ in message() }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        let ids = specs.map(\.id)
+        let expectedMessageIds = messages.map { host.transcript.stableId(for: $0) }
+
+        #expect(ids == expectedMessageIds + ["__composer_spacer__"])
+    }
+
+    @Test("head pagination sentinel is first when older rows are hidden")
+    func headSentinelIsFirst() {
+        let host = makeHost()
+        let messages = (0..<5).map { _ in message() }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 2
+        host.transcript.visibleTail = nil
+
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        let ids = specs.map(\.id)
+        let expectedMessageIds = messages[2...].map { host.transcript.stableId(for: $0) }
+
+        #expect(ids.first == "__top_pagination__")
+        #expect(ids == ["__top_pagination__"] + expectedMessageIds + ["__composer_spacer__"])
+    }
+
+    @Test("streaming caret and queue rows are ordered after messages and before the composer spacer")
+    func syntheticTailOrdering() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.queue = [
+            QueuedPrompt(blocks: [.text("queued one")], status: .pending),
+            QueuedPrompt(blocks: [.text("queued two")], status: .pending),
+        ]
+        let host = makeHost(session: session)
+        let messages = (0..<2).map { _ in message() }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        host.transcript.streamingState = .streaming
+
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        let ids = specs.map(\.id)
+        let expectedMessageIds = messages.map { host.transcript.stableId(for: $0) }
+
+        // Exact expected order: messages, then streaming caret, then the
+        // queue header (2 pending items > 1), then each queued bubble in
+        // order, then the composer spacer. No permission/user-input/
+        // elicitation/context-recovery rows since none apply here.
+        var expected = expectedMessageIds
+        expected.append("__streaming_caret__")
+        expected.append("__queue_header__")
+        for item in session.queue { expected.append("__queue_\(item.id)") }
+        expected.append("__composer_spacer__")
+
+        #expect(ids == expected)
+    }
+}
 
 @Suite("ACPTranscriptScroller policies")
 struct ACPTranscriptScrollerPolicyTests {

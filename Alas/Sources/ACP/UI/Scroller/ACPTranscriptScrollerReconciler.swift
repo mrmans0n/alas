@@ -50,7 +50,17 @@ final class ACPTranscriptScrollerReconciler {
     /// measurement `apply()` needs is already performed directly by its own
     /// code paths, so ignoring the reentrant signal during this window loses
     /// nothing.
-    private var isApplyingSpecs = false
+    ///
+    /// Exposed read-only so `ACPTranscriptScroller.Coordinator`'s `onScroll`
+    /// callback can skip its own `layoutMountedRows()` call while `apply()`
+    /// is mid-mutation: `apply()`'s own programmatic scrolls
+    /// (`applyPrepend`, `scrollToBottom`) report synchronously through the
+    /// same callback, and running a layout pass against `specsById`/
+    /// `orderedIds` before `apply()` has finished updating them would mount
+    /// rows against stale state — the same hazard this flag already guards
+    /// `remeasureRow` against. `apply()`'s own trailing `layoutMountedRows()`
+    /// call covers the pass once it's safe to run.
+    private(set) var isApplyingSpecs = false
 
     /// Reentrancy guard for `layoutMountedRows()`. A layout pass can itself
     /// trigger a nested re-measure (mounting/measuring a row can invalidate
@@ -82,28 +92,49 @@ final class ACPTranscriptScrollerReconciler {
 
     enum Diff: Equatable {
         case unchanged
-        case prepended(count: Int)
-        case appended(count: Int)
-        case prependedAndAppended(prepended: Int, appended: Int)
+        /// `count` new ids inserted at `index` in the new list; every other
+        /// id is unchanged and in the same relative order. Subsumes what
+        /// used to be separate prepend (`index == 0`) and append
+        /// (`index == oldIds.count`) cases — a fixed row at either end (the
+        /// head pagination spinner, the composer spacer) no longer forces a
+        /// full reset just because it sits at position 0 or the tail.
+        case inserted(index: Int, count: Int)
+        /// `count` ids removed starting at `index` in the old list; every
+        /// other id is unchanged and in the same relative order (e.g. the
+        /// streaming caret disappearing at the end of a turn).
+        case removed(index: Int, count: Int)
         case reset
     }
 
-    /// Old ids must appear as a contiguous run inside new ids for an
-    /// incremental classification; anything else is a reset.
+    /// Classifies the transition from `oldIds` to `newIds` by trimming the
+    /// common prefix and common suffix. What remains between them is either
+    /// nothing (`unchanged`), a pure insertion, a pure removal, or — if
+    /// ids changed on both sides at once, or content was replaced in place —
+    /// a `reset`. This subsumes the old prepend/append cases (insertion at
+    /// index 0 or at the old list's end) without needing a fixed row at
+    /// either end to defeat the classification: a common-prefix/suffix trim
+    /// still finds the single insertion/removal point even when both list
+    /// ends are pinned by rows whose ids never change (e.g. a head
+    /// pagination spinner at index 0 and a composer spacer at the tail).
     nonisolated static func diff(oldIds: [String], newIds: [String]) -> Diff {
         if oldIds == newIds { return .unchanged }
-        guard let oldFirst = oldIds.first else { return newIds.isEmpty ? .unchanged : .reset }
-        guard let start = newIds.firstIndex(of: oldFirst) else { return .reset }
-        let end = start + oldIds.count
-        guard end <= newIds.count, Array(newIds[start..<end]) == oldIds else { return .reset }
-        let prepended = start
-        let appended = newIds.count - end
-        switch (prepended > 0, appended > 0) {
-        case (true, true): return .prependedAndAppended(prepended: prepended, appended: appended)
-        case (true, false): return .prepended(count: prepended)
-        case (false, true): return .appended(count: appended)
-        case (false, false): return .unchanged
+        let minCount = min(oldIds.count, newIds.count)
+        var prefix = 0
+        while prefix < minCount, oldIds[prefix] == newIds[prefix] {
+            prefix += 1
         }
+        var suffix = 0
+        while suffix < minCount - prefix,
+              oldIds[oldIds.count - 1 - suffix] == newIds[newIds.count - 1 - suffix] {
+            suffix += 1
+        }
+        if prefix + suffix == oldIds.count, newIds.count > oldIds.count {
+            return .inserted(index: prefix, count: newIds.count - oldIds.count)
+        }
+        if prefix + suffix == newIds.count, oldIds.count > newIds.count {
+            return .removed(index: prefix, count: oldIds.count - newIds.count)
+        }
+        return .reset
     }
 
     func apply(specs: [ACPTranscriptRowSpec], contentWidth width: CGFloat, followsTail: Bool) {
@@ -165,18 +196,28 @@ final class ACPTranscriptScrollerReconciler {
         switch change {
         case .unchanged:
             updateChangedContent(specs: specs)
-        case .prepended(let count):
-            let delta = tiling.prepend(rows: measure(specs[0..<count]))
-            scroller.applyPrepend(delta: delta, newDocumentHeight: tiling.documentHeight)
+        case .inserted(let index, let count):
+            let insertedSpecs = Array(specs[index..<(index + count)])
+            let compensation = tiling.insert(
+                rows: measure(insertedSpecs), at: index, viewportMinY: scroller.scrollY
+            )
+            if compensation != 0 {
+                scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
+            } else {
+                scroller.setDocumentHeight(tiling.documentHeight)
+            }
             updateChangedContent(specs: specs)
-        case .appended(let count):
-            tiling.append(rows: measure(specs[(specs.count - count)...]))
-            scroller.setDocumentHeight(tiling.documentHeight)
-            updateChangedContent(specs: specs)
-        case .prependedAndAppended(let prepended, let appended):
-            let delta = tiling.prepend(rows: measure(specs[0..<prepended]))
-            tiling.append(rows: measure(specs[(specs.count - appended)...]))
-            scroller.applyPrepend(delta: delta, newDocumentHeight: tiling.documentHeight)
+        case .removed(let index, let count):
+            let compensation = tiling.remove(at: index, count: count, viewportMinY: scroller.scrollY)
+            if compensation != 0 {
+                scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
+            } else {
+                scroller.setDocumentHeight(tiling.documentHeight)
+            }
+            // Hosting views for the removed ids are released by the
+            // trailing `layoutMountedRows()` pass in `apply()`: they're no
+            // longer in `specsById`/the tiling controller, so they fall out
+            // of `keep` and `pool.releaseAll(except:)` cleans them up.
             updateChangedContent(specs: specs)
         case .reset:
             pool.releaseAll()

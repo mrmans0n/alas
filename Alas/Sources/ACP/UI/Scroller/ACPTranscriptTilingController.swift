@@ -43,29 +43,75 @@ final class ACPTranscriptTilingController {
         rebuildIndex()
     }
 
+    /// Core insertion primitive shared by `prepend`, `append`, and the
+    /// general `insert(rows:at:viewportMinY:)`. Returns three things a
+    /// caller needs to decide compensation:
+    ///   - `insertionY`: the pre-mutation `minY` of the row that will end up
+    ///     right after the inserted block, using the same half-open
+    ///     convention as `updateHeight` (or the pre-mutation `documentHeight`
+    ///     when inserting at the end — `index == rows.count`).
+    ///   - `hadExistingRows`: whether the controller held any rows before
+    ///     this call. A first-ever populate (empty → N) has nothing to keep
+    ///     visually still, so compensation must never apply to it even
+    ///     though `insertionY` trivially equals `viewportMinY == 0` in that
+    ///     case.
+    ///   - `delta`: total height inserted (row heights + one spacing per row).
+    private func insertCore(
+        rows newRows: [(id: String, height: CGFloat)], at index: Int
+    ) -> (insertionY: CGFloat, hadExistingRows: Bool, delta: CGFloat) {
+        let hadExistingRows = !rows.isEmpty
+        let insertionY = index < rows.count ? rows[index].minY : documentHeight
+        guard !newRows.isEmpty else { return (insertionY, hadExistingRows, 0) }
+        let delta = newRows.reduce(CGFloat(0)) { $0 + $1.height + metrics.rowSpacing }
+        rows.insert(
+            contentsOf: newRows.map { RowLayout(id: $0.id, height: $0.height, minY: 0) },
+            at: index
+        )
+        retile(from: index)
+        rebuildIndex()
+        return (insertionY, hadExistingRows, delta)
+    }
+
     /// Insert rows before the current first row. Returns the y-delta every
     /// pre-existing row moved down by — the exact amount the scroll offset
     /// must grow to keep the viewport visually still.
     func prepend(rows newRows: [(id: String, height: CGFloat)]) -> CGFloat {
-        guard !newRows.isEmpty else { return 0 }
-        let delta = newRows.reduce(CGFloat(0)) { $0 + $1.height + metrics.rowSpacing }
-        rows.insert(
-            contentsOf: newRows.map { RowLayout(id: $0.id, height: $0.height, minY: 0) },
-            at: 0
-        )
-        retile(from: 0)
-        rebuildIndex()
-        return delta
+        insertCore(rows: newRows, at: 0).delta
     }
 
     func append(rows newRows: [(id: String, height: CGFloat)]) {
-        guard !newRows.isEmpty else { return }
-        let firstNewIndex = rows.count
-        rows.append(
-            contentsOf: newRows.map { RowLayout(id: $0.id, height: $0.height, minY: 0) }
-        )
-        retile(from: firstNewIndex)
+        _ = insertCore(rows: newRows, at: rows.count)
+    }
+
+    /// Insert rows at an arbitrary index. Returns the scroll-offset
+    /// compensation the caller must add to keep the viewport visually
+    /// still: the inserted height iff there was existing content AND the
+    /// insertion point lies at or above the current viewport top
+    /// (`insertionY <= viewportMinY`), zero otherwise. Same half-open
+    /// convention as `updateHeight`.
+    func insert(
+        rows newRows: [(id: String, height: CGFloat)], at index: Int, viewportMinY: CGFloat
+    ) -> CGFloat {
+        let clampedIndex = max(0, min(index, rows.count))
+        let (insertionY, hadExistingRows, delta) = insertCore(rows: newRows, at: clampedIndex)
+        return hadExistingRows && insertionY <= viewportMinY ? delta : 0
+    }
+
+    /// Remove `count` rows starting at `index`. Returns the scroll-offset
+    /// compensation the caller must add to keep the viewport visually
+    /// still: the negative removed height iff the removal point lies at or
+    /// above the current viewport top (`removalY <= viewportMinY`), zero
+    /// otherwise. Same half-open convention as `updateHeight` and `insert`.
+    @discardableResult
+    func remove(at index: Int, count: Int, viewportMinY: CGFloat) -> CGFloat {
+        guard count > 0, index >= 0, index < rows.count else { return 0 }
+        let upperBound = min(index + count, rows.count)
+        let removalY = rows[index].minY
+        let delta = rows[index..<upperBound].reduce(CGFloat(0)) { $0 + $1.height + metrics.rowSpacing }
+        rows.removeSubrange(index..<upperBound)
+        retile(from: index)
         rebuildIndex()
+        return removalY <= viewportMinY ? -delta : 0
     }
 
     func removeSuffix(from index: Int) {

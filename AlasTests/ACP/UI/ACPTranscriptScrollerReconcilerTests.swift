@@ -12,41 +12,95 @@ struct ACPTranscriptScrollerReconcilerDiffTests {
         #expect(ACPTranscriptScrollerReconciler.diff(oldIds: ["a", "b"], newIds: ["a", "b"]) == .unchanged)
     }
 
-    @Test("new ids before the old head are a prepend")
+    @Test("new ids before the old head are an insert at index 0")
     func prepend() {
         #expect(
             ACPTranscriptScrollerReconciler.diff(oldIds: ["c", "d"], newIds: ["a", "b", "c", "d"])
-            == .prepended(count: 2)
+            == .inserted(index: 0, count: 2)
         )
     }
 
-    @Test("new ids after the old tail are an append")
+    @Test("new ids after the old tail are an insert at the old list's end")
     func append() {
         #expect(
             ACPTranscriptScrollerReconciler.diff(oldIds: ["a", "b"], newIds: ["a", "b", "c"])
-            == .appended(count: 1)
+            == .inserted(index: 2, count: 1)
         )
     }
 
-    @Test("prepend and append together are recognized")
-    func both() {
+    @Test("ids removed from the middle are a removal, not a reset")
+    func midListRemoval() {
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: ["a", "b", "c", "d"], newIds: ["a", "d"])
+            == .removed(index: 1, count: 2)
+        )
+    }
+
+    @Test("ids inserted in the middle are an insertion, not a reset")
+    func midListInsertion() {
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: ["a", "b", "d", "e"], newIds: ["a", "b", "c", "d", "e"])
+            == .inserted(index: 2, count: 1)
+        )
+    }
+
+    @Test("changes at both ends simultaneously are a reset")
+    func bothEndsChangingIsAReset() {
+        // The generalized diff only classifies a SINGLE insertion or
+        // removal point (found by trimming one common prefix and one
+        // common suffix). Ids changing at both ends in the same update
+        // don't reduce to either shape, so this is deliberately a reset —
+        // simpler and rarer than the single-direction cases the fixed
+        // synthetic rows (head pagination spinner, composer spacer) made
+        // common once they stopped defeating incremental classification.
         #expect(
             ACPTranscriptScrollerReconciler.diff(oldIds: ["b"], newIds: ["a", "b", "c"])
-            == .prependedAndAppended(prepended: 1, appended: 1)
+            == .reset
         )
     }
 
     @Test("anything else is a reset")
     func reset() {
         #expect(ACPTranscriptScrollerReconciler.diff(oldIds: ["a", "b"], newIds: ["a", "c"]) == .reset)
-        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: ["a", "b"], newIds: ["b"]) == .reset)
         #expect(ACPTranscriptScrollerReconciler.diff(oldIds: ["a"], newIds: ["z"]) == .reset)
     }
 
     @Test("empty transitions")
     func empties() {
-        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: [], newIds: ["a"]) == .reset)
+        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: [], newIds: ["a"]) == .inserted(index: 0, count: 1))
         #expect(ACPTranscriptScrollerReconciler.diff(oldIds: [], newIds: []) == .unchanged)
+        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: ["a"], newIds: []) == .removed(index: 0, count: 1))
+    }
+
+    // MARK: fixed rows at both ends (the bug this generalization fixes)
+
+    /// Mirrors `ACPTranscriptScroller.rowSpecs`'s actual shape: a fixed
+    /// `__top_pagination__` row at index 0 and a fixed `__composer_spacer__`
+    /// row at the tail, both unaffected by the mutation in between. Before
+    /// the common-prefix/suffix generalization, having a fixed row at BOTH
+    /// ends defeated the old "old ids are a contiguous run in new ids"
+    /// check for every head-step and every append, forcing a `.reset` (full
+    /// rebuild, no offset compensation) on what should have been a cheap
+    /// incremental update — the bug CRITICAL #1 in the task-10 review fixed.
+    @Test("a fixed row at both ends does not defeat head-step insertion")
+    func headStepWithFixedRowsAtBothEnds() {
+        let old = ["__top_pagination__", "m30", "m31", "m32", "__composer_spacer__"]
+        let new = ["__top_pagination__", "m10", "m20", "m30", "m31", "m32", "__composer_spacer__"]
+        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: old, newIds: new) == .inserted(index: 1, count: 2))
+    }
+
+    @Test("a fixed trailing synthetic row does not defeat append insertion")
+    func appendWithFixedTrailingSyntheticRow() {
+        let old = ["m1", "m2", "__composer_spacer__"]
+        let new = ["m1", "m2", "m3", "__composer_spacer__"]
+        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: old, newIds: new) == .inserted(index: 2, count: 1))
+    }
+
+    @Test("the streaming caret disappearing at the end of a turn is a removal, not a reset")
+    func streamingCaretRemoval() {
+        let old = ["m1", "m2", "__streaming_caret__", "__composer_spacer__"]
+        let new = ["m1", "m2", "__composer_spacer__"]
+        #expect(ACPTranscriptScrollerReconciler.diff(oldIds: old, newIds: new) == .removed(index: 2, count: 1))
     }
 }
 
@@ -121,6 +175,45 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(tiling.rowCount == 20)
         #expect(abs(scroller.distanceFromBottom - bottomDistanceBefore) < 1)
         #expect(scroller.scrollY > 150)  // compensated upward by the prepended height
+    }
+
+    @Test("head-step insertion between fixed rows at both ends compensates end-to-end (no visible jump)")
+    func headStepBetweenFixedSyntheticRowsCompensates() {
+        // Regression test for CRITICAL #1 (task-10 review): with a fixed
+        // row at BOTH ends of the spec list — matching
+        // `ACPTranscriptScroller.rowSpecs`'s actual shape
+        // (`__top_pagination__` first, `__composer_spacer__` last) — the
+        // old contiguous-run diff always fell to `.reset` here, which never
+        // compensates the scroll offset and made the transcript visibly
+        // jump on every head-step. The generalized diff must classify this
+        // as `.inserted`, and `apply()` must compensate exactly like a
+        // pure prepend would.
+        let (reconciler, scroller, tiling) = makeStack()
+        func specsWithFixedEnds(messageIds: [String]) -> [ACPTranscriptRowSpec] {
+            [spec("__top_pagination__")] + messageIds.map { spec($0) } + [spec("__composer_spacer__")]
+        }
+        reconciler.apply(
+            specs: specsWithFixedEnds(messageIds: (30..<90).map { "m\($0)" }),
+            contentWidth: 600, followsTail: false
+        )
+        scroller.setScrollY(800)
+        let bottomDistanceBefore = scroller.distanceFromBottom
+
+        reconciler.apply(
+            specs: specsWithFixedEnds(messageIds: (10..<90).map { "m\($0)" }),
+            contentWidth: 600, followsTail: false
+        )
+
+        #expect(tiling.rowCount == 82)   // top sentinel + 80 messages + spacer
+        #expect(tiling.row(withId: "__top_pagination__") != nil)
+        #expect(tiling.row(withId: "__composer_spacer__") != nil)
+        // No visible jump: the viewport's distance from the bottom (and
+        // hence what's on screen) is preserved, and the compensation moved
+        // scrollY down by roughly the inserted content's height — exactly
+        // the `prependStillViewport` assertions, now proven to also hold
+        // when fixed rows bookend the list.
+        #expect(abs(scroller.distanceFromBottom - bottomDistanceBefore) < 1)
+        #expect(scroller.scrollY > 800)
     }
 
     @Test("append while following tail pins to the bottom")

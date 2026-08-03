@@ -97,6 +97,114 @@ struct ACPTranscriptTilingControllerTests {
 }
 
 @MainActor
+@Suite("ACPTranscriptTilingController generalized insert/remove")
+struct ACPTranscriptTilingInsertRemoveTests {
+    private func controller() -> ACPTranscriptTilingController {
+        ACPTranscriptTilingController(metrics: .init(rowSpacing: 10, topPadding: 20))
+    }
+
+    @Test("insert at a mid-list index shifts only rows from that index onward")
+    func midListInsertion() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50), ("d", 40), ("e", 30)])
+        // a=20, b=130, d=190, e=240; documentHeight = 270
+        let aMinYBefore = c.row(withId: "a")!.minY
+        let bMinYBefore = c.row(withId: "b")!.minY
+        _ = c.insert(rows: [("c", 80)], at: 2, viewportMinY: 10_000)
+        #expect(c.rowCount == 5)
+        #expect(c.row(withId: "a")?.minY == aMinYBefore)
+        #expect(c.row(withId: "b")?.minY == bMinYBefore)
+        let expectedCMinY: CGFloat = 190
+        #expect(c.row(withId: "c")?.minY == expectedCMinY)
+        let expectedDMinY: CGFloat = 280
+        #expect(c.row(withId: "d")?.minY == expectedDMinY)
+        let expectedDocumentHeight: CGFloat = 360
+        #expect(c.documentHeight == expectedDocumentHeight)
+    }
+
+    @Test("insert compensates when the insertion point is at or above the viewport top")
+    func insertCompensatesAboveViewport() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50)])
+        // a=20..120, b=130..180. Insertion point (b's pre-mutation minY,
+        // 130) exactly meets viewportMinY: half-open convention treats
+        // this as "at or above" (same boundary rule as `updateHeight`).
+        let compensation = c.insert(rows: [("z", 40)], at: 1, viewportMinY: 130)
+        let expectedDelta: CGFloat = 40 + 10
+        #expect(compensation == expectedDelta)
+        let expectedBMinY: CGFloat = 130 + expectedDelta
+        #expect(c.row(withId: "b")?.minY == expectedBMinY)
+    }
+
+    @Test("insert does not compensate when the insertion point is below the viewport top")
+    func insertDoesNotCompensateBelowViewport() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50)])
+        // Insertion point (b's pre-mutation minY, 130) is below viewportMinY 0:
+        // the viewport is scrolled to the very top, above where the insert lands.
+        let compensation = c.insert(rows: [("z", 40)], at: 1, viewportMinY: 0)
+        #expect(compensation == 0)
+    }
+
+    @Test("insert into an empty controller never compensates even at viewportMinY 0")
+    func insertIntoEmptyControllerDoesNotCompensate() {
+        let c = controller()
+        // insertionY and viewportMinY are both 0 here, which the naive rule
+        // would treat as "at or above" — but there was no existing content
+        // to protect, so a first-ever populate must never compensate.
+        let compensation = c.insert(rows: [("a", 100)], at: 0, viewportMinY: 0)
+        #expect(compensation == 0)
+        #expect(c.rowCount == 1)
+        #expect(c.row(withId: "a")?.minY == 20)
+    }
+
+    @Test("remove at a mid-list index shifts only rows after the removed range")
+    func midListRemoval() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50), ("c", 80), ("d", 40)])
+        // a=20, b=130, c=190, d=280; documentHeight=320
+        let aMinYBefore = c.row(withId: "a")!.minY
+        _ = c.remove(at: 1, count: 1, viewportMinY: 10_000)
+        #expect(c.rowCount == 3)
+        #expect(c.row(withId: "b") == nil)
+        #expect(c.row(withId: "a")?.minY == aMinYBefore)
+        let expectedCMinY: CGFloat = 130
+        #expect(c.row(withId: "c")?.minY == expectedCMinY)
+        let expectedDocumentHeight: CGFloat = 260
+        #expect(c.documentHeight == expectedDocumentHeight)
+    }
+
+    @Test("remove compensates negatively when the removal point is at or above the viewport top")
+    func removeCompensatesAboveViewport() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50), ("c", 80)])
+        // a=20..120, b=130..180, c=190..270. Removing "a" (removalY 20) is
+        // well above a viewport scrolled to 190.
+        let compensation = c.remove(at: 0, count: 1, viewportMinY: 190)
+        let expectedDelta: CGFloat = -(100 + 10)
+        #expect(compensation == expectedDelta)
+    }
+
+    @Test("remove does not compensate when the removal point is below the viewport top")
+    func removeDoesNotCompensateBelowViewport() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100), ("b", 50), ("c", 80)])
+        // Removing "b" (removalY 130) while the viewport is at the very top.
+        let compensation = c.remove(at: 1, count: 1, viewportMinY: 0)
+        #expect(compensation == 0)
+    }
+
+    @Test("removing every row leaves an empty controller")
+    func removeEverything() {
+        let c = controller()
+        c.replaceAll(rows: [("a", 100)])
+        _ = c.remove(at: 0, count: 1, viewportMinY: 0)
+        #expect(c.rowCount == 0)
+        #expect(c.documentHeight == 0)
+    }
+}
+
+@MainActor
 @Suite("ACPTranscriptTilingController height updates")
 struct ACPTranscriptTilingHeightTests {
     private func controller() -> ACPTranscriptTilingController {

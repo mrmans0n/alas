@@ -83,6 +83,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private let pool = ACPTranscriptRowHostingPool()
         private var host: ACPTranscriptScroller?
         private var didRestoreInitialPosition = false
+        /// Whether the most recently built spec list contained at least one
+        /// non-synthetic (message) row id — i.e. an id not prefixed `__`.
+        /// See `restoreInitialPositionIfNeeded`'s doc comment.
+        private var hasNonSyntheticRow = false
 
         static let composerSpacerHeight: CGFloat = 220
 
@@ -110,6 +114,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // empty once a real width does arrive.
             guard let reconciler, let scroller else { return }
             let specs = Self.rowSpecs(host: host)
+            hasNonSyntheticRow = specs.contains { !$0.id.hasPrefix("__") }
             reconciler.apply(
                 specs: specs,
                 contentWidth: scroller.contentView.bounds.width,
@@ -120,23 +125,49 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         // MARK: row specs
 
-        /// Wraps a row's content with the environment values that would
-        /// otherwise reach it "for free" through normal SwiftUI ancestry in
-        /// the legacy single-ScrollView tree. Each row here is hosted in its
-        /// own, independently-created `NSHostingView` (see
-        /// `ACPTranscriptRowHostingPool`), which SwiftUI's environment
-        /// propagation does not reach automatically — so `\.theme` and
-        /// `\.openURL` (both set once at the legacy VStack root) must be
-        /// re-applied per row.
+        /// Wraps a row's content with the layout and environment values that
+        /// would otherwise reach it "for free" as a child of the legacy
+        /// VStack. In the legacy list, `.frame(maxWidth: contentMaxWidth,
+        /// alignment: .leading).padding(.horizontal: 28 +
+        /// laneWidth).frame(maxWidth: .infinity, alignment: .center)` sits
+        /// on the WHOLE VStack (ACPMessageList.swift:267-270), constraining
+        /// every child — including synthetic rows — into one centered
+        /// content column. `\.theme` and `\.openURL` are likewise set once
+        /// at that same root. Each row here is instead hosted in its own,
+        /// independently-created `NSHostingView` (see
+        /// `ACPTranscriptRowHostingPool`), which SwiftUI's layout/environment
+        /// propagation does not reach automatically — so both the column
+        /// framing and the environment values must be re-applied per row.
         private static func wrapRow<Content: View>(
             host: ACPTranscriptScroller,
             @ViewBuilder _ content: () -> Content
         ) -> AnyView {
             AnyView(
                 content()
+                    .frame(maxWidth: host.contentMaxWidth, alignment: .leading)
+                    .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.theme, host.theme)
                     .environment(\.openURL, host.openTranscriptURLAction)
             )
+        }
+
+        /// Folds `host.theme` into an equality token so a live theme switch
+        /// forces every mounted row to rebuild — and thus re-run `wrapRow`'s
+        /// `.environment(\.theme, host.theme)` with the NEW value — instead
+        /// of leaving already-mounted rows on the old palette until some
+        /// other part of their content happens to change. `wrapRow` bakes
+        /// `host.theme` into the built view at construction time; without
+        /// this, `ACPTranscriptRowHostingPool.view(for:)` only rebuilds a
+        /// row when its token changes, so a bare theme switch (no other
+        /// content change) would never be observed by already-mounted rows.
+        private static func token<T: Equatable>(_ base: T, host: ACPTranscriptScroller) -> ACPRowEqualityToken {
+            ACPRowEqualityToken(ThemedToken(theme: host.theme, base: base))
+        }
+
+        private struct ThemedToken<Base: Equatable>: Equatable {
+            let theme: Theme
+            let base: Base
         }
 
         /// Message rows from the render window + synthetic tail rows, in the
@@ -148,7 +179,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if transcript.isBackfillingOlderMessages || transcript.visibleHead > 0 {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__top_pagination__",
-                    equalityToken: ACPRowEqualityToken(transcript.isBackfillingOlderMessages),
+                    equalityToken: token(transcript.isBackfillingOlderMessages, host: host),
                     build: {
                         wrapRow(host: host) {
                             Spinner(lineWidth: 1.5)
@@ -168,16 +199,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
             for row in rows where transcript.messages.indices.contains(row.index) {
                 let message = transcript.messages[row.index]
-                let token = ACPRowEqualityToken(ACPTranscriptRowContent.equalityKey(
+                let rowToken = token(ACPTranscriptRowContent.equalityKey(
                     stableId: row.stableId, message: message,
                     contentMaxWidth: host.contentMaxWidth, typography: host.typography,
                     trustedImageRoot: host.trustedImageRoot,
                     isForkEligible: host.session.canForkMessage(at: row.index),
                     forkTargets: host.forkTargets
-                ))
+                ), host: host)
                 specs.append(ACPTranscriptRowSpec(
                     id: row.stableId,
-                    equalityToken: token,
+                    equalityToken: rowToken,
                     build: { wrapRow(host: host) { Self.messageRow(host: host, row: row, message: message) } }
                 ))
                 // Fork divider follows its boundary row, as in the legacy list.
@@ -213,9 +244,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 forkTargets: host.forkTargets,
                 onFork: host.onFork
             )
-            .frame(maxWidth: host.contentMaxWidth, alignment: .leading)
-            .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
-            .frame(maxWidth: .infinity, alignment: .center)
+            // Column framing (max width / horizontal padding / centering)
+            // is applied uniformly to every row by `wrapRow`, not here —
+            // see its doc comment.
         }
 
         /// Verbatim port of the fork divider inserted right after the fork
@@ -226,7 +257,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         ) -> ACPTranscriptRowSpec {
             ACPTranscriptRowSpec(
                 id: "__fork_divider__",
-                equalityToken: ACPRowEqualityToken(fork),
+                equalityToken: token(fork, host: host),
                 build: {
                     wrapRow(host: host) {
                         Group {
@@ -261,7 +292,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 let pendingPermission = transcript.pendingPermission
                 specs.append(ACPTranscriptRowSpec(
                     id: "__pending_perm__",
-                    equalityToken: ACPRowEqualityToken(pendingPermission),
+                    equalityToken: token(pendingPermission, host: host),
                     build: {
                         wrapRow(host: host) {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: host.scopeKey)
@@ -273,7 +304,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if let request = transcript.pendingUserInputs.first {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__pending_user_input_\(request.id)",
-                    equalityToken: ACPRowEqualityToken(request.id),
+                    equalityToken: token(request.id, host: host),
                     build: {
                         wrapRow(host: host) {
                             ACPUserInputPrompt(
@@ -289,7 +320,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             for wait in transcript.urlElicitationWaits {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__elicitation_wait_\(wait.id)",
-                    equalityToken: ACPRowEqualityToken(wait),
+                    equalityToken: token(wait, host: host),
                     build: {
                         wrapRow(host: host) {
                             ACPURLElicitationWaitView(
@@ -305,7 +336,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if transcript.streamingState == .streaming {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__streaming_caret__",
-                    equalityToken: ACPRowEqualityToken(transcript.streamingState),
+                    equalityToken: token(transcript.streamingState, host: host),
                     build: {
                         wrapRow(host: host) {
                             StreamingCaret().frame(width: 8, height: 14)
@@ -318,7 +349,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if queueHeaderCount > 1 {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_header__",
-                    equalityToken: ACPRowEqualityToken(queueHeaderCount),
+                    equalityToken: token(queueHeaderCount, host: host),
                     build: {
                         wrapRow(host: host) {
                             ACPQueueHeader(count: queueHeaderCount, onClear: host.onQueueClearAll)
@@ -331,7 +362,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             where ACPMessageList.shouldRenderQueueBubble(status: item.status) {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_\(item.id)",
-                    equalityToken: ACPRowEqualityToken(item),
+                    equalityToken: token(item, host: host),
                     build: {
                         wrapRow(host: host) {
                             ACPQueuedBubble(
@@ -363,7 +394,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if let status = session.contextRecoveryStatus {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__context_recovery__",
-                    equalityToken: ACPRowEqualityToken(status),
+                    equalityToken: token(status, host: host),
                     build: {
                         wrapRow(host: host) {
                             ContextRecoveryRow(status: status, onRetry: host.onRetryContextRecovery)
@@ -374,15 +405,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
             // Invisible tail spacer the tail-follow scroll pins to the
             // viewport bottom; guarantees the streaming caret / last
-            // message sits above the composer pill. Content never changes,
-            // so a constant equality token is correct (never rebuilds).
+            // message sits above the composer pill. Its content is a
+            // fixed-height `Color.clear` that reads neither theme nor
+            // openURL, so — unlike every other row — a constant equality
+            // token is correct here: nothing about it ever needs to rebuild.
+            // Still routed through `wrapRow` for the same column framing
+            // every other row gets, matching the legacy VStack where this
+            // spacer was a plain child of the same constrained stack.
             specs.append(ACPTranscriptRowSpec(
                 id: "__composer_spacer__",
                 equalityToken: ACPRowEqualityToken(true),
                 build: {
-                    AnyView(
+                    wrapRow(host: host) {
                         Color.clear.frame(height: composerSpacerHeight)
-                    )
+                    }
                 }
             ))
 
@@ -397,7 +433,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             isProgrammatic: Bool
         ) {
             guard let host, let scroller, let reconciler else { return }
-            reconciler.layoutMountedRows()
+            // `apply()` issues its own programmatic scrolls synchronously
+            // (`applyPrepend`, `scrollToBottom`) while `specsById`/
+            // `orderedIds` are mid-mutation; running a layout pass here
+            // against that stale state would mount views from the previous
+            // update instead of the one `apply()` is still installing.
+            // `apply()`'s own trailing `layoutMountedRows()` call covers
+            // this once it's safe — see `isApplyingSpecs`'s doc comment.
+            // Other programmatic scrolls that happen OUTSIDE of `apply()`
+            // (`resumeTailFollow`, `restoreInitialPositionIfNeeded`) are not
+            // covered by that trailing call, so they invoke
+            // `layoutMountedRows()` explicitly themselves.
+            if !reconciler.isApplyingSpecs {
+                reconciler.layoutMountedRows()
+            }
             guard !isProgrammatic else { return }
 
             let event = NSApp.currentEvent
@@ -479,19 +528,43 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host.onRememberScrollAnchor(anchorId, index, false)
         }
 
+        /// Runs once per Coordinator lifetime, but only actually latches
+        /// (`didRestoreInitialPosition = true`) once the outcome is
+        /// definite. `__composer_spacer__` and other synthetic rows are
+        /// unconditionally present in `rowSpecs`, so `tiling.rowCount > 0`
+        /// alone is true on the very first `apply()` even with zero
+        /// messages — gating on `hasNonSyntheticRow` instead avoids latching
+        /// before there's any real content to restore a position within.
+        /// Beyond that: tail-follow and "no remembered anchor" are definite
+        /// outcomes (latch immediately); a remembered anchor that isn't yet
+        /// in the tiling map (e.g. the render window hasn't reached it yet)
+        /// is NOT definite — don't latch, so the next `update(host:)` (which
+        /// runs on every relevant transcript/session change, mirroring the
+        /// legacy path's retries on appear / viewport change / scroll
+        /// signature / visibleHead) gets another chance to resolve it,
+        /// instead of permanently falling back to `scrollToBottom()`.
         private func restoreInitialPositionIfNeeded() {
             guard !didRestoreInitialPosition, let host, let scroller,
-                  tiling.rowCount > 0
+                  hasNonSyntheticRow
             else { return }
-            didRestoreInitialPosition = true
             if host.session.followsTranscriptTail {
+                didRestoreInitialPosition = true
                 scroller.scrollToBottom()
-            } else if let anchor = host.rememberedScrollAnchor(),
-                      let row = tiling.row(withId: anchor) {
-                scroller.setScrollY(row.minY)
-            } else {
-                scroller.scrollToBottom()
+                return
             }
+            guard let anchor = host.rememberedScrollAnchor() else {
+                // Nothing to restore — this is a definite final state.
+                didRestoreInitialPosition = true
+                scroller.scrollToBottom()
+                return
+            }
+            guard let row = tiling.row(withId: anchor) else {
+                // Anchor exists but isn't resolvable yet; retry later
+                // instead of latching onto a wrong fallback.
+                return
+            }
+            didRestoreInitialPosition = true
+            scroller.setScrollY(row.minY)
         }
     }
 }
