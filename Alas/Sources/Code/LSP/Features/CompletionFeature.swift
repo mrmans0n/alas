@@ -337,14 +337,39 @@ final class CompletionFeature {
     }
 
     private func invalidateActiveSessionForChange() {
+        let previousPrefix = prefix
         requestTask?.cancel()
         requestTask = nil
         requestID &+= 1
-        candidates.removeAll()
-        prefix = nil
-        selection = 0
         isRefreshing = true
-        closeUI()
+
+        guard let textView,
+              let updatedPrefix = CompletionEngine.prefix(
+                in: textView.string,
+                caret: textView.selectedRange().location
+              ),
+              !updatedPrefix.text.isEmpty,
+              previousPrefix?.range.location == updatedPrefix.range.location else {
+            candidates.removeAll()
+            prefix = nil
+            selection = 0
+            closeUI()
+            return
+        }
+
+        candidates.removeAll { candidate in
+            let filter = candidate.filterText ?? candidate.label
+            return !CompletionEngine.hasCaseInsensitivePrefix(filter, updatedPrefix.text) &&
+                !CompletionEngine.hasCaseInsensitivePrefix(candidate.label, updatedPrefix.text)
+        }
+        prefix = candidates.isEmpty ? nil : updatedPrefix
+        selection = min(max(selection, 0), max(candidates.count - 1, 0))
+
+        if candidates.isEmpty {
+            closeUI()
+        } else if suggestionWindow.isVisible {
+            showPopup()
+        }
     }
 
     private func canAcceptCompletion(prefix: CompletionPrefix, in textView: CodeTextView) -> Bool {

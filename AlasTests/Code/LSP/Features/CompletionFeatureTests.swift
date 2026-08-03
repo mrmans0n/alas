@@ -64,8 +64,8 @@ struct CompletionFeatureTests {
         #expect(!CompletionFeature.isMemberAccessTriggerCharacter(nil))
     }
 
-    @Test("refresh clears stale candidates before the next response")
-    func refreshClearsStaleCandidatesBeforeNextResponse() {
+    @Test("refresh keeps matching candidates while awaiting the next response")
+    func refreshKeepsMatchingCandidatesWhileAwaitingNextResponse() {
         let textView = makeTextView("open")
         let feature = CompletionFeature(
             textView: textView,
@@ -78,10 +78,10 @@ struct CompletionFeatureTests {
             prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4))
         )
 
-        textView.completionChangeHandler?()
+        textView.insertText("A", replacementRange: NSRange(location: NSNotFound, length: 0))
 
-        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
-        #expect(feature.testingSnapshot.prefix == nil)
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha"])
+        #expect(feature.testingSnapshot.prefix == CompletionPrefix(text: "openA", range: NSRange(location: 0, length: 5)))
         #expect(feature.testingSnapshot.selection == 0)
         #expect(feature.testingSnapshot.isRefreshing)
         feature.cancelAndDismiss()

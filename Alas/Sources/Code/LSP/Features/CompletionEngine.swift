@@ -307,7 +307,7 @@ enum CompletionEngine {
             hasCaseInsensitivePrefix(replacement, prefix.text)
     }
 
-    private static func hasCaseInsensitivePrefix(_ text: String, _ prefix: String) -> Bool {
+    static func hasCaseInsensitivePrefix(_ text: String, _ prefix: String) -> Bool {
         prefix.isEmpty || text.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
     }
 
