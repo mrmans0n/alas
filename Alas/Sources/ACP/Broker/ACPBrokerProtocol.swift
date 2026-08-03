@@ -165,11 +165,15 @@ struct ACPBrokerRPCOutcome: Codable, Equatable, Sendable {
     let error: JSONRPCError?
 }
 
+/// Deliberately carries no `params`. Nothing here reads them — `setSnapshot`
+/// uses only the request id, operation key and terminal outcome — and a
+/// prompt's params can be hundreds of megabytes, which the broker would then
+/// serialize into every attach reply. A broker from an older build still
+/// sends the field; `Codable` ignores it.
 struct ACPBrokerOperationSnapshot: Codable, Equatable, Sendable {
     let operationKey: ACPBrokerOperationKey
     let adapterRequestId: ACPBrokerAdapterRequestID
     let method: String
-    let params: ACPBrokerJSONValue
     let terminalOutcome: ACPBrokerRPCOutcome?
 }
 
@@ -195,11 +199,13 @@ enum ACPBrokerEventKind: Equatable, Sendable {
     case turnStateChanged(state: ACPBrokerTurnState)
     case pendingRequest(ACPBrokerPendingRequest)
     case pendingRequestResolved(requestId: String, response: ACPBrokerRPCOutcome)
+    /// No `params` for the same reason as `ACPBrokerOperationSnapshot`: they
+    /// are unread, and the replay would otherwise carry a second full copy of
+    /// a prompt that the snapshot already carried once.
     case operationStarted(
         operationKey: ACPBrokerOperationKey,
         adapterRequestId: ACPBrokerAdapterRequestID,
-        method: String,
-        params: ACPBrokerJSONValue
+        method: String
     )
     case operationCompleted(operationKey: ACPBrokerOperationKey, outcome: ACPBrokerRPCOutcome)
     case adapterNotification(method: String, params: ACPBrokerJSONValue)
@@ -243,8 +249,7 @@ extension ACPBrokerEventKind: Codable {
             self = .operationStarted(
                 operationKey: try container.decode(ACPBrokerOperationKey.self, forKey: .operationKey),
                 adapterRequestId: try container.decode(ACPBrokerAdapterRequestID.self, forKey: .adapterRequestId),
-                method: try container.decode(String.self, forKey: .method),
-                params: try container.decode(ACPBrokerJSONValue.self, forKey: .params)
+                method: try container.decode(String.self, forKey: .method)
             )
         case "operationCompleted":
             let outcome = try container.decodeIfPresent(ACPBrokerRPCOutcome.self, forKey: .outcome)
@@ -286,12 +291,11 @@ extension ACPBrokerEventKind: Codable {
             try container.encode("pendingRequestResolved", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(response, forKey: .response)
-        case .operationStarted(let operationKey, let adapterRequestId, let method, let params):
+        case .operationStarted(let operationKey, let adapterRequestId, let method):
             try container.encode("operationStarted", forKey: .type)
             try container.encode(operationKey, forKey: .operationKey)
             try container.encode(adapterRequestId, forKey: .adapterRequestId)
             try container.encode(method, forKey: .method)
-            try container.encode(params, forKey: .params)
         case .operationCompleted(let operationKey, let outcome):
             try container.encode("operationCompleted", forKey: .type)
             try container.encode(operationKey, forKey: .operationKey)

@@ -193,7 +193,6 @@ pub enum BrokerEventKind {
         operation_key: OperationKey,
         adapter_request_id: AdapterRequestId,
         method: String,
-        params: Value,
     },
     OperationCompleted {
         operation_key: OperationKey,
@@ -224,7 +223,6 @@ pub struct OperationSnapshot {
     pub operation_key: OperationKey,
     pub adapter_request_id: AdapterRequestId,
     pub method: String,
-    pub params: Value,
     pub terminal_outcome: Option<AdapterRPCOutcome>,
 }
 
@@ -394,7 +392,6 @@ impl ACPBrokerState {
             operation_key: operation_key.clone(),
             adapter_request_id,
             method: record.fingerprint.method.clone(),
-            params: record.fingerprint.params.clone(),
         });
         self.operations.insert(operation_key.clone(), record);
 
@@ -561,7 +558,6 @@ impl ACPBrokerState {
                 operation_key: record.key.clone(),
                 adapter_request_id: record.adapter_request_id,
                 method: record.fingerprint.method.clone(),
-                params: record.fingerprint.params.clone(),
                 terminal_outcome: record.terminal_outcome.clone(),
             })
             .collect();

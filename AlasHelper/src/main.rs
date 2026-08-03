@@ -210,6 +210,9 @@ pub(crate) enum ProcNotification {
 #[derive(Debug)]
 pub(crate) enum ServerMessage {
     Request(String),
+    /// A fully-formed JSON-RPC response produced off the serve loop, waiting
+    /// to be written. See `AcpJob`.
+    Response(String),
     Watch(WatchNotification),
     Search(SearchNotification),
     Proc(ProcNotification),
@@ -335,9 +338,34 @@ fn serve() -> io::Result<()> {
                 if line.trim().is_empty() {
                     continue;
                 }
-                if let Some(response) = handle_line(&mut state, &line) {
-                    write_json_line(&mut stdout, &response)?;
+                // ACP requests talk to broker processes and wait as long as a
+                // broker takes to answer. Handling one here would put that
+                // wait in front of everything else this helper serves — every
+                // other ACP session, and every fs, watch, search and proc
+                // request — so a single slow or wedged broker would stall the
+                // whole app. Run them off this thread and let the response
+                // come back through the same channel the watchers use.
+                match AcpJob::from_line(&line) {
+                    Some(job) => match state.event_sender.clone() {
+                        Some(sender) => {
+                            std::thread::spawn(move || {
+                                let _ = sender.send(ServerMessage::Response(job.run()));
+                            });
+                        }
+                        // No channel to answer on (only reachable outside the
+                        // serve loop); fall back to answering inline.
+                        None => write_json_line(&mut stdout, &job.run())?,
+                    },
+                    None => {
+                        if let Some(response) = handle_line(&mut state, &line) {
+                            write_json_line(&mut stdout, &response)?;
+                        }
+                    }
                 }
+            }
+            Some(ServerMessage::Response(line)) => {
+                flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
+                write_json_line(&mut stdout, &line)?;
             }
             Some(ServerMessage::Watch(notification)) => {
                 pending_events
@@ -487,6 +515,39 @@ fn flush_watch_events(
         write_json_line(stdout, &notification.to_string())?;
     }
     Ok(())
+}
+
+/// An `acp/*` request lifted out of the serve loop so it can block on a
+/// broker without blocking anything else.
+///
+/// Only requests with an id qualify: a notification has nothing to send back,
+/// so there is no response to route through the channel.
+struct AcpJob {
+    id: Value,
+    method: String,
+    params: Option<Value>,
+}
+
+impl AcpJob {
+    fn from_line(line: &str) -> Option<Self> {
+        let request: JsonRpcRequest = serde_json::from_str(line).ok()?;
+        let method = request.method?;
+        if !method.starts_with("acp/") {
+            return None;
+        }
+        Some(Self {
+            id: request.id?,
+            method,
+            params: request.params,
+        })
+    }
+
+    fn run(self) -> String {
+        match acp_broker_process::handle_control_request(&self.method, self.params) {
+            Ok(result) => success_response(self.id, result),
+            Err(error) => error_response(self.id, error.code, error.message),
+        }
+    }
 }
 
 fn handle_line(state: &mut HelperState, line: &str) -> Option<String> {

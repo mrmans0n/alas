@@ -76,6 +76,24 @@ impl Helper {
         serde_json::from_str(&line).expect("helper response JSON")
     }
 
+    /// Like `raw_request`, but skips past responses to other requests instead
+    /// of assuming the next line is ours. `acp/*` requests are answered on
+    /// worker threads now, so a later request can legitimately finish first.
+    fn raw_request_matching(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.write_request_without_reading(method, params);
+        loop {
+            let mut line = String::new();
+            self.stdout
+                .read_line(&mut line)
+                .expect("read helper response");
+            let value: Value = serde_json::from_str(&line).expect("helper response JSON");
+            if value["id"] == json!(id) {
+                return value;
+            }
+        }
+    }
+
     fn write_request_without_reading(&mut self, method: &str, params: Value) {
         let id = self.next_id;
         self.next_id += 1;
@@ -1017,6 +1035,166 @@ fn attached_has_pending_request(attached: &Value) -> bool {
 }
 
 /// A client that connects to a broker's socket and then goes quiet — killed
+/// Sends a raw request straight to a broker socket, bypassing the helper, and
+/// returns the reply plus whether it came back framed. `framed` picks the
+/// request encoding, so the same broker can be driven both ways — and the
+/// caller can assert the reply mirrored it rather than silently downgrading.
+#[cfg(unix)]
+fn broker_roundtrip(socket: &Path, request: &str, framed: bool) -> (String, bool) {
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(socket).expect("broker socket connects");
+    if framed {
+        write!(stream, "ALASIPC1 {}\n{}", request.len(), request).expect("framed request");
+    } else {
+        writeln!(stream, "{request}").expect("legacy request");
+    }
+    stream.flush().expect("flush request");
+
+    let mut reader = BufReader::new(&stream);
+    let mut head = String::new();
+    reader.read_line(&mut head).expect("reply head");
+    match head.strip_prefix("ALASIPC1 ") {
+        Some(len) => {
+            let len: usize = len.trim().parse().expect("frame length");
+            let mut body = vec![0u8; len];
+            std::io::Read::read_exact(&mut reader, &mut body).expect("framed reply body");
+            (String::from_utf8(body).expect("reply utf8"), true)
+        }
+        None => (head, false),
+    }
+}
+
+/// A broker built after framing landed must still understand a caller that
+/// does not use it. This is not hypothetical: a helper from an earlier build
+/// can be the one talking to it, and it only knows the newline encoding.
+#[cfg(unix)]
+#[test]
+fn a_broker_answers_a_legacy_caller_in_the_legacy_encoding() {
+    let fixture = Fixture::new("legacy-caller");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-legacy-in", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-legacy-in/broker.sock");
+
+    let (reply, reply_framed) =
+        broker_roundtrip(&socket, r#"{"method":"snapshot","params":{}}"#, false);
+
+    assert!(
+        !reply_framed,
+        "a legacy caller must not be answered with a framed reply it cannot parse"
+    );
+    let value: Value = serde_json::from_str(reply.trim()).expect("legacy reply JSON");
+    assert_eq!(value["ok"], true);
+    assert_eq!(
+        value["result"]["metadata"]["brokerId"], "broker-legacy-in",
+        "legacy caller did not get a usable snapshot: {value}"
+    );
+}
+
+/// The point of framing: the reader is told the length up front, so a request
+/// carries whatever it carries. An `acp/respond` returning a whole file has no
+/// size the caller could have predicted, and under the newline encoding the
+/// only bound available was a total time budget standing in for a size cap.
+#[cfg(unix)]
+#[test]
+fn a_framed_request_carries_a_payload_far_past_any_line_budget() {
+    let fixture = Fixture::new("framed-payload");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-framed", 0));
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-framed/broker.sock");
+
+    // `snapshot` ignores its params, so this exercises the framed read path
+    // with a large body without involving the adapter.
+    let filler = "x".repeat(40 * 1024 * 1024);
+    let request = json!({"method": "snapshot", "params": {"filler": filler}}).to_string();
+    assert!(request.len() > 40 * 1024 * 1024);
+
+    let (reply, reply_framed) = broker_roundtrip(&socket, &request, true);
+
+    assert!(reply_framed, "a framed request should be answered framed");
+    let value: Value = serde_json::from_str(&reply).expect("framed reply JSON");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["result"]["metadata"]["brokerId"], "broker-framed");
+}
+
+/// The mirror case: a helper built after framing landed can adopt a broker
+/// that a previous build started, which advertises nothing and speaks only the
+/// newline encoding. Removing the marker stands in for that broker.
+#[test]
+fn the_helper_falls_back_to_the_legacy_encoding_for_an_older_broker() {
+    let fixture = Fixture::new("legacy-broker");
+    let mut helper = Helper::start(&fixture.home);
+    let opened = helper.request("acp/open", fixture.open_params("broker-legacy-out", 0));
+    assert_eq!(opened["adopted"], false);
+
+    let marker = fixture
+        .home
+        .join(".alas/acp-brokers/broker-legacy-out/framing");
+    assert!(marker.exists(), "a fresh broker should advertise framing");
+    std::fs::remove_file(&marker).expect("remove framing marker");
+
+    let adopted = helper.request("acp/open", fixture.open_params("broker-legacy-out", 0));
+    assert_eq!(
+        adopted["adopted"], true,
+        "helper could not talk to a broker that does not advertise framing: {adopted}"
+    );
+}
+
+/// One broker going quiet must not stop a different one being used. Every
+/// `acp/*` request used to be handled inline on the helper's single serve
+/// loop, so a call waiting on a wedged broker held up every other session
+/// behind it — the reason a single bad broker could take the whole app down
+/// rather than one chat.
+#[cfg(unix)]
+#[test]
+fn a_wedged_broker_does_not_block_a_different_broker() {
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+
+    let fixture = Fixture::new("independent-brokers");
+    let mut helper = Helper::start(&fixture.home);
+    helper.request("acp/open", fixture.open_params("broker-wedged", 0));
+    let healthy = helper.request("acp/open", fixture.open_params("broker-healthy", 0));
+    assert_eq!(healthy["adopted"], false);
+
+    // Hold the first broker's accept loop with clients that never complete a
+    // request line. Each costs the broker one request-read timeout, so enough
+    // of them keep it unavailable for far longer than this test waits — a
+    // single one would lapse and let the broker recover, and the test would
+    // then pass whether or not dispatch is concurrent.
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-wedged/broker.sock");
+    let silent: Vec<UnixStream> = (0..10)
+        .map(|_| UnixStream::connect(&socket).expect("silent client connects"))
+        .collect();
+
+    let (sender, receiver) = mpsc::channel();
+    let wedged_params = fixture.open_params("broker-wedged", 0);
+    let healthy_params = fixture.open_params("broker-healthy", 0);
+    std::thread::spawn(move || {
+        // Issued first, and expected to be the slow one.
+        helper.write_request_without_reading("acp/open", wedged_params);
+        // The interesting call: a different broker, behind the slow one in
+        // arrival order, which must not have to wait for it.
+        let adopted = helper.raw_request_matching("acp/open", healthy_params);
+        let _ = sender.send(adopted);
+    });
+
+    let adopted = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("a healthy broker must be usable while another is wedged");
+    drop(silent);
+    assert_eq!(
+        adopted["result"]["adopted"], true,
+        "healthy broker did not answer while another was wedged: {adopted}"
+    );
+}
+
 /// A socket read timeout is an *inactivity* timeout on each underlying read,
 /// and `read_line` keeps issuing reads until it sees a newline. So a client
 /// that dribbles a byte at a time, faster than the timeout but never ending
