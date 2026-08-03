@@ -507,7 +507,25 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 eventTimestamp: event?.timestamp,
                 now: ProcessInfo.processInfo.systemUptime
             )
-            let isUserDriven = eventIsFresh && ACPUserScrollEvent.isUserDriven(event?.type)
+            let currentEventType = eventIsFresh ? event?.type : nil
+            let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
+            // Mirrors `ACPMessageList.handleScrollGeometry`: a click on the
+            // scrollbar track arrives as a plain `.leftMouseDown`, which
+            // `isUserDriven` alone rejects (a bare click can't be told apart
+            // from clicking a transcript control by event type). Widen to
+            // `isHeadPaginationDriven`, which additionally accepts that
+            // click when it actually hit the scrollbar track AND the
+            // geometry genuinely moved upward — so a track click both
+            // pauses tail-follow and can step the head window back, the
+            // same as a trackpad gesture or scroller-knob drag would,
+            // without misclassifying clicks on transcript controls (which
+            // aren't scrollbar hits) as scrolling.
+            let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+                currentEventType,
+                previousMinY: previousY,
+                newMinY: newY,
+                isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
+            )
 
             let decision = ACPScrollDirectionClassifier.decide(
                 previousOffsetY: previousY,
@@ -515,7 +533,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 viewportHeight: viewportHeight,
                 contentHeight: contentHeight,
                 isRestoring: false,
-                isUserDriven: isUserDriven
+                isUserDriven: isHeadPaginationDriven
             )
             switch decision {
             case .userScrolledUp:
@@ -531,7 +549,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let threshold = ACPTranscriptScroller.headStepThreshold(viewportHeight: viewportHeight)
             if ACPTranscriptScroller.shouldStepHeadBack(
                 visibleHead: host.transcript.visibleHead,
-                scrollY: newY, isUserDriven: isUserDriven, threshold: threshold,
+                scrollY: newY, isUserDriven: isHeadPaginationDriven, threshold: threshold,
                 hasPendingHeadStep: pendingHeadStep
             ) {
                 // `stepHeadBack` mutates `visibleHead` synchronously, but the

@@ -376,3 +376,115 @@ struct ACPTranscriptScrollerPolicyTests {
         #expect(ACPTranscriptScroller.headStepThreshold(viewportHeight: 900) == 1800)
     }
 }
+
+/// Regression coverage for the review's fix-round-2 finding: a click on the
+/// scrollbar track arrives as a plain `.leftMouseDown`, which
+/// `ACPUserScrollEvent.isUserDriven` alone rejects. `handleScroll` now
+/// widens the tail-follow pause/resume classification and the head-step
+/// gate to `ACPUserScrollEvent.isHeadPaginationDriven` — which additionally
+/// accepts a `.leftMouseDown` when it is a genuine scrollbar-track hit AND
+/// the geometry actually moved upward — while leaving `shouldStepTailForward`
+/// on the plain `isUserDriven` signal, mirroring
+/// `ACPMessageList.handleScrollGeometry` exactly (compare
+/// `ACPMessageList.swift`'s `handleScrollGeometry`/
+/// `shouldStepHeadBackFromGeometry` call sites).
+///
+/// `handleScroll` itself is a private, `NSApp.currentEvent`-driven method
+/// that needs a real `NSEvent` routed through an actual window's view
+/// hierarchy (for `isScrollbarTrackMouseDown`'s hit-test) to exercise for
+/// real — not something a headless unit test can synthesize. These tests
+/// instead exercise the pure `nonisolated static` predicates directly
+/// (`ACPUserScrollEvent.isHeadPaginationDriven`, `ACPScrollDirectionClassifier
+/// .decide`, `ACPTranscriptScroller.shouldStepHeadBack`/
+/// `shouldStepTailForward`), composed exactly the way `handleScroll` composes
+/// them, which is why those predicates are `nonisolated static` in the first
+/// place.
+@Suite("ACPTranscriptScroller scrollbar-track click classification")
+struct ACPTranscriptScrollerScrollbarTrackClickTests {
+    private static let threshold: CGFloat = 1500
+
+    @Test("an upward scrollbar-track click pauses tail-follow, same as a live scroll gesture")
+    func scrollbarTrackClickPausesTailFollow() {
+        // A track click landing above the current position: previousMinY
+        // 2000 -> newMinY 100, a genuine scrollbar hit.
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: true
+        )
+        #expect(isHeadPaginationDriven)
+
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 2000, newOffsetY: 100,
+            viewportHeight: 400, contentHeight: 5000,
+            isRestoring: false, isUserDriven: isHeadPaginationDriven
+        )
+        #expect(decision == .userScrolledUp)
+    }
+
+    @Test("a scrollbar-track click away from the track does not pause tail-follow")
+    func nonScrollbarClickDoesNotPauseTailFollow() {
+        // Same geometry as the passing case above, but the click did not
+        // land on the scrollbar (e.g. a transcript control).
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: false
+        )
+        #expect(!isHeadPaginationDriven)
+
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 2000, newOffsetY: 100,
+            viewportHeight: 400, contentHeight: 5000,
+            isRestoring: false, isUserDriven: isHeadPaginationDriven
+        )
+        #expect(decision == .noChange)
+    }
+
+    @Test("a scrollbar-track click that does not move the geometry upward does not pause tail-follow")
+    func scrollbarClickWithoutUpwardMovementDoesNotPauseTailFollow() {
+        // Downward or no-op track click: geometry did not move up.
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown, previousMinY: 100, newMinY: 2000, isScrollbarTrackHit: true
+        )
+        #expect(!isHeadPaginationDriven)
+
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 100, newOffsetY: 2000,
+            viewportHeight: 400, contentHeight: 5000,
+            isRestoring: false, isUserDriven: isHeadPaginationDriven
+        )
+        #expect(decision == .noChange)
+    }
+
+    @Test("an upward scrollbar-track click can also trigger head pagination")
+    func scrollbarTrackClickTriggersHeadPagination() {
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: true
+        )
+        #expect(ACPTranscriptScroller.shouldStepHeadBack(
+            visibleHead: 30, scrollY: 100, isUserDriven: isHeadPaginationDriven, threshold: Self.threshold
+        ))
+    }
+
+    @Test("a non-scrollbar click does not trigger head pagination")
+    func nonScrollbarClickDoesNotTriggerHeadPagination() {
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: false
+        )
+        #expect(!ACPTranscriptScroller.shouldStepHeadBack(
+            visibleHead: 30, scrollY: 100, isUserDriven: isHeadPaginationDriven, threshold: Self.threshold
+        ))
+    }
+
+    @Test("a scrollbar-track click does not drive tail pagination, matching the legacy plain-isUserDriven gate")
+    func scrollbarTrackClickDoesNotDriveTailPagination() {
+        // `shouldStepTailForward` mirrors `ACPMessageList
+        // .shouldStepTailForwardFromBottomGeometry`, which the legacy path
+        // gates on plain `isUserDriven`, NOT `isHeadPaginationDriven` — a
+        // scrollbar-track click must not page in hidden newer messages.
+        let plainIsUserDriven = ACPUserScrollEvent.isUserDriven(.leftMouseDown)
+        #expect(!plainIsUserDriven)
+        #expect(!ACPTranscriptScroller.shouldStepTailForward(
+            visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
+            isUserDriven: plainIsUserDriven, threshold: Self.threshold,
+            previousScrollY: 2000, newScrollY: 2050
+        ))
+    }
+}
