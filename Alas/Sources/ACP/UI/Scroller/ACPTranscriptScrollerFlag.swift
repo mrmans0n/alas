@@ -8,7 +8,17 @@ enum ACPTranscriptScrollerFlag {
     static let defaultsKey = "alas.transcript.appkitScroller"
 
     static var isEnabled: Bool {
-        let override = UserDefaults.standard.object(forKey: defaultsKey) as? Bool
+        isEnabledWithDefaults(UserDefaults.standard)
+    }
+
+    /// Internal seam for testing: reads the override from the given UserDefaults instance.
+    nonisolated static func readOverride(from defaults: UserDefaults) -> Bool? {
+        defaults.object(forKey: defaultsKey) as? Bool
+    }
+
+    /// Internal seam for testing: computes isEnabled given a UserDefaults instance.
+    nonisolated static func isEnabledWithDefaults(_ defaults: UserDefaults) -> Bool {
+        let override = readOverride(from: defaults)
         #if DEBUG
         return resolve(override: override, isDebugBuild: true)
         #else
