@@ -388,11 +388,17 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
         if !dir.is_dir() || !broker_is_running(&dir) {
             continue;
         }
-        // This sweeps every broker dir on disk, including leftovers from
-        // earlier app runs, so it must not pay the full per-request budget
-        // for each unresponsive one. A live broker answers `snapshot` from
-        // memory; anything slower than this is not worth listing.
-        if let Ok(snapshot) = send_ipc_within(&dir, "snapshot", json!({}), Duration::from_secs(2)) {
+        // The ordinary budget, deliberately. A shorter one was tempting here
+        // — this sweeps every broker dir on disk, including leftovers from
+        // earlier runs — but it silently drops healthy brokers: a snapshot
+        // carrying a retained large-image prompt takes ~7.4s to serialize,
+        // all of it silent, so any budget below that omits a live broker from
+        // the list rather than reporting it. The cheap exclusions are already
+        // handled above by `broker_is_running`, and a dead socket fails the
+        // connect immediately; what is left is a broker that is live but
+        // wedged, which is exactly what an idle budget is for.
+        if let Ok(snapshot) = send_ipc_within(&dir, "snapshot", json!({}), BROKER_IPC_IDLE_TIMEOUT)
+        {
             if snapshot
                 .get("adapterExited")
                 .and_then(Value::as_bool)
