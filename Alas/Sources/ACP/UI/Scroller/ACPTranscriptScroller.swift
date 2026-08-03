@@ -168,22 +168,44 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        /// Folds `host.theme` into an equality token so a live theme switch
-        /// forces every mounted row to rebuild — and thus re-run `wrapRow`'s
-        /// `.environment(\.theme, host.theme)` with the NEW value — instead
-        /// of leaving already-mounted rows on the old palette until some
+        /// Folds `host.theme` and `host.contentMaxWidth` into an equality
+        /// token so a live theme switch or column-width change forces every
+        /// mounted row to rebuild — and thus re-run `wrapRow`'s
+        /// `.environment(\.theme, host.theme)` and `.frame(maxWidth:
+        /// host.contentMaxWidth, ...)` with the NEW values — instead of
+        /// leaving already-mounted rows on the old palette/width until some
         /// other part of their content happens to change. `wrapRow` bakes
-        /// `host.theme` into the built view at construction time; without
-        /// this, `ACPTranscriptRowHostingPool.view(for:)` only rebuilds a
-        /// row when its token changes, so a bare theme switch (no other
-        /// content change) would never be observed by already-mounted rows.
+        /// both values into the built view at construction time for EVERY
+        /// row that goes through it (every synthetic spec below, plus
+        /// message rows); without this, `ACPTranscriptRowHostingPool.view(
+        /// for:)` only rebuilds a row when its token changes, so a bare
+        /// theme switch or window resize (no other content change) would
+        /// never be observed by already-mounted rows. Message rows already
+        /// fold `contentMaxWidth` a second time via `equalityKey`'s own
+        /// field — harmless duplication, not a correctness issue.
+        /// `host.typography` is deliberately NOT folded in here: unlike
+        /// `contentMaxWidth`, `wrapRow` never reads it, and most synthetic
+        /// rows below never capture it either, so folding it generically
+        /// would rebuild rows that don't use it on every typography change.
+        /// Specs whose build closures do capture it (the queue bubble) fold
+        /// it into their own token explicitly instead.
         private static func token<T: Equatable>(_ base: T, host: ACPTranscriptScroller) -> ACPRowEqualityToken {
-            ACPRowEqualityToken(ThemedToken(theme: host.theme, base: base))
+            ACPRowEqualityToken(ThemedToken(theme: host.theme, contentMaxWidth: host.contentMaxWidth, base: base))
         }
 
         private struct ThemedToken<Base: Equatable>: Equatable {
             let theme: Theme
+            let contentMaxWidth: CGFloat
             let base: Base
+        }
+
+        /// See the queue-bubble spec below: folds the rendering/behavior
+        /// inputs its build closure captures beyond what `token(_:host:)`
+        /// already covers generically (theme, contentMaxWidth).
+        private struct QueueBubbleTokenInputs: Equatable {
+            let item: QueuedPrompt
+            let idx: Int
+            let typography: ACPChatTypography
         }
 
         /// Message rows from the render window + synthetic tail rows, in the
@@ -378,7 +400,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             where ACPMessageList.shouldRenderQueueBubble(status: item.status) {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_\(item.id)",
-                    equalityToken: token(item, host: host),
+                    // Beyond `item` (and theme/contentMaxWidth folded by
+                    // `token(_:host:)`), this row's build closure also
+                    // captures `host.typography` (passed straight into
+                    // `ACPQueuedBubble`) and `idx` (captured by the
+                    // `.dropDestination` handler below as the reorder
+                    // target). Both must be in the token: a typography
+                    // change would otherwise leave the mounted bubble
+                    // measured with stale text metrics, and a stale `idx`
+                    // after the queue reorders would send a subsequent drag
+                    // on this retained bubble to the wrong slot.
+                    equalityToken: token(
+                        QueueBubbleTokenInputs(item: item, idx: idx, typography: host.typography),
+                        host: host
+                    ),
                     build: {
                         wrapRow(host: host) {
                             ACPQueuedBubble(

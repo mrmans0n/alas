@@ -8,13 +8,15 @@ import Testing
 /// not about what any particular callback does when invoked.
 @MainActor
 private func makeHost(
-    session: ACPSession = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+    session: ACPSession = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t"),
+    contentMaxWidth: CGFloat = 800,
+    typography: ACPChatTypography = .default
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
         session: session,
         transcript: session.transcript,
-        contentMaxWidth: 800,
-        typography: .default,
+        contentMaxWidth: contentMaxWidth,
+        typography: typography,
         trustedImageRoot: nil,
         onOpenDiff: { _ in },
         onLoadFullToolCallContent: { _ in nil },
@@ -107,6 +109,137 @@ struct ACPTranscriptScrollerRowSpecsTests {
         expected.append("__composer_spacer__")
 
         #expect(ids == expected)
+    }
+}
+
+/// Regression coverage for the review's fix-round-2 finding: the queued-
+/// bubble spec's `build` closure captures `host.contentMaxWidth`,
+/// `host.typography`, and the enumeration index `idx` (used by the drop
+/// handler for reordering), but its equality token used to fold in only the
+/// `QueuedPrompt` and `host.theme`. A mounted bubble whose closure was
+/// retained (because the token still compared equal) rendered/measured
+/// with stale typography or width, and — worse — its retained drop handler
+/// kept dragging against a stale `idx` after the queue reordered.
+///
+/// These tests exercise `rowSpecs(host:)`'s emitted `equalityToken` (via
+/// `ACPRowEqualityToken.isEqual(to:)`) directly, the same token the
+/// hosting pool compares to decide whether to rebuild a mounted row.
+@MainActor
+@Suite("ACPTranscriptScroller queue bubble equality token")
+struct ACPTranscriptScrollerQueueBubbleTokenTests {
+    private func queueBubbleToken(host: ACPTranscriptScroller, id: UUID) -> ACPRowEqualityToken? {
+        ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "__queue_\(id)" }?
+            .equalityToken
+    }
+
+    @Test("token is unchanged when nothing relevant changed")
+    func tokenStableAcrossIdenticalHosts() throws {
+        let id = UUID()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.queue = [QueuedPrompt(id: id, blocks: [.text("hello")], status: .pending)]
+        let hostA = makeHost(session: session, contentMaxWidth: 800, typography: .default)
+        let hostB = makeHost(session: session, contentMaxWidth: 800, typography: .default)
+
+        let tokenA = try #require(queueBubbleToken(host: hostA, id: id))
+        let tokenB = try #require(queueBubbleToken(host: hostB, id: id))
+        #expect(tokenA.isEqual(to: tokenB))
+    }
+
+    @Test("token changes when contentMaxWidth changes, QueuedPrompt unchanged")
+    func tokenChangesOnContentMaxWidth() throws {
+        let id = UUID()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.queue = [QueuedPrompt(id: id, blocks: [.text("hello")], status: .pending)]
+        let narrow = makeHost(session: session, contentMaxWidth: 600, typography: .default)
+        let wide = makeHost(session: session, contentMaxWidth: 900, typography: .default)
+
+        let narrowToken = try #require(queueBubbleToken(host: narrow, id: id))
+        let wideToken = try #require(queueBubbleToken(host: wide, id: id))
+        #expect(!narrowToken.isEqual(to: wideToken))
+    }
+
+    @Test("token changes when typography changes, QueuedPrompt unchanged")
+    func tokenChangesOnTypography() throws {
+        let id = UUID()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.queue = [QueuedPrompt(id: id, blocks: [.text("hello")], status: .pending)]
+        let hostA = makeHost(session: session, typography: .default)
+        let hostB = makeHost(session: session, typography: ACPChatTypography(fontFamily: "Menlo", fontSize: 18))
+
+        let tokenA = try #require(queueBubbleToken(host: hostA, id: id))
+        let tokenB = try #require(queueBubbleToken(host: hostB, id: id))
+        #expect(!tokenA.isEqual(to: tokenB))
+    }
+
+    @Test("token changes when the item's queue position changes, QueuedPrompt unchanged")
+    func tokenChangesOnIndex() throws {
+        let movedId = UUID()
+        let movedItem = QueuedPrompt(id: movedId, blocks: [.text("hello")], status: .pending)
+        let otherItem = QueuedPrompt(id: UUID(), blocks: [.text("other")], status: .pending)
+
+        // `movedItem` sits at index 0 in the first session, index 1 in the
+        // second — same QueuedPrompt value, different enumeration index.
+        let sessionFirst = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        sessionFirst.queue = [movedItem, otherItem]
+        let sessionSecond = ACPSession(id: "s2", agentId: "claude", worktreeId: "w", title: "t")
+        sessionSecond.queue = [otherItem, movedItem]
+
+        let hostFirst = makeHost(session: sessionFirst)
+        let hostSecond = makeHost(session: sessionSecond)
+
+        let tokenFirst = try #require(queueBubbleToken(host: hostFirst, id: movedId))
+        let tokenSecond = try #require(queueBubbleToken(host: hostSecond, id: movedId))
+        #expect(!tokenFirst.isEqual(to: tokenSecond))
+    }
+}
+
+/// Regression coverage for the same finding, generalized: `wrapRow` applies
+/// `.frame(maxWidth: host.contentMaxWidth, ...)` to EVERY row, synthetic
+/// rows included, via the shared `token(_:host:)` helper. Picks one
+/// representative synthetic spec (the top pagination sentinel) to confirm
+/// the fix is systemic, not just applied to the queue bubble.
+@MainActor
+@Suite("ACPTranscriptScroller synthetic row tokens fold contentMaxWidth")
+struct ACPTranscriptScrollerSyntheticTokenTests {
+    @Test("top pagination sentinel token changes when contentMaxWidth changes")
+    func topPaginationTokenChangesOnContentMaxWidth() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let messages = (0..<5).map { _ in ACPMessage.systemNotice(id: UUID(), text: "hello") }
+        session.transcript.messages = messages
+        session.transcript.visibleHead = 2
+        session.transcript.visibleTail = nil
+
+        let narrow = makeHost(session: session, contentMaxWidth: 600)
+        let wide = makeHost(session: session, contentMaxWidth: 900)
+
+        let narrowToken = try #require(
+            ACPTranscriptScroller.Coordinator.rowSpecs(host: narrow).first { $0.id == "__top_pagination__" }?.equalityToken
+        )
+        let wideToken = try #require(
+            ACPTranscriptScroller.Coordinator.rowSpecs(host: wide).first { $0.id == "__top_pagination__" }?.equalityToken
+        )
+        #expect(!narrowToken.isEqual(to: wideToken))
+    }
+
+    @Test("top pagination sentinel token unchanged when nothing relevant changed")
+    func topPaginationTokenStable() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let messages = (0..<5).map { _ in ACPMessage.systemNotice(id: UUID(), text: "hello") }
+        session.transcript.messages = messages
+        session.transcript.visibleHead = 2
+        session.transcript.visibleTail = nil
+
+        let hostA = makeHost(session: session, contentMaxWidth: 800)
+        let hostB = makeHost(session: session, contentMaxWidth: 800)
+
+        let tokenA = try #require(
+            ACPTranscriptScroller.Coordinator.rowSpecs(host: hostA).first { $0.id == "__top_pagination__" }?.equalityToken
+        )
+        let tokenB = try #require(
+            ACPTranscriptScroller.Coordinator.rowSpecs(host: hostB).first { $0.id == "__top_pagination__" }?.equalityToken
+        )
+        #expect(tokenA.isEqual(to: tokenB))
     }
 }
 
