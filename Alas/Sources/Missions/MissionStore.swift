@@ -19,6 +19,7 @@ final class MissionStore {
 
     let path: String
     let db: SQLiteDatabase
+    private let schemaTargetVersion: Int
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -27,8 +28,13 @@ final class MissionStore {
     }()
     private let decoder = JSONDecoder()
 
-    init(path: String, busyTimeoutMilliseconds: Int32 = 5_000) throws {
+    init(
+        path: String,
+        busyTimeoutMilliseconds: Int32 = 5_000,
+        schemaTargetVersion: Int = MissionStore.targetSchemaVersion
+    ) throws {
         self.path = path
+        self.schemaTargetVersion = schemaTargetVersion
         try? FileManager.default.createDirectory(
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -44,6 +50,7 @@ final class MissionStore {
 
     func insert(_ aggregate: MissionAggregate, allowDuplicate: Bool = false) throws {
         try validate(aggregate)
+        guard aggregate.legs.count == 1 else { throw Error.invalidLegCollection }
         try immediateTransaction {
             if !allowDuplicate {
                 let identity = aggregate.issue.identity
@@ -65,11 +72,9 @@ final class MissionStore {
                 if !duplicate.isEmpty { throw Error.duplicateActiveIssueIdentity }
             }
 
-            try insertMission(aggregate.mission)
+            try insertMission(aggregate.mission, initialLeg: aggregate.legs[0])
             try insertIssue(aggregate.issue, missionID: aggregate.mission.id)
-            for leg in aggregate.legs.sorted(by: { $0.ordinal < $1.ordinal }) {
-                try insertLeg(leg)
-            }
+            try insertLeg(aggregate.legs[0])
             for event in aggregate.events { try insertEvent(event) }
         }
     }
@@ -77,7 +82,7 @@ final class MissionStore {
     func aggregate(id: MissionID) throws -> MissionAggregate? {
         let rows = try db.query("SELECT * FROM missions WHERE id = ?", bindings: [id.rawValue])
         guard let missionRow = rows.first else { return nil }
-        let mission = try decodeMission(missionRow)
+        var mission = try decodeMission(missionRow)
         let issueRows = try db.query(
             "SELECT * FROM mission_issue_sources WHERE mission_id = ?",
             bindings: [id.rawValue]
@@ -91,13 +96,14 @@ final class MissionStore {
             "SELECT * FROM mission_events WHERE mission_id = ? ORDER BY created_at ASC, rowid ASC",
             bindings: [id.rawValue]
         ).map(decodeEvent)
-        let aggregate = MissionAggregate(
+        var aggregate = MissionAggregate(
             mission: mission,
             issue: try decodeIssue(issueRow),
             legs: legs,
             events: events
         )
         try validate(aggregate)
+        applyLegacyPresentation(to: &aggregate)
         return aggregate
     }
 
@@ -154,7 +160,10 @@ final class MissionStore {
     }
 
     func addLeg(_ leg: MissionLeg, event: MissionEvent) throws {
-        guard event.missionID == leg.missionID, event.legID == leg.id else { throw Error.invalidEventLeg }
+        guard event.kind == .legAdded,
+              event.missionID == leg.missionID,
+              event.legID == leg.id
+        else { throw Error.invalidEventLeg }
         try immediateTransaction {
             let aggregate = try requireAggregate(leg.missionID)
             guard aggregate.mission.state == .running else { throw Error.invalidLegCollection }
@@ -163,10 +172,11 @@ final class MissionStore {
                 throw Error.duplicateLegProject
             }
             try insertLeg(leg)
-            try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
-                event.createdAt.timeIntervalSince1970,
-                leg.missionID.rawValue,
-            ])
+            try updateMissionState(
+                missionID: leg.missionID,
+                legs: aggregate.legs + [leg],
+                updatedAt: event.createdAt
+            )
             try insertEvent(event)
         }
     }
@@ -181,23 +191,17 @@ final class MissionStore {
         try validate(event: event, for: id)
         try immediateTransaction {
             let aggregate = try requireAggregate(id)
-            try db.exec("""
-            UPDATE missions
-            SET state = ?, setup_checkpoint = ?, attention_reason = ?, updated_at = ?
-            WHERE id = ?
-            """, bindings: [
-                state.rawValue,
-                checkpoint.rawValue,
-                attentionReason,
-                event.createdAt.timeIntervalSince1970,
-                id.rawValue,
-            ])
             if var leg = aggregate.primaryLeg {
                 leg.state = Self.legState(for: state, checkpoint: checkpoint)
                 leg.setupCheckpoint = checkpoint
                 leg.attentionReason = attentionReason
                 leg.updatedAt = event.createdAt
                 try updateLegRecord(leg)
+                try updateMissionState(
+                    missionID: id,
+                    legs: replacing(leg, in: aggregate.legs),
+                    updatedAt: event.createdAt
+                )
             }
             try insertEvent(event)
         }
@@ -206,14 +210,15 @@ final class MissionStore {
     func updateLeg(_ leg: MissionLeg, event: MissionEvent?) throws {
         if let event { try validate(event: event, for: leg.missionID, legID: leg.id) }
         try immediateTransaction {
+            let aggregate = try requireAggregate(leg.missionID)
             try updateLegRecord(leg)
-            if let event {
-                try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
-                    event.createdAt.timeIntervalSince1970,
-                    leg.missionID.rawValue,
-                ])
-                try insertEvent(event)
-            }
+            let updatedAt = event?.createdAt ?? leg.updatedAt
+            try updateMissionState(
+                missionID: leg.missionID,
+                legs: replacing(leg, in: aggregate.legs),
+                updatedAt: updatedAt
+            )
+            if let event { try insertEvent(event) }
         }
     }
 
@@ -225,13 +230,14 @@ final class MissionStore {
         guard leg.missionID == missionID else { throw Error.invalidLegCollection }
         if let event { try validate(event: event, for: missionID, legID: leg.id) }
         try immediateTransaction {
-            try requireMission(missionID)
+            let aggregate = try requireAggregate(missionID)
             try updateLegRecord(leg)
             let updatedAt = event?.createdAt ?? leg.updatedAt
-            try db.exec("UPDATE missions SET updated_at = ? WHERE id = ?", bindings: [
-                updatedAt.timeIntervalSince1970,
-                missionID.rawValue,
-            ])
+            try updateMissionState(
+                missionID: missionID,
+                legs: replacing(leg, in: aggregate.legs),
+                updatedAt: updatedAt
+            )
             if let event { try insertEvent(event) }
         }
     }
@@ -247,24 +253,18 @@ final class MissionStore {
         try validate(event: event, for: id, legID: leg.id)
         guard leg.missionID == id else { throw Error.invalidLegCollection }
         try immediateTransaction {
-            try requireMission(id)
+            let aggregate = try requireAggregate(id)
             var updatedLeg = leg
             updatedLeg.state = Self.legState(for: state, checkpoint: checkpoint)
             updatedLeg.setupCheckpoint = checkpoint
             updatedLeg.attentionReason = attentionReason
             updatedLeg.updatedAt = event.createdAt
             try updateLegRecord(updatedLeg)
-            try db.exec("""
-            UPDATE missions
-            SET state = ?, setup_checkpoint = ?, attention_reason = ?, updated_at = ?
-            WHERE id = ?
-            """, bindings: [
-                state.rawValue,
-                checkpoint.rawValue,
-                attentionReason,
-                event.createdAt.timeIntervalSince1970,
-                id.rawValue,
-            ])
+            try updateMissionState(
+                missionID: id,
+                legs: replacing(updatedLeg, in: aggregate.legs),
+                updatedAt: event.createdAt
+            )
             try insertEvent(event)
         }
     }
@@ -454,33 +454,20 @@ final class MissionStore {
     ) throws {
         try validate(event: event, for: id)
         try immediateTransaction {
-            let rows = try db.query("SELECT primary_leg_id FROM missions WHERE id = ?", bindings: [id.rawValue])
-            guard let primaryLegID = rows.first?["primary_leg_id"] as? String else { throw Error.missionNotFound }
-            let changed = try db.execChanges("""
-            UPDATE mission_legs
-            SET review_identity = ?, state = ?, setup_checkpoint = ?, attention_reason = NULL,
-                readiness_evidence = ?, updated_at = ?
-            WHERE id = ? AND mission_id = ?
-            """, bindings: [
-                try reviewIdentity.map(encoder.encode),
-                MissionLegState.ready.rawValue,
-                MissionSetupCheckpoint.running.rawValue,
-                try encoder.encode(MissionLegReadinessEvidence(kind: .mergedReview, observedAt: event.createdAt)),
-                event.createdAt.timeIntervalSince1970,
-                primaryLegID,
-                id.rawValue,
-            ])
-            guard changed == 1 else { throw Error.malformedRecord }
-            try db.exec("""
-            UPDATE missions
-            SET state = ?, setup_checkpoint = ?, attention_reason = NULL, updated_at = ?
-            WHERE id = ?
-            """, bindings: [
-                MissionState.readyToComplete.rawValue,
-                MissionSetupCheckpoint.running.rawValue,
-                event.createdAt.timeIntervalSince1970,
-                id.rawValue,
-            ])
+            let aggregate = try requireAggregate(id)
+            guard var primaryLeg = aggregate.primaryLeg else { throw Error.invalidLegCollection }
+            primaryLeg.reviewIdentity = reviewIdentity
+            primaryLeg.state = .ready
+            primaryLeg.setupCheckpoint = .running
+            primaryLeg.attentionReason = nil
+            primaryLeg.readinessEvidence = .init(kind: .mergedReview, observedAt: event.createdAt)
+            primaryLeg.updatedAt = event.createdAt
+            try updateLegRecord(primaryLeg)
+            try updateMissionState(
+                missionID: id,
+                legs: replacing(primaryLeg, in: aggregate.legs),
+                updatedAt: event.createdAt
+            )
             try insertEvent(event)
         }
     }
@@ -489,7 +476,10 @@ final class MissionStore {
         try validate(event: event, for: id)
         if let leg, leg.missionID != id { throw Error.malformedRecord }
         try immediateTransaction {
-            try requireMission(id)
+            let aggregate = try requireAggregate(id)
+            guard aggregate.legs.allSatisfy({ $0.readinessEvidence != nil }) else {
+                throw Error.invalidLegCollection
+            }
             if let leg {
                 let changed = try db.execChanges("""
                 UPDATE mission_legs
@@ -504,7 +494,7 @@ final class MissionStore {
             }
             try db.exec("""
             UPDATE missions
-            SET state = ?, attention_reason = NULL, updated_at = ?, completed_at = ?
+            SET state = ?, updated_at = ?, completed_at = ?
             WHERE id = ?
             """, bindings: [
                 MissionState.completed.rawValue,
@@ -519,19 +509,19 @@ final class MissionStore {
     private func migrate() throws {
         try db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         var current = try currentSchemaVersion()
-        if current < 1 {
+        if current < 1, schemaTargetVersion >= 1 {
             try migrate(to: 1, migrateToV1)
             current = 1
         }
-        if current < 2 {
+        if current < 2, schemaTargetVersion >= 2 {
             try migrate(to: 2, migrateToV2)
             current = 2
         }
-        if current < 3 {
+        if current < 3, schemaTargetVersion >= 3 {
             try migrate(to: 3, migrateToV3)
             current = 3
         }
-        if current < 4 {
+        if current < 4, schemaTargetVersion >= 4 {
             try migrate(to: 4, migrateToV4)
         }
     }
@@ -755,6 +745,37 @@ final class MissionStore {
         return (normalizedMissionState, legState, readinessEvidence)
     }
 
+    private static func globalMissionState(for legs: [MissionLeg]) -> MissionState {
+        if legs.allSatisfy({ $0.readinessEvidence != nil }) { return .readyToComplete }
+        if legs.allSatisfy({ $0.state == .creating }) { return .creating }
+        return .running
+    }
+
+    private func updateMissionState(
+        missionID: MissionID,
+        legs: [MissionLeg],
+        updatedAt: Date
+    ) throws {
+        try db.exec("UPDATE missions SET state = ?, updated_at = ? WHERE id = ?", bindings: [
+            Self.globalMissionState(for: legs).rawValue,
+            updatedAt.timeIntervalSince1970,
+            missionID.rawValue,
+        ])
+    }
+
+    private func replacing(_ leg: MissionLeg, in legs: [MissionLeg]) -> [MissionLeg] {
+        legs.map { $0.id == leg.id ? leg : $0 }
+    }
+
+    private func applyLegacyPresentation(to aggregate: inout MissionAggregate) {
+        guard let primaryLeg = aggregate.primaryLeg else { return }
+        if aggregate.mission.state != .completed {
+            aggregate.mission.state = Self.globalMissionState(for: aggregate.legs)
+        }
+        aggregate.mission.setupCheckpoint = primaryLeg.setupCheckpoint
+        aggregate.mission.attentionReason = primaryLeg.attentionReason
+    }
+
     private func issueIdentity(missionID: MissionID) throws -> MissionIssueIdentity {
         let rows = try db.query("""
         SELECT provider, host, repository_slug, issue_number
@@ -833,7 +854,7 @@ final class MissionStore {
         )
     }
 
-    private func insertMission(_ mission: MissionRecord) throws {
+    private func insertMission(_ mission: MissionRecord, initialLeg: MissionLeg) throws {
         try db.exec("""
         INSERT INTO missions (
             id, title, source_kind, state, setup_checkpoint, primary_leg_id,
@@ -842,10 +863,10 @@ final class MissionStore {
         """, bindings: [
             mission.id.rawValue,
             mission.title,
-            mission.state.rawValue,
-            mission.setupCheckpoint.rawValue,
+            Self.globalMissionState(for: [initialLeg]).rawValue,
+            initialLeg.setupCheckpoint.rawValue,
             mission.primaryLegID.rawValue,
-            mission.attentionReason,
+            initialLeg.attentionReason,
             mission.createdAt.timeIntervalSince1970,
             mission.updatedAt.timeIntervalSince1970,
             mission.completedAt?.timeIntervalSince1970,

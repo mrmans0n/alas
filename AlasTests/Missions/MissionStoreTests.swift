@@ -51,12 +51,14 @@ struct MissionStoreTests {
     @Test("v4 migrates legacy Mission attention onto its leg")
     func migratesLegacyAttentionToLeg() throws {
         let path = temporaryPath()
-        let legacy = try MissionStoreTestDatabase.v3(
-            path: URL(fileURLWithPath: path),
-            missionState: "needsAttention",
-            checkpoint: "startingAgent",
-            attentionReason: "Install Codex"
-        )
+        do {
+            _ = try MissionStoreTestDatabase.v3(
+                path: URL(fileURLWithPath: path),
+                missionState: "needsAttention",
+                checkpoint: "startingAgent",
+                attentionReason: "Install Codex"
+            )
+        }
 
         let store = try MissionStore(path: path)
         let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
@@ -82,12 +84,14 @@ struct MissionStoreTests {
 
         for (index, legacyCase) in cases.enumerated() {
             let path = temporaryPath()
-            let legacy = try MissionStoreTestDatabase.v3(
-                path: URL(fileURLWithPath: path),
-                missionState: legacyCase.state,
-                checkpoint: legacyCase.checkpoint,
-                attentionReason: "Legacy reason"
-            )
+            do {
+                _ = try MissionStoreTestDatabase.v3(
+                    path: URL(fileURLWithPath: path),
+                    missionState: legacyCase.state,
+                    checkpoint: legacyCase.checkpoint,
+                    attentionReason: "Legacy reason"
+                )
+            }
 
             let store = try MissionStore(path: path)
             let aggregate = try #require(try store.aggregate(id: MissionID(rawValue: "mission-1")))
@@ -103,8 +107,8 @@ struct MissionStoreTests {
         }
     }
 
-    @Test("persists two independently addressed legs")
-    func persistsTwoLegs() throws {
+    @Test("rejects multiple legs during initial Mission insertion")
+    func rejectsMultipleInitialLegs() throws {
         let store = try MissionStore(path: temporaryPath())
         var aggregate = MissionFixtures.creatingMission()
         aggregate.mission.state = .running
@@ -134,19 +138,7 @@ struct MissionStoreTests {
             updatedAt: Date(timeIntervalSince1970: 100)
         )
         aggregate.legs.append(secondLeg)
-        aggregate.events.append(MissionFixtures.event(
-            id: "leg-added",
-            missionID: aggregate.mission.id,
-            legID: secondLeg.id,
-            kind: .legAdded,
-            createdAt: 102
-        ))
-
-        try store.insert(aggregate)
-
-        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(loaded.legs.map(\.id) == [aggregate.primaryLeg!.id, secondLeg.id])
-        #expect(try store.leg(missionID: aggregate.mission.id, legID: secondLeg.id) == secondLeg)
+        #expect(throws: MissionStore.Error.invalidLegCollection) { try store.insert(aggregate) }
     }
 
     @Test("adds a leg atomically to a running Mission")
@@ -196,6 +188,30 @@ struct MissionStoreTests {
         #expect(loaded.mission.updatedAt == event.createdAt)
     }
 
+    @Test("requires a leg-added event to add a Mission leg")
+    func requiresLegAddedEvent() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].state = .running
+        aggregate.legs[0].setupCheckpoint = .running
+        try store.insert(aggregate)
+        let leg = MissionFixtures.leg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"),
+            missionID: aggregate.mission.id,
+            ordinal: 1
+        )
+
+        #expect(throws: MissionStore.Error.invalidEventLeg) {
+            try store.addLeg(leg, event: MissionFixtures.event(
+                id: "not-a-leg-add",
+                missionID: aggregate.mission.id,
+                legID: leg.id,
+                kind: .agentStarted
+            ))
+        }
+    }
+
     @Test("rejects duplicate leg projects")
     func rejectsDuplicateLegProjects() throws {
         let store = try MissionStore(path: temporaryPath())
@@ -214,9 +230,15 @@ struct MissionStoreTests {
             state: .creating, setupCheckpoint: .creatingWorktree, attentionReason: nil,
             readinessEvidence: nil, createdAt: duplicate.createdAt, updatedAt: duplicate.updatedAt
         )
-        aggregate.legs.append(duplicate)
-
-        #expect(throws: MissionStore.Error.duplicateLegProject) { try store.insert(aggregate) }
+        try store.insert(aggregate)
+        #expect(throws: MissionStore.Error.duplicateLegProject) {
+            try store.addLeg(duplicate, event: MissionFixtures.event(
+                id: "leg-added",
+                missionID: aggregate.mission.id,
+                legID: duplicate.id,
+                kind: .legAdded
+            ))
+        }
     }
 
     @Test("rejects noncontiguous leg ordinals")
@@ -234,9 +256,15 @@ struct MissionStoreTests {
             state: .creating, setupCheckpoint: .creatingWorktree, attentionReason: nil,
             readinessEvidence: nil, createdAt: leg.createdAt, updatedAt: leg.updatedAt
         )
-        aggregate.legs.append(leg)
-
-        #expect(throws: MissionStore.Error.invalidLegCollection) { try store.insert(aggregate) }
+        try store.insert(aggregate)
+        #expect(throws: MissionStore.Error.invalidLegCollection) {
+            try store.addLeg(leg, event: MissionFixtures.event(
+                id: "leg-added",
+                missionID: aggregate.mission.id,
+                legID: leg.id,
+                kind: .legAdded
+            ))
+        }
     }
 
     @Test("rejects events addressed to legs outside the Mission")
@@ -344,6 +372,9 @@ struct MissionStoreTests {
         try store.insert(aggregate)
         var leg = try #require(aggregate.primaryLeg)
         leg.worktreeLineageID = "device:inode"
+        leg.state = .ready
+        leg.readinessEvidence = .init(kind: .legacy, observedAt: Date(timeIntervalSince1970: 199))
+        try store.updateLegSetup(missionID: aggregate.mission.id, leg: leg, event: nil)
         try store.complete(
             id: aggregate.mission.id,
             leg: leg,
@@ -360,6 +391,40 @@ struct MissionStoreTests {
         #expect(try store.aggregate(id: aggregate.mission.id)?.primaryLeg?.worktreeLineageID == "device:inode")
         try store.insert(MissionFixtures.creatingMission(id: "mission-2"))
         #expect(try store.activeMission(issueIdentity: aggregate.issue.identity)?.mission.id == MissionID(rawValue: "mission-2"))
+    }
+
+    @Test("requires readiness evidence from every leg before completion")
+    func requiresAllLegReadinessBeforeCompletion() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].state = .running
+        aggregate.legs[0].setupCheckpoint = .running
+        try store.insert(aggregate)
+        var firstLeg = try #require(aggregate.primaryLeg)
+        firstLeg.state = .ready
+        firstLeg.readinessEvidence = .init(kind: .mergedReview, observedAt: Date(timeIntervalSince1970: 110))
+        try store.updateLegSetup(missionID: aggregate.mission.id, leg: firstLeg, event: nil)
+        let secondLeg = MissionFixtures.leg(
+            id: MissionLegID(rawValue: "mission-1-leg-2"),
+            missionID: aggregate.mission.id,
+            ordinal: 1
+        )
+        try store.addLeg(secondLeg, event: MissionFixtures.event(
+            id: "leg-added",
+            missionID: aggregate.mission.id,
+            legID: secondLeg.id,
+            kind: .legAdded,
+            createdAt: 111
+        ))
+
+        #expect(throws: MissionStore.Error.invalidLegCollection) {
+            try store.complete(
+                id: aggregate.mission.id,
+                at: Date(timeIntervalSince1970: 120),
+                event: MissionFixtures.event(id: "completed", kind: .completed, createdAt: 120)
+            )
+        }
     }
 
     @Test("leg setup state and its event are committed together")
@@ -699,6 +764,10 @@ struct MissionStoreTests {
         let store = try MissionStore(path: temporaryPath())
         let completed = MissionFixtures.creatingMission(id: "completed-mission")
         try store.insert(completed)
+        var completedLeg = try #require(completed.primaryLeg)
+        completedLeg.state = .ready
+        completedLeg.readinessEvidence = .init(kind: .legacy, observedAt: Date(timeIntervalSince1970: 124))
+        try store.updateLegSetup(missionID: completed.mission.id, leg: completedLeg, event: nil)
         try store.complete(
             id: completed.mission.id,
             at: Date(timeIntervalSince1970: 125),
@@ -761,6 +830,10 @@ struct MissionStoreTests {
         try store.insert(completed)
         try store.insert(olderActive)
         try store.insert(newerActive)
+        var completedLeg = try #require(completed.primaryLeg)
+        completedLeg.state = .ready
+        completedLeg.readinessEvidence = .init(kind: .legacy, observedAt: Date(timeIntervalSince1970: 399))
+        try store.updateLegSetup(missionID: completed.mission.id, leg: completedLeg, event: nil)
         try store.complete(
             id: completed.mission.id,
             at: Date(timeIntervalSince1970: 400),
@@ -786,71 +859,9 @@ private enum MissionStoreTestDatabase {
         checkpoint: String,
         attentionReason: String?
     ) throws -> SQLiteDatabase {
+        do { _ = try MissionStore(path: path.path, schemaTargetVersion: 1) }
+        do { _ = try MissionStore(path: path.path, schemaTargetVersion: 3) }
         let database = try SQLiteDatabase(path: path.path)
-        try database.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
-        try database.exec("INSERT INTO schema_version (version) VALUES (3)")
-        try database.exec("""
-        CREATE TABLE missions (
-          id TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          source_kind TEXT NOT NULL CHECK (source_kind = 'issue'),
-          state TEXT NOT NULL,
-          setup_checkpoint TEXT NOT NULL,
-          primary_leg_id TEXT NOT NULL,
-          attention_reason TEXT,
-          created_at REAL NOT NULL,
-          updated_at REAL NOT NULL,
-          completed_at REAL
-        )
-        """)
-        try database.exec("""
-        CREATE TABLE mission_issue_sources (
-          mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
-          provider TEXT NOT NULL,
-          host TEXT NOT NULL,
-          repository_slug TEXT NOT NULL,
-          issue_number INTEGER NOT NULL,
-          canonical_url TEXT NOT NULL,
-          title TEXT NOT NULL,
-          body TEXT NOT NULL,
-          provider_state TEXT NOT NULL,
-          labels BLOB NOT NULL,
-          assignees BLOB NOT NULL,
-          provider_updated_at REAL,
-          captured_at REAL NOT NULL,
-          refresh_error TEXT
-        )
-        """)
-        try database.exec("""
-        CREATE TABLE mission_legs (
-          id TEXT PRIMARY KEY,
-          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-          ordinal INTEGER NOT NULL,
-          project_id TEXT NOT NULL,
-          base_ref TEXT NOT NULL,
-          branch TEXT NOT NULL,
-          destination_path TEXT NOT NULL,
-          worktree_id TEXT,
-          agent_id TEXT NOT NULL,
-          acp_session_id TEXT,
-          initial_prompt_id TEXT NOT NULL,
-          pending_initial_prompt TEXT,
-          review_identity BLOB,
-          UNIQUE(mission_id, ordinal)
-        )
-        """)
-        try database.exec("ALTER TABLE mission_legs ADD COLUMN base_remote_name TEXT")
-        try database.exec("ALTER TABLE mission_legs ADD COLUMN worktree_lineage_id TEXT")
-        try database.exec("""
-        CREATE TABLE mission_events (
-          id TEXT PRIMARY KEY,
-          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-          leg_id TEXT,
-          kind TEXT NOT NULL,
-          message TEXT NOT NULL,
-          created_at REAL NOT NULL
-        )
-        """)
 
         let encoded = JSONEncoder()
         try database.exec("""

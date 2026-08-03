@@ -162,6 +162,28 @@ struct MissionRecord: Codable, Equatable, Sendable {
     let createdAt: Date
     var updatedAt: Date
     var completedAt: Date?
+
+    init(
+        id: MissionID,
+        title: String,
+        state: MissionState = .creating,
+        setupCheckpoint: MissionSetupCheckpoint = .creatingWorktree,
+        primaryLegID: MissionLegID,
+        attentionReason: String? = nil,
+        createdAt: Date,
+        updatedAt: Date,
+        completedAt: Date?
+    ) {
+        self.id = id
+        self.title = title
+        self.state = state
+        self.setupCheckpoint = setupCheckpoint
+        self.primaryLegID = primaryLegID
+        self.attentionReason = attentionReason
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.completedAt = completedAt
+    }
 }
 
 struct MissionLeg: Codable, Equatable, Sendable {
