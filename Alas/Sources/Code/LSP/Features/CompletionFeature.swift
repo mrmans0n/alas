@@ -268,7 +268,7 @@ final class CompletionFeature {
         candidateItems = items
         candidateAllowsBufferFallback = allowBufferFallback
         candidateMemberAccessOnly = memberAccessOnly
-        candidateAllowsEmptyPrefix = allowEmptyPrefix
+        candidateAllowsEmptyPrefix = candidateAllowsEmptyPrefix || allowEmptyPrefix
         isRefreshing = false
         selection = selectedCandidate.flatMap { selected in
             next.firstIndex {

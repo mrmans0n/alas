@@ -334,11 +334,13 @@ enum CompletionEngine {
             return nsRange(for: range, in: text)
         }
         let oldCaretCharacter = prefixStart.character + originalPrefix.range.length
+        let isInsertion = range.start.line == range.end.line &&
+            range.start.character == range.end.character
 
         func shifted(_ position: LSPPosition, atEnd: Bool) -> LSPPosition {
             guard position.line == prefixStart.line,
                   position.character > oldCaretCharacter ||
-                  (!atEnd || includeInsertedTextAtEnd || growth < 0) &&
+                  (!atEnd || includeInsertedTextAtEnd || isInsertion || growth < 0) &&
                   position.character == oldCaretCharacter else {
                 return position
             }

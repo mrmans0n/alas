@@ -145,6 +145,14 @@ struct CompletionFeatureTests {
         )
 
         textView.insertText("c", replacementRange: NSRange(location: NSNotFound, length: 0))
+        feature.testingPresent(
+            items: [
+                .testing(label: "count", sortText: "001", filterText: nil),
+                .testing(label: "copy", sortText: "002", filterText: nil)
+            ],
+            prefix: CompletionPrefix(text: "c", range: NSRange(location: 4, length: 1)),
+            bufferText: "foo.c"
+        )
         textView.deleteBackward(nil)
 
         #expect(textView.string == "foo.")
