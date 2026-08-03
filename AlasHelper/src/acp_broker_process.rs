@@ -25,14 +25,24 @@ use std::os::unix::net::{UnixListener, UnixStream};
 /// Idle, not total, and that is forced by the legacy encoding: under framing
 /// this line is a short header, but a legacy caller sends the whole message
 /// here — and an older helper serializes *after* connecting, so it can
-/// legitimately say nothing at all for the ~7.4s a maximal image prompt takes
-/// to encode. A total budget would drop that request, breaking the very
-/// callers the legacy path exists to keep working.
+/// legitimately say nothing at all while it encodes. A total budget would drop
+/// that request, breaking the very callers the legacy path exists to serve.
 ///
-/// Shorter than `BROKER_IPC_IDLE_TIMEOUT` because it is the one bound a caller
-/// can hold without having promised anything yet; past this line a framed
-/// caller has declared a length and is held to it instead.
-const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// This is the one bound that has to be a fixed duration rather than a rate,
+/// because before a single byte arrives there is nothing to measure a rate
+/// against: a peer part-way through encoding two gigabytes and a peer that
+/// connected and died look identical. Since it cannot be derived, it is sized
+/// against what a sender can physically produce. Serialization measures
+/// ~36 MB/s, so this covers something over ten gigabytes of encoding — and the
+/// largest legacy request is an `acp/respond` carrying a whole file, which
+/// `ACPSessionRunner.serveRead` builds by holding the file, a `String` copy
+/// and the encoded JSON in memory at once. A sender that needs longer than
+/// this has already failed on its own side.
+///
+/// The cost of being generous is bounded too: a silent connection holds one
+/// worker, there are `MAX_BROKER_CONNECTION_WORKERS` of them, and the listen
+/// backlog caps how many a peer can hold at once regardless.
+const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Rate a peer must sustain while reading a response.
 ///
