@@ -375,6 +375,32 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refresh filters cached buffer words when broadening the prefix")
+    func refreshFiltersCachedBufferWords() {
+        let text = "openEditor operate\nopen"
+        let textView = makeTextView(text)
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        let prefix = CompletionEngine.prefix(in: text, caret: (text as NSString).length)!
+        feature.testingPresent(
+            items: [],
+            prefix: prefix,
+            bufferText: text,
+            allowBufferFallback: true
+        )
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openEditor"])
+
+        textView.deleteBackward(nil)
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openEditor", "operate", "open"])
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh preserves the selected matching candidate")
     func refreshPreservesSelectedMatchingCandidate() {
         let textView = makeTextView("a")

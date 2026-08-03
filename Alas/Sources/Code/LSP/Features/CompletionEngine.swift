@@ -102,8 +102,10 @@ enum CompletionEngine {
     }
 
     static func bufferWordCandidates(in text: String, prefix: CompletionPrefix, limit: Int = 24) -> [CompletionCandidate] {
-        guard (prefix.text as NSString).length >= 3, limit > 0 else { return [] }
+        bufferWordCandidates(from: bufferWords(in: text), prefix: prefix, limit: limit)
+    }
 
+    static func bufferWords(in text: String) -> [String] {
         let ns = text as NSString
         var seen = Set<String>()
         var words: [String] = []
@@ -121,14 +123,24 @@ enum CompletionEngine {
             }
 
             let word = ns.substring(with: NSRange(location: start, length: index - start))
-            if word != prefix.text,
-               hasCaseInsensitivePrefix(word, prefix.text),
-               seen.insert(word).inserted {
+            if seen.insert(word).inserted {
                 words.append(word)
             }
         }
+        return words
+    }
 
-        return words.prefix(limit).map { word in
+    static func bufferWordCandidates(
+        from words: [String],
+        prefix: CompletionPrefix,
+        limit: Int = 24
+    ) -> [CompletionCandidate] {
+        guard (prefix.text as NSString).length >= 3, limit > 0 else { return [] }
+
+        return words.lazy
+            .filter { $0 != prefix.text && hasCaseInsensitivePrefix($0, prefix.text) }
+            .prefix(limit)
+            .map { word in
             CompletionCandidate(
                 label: word,
                 detail: "Current buffer",
