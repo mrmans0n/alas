@@ -522,6 +522,15 @@ fn flush_watch_events(
 ///
 /// Only requests with an id qualify: a notification has nothing to send back,
 /// so there is no response to route through the channel.
+///
+/// A thread per request, with no pool, is deliberate. It reads alarming next
+/// to `ACPBrokerClient`'s 50ms active poll — 20 requests a second per live
+/// session — but that loop awaits each `attachAndReplay` before sleeping
+/// again, so a session has at most one attach outstanding. Concurrency
+/// therefore tracks the number of sessions, not the poll rate, and a wedged
+/// broker parks one thread per session rather than accumulating them. What is
+/// left is churn: ~20 spawns a second per active session, tens of microseconds
+/// each. A pool would buy that back and cost a queue that could itself stall.
 struct AcpJob {
     id: Value,
     method: String,

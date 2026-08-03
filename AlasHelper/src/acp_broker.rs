@@ -193,6 +193,8 @@ pub enum BrokerEventKind {
         operation_key: OperationKey,
         adapter_request_id: AdapterRequestId,
         method: String,
+        /// Always null. See `OperationSnapshot::params`.
+        params: Value,
     },
     OperationCompleted {
         operation_key: OperationKey,
@@ -223,6 +225,16 @@ pub struct OperationSnapshot {
     pub operation_key: OperationKey,
     pub adapter_request_id: AdapterRequestId,
     pub method: String,
+    /// Always null, and deliberately still emitted.
+    ///
+    /// The real params are not sent — nothing reads them, and a prompt's can
+    /// run to hundreds of megabytes that the reply would otherwise carry (see
+    /// `snapshot`). Dropping the key outright is what cannot be done: a
+    /// broker outlives the app that started it, so a client from an earlier
+    /// build can adopt this one, and its decoder requires the key to be
+    /// present. Six bytes buys that; omitting them would leave such a client
+    /// unable to adopt or even close the broker.
+    pub params: Value,
     pub terminal_outcome: Option<AdapterRPCOutcome>,
 }
 
@@ -392,6 +404,7 @@ impl ACPBrokerState {
             operation_key: operation_key.clone(),
             adapter_request_id,
             method: record.fingerprint.method.clone(),
+            params: Value::Null,
         });
         self.operations.insert(operation_key.clone(), record);
 
@@ -558,6 +571,7 @@ impl ACPBrokerState {
                 operation_key: record.key.clone(),
                 adapter_request_id: record.adapter_request_id,
                 method: record.fingerprint.method.clone(),
+                params: Value::Null,
                 terminal_outcome: record.terminal_outcome.clone(),
             })
             .collect();

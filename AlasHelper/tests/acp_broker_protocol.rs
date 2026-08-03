@@ -440,6 +440,45 @@ fn duplicate_pending_request_ids_are_rejected() {
     );
 }
 
+/// A broker outlives the app build that started it, so a client from an
+/// earlier build can adopt this one — and that client's decoder requires
+/// `params` to be present on both wire shapes. The value is deliberately
+/// null (the real params are hundreds of megabytes and nothing reads them),
+/// but the key has to stay, or such a client cannot adopt or even close the
+/// broker. Tidying the null away would be silently breaking.
+#[test]
+fn operation_params_stay_on_the_wire_as_a_null_placeholder() {
+    let mut broker = broker();
+    broker
+        .begin_operation(
+            OperationKey::new("prompt-1"),
+            "session/prompt".to_string(),
+            json!({"prompt": "hello"}),
+        )
+        .unwrap();
+
+    let snapshot = serde_json::to_value(broker.snapshot()).unwrap();
+    let operation = &snapshot["operations"][0];
+    assert!(
+        operation.get("params").is_some(),
+        "snapshot operation dropped the params key: {operation}"
+    );
+    assert_eq!(operation["params"], Value::Null);
+
+    let events = serde_json::to_value(broker.replay_after(EventCursor::new(0)).unwrap()).unwrap();
+    let started = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"]["type"] == "operationStarted")
+        .expect("operationStarted event");
+    assert!(
+        started["kind"].get("params").is_some(),
+        "operationStarted dropped the params key: {started}"
+    );
+    assert_eq!(started["kind"]["params"], Value::Null);
+}
+
 #[test]
 fn snapshot_round_trip_excludes_secret_environment_values() {
     let mut broker = broker();
