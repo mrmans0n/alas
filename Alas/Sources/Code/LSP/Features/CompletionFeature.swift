@@ -20,6 +20,9 @@ final class CompletionFeature {
     private var prefix: CompletionPrefix?
     private var candidatePrefix: CompletionPrefix?
     private var candidateBufferText: String?
+    private var candidateItems: [LSPCompletionItem] = []
+    private var candidateAllowsBufferFallback = false
+    private var candidateMemberAccessOnly = false
     private var selection: Int = 0
     private let suggestionWindow = CompletionWindowController()
     private var isRefreshing = false
@@ -75,6 +78,9 @@ final class CompletionFeature {
         prefix = nil
         candidatePrefix = nil
         candidateBufferText = nil
+        candidateItems.removeAll()
+        candidateAllowsBufferFallback = false
+        candidateMemberAccessOnly = false
         selection = 0
         isRefreshing = false
         closeUI()
@@ -228,17 +234,13 @@ final class CompletionFeature {
         allowBufferFallback: Bool,
         memberAccessOnly: Bool
     ) {
-        var next = CompletionEngine.lspCandidates(
-            from: items,
+        let next = Self.candidates(
+            items: items,
             prefix: prefix,
+            bufferText: bufferText,
+            allowBufferFallback: allowBufferFallback,
             memberAccessOnly: memberAccessOnly
         )
-        if allowBufferFallback {
-            let buffer = CompletionEngine.bufferWordCandidates(in: bufferText, prefix: prefix)
-            next.append(contentsOf: buffer.filter { bufferCandidate in
-                !next.contains { $0.label == bufferCandidate.label }
-            })
-        }
 
         guard !next.isEmpty else {
             cancelAndDismiss()
@@ -259,6 +261,9 @@ final class CompletionFeature {
         self.prefix = prefix
         candidatePrefix = prefix
         candidateBufferText = bufferText
+        candidateItems = items
+        candidateAllowsBufferFallback = allowBufferFallback
+        candidateMemberAccessOnly = memberAccessOnly
         isRefreshing = false
         selection = selectedCandidate.flatMap { selected in
             next.firstIndex {
@@ -276,6 +281,27 @@ final class CompletionFeature {
             }
         } ?? 0
         showPopup()
+    }
+
+    private static func candidates(
+        items: [LSPCompletionItem],
+        prefix: CompletionPrefix,
+        bufferText: String,
+        allowBufferFallback: Bool,
+        memberAccessOnly: Bool
+    ) -> [CompletionCandidate] {
+        var candidates = CompletionEngine.lspCandidates(
+            from: items,
+            prefix: prefix,
+            memberAccessOnly: memberAccessOnly
+        )
+        if allowBufferFallback {
+            let buffer = CompletionEngine.bufferWordCandidates(in: bufferText, prefix: prefix)
+            candidates.append(contentsOf: buffer.filter { bufferCandidate in
+                !candidates.contains { $0.label == bufferCandidate.label }
+            })
+        }
+        return candidates
     }
 
     private func showPopup() {
@@ -385,7 +411,6 @@ final class CompletionFeature {
                 in: textView.string,
                 caret: textView.selectedRange().location
               ),
-              !updatedPrefix.text.isEmpty,
               previousPrefix?.range.location == updatedPrefix.range.location,
               textOutsideCandidatePrefixIsUnchanged(in: textView.string, updatedPrefix: updatedPrefix) else {
             candidates.removeAll()
@@ -393,9 +418,27 @@ final class CompletionFeature {
             prefix = nil
             candidatePrefix = nil
             candidateBufferText = nil
+            candidateItems.removeAll()
+            candidateAllowsBufferFallback = false
+            candidateMemberAccessOnly = false
             selection = 0
             closeUI()
             return
+        }
+
+        if let candidatePrefix,
+           updatedPrefix.range.length < candidatePrefix.range.length,
+           let candidateBufferText {
+            let rebuilt = Self.candidates(
+                items: candidateItems,
+                prefix: updatedPrefix,
+                bufferText: candidateBufferText,
+                allowBufferFallback: candidateAllowsBufferFallback,
+                memberAccessOnly: candidateMemberAccessOnly
+            )
+            candidatePool = rebuilt.map { candidate in
+                candidatePool.first { $0 == candidate } ?? candidate
+            }
         }
 
         let selectedCandidateID = candidates.indices.contains(selection) ? candidates[selection].id : nil

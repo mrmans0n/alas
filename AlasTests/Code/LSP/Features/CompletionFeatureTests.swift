@@ -130,6 +130,55 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("refresh restores candidates at an empty trigger prefix")
+    func refreshRestoresCandidatesAtEmptyPrefix() {
+        let textView = makeTextView("foo.")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingSeedVisibleCandidates(
+            labels: ["count", "copy"],
+            prefix: CompletionPrefix(text: "", range: NSRange(location: 4, length: 0))
+        )
+
+        textView.insertText("c", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.deleteBackward(nil)
+
+        #expect(textView.string == "foo.")
+        #expect(feature.testingSnapshot.candidateLabels == ["count", "copy"])
+        feature.cancelAndDismiss()
+    }
+
+    @Test("refresh rebuilds candidates when broadening past the response prefix")
+    func refreshRebuildsCandidatesPastResponsePrefix() {
+        let textView = makeTextView("open")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingPresent(
+            items: [
+                .testing(label: "openAlpha", sortText: "001", filterText: nil),
+                .testing(label: "operate", sortText: "002", filterText: nil)
+            ],
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4)),
+            bufferText: "open"
+        )
+
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha"])
+
+        textView.deleteBackward(nil)
+
+        #expect(textView.string == "ope")
+        #expect(feature.testingSnapshot.candidateLabels == ["openAlpha", "operate"])
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh preserves the selected matching candidate")
     func refreshPreservesSelectedMatchingCandidate() {
         let textView = makeTextView("a")
