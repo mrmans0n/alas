@@ -361,29 +361,30 @@ final class CompletionFeature {
         text: String,
         coordinateIndex: TextEditCoordinates.LineIndex
     ) -> (candidates: [CompletionCandidate], origins: [UUID: CompletionPrefix]) {
-        var merged = candidates
-        var mergedOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, originPrefix) })
-        var identities = Set(merged.compactMap {
-            candidateIdentity(
-                for: $0,
-                origin: mergedOrigins[$0.id],
+        var merged: [CompletionCandidate] = []
+        var mergedOrigins: [UUID: CompletionPrefix] = [:]
+        var identities = Set<CandidateIdentity>()
+        for candidate in candidates {
+            guard let identity = candidateIdentity(
+                for: candidate,
+                origin: originPrefix,
                 prefix: prefix,
                 text: text,
                 coordinateIndex: coordinateIndex
-            )
-        })
+            ), identities.insert(identity).inserted else { continue }
+            merged.append(candidate)
+            mergedOrigins[candidate.id] = originPrefix
+        }
         for candidate in retained {
-            let identity = candidateIdentity(
+            guard let identity = candidateIdentity(
                 for: candidate,
                 origin: origins[candidate.id],
                 prefix: prefix,
                 text: text,
                 coordinateIndex: coordinateIndex
-            )
-            guard identity.map({ !identities.contains($0) }) ?? true else { continue }
+            ), identities.insert(identity).inserted else { continue }
             merged.append(candidate)
             mergedOrigins[candidate.id] = origins[candidate.id]
-            if let identity { identities.insert(identity) }
         }
         return (merged, mergedOrigins)
     }

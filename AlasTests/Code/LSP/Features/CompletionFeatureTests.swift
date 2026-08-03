@@ -494,6 +494,43 @@ struct CompletionFeatureTests {
         feature.cancelAndDismiss()
     }
 
+    @Test("invalid LSP edit candidates are not retained")
+    func invalidEditCandidatesAreDropped() {
+        let textView = makeTextView("a")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        let invalid = LSPCompletionItem.testing(
+            label: "alpha",
+            sortText: "001",
+            filterText: nil,
+            textEdit: LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 99, character: 0),
+                    end: LSPPosition(line: 99, character: 1)
+                ),
+                newText: "alpha"
+            )
+        )
+
+        feature.testingPresent(
+            items: [invalid],
+            prefix: CompletionPrefix(text: "a", range: NSRange(location: 0, length: 1)),
+            bufferText: "a"
+        )
+        feature.testingPresent(
+            items: [invalid],
+            prefix: CompletionPrefix(text: "a", range: NSRange(location: 0, length: 1)),
+            bufferText: "a"
+        )
+
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        feature.cancelAndDismiss()
+    }
+
     @Test("refresh preserves the selected matching candidate")
     func refreshPreservesSelectedMatchingCandidate() {
         let textView = makeTextView("a")
