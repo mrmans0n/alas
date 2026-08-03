@@ -39,6 +39,32 @@ struct ACPTranscriptScrollerViewTests {
         #expect(abs(s.distanceFromBottom - (5000 - s.viewportHeight - 300)) < 1)
     }
 
+    /// `applyPrepend` used to assign the clip view's bounds origin without
+    /// the clamp `setScrollY` applies, and `.removed` compensation routes a
+    /// NEGATIVE delta through this same primitive. Empirically AppKit's own
+    /// `NSClipView` already constrains the origin, so this held before the
+    /// clamp was added too — these expectations pin the guarantee at OUR
+    /// layer rather than leaving it to an AppKit implementation detail that
+    /// a `constrainBoundsRect` override (or a clip-view swap) could remove.
+    @Test("applyPrepend clamps its resulting offset exactly like setScrollY does")
+    func prependClamps() {
+        let s = scroller()
+        s.setScrollY(300)
+        s.applyPrepend(delta: -1000, newDocumentHeight: 4000)
+        #expect(s.scrollY == 0)
+
+        // The upper bound is clamped against the NEW document height, the
+        // same expression `setScrollY` uses.
+        s.applyPrepend(delta: 100_000, newDocumentHeight: 4000)
+        #expect(abs(s.scrollY - (4000 - s.viewportHeight)) < 1)
+
+        // A normal prepend (grow above, shift down by the same delta) is
+        // untouched by the clamp.
+        s.setScrollY(500)
+        s.applyPrepend(delta: 700, newDocumentHeight: 4700)
+        #expect(abs(s.scrollY - 1200) < 0.5)
+    }
+
     @Test("scrollToBottom lands within tolerance of the bottom")
     func toBottom() {
         let s = scroller()

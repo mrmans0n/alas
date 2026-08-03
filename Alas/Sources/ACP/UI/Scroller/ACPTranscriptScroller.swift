@@ -87,6 +87,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// non-synthetic (message) row id — i.e. an id not prefixed `__`.
         /// See `restoreInitialPositionIfNeeded`'s doc comment.
         private var hasNonSyntheticRow = false
+        /// Set when a head step has been requested and cleared by the next
+        /// `update(host:)`. See `handleScroll`'s head-step block.
+        private var pendingHeadStep = false
+        /// Memoizes the window-sliced row list + its id → message-index
+        /// lookup, keyed on (messages generation, window bounds) — the same
+        /// cache the legacy list uses. `rememberCurrentAnchor` runs on every
+        /// non-programmatic scroll tick while browsing history, i.e. at
+        /// display refresh rate over a window that can hold thousands of
+        /// rows; rebuilding that array per tick just to map one anchor id to
+        /// its message index is O(window) work in exactly the state where
+        /// scrolling must stay smooth.
+        private let visibleRowsCache = ACPVisibleRowsCache()
 
         static let composerSpacerHeight: CGFloat = 220
 
@@ -120,6 +132,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 contentWidth: scroller.contentView.bounds.width,
                 followsTail: host.session.followsTranscriptTail
             )
+            // This update carries whatever `visibleHead` currently is, so a
+            // head step requested since the last one has now been applied
+            // (or, at width 0, will be re-requested by the next scroll tick).
+            pendingHeadStep = false
             restoreInitialPositionIfNeeded()
         }
 
@@ -480,11 +496,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let threshold = ACPTranscriptScroller.headStepThreshold(viewportHeight: viewportHeight)
             if ACPTranscriptScroller.shouldStepHeadBack(
                 visibleHead: host.transcript.visibleHead,
-                scrollY: newY, isUserDriven: isUserDriven, threshold: threshold
+                scrollY: newY, isUserDriven: isUserDriven, threshold: threshold,
+                hasPendingHeadStep: pendingHeadStep
             ) {
+                // `stepHeadBack` mutates `visibleHead` synchronously, but the
+                // rows it exposes — and the compensating prepend that keeps
+                // them from shoving the reading position down — only arrive
+                // on the NEXT SwiftUI update. Until then every scroll tick
+                // still sees a positive `visibleHead` and a `scrollY` under
+                // threshold, so without this latch one flick near the head
+                // queues several steps that land together as a single
+                // 60-150 row insertion measured in one synchronous pass.
+                pendingHeadStep = true
                 host.transcript.stepHeadBack(boundTail: false)
-                // SwiftUI observes visibleHead; updateNSView re-runs and the
-                // reconciler prepends with compensation in that same pass.
             }
             if ACPTranscriptScroller.shouldStepTailForward(
                 visibleTail: host.transcript.visibleTailBound,
@@ -520,14 +544,24 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let anchorId = tiling.topVisibleRowId(viewportMinY: scroller.scrollY),
                   !anchorId.hasPrefix("__")   // synthetic rows are not anchors
             else { return }
-            let rows = ACPMessageList.visibleRows(
-                messages: host.transcript.messages,
-                visibleHead: host.transcript.visibleHead,
-                visibleTail: host.transcript.visibleTailBound,
-                stableId: { host.transcript.stableId(for: $0) }
+            // O(1) per tick: the row list is rebuilt only when the window
+            // itself changes, and the id → index map is derived once per
+            // rebuild. Same rows, same builder, same lookup the legacy list
+            // uses.
+            let lookup = visibleRowsCache.lookup(
+                generation: host.transcript.messagesGeneration,
+                head: host.transcript.visibleHead,
+                tail: host.transcript.visibleTailBound,
+                build: {
+                    ACPMessageList.visibleRows(
+                        messages: host.transcript.messages,
+                        visibleHead: host.transcript.visibleHead,
+                        visibleTail: host.transcript.visibleTailBound,
+                        stableId: { host.transcript.stableId(for: $0) }
+                    )
+                }
             )
-            let index = rows.first(where: { $0.stableId == anchorId })?.index
-            host.onRememberScrollAnchor(anchorId, index, false)
+            host.onRememberScrollAnchor(anchorId, lookup.transcriptIndex(for: anchorId), false)
         }
 
         /// Runs once per Coordinator lifetime, but only actually latches
@@ -588,10 +622,14 @@ extension ACPTranscriptScroller {
         max(1500, viewportHeight * 2)
     }
 
+    /// `hasPendingHeadStep` is the caller's latch for "a step was already
+    /// requested and its compensating update hasn't landed yet" — see the
+    /// call site in `Coordinator.handleScroll`.
     nonisolated static func shouldStepHeadBack(
-        visibleHead: Int, scrollY: CGFloat, isUserDriven: Bool, threshold: CGFloat
+        visibleHead: Int, scrollY: CGFloat, isUserDriven: Bool, threshold: CGFloat,
+        hasPendingHeadStep: Bool = false
     ) -> Bool {
-        visibleHead > 0 && isUserDriven && scrollY < threshold
+        visibleHead > 0 && isUserDriven && scrollY < threshold && !hasPendingHeadStep
     }
 
     nonisolated static func shouldStepTailForward(

@@ -202,7 +202,8 @@ final class ACPTranscriptScrollerReconciler {
         case .inserted(let index, let count):
             let insertedSpecs = Array(specs[index..<(index + count)])
             let compensation = tiling.insert(
-                rows: measure(insertedSpecs), at: index, viewportMinY: scroller.scrollY
+                rows: measure(insertedSpecs), at: index,
+                viewportMinY: effectiveViewportMinY(forInsertionAt: index)
             )
             if compensation != 0 {
                 scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
@@ -320,6 +321,41 @@ final class ACPTranscriptScrollerReconciler {
         // ticking) are current; everything else must be measured here — this
         // is the whole reason the width-settle reset exists.
         return isMounted && pool.mountedView(id: spec.id)?.lastMeasuredWidth == contentWidth
+    }
+
+    /// Synthetic rows (the head pagination spinner, the composer spacer, the
+    /// streaming caret, …) all use this id prefix — see
+    /// `ACPTranscriptScroller.Coordinator.rowSpecs`.
+    private static let syntheticIdPrefix = "__"
+
+    /// The viewport top to hand `ACPTranscriptTilingController.insert` when
+    /// it decides whether an insertion needs offset compensation.
+    ///
+    /// Normally that is simply the real viewport top: content grafted in at
+    /// or above it must push the offset down by the same amount to keep the
+    /// reading position still. But the head pagination spinner occupies row
+    /// 0, so a head step inserts at index 1 — i.e. at `topPadding +
+    /// spinnerHeight + rowSpacing`, roughly 56pt down — and bouncing to the
+    /// very top of history (the natural gesture that TRIGGERS a head step)
+    /// leaves `scrollY` below that. The plain `insertionY <= viewportMinY`
+    /// rule then declines to compensate and the whole inserted block, tens
+    /// of rows and thousands of points, shoves the reading position down.
+    ///
+    /// When every row above the insertion point is synthetic there is no
+    /// real content up there to hold still, so the insertion is logically
+    /// above the viewport however small `scrollY` happens to be: report the
+    /// insertion point itself as the viewport top so the rule fires. (An
+    /// insertion at index 0 satisfies this vacuously, which is also exactly
+    /// right — inserting above every row is what `prepend` always
+    /// compensated for unconditionally.) Insertions with real message rows
+    /// above them — every append, every mid-list insert — are unaffected.
+    private func effectiveViewportMinY(forInsertionAt index: Int) -> CGFloat {
+        let viewportMinY = scroller.scrollY
+        guard index <= orderedIds.count,
+              orderedIds[0..<index].allSatisfy({ $0.hasPrefix(Self.syntheticIdPrefix) })
+        else { return viewportMinY }
+        let insertionY = index < tiling.rowCount ? tiling.rowLayout(at: index).minY : tiling.documentHeight
+        return max(viewportMinY, insertionY)
     }
 
     /// Fires once a width-only change has stopped ticking for
@@ -457,7 +493,16 @@ final class ACPTranscriptScrollerReconciler {
             // effect of `addSubview` — that isn't contractual behavior.
             if view.lastMeasuredWidth != contentWidth {
                 let height = view.measuredHeight(forWidth: contentWidth)
-                applyHeightToTiling(id: layout.id, height: height)
+                // A changed height supersedes the `band`/`keep` computed at
+                // the top of this pass: rows that shrank pull later rows up
+                // into the band this pass will never look at, leaving a gap
+                // at the bottom of the viewport until the next scroll tick.
+                // Coalesce into another pass instead (`layoutMountedRows`
+                // drains `pendingRelayout` before returning) — the same
+                // thing `applyMeasuredHeight` does for out-of-pass callers.
+                if applyHeightToTiling(id: layout.id, height: height) {
+                    pendingRelayout = true
+                }
             }
             assert(
                 view.lastMeasuredWidth == contentWidth,

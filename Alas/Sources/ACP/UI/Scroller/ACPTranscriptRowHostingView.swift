@@ -33,6 +33,26 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
     /// view actually ends up placed at.
     private(set) var lastMeasuredWidth: CGFloat?
 
+    /// `translatesAutoresizingMaskIntoConstraints = false` alongside
+    /// `sizingOptions = [.intrinsicContentSize]` is NSHostingView's
+    /// "the container decides my frame, I only report a size" configuration,
+    /// which is exactly the contract the tiling reconciler wants: it reads
+    /// `measuredHeight(forWidth:)` and then assigns `frame` directly.
+    ///
+    /// Opting a view out of the autoresizing bridge normally hands its frame
+    /// to the constraint engine, which — with no constraints describing this
+    /// view — would be the classic "every row collapses to the origin"
+    /// failure. It does not happen here, and not by luck: the entire
+    /// ancestor chain (`ACPTranscriptDocumentView`, the clip view, the
+    /// scroll view) keeps `translatesAutoresizingMaskIntoConstraints ==
+    /// true` and holds no constraints, so nothing ever runs a constraint
+    /// solve over this subtree. Measured inside a real key window after
+    /// `layoutIfNeeded()`: these views report `hasAmbiguousLayout == false`
+    /// and zero constraints, and their assigned frames survive repeated
+    /// layout passes untouched. `ACPTranscriptScrollerReconcilerWindowLayoutTests`
+    /// pins that down, so a future change that does introduce constraints
+    /// into this subtree fails a test instead of silently blanking the
+    /// transcript.
     required init(rootView: AnyView) {
         baseRootView = rootView
         super.init(rootView: rootView)

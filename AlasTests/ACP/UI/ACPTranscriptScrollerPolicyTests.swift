@@ -175,6 +175,22 @@ struct ACPTranscriptScrollerPolicyTests {
             visibleHead: 30, scrollY: 800, isUserDriven: false, threshold: 1500))
     }
 
+    @Test("a head step already awaiting its compensating update does not queue another")
+    func headStepIsLatchedUntilTheNextUpdate() {
+        // `stepHeadBack` mutates `visibleHead` synchronously, but the
+        // compensating prepend only lands on the NEXT SwiftUI update. Every
+        // intervening scroll tick still sees a positive `visibleHead` and a
+        // `scrollY` under threshold, so without a latch a single flick near
+        // the head queues several steps that arrive as one 60-150 row
+        // insertion measured in a single synchronous pass.
+        #expect(!ACPTranscriptScroller.shouldStepHeadBack(
+            visibleHead: 30, scrollY: 800, isUserDriven: true, threshold: 1500,
+            hasPendingHeadStep: true))
+        #expect(ACPTranscriptScroller.shouldStepHeadBack(
+            visibleHead: 30, scrollY: 800, isUserDriven: true, threshold: 1500,
+            hasPendingHeadStep: false))
+    }
+
     @Test("tail step fires near the bottom when newer rows are hidden")
     func tailStep() {
         #expect(ACPTranscriptScroller.shouldStepTailForward(

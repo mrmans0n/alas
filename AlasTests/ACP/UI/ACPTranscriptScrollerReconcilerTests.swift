@@ -490,6 +490,94 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.contentHeight == tiling.documentHeight)
     }
 
+    // MARK: mount-time fallback re-measure (final-review IMPORTANT 3)
+
+    @Test("a fallback re-measure of an already-mounted row schedules another layout pass")
+    func fallbackRemeasureSchedulesAnotherPass() {
+        // The fallback re-measure in `performLayoutPass` has two triggers.
+        // A row mounting for the first time is rescued by accident — AppKit
+        // fires `invalidateIntrinsicContentSize` synchronously from
+        // `addSubview`, which routes into `remeasureRow` and coalesces a
+        // relayout. An ALREADY-mounted row re-pinned to a new width has no
+        // such rescue: no `addSubview`, and re-assigning `rootView` inside
+        // `measuredHeight` does not invalidate. That is the live
+        // resize-drag path, and it is what this test drives.
+        let (reconciler, scroller, tiling) = makeStack()
+        let specs = (0..<60).map { wrappingSpec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 300, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        let narrowHeight = tiling.row(withId: "r0")!.height
+        let mountedWhenNarrow = reconciler.mountedRowIdsForTesting.count
+
+        // Widening makes every row shorter, so many more of them fit inside
+        // the mount band — but the band was computed from the pre-measure
+        // geometry, so without coalescing another pass the extra rows are
+        // never mounted and the bottom of the viewport is left empty.
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+
+        #expect(tiling.row(withId: "r0")!.height < narrowHeight)
+        let band = tiling.mountBand(
+            viewportMinY: scroller.scrollY, viewportHeight: scroller.viewportHeight,
+            overscan: ACPTranscriptScrollerReconciler.overscan
+        )
+        #expect(band.count > mountedWhenNarrow)
+        #expect(reconciler.mountedRowIdsForTesting == Set(band.map { tiling.rowId(at: $0) }))
+    }
+
+    // MARK: head step at the very top (final-review IMPORTANT 5)
+
+    @Test("a head step taken at the very top of the document still keeps the reading position still")
+    func headStepAtTopOfDocumentCompensates() {
+        let (reconciler, scroller, tiling) = makeStack()
+        func specsWithFixedEnds(messageIds: [String]) -> [ACPTranscriptRowSpec] {
+            [spec("__top_pagination__", height: 14)]
+                + messageIds.map { spec($0) }
+                + [spec("__composer_spacer__", height: 220)]
+        }
+        reconciler.apply(
+            specs: specsWithFixedEnds(messageIds: (30..<90).map { "m\($0)" }),
+            contentWidth: 600, followsTail: false
+        )
+        // The top-of-history bounce: the head pagination spinner occupies
+        // index 0, so the first message starts at topPadding(24) +
+        // spinner(14) + spacing(18) == 56. Parked above that, the plain
+        // `insertionY <= viewportMinY` rule declines to compensate and the
+        // whole inserted block shoves the reading position down.
+        #expect(tiling.row(withId: "m30")!.minY == 56)
+        scroller.setScrollY(10)
+        let before = screenOffset(of: "m30", tiling: tiling, scroller: scroller)
+
+        reconciler.apply(
+            specs: specsWithFixedEnds(messageIds: (10..<90).map { "m\($0)" }),
+            contentWidth: 600, followsTail: false
+        )
+
+        #expect(abs(screenOffset(of: "m30", tiling: tiling, scroller: scroller) - before) < 1)
+    }
+
+    @Test("an append below the reading position never compensates")
+    func appendBelowReadingPositionDoesNotCompensate() {
+        // Guard against the head-step fix over-reaching: an insertion with
+        // real message rows above it must still leave the offset alone.
+        let (reconciler, scroller, _) = makeStack()
+        func specsWithFixedEnds(messageIds: [String]) -> [ACPTranscriptRowSpec] {
+            [spec("__top_pagination__", height: 14)]
+                + messageIds.map { spec($0) }
+                + [spec("__composer_spacer__", height: 220)]
+        }
+        reconciler.apply(
+            specs: specsWithFixedEnds(messageIds: (0..<60).map { "m\($0)" }),
+            contentWidth: 600, followsTail: false
+        )
+        scroller.setScrollY(10)
+        reconciler.apply(
+            specs: specsWithFixedEnds(messageIds: (0..<62).map { "m\($0)" }),
+            contentWidth: 600, followsTail: false
+        )
+        #expect(abs(scroller.scrollY - 10) < 0.5)
+    }
+
     @Test("a pure width change with identical ids coalesces: bounded interim work, full correction after settling")
     func widthChangeCoalescesThenSettles() async throws {
         let (reconciler, scroller, tiling) = makeStack()

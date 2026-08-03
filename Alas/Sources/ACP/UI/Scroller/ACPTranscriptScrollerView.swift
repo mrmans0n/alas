@@ -65,22 +65,35 @@ final class ACPTranscriptScrollerView: NSScrollView {
 
     /// Grow the document by prepended content and shift the scroll offset by
     /// the same delta, in one pass — the viewport does not move visually.
+    ///
+    /// The resulting offset is clamped exactly as `setScrollY` clamps, and
+    /// against the NEW document height (already installed at that point).
+    /// `delta` is not always positive: removal compensation routes a
+    /// negative delta through this same primitive, and a removal straddling
+    /// the viewport top would otherwise leave the clip view at a negative
+    /// bounds origin — parked above the document's own content until the
+    /// next user scroll happens to correct it.
     func applyPrepend(delta: CGFloat, newDocumentHeight: CGFloat) {
         performProgrammatic {
             flippedDocumentView.frame.size.height = newDocumentHeight
-            var origin = contentView.bounds.origin
-            origin.y += delta
-            contentView.setBoundsOrigin(origin)
+            let origin = contentView.bounds.origin
+            contentView.setBoundsOrigin(NSPoint(x: origin.x, y: clampedScrollY(origin.y + delta)))
             reflectScrolledClipView(contentView)
         }
     }
 
     func setScrollY(_ y: CGFloat) {
-        let clamped = max(0, min(y, max(0, contentHeight - viewportHeight)))
+        let clamped = clampedScrollY(y)
         performProgrammatic {
             contentView.setBoundsOrigin(NSPoint(x: contentView.bounds.origin.x, y: clamped))
             reflectScrolledClipView(contentView)
         }
+    }
+
+    /// The scrollable range's clamp, shared by every programmatic offset
+    /// adjustment so they cannot disagree about what a legal offset is.
+    private func clampedScrollY(_ y: CGFloat) -> CGFloat {
+        max(0, min(y, max(0, contentHeight - viewportHeight)))
     }
 
     func scrollToBottom() {
