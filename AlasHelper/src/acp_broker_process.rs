@@ -33,20 +33,24 @@ use std::os::unix::net::{UnixListener, UnixStream};
 /// caller has declared a length and is held to it instead.
 const IPC_REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Ceiling on the whole first line, alongside the silence bound above.
+/// Rate a caller must sustain on the first line once it starts sending.
 ///
-/// Without it a caller can send one byte every 59s forever, and since every
-/// connection owns a thread, repeating that accumulates threads until the
-/// broker cannot spawn any more. Generous next to what the line actually
-/// costs — a legacy caller pauses ~7.4s to encode a maximal prompt and then
-/// writes it in ~0.2s — so this only ever catches a caller that is not really
-/// trying to finish.
-const IPC_REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_secs(180);
+/// A fixed duration cannot work here. Under the legacy encoding this line is
+/// the whole message, and a legacy request is not bounded in size — an
+/// `acp/respond` carries whatever `fs/read_text_file` was asked for, and
+/// `ACPSessionRunner.serveRead` returns a whole file when the adapter sends no
+/// line/limit. Any ceiling on elapsed time is therefore a ceiling on size.
+/// Requiring a rate instead tells a large transfer apart from a trickle
+/// without needing to know how large: this is ~1% of what the socket
+/// measures, so a genuine sender clears it easily, while one byte every 59s
+/// does not — and since every connection owns a thread, that pattern would
+/// otherwise accumulate threads until the broker cannot spawn any more.
+const MIN_IPC_REQUEST_RATE: u64 = 16 * 1024;
 
-/// Bounds on the first line of a request: silence, and total elapsed.
+/// Bounds on the first line of a request: silence, and sustained rate.
 #[cfg(unix)]
 const IPC_REQUEST_HEAD_BUDGET: ReadBudget =
-    ReadBudget::bounded_const(IPC_REQUEST_IDLE_TIMEOUT, IPC_REQUEST_TOTAL_TIMEOUT);
+    ReadBudget::at_least(IPC_REQUEST_IDLE_TIMEOUT, MIN_IPC_REQUEST_RATE);
 
 /// Slowest a caller may deliver a framed body before we stop waiting.
 ///
@@ -78,7 +82,7 @@ fn trusted_body_budget(_len: usize) -> ReadBudget {
 #[cfg(unix)]
 fn framed_body_budget(len: usize) -> ReadBudget {
     let by_rate = Duration::from_secs_f64(len as f64 / MIN_IPC_BODY_THROUGHPUT as f64);
-    ReadBudget::bounded(
+    ReadBudget::within(
         BROKER_IPC_IDLE_TIMEOUT,
         by_rate.max(BROKER_IPC_IDLE_TIMEOUT),
     )
@@ -490,49 +494,76 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
     Ok(json!({ "brokers": brokers }))
 }
 
+/// What is asked of a peer beyond not going silent.
+#[derive(Clone, Copy)]
+enum Pace {
+    /// Finish within this, however fast you go. Right where the sender
+    /// declared a length, since the deadline can then be derived from it.
+    Within(Duration),
+    /// Once you start sending, keep up at least this many bytes per second.
+    /// Right where the length is *not* known — a legacy request is the whole
+    /// message on one line, so there is no size to turn into a deadline, and
+    /// any fixed duration would be a size ceiling in disguise. A rate tells a
+    /// large transfer apart from a trickle without needing to know how large.
+    AtLeast(u64),
+    /// Nothing beyond the idle bound. For a broker this helper spawned: its
+    /// reply has no size we could bound, and one thread per outstanding
+    /// request is limited by how many sessions exist, not by the peer.
+    Unbounded,
+}
+
 /// How a read is bounded in time.
 ///
-/// Two bounds, because either alone has a hole. An idle bound asks only that
-/// the peer keep sending, which a trickle satisfies forever. A total bound
-/// asks the read to finish by a fixed time, which fails a legitimately large
-/// or slow-to-start transfer. Applying both lets a peer be slow *or* large
-/// without letting it be indefinite.
+/// An idle bound alone has a hole — a trickle satisfies it forever — so every
+/// read from an arbitrary peer pairs one with a `Pace`. Which pace depends on
+/// whether the sender told us how much to expect.
 #[derive(Clone, Copy)]
 struct ReadBudget {
     /// Longest run with no bytes arriving.
     idle: Duration,
-    /// Longest the whole read may take, however much progress is made. `None`
-    /// where the peer is a broker this helper spawned and its reply has no
-    /// size we could turn into a deadline — there, one thread per outstanding
-    /// request is bounded by the number of sessions, not by the peer.
-    total: Option<Duration>,
+    pace: Pace,
 }
 
 impl ReadBudget {
     /// For a peer we trust to finish what it starts.
     fn idle(idle: Duration) -> Self {
-        Self { idle, total: None }
-    }
-
-    /// For an arbitrary peer, which must be both making progress and finishing.
-    fn bounded(idle: Duration, total: Duration) -> Self {
-        Self::bounded_const(idle, total)
-    }
-
-    const fn bounded_const(idle: Duration, total: Duration) -> Self {
         Self {
             idle,
-            total: Some(total),
+            pace: Pace::Unbounded,
+        }
+    }
+
+    /// For a sender that declared how much it is about to send.
+    fn within(idle: Duration, total: Duration) -> Self {
+        Self {
+            idle,
+            pace: Pace::Within(total),
+        }
+    }
+
+    /// For a sender whose length we cannot know.
+    const fn at_least(idle: Duration, bytes_per_second: u64) -> Self {
+        Self {
+            idle,
+            pace: Pace::AtLeast(bytes_per_second),
         }
     }
 }
 
-/// Tracks whether a read still has time left under both of its bounds.
+/// Grace before a rate is judged, so a sender is not failed on the strength of
+/// its first few hundred bytes.
+#[cfg(unix)]
+const IPC_RATE_GRACE: Duration = Duration::from_secs(10);
+
+/// Tracks whether a read still has time left under its bounds.
 #[cfg(unix)]
 struct BudgetClock {
     idle: Duration,
+    pace: Pace,
     idle_deadline: std::time::Instant,
     total_deadline: Option<std::time::Instant>,
+    first_byte_at: Option<std::time::Instant>,
+    bytes: u64,
 }
 
 #[cfg(unix)]
@@ -541,20 +572,45 @@ impl BudgetClock {
         let now = std::time::Instant::now();
         Self {
             idle: budget.idle,
+            pace: budget.pace,
             idle_deadline: now + budget.idle,
-            total_deadline: budget.total.map(|total| now + total),
+            total_deadline: match budget.pace {
+                Pace::Within(total) => Some(now + total),
+                _ => None,
+            },
+            first_byte_at: None,
+            bytes: 0,
         }
     }
 
     fn expired(&self) -> bool {
         let now = std::time::Instant::now();
-        now >= self.idle_deadline || self.total_deadline.is_some_and(|deadline| now >= deadline)
+        if now >= self.idle_deadline {
+            return true;
+        }
+        if self.total_deadline.is_some_and(|deadline| now >= deadline) {
+            return true;
+        }
+        let Pace::AtLeast(rate) = self.pace else {
+            return false;
+        };
+        let Some(first_byte_at) = self.first_byte_at else {
+            // Nothing sent yet, so there is no rate to judge — the idle bound
+            // above is what covers a sender still preparing its request.
+            return false;
+        };
+        let elapsed = now.duration_since(first_byte_at);
+        let judged = elapsed.saturating_sub(IPC_RATE_GRACE);
+        self.bytes < rate.saturating_mul(judged.as_secs())
     }
 
-    /// Bytes arrived, so the idle bound starts over. The total bound does not:
-    /// that is the one a trickle cannot renew.
-    fn progressed(&mut self) {
-        self.idle_deadline = std::time::Instant::now() + self.idle;
+    /// `count` bytes arrived, so the idle bound starts over. Neither the total
+    /// nor the required rate does: those are what a trickle cannot renew.
+    fn progressed(&mut self, count: usize) {
+        let now = std::time::Instant::now();
+        self.idle_deadline = now + self.idle;
+        self.first_byte_at.get_or_insert(now);
+        self.bytes = self.bytes.saturating_add(count as u64);
     }
 
     fn timed_out() -> io::Error {
@@ -629,7 +685,7 @@ fn read_line_within(reader: &mut BufReader<&UnixStream>, budget: ReadBudget) -> 
             Err(error) => return Err(error),
         };
         reader.consume(consumed);
-        clock.progressed();
+        clock.progressed(consumed);
         if finished {
             return String::from_utf8(line)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
@@ -670,7 +726,7 @@ fn read_exact_within(
             Err(error) => return Err(error),
         };
         reader.consume(consumed);
-        clock.progressed();
+        clock.progressed(consumed);
     }
     String::from_utf8(body).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
@@ -1930,7 +1986,7 @@ mod tests {
         let outcome = read_exact_within(
             &mut reader,
             4 * 1024 * 1024,
-            ReadBudget::bounded(Duration::from_secs(2), Duration::from_secs(2)),
+            ReadBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
         );
         *done.lock().expect("drip flag") = true;
 
@@ -1982,6 +2038,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A rate bound has to separate the two cases a fixed duration cannot: a
+    /// legacy request whose sender pauses to encode and then delivers a lot,
+    /// and a trickle that never intends to finish. Both look identical to an
+    /// idle bound, and any total that admits the first admits the second.
+    #[cfg(unix)]
+    #[test]
+    fn a_rate_bound_admits_a_slow_start_but_not_a_trickle() {
+        fn read_with(chunk: usize, gap: Duration, chunks: usize) -> io::Result<String> {
+            let (mut writer, reader) = UnixStream::pair().expect("socket pair");
+            std::thread::spawn(move || {
+                // A long pause first, standing in for an older helper encoding
+                // its request before it writes anything at all.
+                std::thread::sleep(Duration::from_secs(1));
+                for _ in 0..chunks {
+                    if writer.write_all(&vec![b'q'; chunk]).is_err() {
+                        return;
+                    }
+                    let _ = writer.flush();
+                    std::thread::sleep(gap);
+                }
+                let _ = writer.write_all(b"\n");
+                let _ = writer.flush();
+            });
+            let mut reader = ipc_reader(&reader).expect("reader");
+            // 64 KiB/s required, judged after a 10s grace.
+            read_line_within(
+                &mut reader,
+                ReadBudget::at_least(Duration::from_secs(30), 64 * 1024),
+            )
+        }
+
+        // Pauses a second, then sends ~2 MiB in bursts: comfortably above the
+        // rate, and a fixed total tuned to reject the trickle below would have
+        // had to reject this too.
+        let delivered = read_with(256 * 1024, Duration::from_millis(50), 8)
+            .expect("a sender that pauses and then delivers must be allowed to finish");
+        assert_eq!(delivered.len(), 8 * 256 * 1024 + 1);
+
+        // A byte every 100ms never approaches the rate, and never ends.
+        let started = std::time::Instant::now();
+        let error = read_with(1, Duration::from_millis(100), usize::MAX)
+            .expect_err("a trickle must not be allowed to run indefinitely");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the rate bound took too long to notice: {:?}",
+            started.elapsed()
+        );
+    }
+
     /// The two body budgets encode different trust, and mixing them up is easy
     /// to do silently: holding a broker's reply to a throughput floor would
     /// fail a legitimately slow one, while letting an inbound request go
@@ -1990,12 +2096,11 @@ mod tests {
     fn only_arbitrary_peers_are_held_to_a_declared_length() {
         let len = 64 * 1024 * 1024;
         assert!(
-            framed_body_budget(len).total.is_some(),
+            matches!(framed_body_budget(len).pace, Pace::Within(_)),
             "a request body must be bounded by the length its sender declared"
         );
-        assert_eq!(
-            trusted_body_budget(len).total,
-            None,
+        assert!(
+            matches!(trusted_body_budget(len).pace, Pace::Unbounded),
             "a reply from our own broker has no size we can turn into a deadline"
         );
         assert_eq!(trusted_body_budget(len).idle, BROKER_IPC_IDLE_TIMEOUT);
@@ -2014,11 +2119,8 @@ mod tests {
         let one_tib = 1024usize.pow(4);
         let mut budget = framed_body_budget(one_tib);
         assert!(
-            budget
-                .total
-                .is_some_and(|total| total > Duration::from_secs(3600)),
-            "a 1 TiB body should be allowed hours in total: {:?}",
-            budget.total
+            matches!(budget.pace, Pace::Within(total) if total > Duration::from_secs(3600)),
+            "a 1 TiB body should be allowed hours in total"
         );
         // Shorten only the silence bound, so this test does not sit for the
         // full idle budget while proving the total is not what stops it.
@@ -2036,19 +2138,16 @@ mod tests {
     #[test]
     fn the_body_deadline_scales_with_the_length_a_caller_declares() {
         // Small bodies are not held to a stricter rule than large ones.
-        assert_eq!(
-            framed_body_budget(1024).total,
-            Some(BROKER_IPC_IDLE_TIMEOUT)
-        );
+        assert!(matches!(
+            framed_body_budget(1024).pace,
+            Pace::Within(total) if total == BROKER_IPC_IDLE_TIMEOUT
+        ));
         // A maximal image prompt (~267 MiB) gets time proportional to its size.
         let maximal = 267 * 1024 * 1024;
         let budget = framed_body_budget(maximal);
         assert!(
-            budget
-                .total
-                .is_some_and(|total| total >= BROKER_IPC_IDLE_TIMEOUT),
-            "a large body was given less time than a small one: {:?}",
-            budget.total
+            matches!(budget.pace, Pace::Within(total) if total >= BROKER_IPC_IDLE_TIMEOUT),
+            "a large body was given less time than a small one"
         );
         // The silence bound does not scale with the declared length, or a
         // caller could buy quiet by claiming a huge body.
@@ -2079,7 +2178,7 @@ mod tests {
         let mut reader = ipc_reader(&reader).expect("reader");
         let outcome = read_line_within(
             &mut reader,
-            ReadBudget::bounded(Duration::from_secs(2), Duration::from_secs(2)),
+            ReadBudget::within(Duration::from_secs(2), Duration::from_secs(2)),
         );
         let elapsed = started.elapsed();
         *done.lock().expect("drip flag") = true;
