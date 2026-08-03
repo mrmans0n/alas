@@ -57,7 +57,18 @@ const IPC_REQUEST_HEAD_BUDGET: ReadBudget =
 /// so a legitimate transfer clears it by two orders of magnitude.
 const MIN_IPC_BODY_THROUGHPUT: u64 = 10 * 1024 * 1024;
 
-/// Budget for a framed body of `len` bytes.
+/// Budget for a framed body from a broker this helper spawned.
+///
+/// Progress only. A reply's size is not something we can turn into a deadline,
+/// and the exposure differs in kind from an inbound request: one thread per
+/// outstanding request, bounded by how many sessions exist rather than by
+/// anything the peer chooses.
+#[cfg(unix)]
+fn trusted_body_budget(_len: usize) -> ReadBudget {
+    ReadBudget::idle(BROKER_IPC_IDLE_TIMEOUT)
+}
+
+/// Budget for a framed body of `len` bytes arriving from an arbitrary peer.
 ///
 /// The total scales with the length the caller declared — never below the
 /// ordinary idle budget, so a small body is not held to a stricter rule than a
@@ -717,13 +728,16 @@ fn broker_supports_framing(dir: &Path) -> bool {
 /// reaching a new one.
 ///
 /// `head` bounds the first line, which is a short framing header or — under
-/// the legacy encoding — the entire message. The framed body is then bounded
-/// by the length the caller declared, so an advertised size cannot be used to
-/// hold resources indefinitely.
+/// the legacy encoding — the entire message. `body_for_len` then bounds the
+/// framed body, and the two callers differ on it: a request comes from an
+/// arbitrary peer and is held to the length it declared, while a reply comes
+/// from a broker this helper spawned and is only asked to keep making
+/// progress.
 #[cfg(unix)]
 fn read_ipc_message(
     reader: &mut BufReader<&UnixStream>,
     head: ReadBudget,
+    body_for_len: fn(usize) -> ReadBudget,
 ) -> io::Result<(String, Framing)> {
     let head = read_line_within(reader, head)?;
     let Some(len) = head.strip_prefix(IPC_FRAME_HEADER) else {
@@ -735,7 +749,7 @@ fn read_ipc_message(
             format!("invalid IPC frame length: {}", len.trim()),
         )
     })?;
-    let body = read_exact_within(reader, len, framed_body_budget(len))?;
+    let body = read_exact_within(reader, len, body_for_len(len))?;
     Ok((body, Framing::Framed))
 }
 
@@ -834,20 +848,15 @@ fn handle_connection(runtime: Runtime, stream: UnixStream) -> io::Result<()> {
     // can legitimately be large and cutting one short would corrupt it rather
     // than rescue anything.
     stream.set_write_timeout(Some(BROKER_IPC_WRITE_TIMEOUT))?;
-    let (line, framing) = {
+    let (line, _framing) = {
         let mut reader = ipc_reader(&stream)?;
-        read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET)?
+        read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
     };
-    handle_ipc_line(runtime, stream, line, framing)
+    handle_ipc_line(runtime, stream, line)
 }
 
 #[cfg(unix)]
-fn handle_ipc_line(
-    runtime: Runtime,
-    stream: UnixStream,
-    line: String,
-    framing: Framing,
-) -> io::Result<()> {
+fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Result<()> {
     let response = match serde_json::from_str::<BrokerIpcRequest>(&line) {
         Ok(request) => match handle_ipc_request(&runtime, request) {
             Ok(result) => BrokerIpcResponse {
@@ -867,33 +876,26 @@ fn handle_ipc_line(
             error: Some(format!("invalid IPC request: {error}")),
         },
     };
-    // Serialize straight into the socket rather than building the whole
-    // response first. Two reasons, both about large replies: a maximal attach
-    // reply is ~533 MiB, so `to_string` would materialize that entire String
-    // in this process before a byte moved — on exactly the memory-pressured
-    // machine where it is most likely to happen. And the caller bounds this
-    // read by inactivity, which only works if the expensive phase produces
-    // bytes: encoding to a String first means ~15s of complete silence, long
-    // enough to trip the caller's budget before the reply even starts.
-    // Streaming turns that silence into steady progress.
+    // Replies are never framed, whichever encoding the request used.
+    //
+    // Framing earns its keep on the request path: the peer is arbitrary, so
+    // the read needs a total budget, and a total budget without a declared
+    // length is a size ceiling in disguise. None of that applies here. The
+    // caller is a helper that spawned this process and reads replies against
+    // an idle budget with no ceiling, so a newline is all the delimiter it
+    // needs — and it lets the reply be *streamed*.
+    //
+    // That matters because a reply is not small. `pendingRequests` carries the
+    // payload of every unanswered client request, which for an
+    // `fs/write_text_file` is the file content, and the replayed
+    // `PendingRequest` event carries it a second time. Framing would mean
+    // serializing all of that into memory before writing a byte: an extra copy
+    // of an unbounded payload, and a silent stretch long enough to trip the
+    // caller's idle budget before the reply even begins.
     let mut writer = BufWriter::new(stream);
-    match framing {
-        // Framing needs the length before the bytes, so this one has to be
-        // built first. That is the trade for having no size ceiling; it costs
-        // a transient copy of the reply, and replies no longer carry prompt
-        // params (see `OperationSnapshot`), so what is copied is small.
-        Framing::Framed => {
-            let body = serde_json::to_string(&response).map_err(io::Error::other)?;
-            write_ipc_message(&mut writer, &body, framing)
-        }
-        // Nothing downstream needs the length, so stream it: the caller sees
-        // steady progress instead of one silent pause while it is built.
-        Framing::Legacy => {
-            serde_json::to_writer(&mut writer, &response).map_err(io::Error::other)?;
-            writer.write_all(b"\n")?;
-            writer.flush()
-        }
-    }
+    serde_json::to_writer(&mut writer, &response).map_err(io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn handle_ipc_request(
@@ -1437,8 +1439,12 @@ fn send_ipc_within(
         let (line, _) = {
             let mut reader = ipc_reader(&stream)
                 .map_err(|error| broker_error(-32072, format!("broker read setup: {error}")))?;
-            read_ipc_message(&mut reader, ReadBudget::idle(idle_timeout))
-                .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?
+            read_ipc_message(
+                &mut reader,
+                ReadBudget::idle(idle_timeout),
+                trusted_body_budget,
+            )
+            .map_err(|error| broker_error(-32072, format!("broker read failed: {error}")))?
         };
         let response: BrokerIpcResponse = serde_json::from_str(&line)
             .map_err(|error| broker_error(-32072, format!("broker response failed: {error}")))?;
@@ -1974,6 +1980,25 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The two body budgets encode different trust, and mixing them up is easy
+    /// to do silently: holding a broker's reply to a throughput floor would
+    /// fail a legitimately slow one, while letting an inbound request go
+    /// unbounded is the trickle path this all exists to close.
+    #[test]
+    fn only_arbitrary_peers_are_held_to_a_declared_length() {
+        let len = 64 * 1024 * 1024;
+        assert!(
+            framed_body_budget(len).total.is_some(),
+            "a request body must be bounded by the length its sender declared"
+        );
+        assert_eq!(
+            trusted_body_budget(len).total,
+            None,
+            "a reply from our own broker has no size we can turn into a deadline"
+        );
+        assert_eq!(trusted_body_budget(len).idle, BROKER_IPC_IDLE_TIMEOUT);
     }
 
     /// A declared length buys time proportional to itself, and nothing else.

@@ -1159,8 +1159,15 @@ fn a_framed_request_carries_a_payload_far_past_any_line_budget() {
 
     let (reply, reply_framed) = broker_roundtrip(&socket, &request, true);
 
-    assert!(reply_framed, "a framed request should be answered framed");
-    let value: Value = serde_json::from_str(&reply).expect("framed reply JSON");
+    // Replies are never framed, whichever encoding the request used: framing
+    // buys nothing on a path the caller reads against an idle budget, and it
+    // would force the whole reply — including every unanswered request's
+    // payload — to be built in memory before a byte could be written.
+    assert!(
+        !reply_framed,
+        "replies should stream, not be framed, so a large one needs no buffering"
+    );
+    let value: Value = serde_json::from_str(reply.trim()).expect("reply JSON");
     assert_eq!(value["ok"], true);
     assert_eq!(value["result"]["metadata"]["brokerId"], "broker-framed");
 }
