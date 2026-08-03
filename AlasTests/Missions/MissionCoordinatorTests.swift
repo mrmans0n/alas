@@ -745,6 +745,61 @@ struct MissionCoordinatorTests {
         #expect(recovered.mission.state == .running)
     }
 
+    @Test("agent replacement targets a secondary leg")
+    func agentReplacementTargetsSecondaryLeg() async throws {
+        let fake = MissionCoordinatorFake()
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let controller = MissionController(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        _ = await fake.waitUntilSettled(missionID)
+
+        fake.agentResult = .failure(.init(message: "Install Codex"))
+        let sdkLegID = try await coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        let failed = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let failedLeg = try #require(failed.legs.first(where: { $0.id == sdkLegID }))
+        #expect(failedLeg.state == .needsAttention)
+        #expect(failedLeg.agentId == "codex")
+        let failedSessionID = failedLeg.acpSessionId
+
+        fake.agentResult = nil
+        await controller.retry(missionID, legID: sdkLegID, agentId: "claude")
+        let recovered = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let recoveredLeg = try #require(recovered.legs.first(where: { $0.id == sdkLegID }))
+
+        #expect(Array(fake.startedAgentIDs.suffix(2)) == ["codex", "claude"])
+        #expect(recoveredLeg.state == .running)
+        #expect(recoveredLeg.agentId == "claude")
+        #expect(recoveredLeg.acpSessionId != failedSessionID)
+    }
+
+    @Test("available worktree recovery targets a secondary leg")
+    func availableWorktreeRecoveryTargetsSecondaryLeg() async throws {
+        let fake = MissionCoordinatorFake()
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let controller = MissionController(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        _ = await fake.waitUntilSettled(missionID)
+        let sdkLegID = try await coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        _ = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let startCount = fake.startACPCalls
+
+        await controller.recordMissingWorktree(missionID, legID: sdkLegID)
+        let marked = try #require(try await fake.persistence.aggregate(id: missionID))
+        let markedLeg = try #require(marked.legs.first(where: { $0.id == sdkLegID }))
+        #expect(markedLeg.state == .needsAttention)
+        #expect(markedLeg.pendingInitialPrompt != nil)
+
+        await controller.recordAvailableWorktree(missionID, legID: sdkLegID)
+        let recovered = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let recoveredLeg = try #require(recovered.legs.first(where: { $0.id == sdkLegID }))
+        let primaryLeg = try #require(recovered.primaryLeg)
+
+        #expect(fake.startACPCalls == startCount + 1)
+        #expect(recoveredLeg.state == .running)
+        #expect(recoveredLeg.pendingInitialPrompt == nil)
+        #expect(primaryLeg.state == .running)
+    }
+
     @Test("restart reuses the recorded worktree at the Mission destination")
     func interruptedWorktreeReusesRecordedDestinationArtifact() async throws {
         var existing = MissionFixtures.creatingMission()

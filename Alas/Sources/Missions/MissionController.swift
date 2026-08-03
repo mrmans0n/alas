@@ -184,9 +184,9 @@ final class MissionController {
                 var recreateWorktree = false
                 if let agentId,
                    var aggregate = try await persistence.aggregate(id: id),
-                   aggregate.mission.state == .needsAttention,
-                   aggregate.mission.setupCheckpoint == .startingAgent,
-                   var leg = aggregate.legs.first(where: { $0.id == legID }) {
+                   var leg = aggregate.legs.first(where: { $0.id == legID }),
+                   leg.state == .needsAttention,
+                   leg.setupCheckpoint == .startingAgent {
                     if leg.agentId != agentId {
                         leg.agentId = agentId
                         // ACP sessions retain their original agent identity. A replacement
@@ -376,6 +376,10 @@ final class MissionController {
 
     func recordAvailableWorktree(_ id: MissionID) async {
         await restoreReappearedWorktreeIfNeeded(id)
+    }
+
+    func recordAvailableWorktree(_ id: MissionID, legID: MissionLegID) async {
+        await restoreReappearedWorktreeIfNeeded(id, legID: legID)
     }
 
     func recordMissingWorktree(projectId: String, projectRemoved: Bool) async {
@@ -593,7 +597,7 @@ final class MissionController {
                     await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
                     continue
                 }
-                await restoreReappearedWorktreeIfNeeded(aggregate.mission.id)
+                await restoreReappearedWorktreeIfNeeded(aggregate.mission.id, legID: leg.id)
                 if worktreeArchived(leg.projectId, leg.destinationPath) {
                     await applyArchive(to: aggregate.mission.id, legID: leg.id)
                     continue
@@ -746,52 +750,61 @@ final class MissionController {
         )
     }
 
-    private func restoreReappearedWorktreeIfNeeded(_ id: MissionID) async {
+    private func restoreReappearedWorktreeIfNeeded(_ id: MissionID, legID: MissionLegID? = nil) async {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
-                guard let aggregate = try await persistence.aggregate(id: id),
-                      aggregate.mission.state == .needsAttention,
-                      aggregate.mission.setupCheckpoint == .running,
-                      aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
-                      let leg = aggregate.primaryLeg,
-                      let worktree = environment.worktreeAtDestination(
-                          leg.projectId,
-                          leg.destinationPath
-                      ),
-                      worktree.branch == leg.branch,
-                      let worktreeLineageID = leg.worktreeLineageID,
-                      worktree.lineageID == worktreeLineageID
-                else { return }
-                if leg.pendingInitialPrompt != nil {
-                    try await persistence.updateSetup(
-                        id: id,
-                        state: .creating,
-                        checkpoint: .startingAgent,
-                        attentionReason: nil,
-                        event: makeEvent(
-                            aggregate: aggregate,
-                            kind: .retryStarted,
-                            message: "Mission worktree became available again. Resuming agent setup."
-                        )
-                    )
-                    try await publish(id: id)
-                    await coordinator.advance(id: id)
+                guard let aggregate = try await persistence.aggregate(id: id) else { return }
+                let legs = if let legID {
+                    aggregate.legs.filter { $0.id == legID }
                 } else {
-                    try await persistence.updateSetup(
-                        id: id,
-                        state: .running,
-                        checkpoint: .running,
-                        attentionReason: nil,
-                        event: makeEvent(
-                            aggregate: aggregate,
-                            kind: .retryStarted,
-                            message: "Mission worktree became available again."
-                        )
-                    )
-                    try await publish(id: id)
-                    loadError = nil
+                    aggregate.legs
                 }
+                for leg in legs {
+                    guard leg.state == .needsAttention,
+                          leg.setupCheckpoint == .running,
+                          leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
+                          let worktree = environment.worktreeAtDestination(
+                              leg.projectId,
+                              leg.destinationPath
+                          ),
+                          worktree.branch == leg.branch,
+                          let worktreeLineageID = leg.worktreeLineageID,
+                          worktree.lineageID == worktreeLineageID
+                    else { continue }
+                    var restored = leg
+                    restored.attentionReason = nil
+                    restored.updatedAt = environment.now()
+                    if restored.pendingInitialPrompt != nil {
+                        restored.state = .creating
+                        restored.setupCheckpoint = .startingAgent
+                        try await persistence.updateLeg(
+                            restored,
+                            event: makeEvent(
+                                aggregate: aggregate,
+                                legID: leg.id,
+                                kind: .retryStarted,
+                                message: "Mission worktree became available again. Resuming agent setup."
+                            )
+                        )
+                        try await publish(id: id)
+                        await coordinator.advance(id: id, legID: leg.id)
+                    } else {
+                        restored.state = .running
+                        restored.setupCheckpoint = .running
+                        try await persistence.updateLeg(
+                            restored,
+                            event: makeEvent(
+                                aggregate: aggregate,
+                                legID: leg.id,
+                                kind: .retryStarted,
+                                message: "Mission worktree became available again."
+                            )
+                        )
+                        try await publish(id: id)
+                    }
+                }
+                loadError = nil
             } catch {
                 loadError = error.localizedDescription
             }
