@@ -73,6 +73,31 @@ struct CommitHeaderViewTests {
         #expect(controller.view != nil)
     }
 
+    @Test func expandedHeaderOnlyCapsLongBody() {
+        let shortView = CommitHeaderView(details: makeDetails(body: "Short body"), expanded: .constant(true))
+            .environment(\.theme, currentTheme())
+            .frame(width: 600)
+        let body = Array(repeating: "A long commit message line", count: 100)
+            .joined(separator: "\n")
+        let longView = CommitHeaderView(details: makeDetails(body: body), expanded: .constant(true))
+            .environment(\.theme, currentTheme())
+            .frame(width: 600)
+
+        #expect(NSHostingView(rootView: shortView).fittingSize.height < CommitHeaderView.maxExpandedHeight)
+        #expect(NSHostingView(rootView: longView).fittingSize.height <= CommitHeaderView.maxExpandedHeight + 80)
+    }
+
+    @Test func expandedHeaderKeepsShortBodyIntrinsicInTallParent() {
+        let view = CommitHeaderView(details: makeDetails(body: "Short body"), expanded: .constant(true))
+            .environment(\.theme, currentTheme())
+            .frame(width: 600)
+        let size = NSHostingController(rootView: view).sizeThatFits(
+            in: NSSize(width: 600, height: CommitHeaderView.maxExpandedHeight + 200)
+        )
+
+        #expect(size.height <= CommitHeaderView.maxExpandedHeight + 40)
+    }
+
     @Test func headerRowHasButtonAccessibilityTrait() {
         let details = makeDetails(body: "Body")
         var expanded = false
