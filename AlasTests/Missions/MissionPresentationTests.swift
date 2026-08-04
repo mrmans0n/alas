@@ -105,6 +105,20 @@ struct MissionPresentationTests {
         #expect(summary.diffCopy == "6 files · +15 −6")
     }
 
+    @Test func completionConfirmationListsEveryUnfinishedLeg() {
+        let aggregate = Self.threeLegAggregate()
+
+        let message = MissionCompletionConfirmation.message(
+            for: aggregate,
+            projectNames: ["app": "Alas App", "sdk": "Alas SDK", "server": "Alas Server"]
+        )
+
+        #expect(message.contains("Unfinished legs:"))
+        #expect(message.contains("• Alas App — mission/42-app — Working"))
+        #expect(message.contains("• Alas SDK — mission/42-sdk — Needs attention"))
+        #expect(!message.contains("Alas Server"))
+    }
+
     @Test func missionPaneLookupKeepsPersistedQualifiedBase() {
         let aggregate = Self.runningAggregate()
         let leg = Self.leg(

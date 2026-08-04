@@ -120,6 +120,29 @@ struct GlobalTabsManagerTests {
         #expect(harness.tabs.activeTabId(forWorktree: "app") == terminal.id)
     }
 
+    @Test("migration selects the next surviving tab after multiple Mission tabs")
+    func migrationRepairsActiveMissionIndexAfterRemovingMissionTabs() throws {
+        let firstMission = MissionTabState(
+            missionID: MissionID(rawValue: "mission-1"),
+            title: "First Mission"
+        )
+        let activeMission = MissionTabState(
+            missionID: MissionID(rawValue: "mission-2"),
+            title: "Second Mission"
+        )
+        let first = Tab.terminal(.init(id: "terminal-1", title: "First", sessionId: "session-1"))
+        let second = Tab.terminal(.init(id: "terminal-2", title: "Second", sessionId: "session-2"))
+        let harness = try GlobalTabsHarness(
+            worktreeTabs: ["app": [.mission(firstMission), .mission(activeMission), first, second]],
+            activeTabIDs: ["app": activeMission.id]
+        )
+
+        try harness.global.loadAndMigrate(worktreeTabs: harness.tabs)
+
+        #expect(harness.tabs.tabs(forWorktree: "app") == [first, second])
+        #expect(harness.tabs.activeTabId(forWorktree: "app") == first.id)
+    }
+
     @Test("migration preserves an active ordinary worktree tab")
     func migrationPreservesActiveOrdinaryWorktreeTab() throws {
         let first = Tab.terminal(.init(id: "terminal-1", title: "First", sessionId: "session-1"))

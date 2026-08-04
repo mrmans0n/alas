@@ -321,6 +321,38 @@ enum MissionTabContext {
     }
 }
 
+enum MissionCompletionConfirmation {
+    private static let consequence = "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the source issue."
+
+    static func message(
+        for aggregate: MissionAggregate,
+        projectNames: [String: String]
+    ) -> String {
+        let unfinished = aggregate.legs
+            .filter { $0.state != .ready }
+            .sorted { lhs, rhs in
+                if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+                return lhs.id.rawValue < rhs.id.rawValue
+            }
+        guard !unfinished.isEmpty else { return consequence }
+
+        let lines = unfinished.map { leg in
+            let projectName = projectNames[leg.projectId] ?? leg.projectId
+            return "• \(projectName) — \(leg.branch) — \(stateLabel(leg.state))"
+        }
+        return "\(consequence)\n\nUnfinished legs:\n\(lines.joined(separator: "\n"))"
+    }
+
+    private static func stateLabel(_ state: MissionLegState) -> String {
+        switch state {
+        case .creating: "Creating"
+        case .running: "Working"
+        case .needsAttention: "Needs attention"
+        case .ready: "Ready"
+        }
+    }
+}
+
 struct MissionLegCardActions {
     let openAgent: () -> Void
     let openChanges: () -> Void
@@ -379,7 +411,7 @@ struct MissionTabView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This only marks the Mission completed in Alas. It does not stop the agent, archive the worktree, merge code, or change the source issue.")
+            Text(completionConfirmationMessage)
         }
         .popover(isPresented: $agentPickerPresented) {
             MissionAgentReplacementPopover(
@@ -508,6 +540,16 @@ struct MissionTabView: View {
 
     private var enabledACPAgents: [AgentDefinition] {
         NewWorktreeDialog.acpCapableAgents(from: state.agentRegistry.enabled())
+    }
+
+    private var completionConfirmationMessage: String {
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID) else {
+            return "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the source issue."
+        }
+        return MissionCompletionConfirmation.message(
+            for: aggregate,
+            projectNames: Dictionary(uniqueKeysWithValues: state.projects.map { ($0.id, $0.name) })
+        )
     }
 
     private var worktreeIsArchived: Bool {

@@ -916,14 +916,21 @@ final class TabsManager {
                 else { return nil }
                 return index
             }
+            let activeMissionFallbackID = activeMissionIndex.flatMap { index in
+                file.tabs.dropFirst(index + 1).first(where: { tab in
+                    if case .mission = tab { return false }
+                    return true
+                })?.id ?? file.tabs[..<index].last(where: { tab in
+                    if case .mission = tab { return false }
+                    return true
+                })?.id
+            }
             file.tabs.removeAll { tab in
                 if case .mission = tab { return true }
                 return false
             }
-            if let activeMissionIndex {
-                file.activeTabId = file.tabs.indices.contains(activeMissionIndex)
-                    ? file.tabs[activeMissionIndex].id
-                    : file.tabs.last?.id
+            if activeMissionIndex != nil {
+                file.activeTabId = activeMissionFallbackID
             }
             try store.write(file, to: tabsFile(forWorktreeId: worktreeID))
             byWorktree[worktreeID] = file
