@@ -14,7 +14,7 @@ struct MissionLegPromptBuilderTests {
             instructions: "Update the Swift client API."
         )
 
-        #expect(prompt.contains("## Issue context"))
+        #expect(prompt.contains("## Work item context"))
         #expect(prompt.contains("**URL:** https://github.com/acme/alas/issues/42"))
         #expect(prompt.contains("Alas App · nacho/1842-app · Running"))
         #expect(!prompt.contains("project-uuid ·"))

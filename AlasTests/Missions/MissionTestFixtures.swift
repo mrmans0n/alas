@@ -2,6 +2,31 @@ import Foundation
 @testable import Alas
 
 enum MissionFixtures {
+    static func manualSource(
+        url: String,
+        title: String,
+        body: String
+    ) -> MissionSourceSnapshot {
+        .init(
+            identity: .init(providerID: .manual, stableID: url),
+            canonicalURL: URL(string: url)!,
+            providerLabel: URL(string: url)!.host!,
+            displayReference: nil,
+            repositoryLocator: nil,
+            title: title,
+            body: body,
+            state: .unknown,
+            labels: [],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: Date(timeIntervalSince1970: 100),
+            refreshError: nil,
+            contentOrigin: .manual,
+            isEditable: true,
+            isRefreshable: false
+        )
+    }
+
     static func issue(
         number: Int = 42,
         title: String = "Fix parser crash",
