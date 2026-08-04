@@ -25,7 +25,7 @@ actor RevisionSnapshotCache {
     /// hopping onto the actor.
     nonisolated let sessionDirectory: URL
 
-    private var snapshots: [String: URL] = [:]
+    private var snapshots: [String: Snapshot] = [:]
     /// `(worktree, ref, path)` keys already known to have no blob, so a repeated failed
     /// lookup — e.g. dragging a deleted file's row — does not re-spawn `git
     /// show` for every gesture callback while the drag is held.
@@ -96,8 +96,8 @@ actor RevisionSnapshotCache {
         sweepStaleSessionsIfNeeded()
 
         let key = "\(worktreePath.path)\u{0}\(ref)\u{0}\(path)"
-        if let cached = snapshots[key], FileManager.default.fileExists(atPath: cached.path) {
-            return cached
+        if let cached = snapshots[key], cached.isIntact {
+            return cached.url
         }
         if missingSnapshots.contains(key) {
             return nil
@@ -117,6 +117,8 @@ actor RevisionSnapshotCache {
                 withIntermediateDirectories: true
             )
             try result.stdout.write(to: destination, options: .atomic)
+            snapshots[key] = Snapshot(recording: destination)
+            return destination
         } catch {
             // A thrown error here is either a cancellation (the task was
             // cancelled while `git show` was in flight, so `Process.runData`
@@ -127,9 +129,40 @@ actor RevisionSnapshotCache {
             // miss must not be memoized: a retry could still succeed.
             return nil
         }
+    }
 
-        snapshots[key] = destination
-        return destination
+    /// A materialized snapshot, plus the fingerprint the file had when it was
+    /// written.
+    ///
+    /// The receiving app of a drag can write to this file — an editor that
+    /// saves the dropped document writes straight back to this path. Handing
+    /// the same URL out again would then serve bytes that no longer match the
+    /// revision the caller asked for, so a changed fingerprint re-reads from
+    /// git instead.
+    private struct Snapshot {
+        let url: URL
+        let size: Int?
+        let modified: Date?
+
+        /// Read through `FileManager` rather than `URL.resourceValues`: the
+        /// latter caches values on the bridged `NSURL`, so re-querying the same
+        /// `URL` returns the fingerprint taken at write time and an external
+        /// edit is never detected.
+        private static func fingerprint(of url: URL) -> (size: Int?, modified: Date?) {
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            return (attributes?[.size] as? Int, attributes?[.modificationDate] as? Date)
+        }
+
+        init(recording url: URL) {
+            self.url = url
+            (size, modified) = Self.fingerprint(of: url)
+        }
+
+        var isIntact: Bool {
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            let current = Self.fingerprint(of: url)
+            return current.size == size && current.modified == modified
+        }
     }
 
     func removeSessionDirectory() {

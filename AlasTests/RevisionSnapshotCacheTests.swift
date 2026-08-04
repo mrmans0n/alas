@@ -70,6 +70,28 @@ struct RevisionSnapshotCacheTests {
         await cache.removeSessionDirectory()
     }
 
+    /// The app receiving a drag can save over the snapshot file. Reusing it
+    /// would then hand out bytes that no longer match the revision.
+    @Test func snapshotIsRewrittenAfterTheReceivingAppEditsIt() async throws {
+        let repo = try await makeRepo(name: "clobbered")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("hello.txt")
+        try "committed".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "hello.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add hello"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let first = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "hello.txt"))
+        #expect(try String(contentsOf: first, encoding: .utf8) == "committed")
+
+        // Stand in for an editor saving the dropped file back to disk.
+        try "edited by the receiving app".write(to: first, atomically: true, encoding: .utf8)
+
+        let second = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "hello.txt"))
+        #expect(try String(contentsOf: second, encoding: .utf8) == "committed")
+        await cache.removeSessionDirectory()
+    }
+
     @Test func snapshotReturnsNilWhenTheBlobDoesNotExistAtThatRevision() async throws {
         let repo = try await makeRepo(name: "missing")
         defer { try? FileManager.default.removeItem(at: repo) }
