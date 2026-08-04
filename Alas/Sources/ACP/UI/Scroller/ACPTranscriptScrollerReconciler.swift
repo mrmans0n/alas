@@ -469,11 +469,33 @@ final class ACPTranscriptScrollerReconciler {
     /// streaming row growing in place). No-ops while `apply()` (or the
     /// deferred width-settle reset) is itself mutating row state — see
     /// `isApplyingSpecs`'s doc comment.
+    ///
+    /// A mounted TAIL row growing this way (an image finishing its load, an
+    /// expandable row changing its own internal state) is never "entirely
+    /// above the viewport", so `applyHeightToTiling`'s compensation is
+    /// correctly zero — but that leaves the viewport at its old offset while
+    /// the document grew underneath it, stranding it above the new bottom
+    /// even though tail-follow is still active. Re-pin explicitly using
+    /// `lastFollowsTail`, which is guaranteed current here: this method only
+    /// runs once `isApplyingSpecs` is false, i.e. after some `apply()` call
+    /// has fully finished and already assigned `lastFollowsTail` from its
+    /// own `followsTail` argument. If the user scrolled away, the resulting
+    /// `apply()` (driven by `session.followsTranscriptTail` flipping to
+    /// false) already latched `lastFollowsTail = false` before this can run,
+    /// so this never fights a user who has genuinely left the tail.
+    /// `scroller.scrollToBottom()` is idempotent when already there — its
+    /// `setScrollY` clamp reports no `onScroll` change (`reportScroll` skips
+    /// when the offset is unchanged) — so calling it unconditionally on
+    /// every tail-following remeasure, not just ones that grow the tail,
+    /// costs nothing extra in the common case.
     func remeasureRow(id: String) {
         guard !isApplyingSpecs else { return }
         guard let spec = specsById[id] else { return }
         let (view, _) = pool.view(for: spec)
         applyMeasuredHeight(id: id, view: view)
+        if lastFollowsTail {
+            scroller.scrollToBottom()
+        }
     }
 
     /// Measures `view` at the current content width and pushes the result

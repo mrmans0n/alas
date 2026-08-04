@@ -346,6 +346,48 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.scrollY > scrollYBefore)
     }
 
+    @Test("remeasureRow re-pins to the bottom when a mounted tail row grows while following the tail")
+    func remeasureRowRepinsToBottomWhileFollowingTail() {
+        // Headline scenario: streaming while pinned to the bottom stays
+        // pinned. The last row ("r9") growing in place (an image finishing
+        // its load, an expandable row toggling) is never "entirely above
+        // the viewport" while tail-following, so `updateHeight`'s
+        // compensation is correctly zero — the document grows underneath a
+        // scroll offset that doesn't move on its own. Without the fix, the
+        // viewport is left short of the new bottom by the growth amount.
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<10).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: true)
+        #expect(scroller.distanceFromBottom < 1)
+
+        let (lastView, _) = pool.view(for: specs[9])
+        lastView.updateRootView(AnyView(Color.clear.frame(height: 250)))
+        reconciler.remeasureRow(id: "r9")
+
+        #expect(tiling.row(withId: "r9")!.height == 250)
+        #expect(scroller.distanceFromBottom < 1)
+        #expect(scroller.contentHeight == tiling.documentHeight)
+    }
+
+    @Test("remeasureRow does not move the viewport when a tail row grows while browsing (not following the tail)")
+    func remeasureRowDoesNotRepinWhileBrowsing() {
+        // Guard against the fix over-reaching: a user who has scrolled away
+        // from the tail must not be fought back to the bottom just because
+        // some row's content happened to change size.
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<10).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        let scrollYBefore = scroller.scrollY
+
+        let (lastView, _) = pool.view(for: specs[9])
+        lastView.updateRootView(AnyView(Color.clear.frame(height: 250)))
+        reconciler.remeasureRow(id: "r9")
+
+        #expect(tiling.row(withId: "r9")!.height == 250)
+        #expect(abs(scroller.scrollY - scrollYBefore) < 0.5)
+    }
+
     @Test("remeasureRow is a no-op for an id that isn't currently tracked")
     func remeasureRowUnknownIdNoOps() {
         let (reconciler, _, tiling, _) = makeStackWithPool()
