@@ -525,6 +525,35 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.contentHeight == tiling.documentHeight)
     }
 
+    @Test("remeasureRow does not re-pin once tail-follow is paused, even before the next apply")
+    func remeasureRowDoesNotRepinAfterTailFollowPaused() {
+        // The window this closes: a user scrolls up, the scroll handler
+        // pauses tail-follow and then mounts the rows that scroll exposed.
+        // The `apply()` carrying `followsTail: false` is still one SwiftUI
+        // update away, so a row whose intrinsic size invalidates as it
+        // mounts lands in `remeasureRow` with the reconciler still
+        // believing tail-follow is on — and drags the user back to the
+        // bottom with following already off. `setFollowsTail(false)` is
+        // what the handler calls before mounting anything.
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<10).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: true)
+        #expect(scroller.distanceFromBottom < 1)
+
+        // The user scrolls up. No `apply()` yet — only the synchronous
+        // pause the scroll handler performs.
+        reconciler.setFollowsTail(false)
+        scroller.setScrollY(0)
+        let scrollYBefore = scroller.scrollY
+
+        let (lastView, _) = pool.view(for: specs[9])
+        lastView.updateRootView(AnyView(Color.clear.frame(height: 250)))
+        reconciler.remeasureRow(id: "r9")
+
+        #expect(tiling.row(withId: "r9")!.height == 250)
+        #expect(abs(scroller.scrollY - scrollYBefore) < 0.5)
+    }
+
     @Test("remeasureRow does not move the viewport when a tail row grows while browsing (not following the tail)")
     func remeasureRowDoesNotRepinWhileBrowsing() {
         // Guard against the fix over-reaching: a user who has scrolled away

@@ -612,10 +612,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // at those sites too, so this same guard still lets their
             // `onScroll` callback run `layoutMountedRows()` normally — no
             // explicit call is needed at either site.
-            if !reconciler.isApplyingSpecs {
-                reconciler.layoutMountedRows()
+            guard !isProgrammatic else {
+                if !reconciler.isApplyingSpecs {
+                    reconciler.layoutMountedRows()
+                }
+                return
             }
-            guard !isProgrammatic else { return }
 
             let event = NSApp.currentEvent
             let eventIsFresh = ACPUserScrollEvent.isFresh(
@@ -661,6 +663,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 break
             }
 
+            // Deliberately after the classification above. Mounting a newly
+            // exposed row can synchronously invalidate its intrinsic size,
+            // which lands in `remeasureRow` and re-pins to the bottom while
+            // the reconciler still believes tail-follow is on. Pausing
+            // first means that belief is already correct by the time any
+            // row is mounted.
+            if !reconciler.isApplyingSpecs {
+                reconciler.layoutMountedRows()
+            }
+
             let threshold = ACPTranscriptScroller.headStepThreshold(viewportHeight: viewportHeight)
             if ACPTranscriptScroller.shouldStepHeadBack(
                 visibleHead: host.transcript.visibleHead,
@@ -696,6 +708,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private func pauseTailFollow() {
             guard let host, host.session.followsTranscriptTail else { return }
             host.session.followsTranscriptTail = false
+            // Mirror the pause into the reconciler now rather than waiting
+            // for the `apply()` one update later. Between those two points
+            // the scroll handler mounts newly exposed rows, and a row whose
+            // intrinsic size invalidates on mount would otherwise re-pin
+            // this user to the bottom — see `remeasureRow`'s doc comment.
+            reconciler?.setFollowsTail(false)
             host.transcript.freezeVisibleTail()
             rememberCurrentAnchor()
         }
@@ -703,6 +721,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private func resumeTailFollow() {
             guard let host, !host.session.followsTranscriptTail else { return }
             host.session.followsTranscriptTail = true
+            reconciler?.setFollowsTail(true)
             host.transcript.resetWindowToTail()
             host.onRememberScrollAnchor(nil, nil, true)
             scroller?.scrollToBottom()

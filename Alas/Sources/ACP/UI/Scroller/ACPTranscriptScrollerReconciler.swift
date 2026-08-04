@@ -484,18 +484,37 @@ final class ACPTranscriptScrollerReconciler {
     /// correctly zero — but that leaves the viewport at its old offset while
     /// the document grew underneath it, stranding it above the new bottom
     /// even though tail-follow is still active. Re-pin explicitly using
-    /// `lastFollowsTail`, which is guaranteed current here: this method only
-    /// runs once `isApplyingSpecs` is false, i.e. after some `apply()` call
-    /// has fully finished and already assigned `lastFollowsTail` from its
-    /// own `followsTail` argument. If the user scrolled away, the resulting
-    /// `apply()` (driven by `session.followsTranscriptTail` flipping to
-    /// false) already latched `lastFollowsTail = false` before this can run,
-    /// so this never fights a user who has genuinely left the tail.
+    /// `lastFollowsTail`.
+    ///
+    /// `apply()` alone does not keep `lastFollowsTail` current. A user
+    /// scrolling away flips `session.followsTranscriptTail` to false, but
+    /// the `apply()` that latches it only arrives on the NEXT SwiftUI
+    /// update — and the scroll handler mounts newly exposed rows in the
+    /// meantime. If mounting one of those synchronously invalidates its
+    /// intrinsic size, this method runs inside that window and would re-pin
+    /// a user who has just scrolled up, stranding them at the bottom with
+    /// tail-follow off. The scroll handler therefore calls
+    /// `setFollowsTail(false)` as it pauses, before mounting anything, so
+    /// the state read here is current and this never fights a user who has
+    /// genuinely left the tail.
     /// `scroller.scrollToBottom()` is idempotent when already there — its
     /// `setScrollY` clamp reports no `onScroll` change (`reportScroll` skips
     /// when the offset is unchanged) — so calling it unconditionally on
     /// every tail-following remeasure, not just ones that grow the tail,
     /// costs nothing extra in the common case.
+    /// Updates the tail-follow state that `remeasureRow` re-pins against,
+    /// without waiting for the `apply()` that will carry the same value.
+    ///
+    /// This exists so the scroll handler can close the window described on
+    /// `remeasureRow`: it pauses or resumes tail-follow synchronously, one
+    /// SwiftUI update ahead of the `apply()` that latches the session's new
+    /// `followsTranscriptTail`. Only the re-pin decision is affected —
+    /// nothing here mounts, measures, or moves the viewport, and the next
+    /// `apply()` overwrites it with the authoritative value either way.
+    func setFollowsTail(_ followsTail: Bool) {
+        lastFollowsTail = followsTail
+    }
+
     func remeasureRow(id: String) {
         guard !isApplyingSpecs else { return }
         guard let spec = specsById[id] else { return }
