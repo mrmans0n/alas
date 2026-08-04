@@ -22,6 +22,7 @@ struct ChangedRow: View {
     var openFileEnabled:  Bool = true
     var viewAtHEADEnabled: Bool = true
     var ignoreMenu:       AnyView? = nil
+    var dragPayload: (() -> DragOutPayload?)? = nil
     @Environment(\.theme) var theme
 
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
@@ -87,6 +88,7 @@ struct ChangedRow: View {
                 ignoreMenu
             }
         }
+        .dragOut { dragPayload?() }
     }
 }
 

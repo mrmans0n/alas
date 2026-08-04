@@ -21,6 +21,7 @@ struct WorkingTreeSectionView: View {
     var onParkChanges:     (() -> Void)? = nil
     var parkChangesDisabled: Bool = false
     var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
+    var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -252,7 +253,8 @@ struct WorkingTreeSectionView: View {
                     onDiscard: onDiscardFile.map { fn in { fn(file) } },
                     openFileEnabled: isOpenFileEnabled?(file) ?? true,
                     viewAtHEADEnabled: hasHeadVersion(group),
-                    ignoreMenu: ignore
+                    ignoreMenu: ignore,
+                    dragPayload: dragPayload.map { fn in { fn(file) } }
                 )
             )
         } else {

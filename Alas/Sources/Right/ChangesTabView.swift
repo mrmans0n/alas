@@ -207,7 +207,10 @@ struct ChangesTabView: View {
                     )
                 },
                 onCancelBulkResolve: { rps.cancelBulkResolve() },
-                onDismissBulkReport: { rps.dismissBulkResolveReport() }
+                onDismissBulkReport: { rps.dismissBulkResolveReport() },
+                dragPayload: { file in
+                    .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
+                }
             )
 
             if Self.shouldShowChangesPreparationCard(
@@ -285,6 +288,9 @@ struct ChangesTabView: View {
                         worktreePath: rps.worktree.path,
                         relativePath: file.path
                     )
+                },
+                dragPayload: { file in
+                    .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
                 }
             )
             StashesSectionView(
