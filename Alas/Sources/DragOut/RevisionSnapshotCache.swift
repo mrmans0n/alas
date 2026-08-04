@@ -136,6 +136,12 @@ actor RevisionSnapshotCache {
                 worktreePath: worktreePath
             ) ?? result.stdout
             try bytes.write(to: destination, options: .atomic)
+            await restoreExecutableBit(
+                on: destination,
+                worktreePath: worktreePath,
+                ref: ref,
+                path: path
+            )
             snapshots[key] = Snapshot(recording: destination)
             touchSessionDirectory()
             return destination
@@ -149,6 +155,34 @@ actor RevisionSnapshotCache {
             // miss must not be memoized: a retry could still succeed.
             return nil
         }
+    }
+
+    /// `git show` hands back blob bytes with no mode, so a snapshot of a
+    /// `100755` entry would otherwise drag out non-executable — unlike a
+    /// working-tree drag, which hands over the real file with its real mode.
+    /// Read the tree entry and restore the bit.
+    ///
+    /// Symlinks (`120000`) are deliberately left as the target text they
+    /// already are: recreating a link inside the snapshot directory would
+    /// point at a relative target that need not resolve wherever the drag is
+    /// dropped, which is not obviously better than the text.
+    ///
+    /// Best-effort throughout — a drag is never failed over a mode.
+    private func restoreExecutableBit(
+        on destination: URL,
+        worktreePath: URL,
+        ref: String,
+        path: String
+    ) async {
+        guard
+            let result = try? await Process.git(["ls-tree", ref, "--", path], cwd: worktreePath),
+            result.exitCode == 0,
+            result.stdout.hasPrefix("100755")
+        else { return }
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: destination.path
+        )
     }
 
     /// A materialized snapshot, plus the fingerprint the file had when it was

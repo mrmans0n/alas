@@ -350,6 +350,42 @@ struct RevisionSnapshotCacheTests {
         await cache.removeSessionDirectory()
     }
 
+    /// `git show` returns blob bytes with no mode, so without restoring it a
+    /// script dragged out of a commit lands non-executable.
+    @Test func snapshotOfAnExecutableBlobKeepsTheExecutableBit() async throws {
+        let repo = try await makeRepo(name: "exec-bit")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let script = repo.appendingPathComponent("run.sh")
+        try "#!/bin/sh\necho hi\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: script.path
+        )
+        _ = try await Process.git(["add", "run.sh"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add script"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let snapshot = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "run.sh"))
+
+        #expect(FileManager.default.isExecutableFile(atPath: snapshot.path))
+        await cache.removeSessionDirectory()
+    }
+
+    @Test func snapshotOfANonExecutableBlobStaysNonExecutable() async throws {
+        let repo = try await makeRepo(name: "no-exec-bit")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("notes.txt")
+        try "plain".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "notes.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add notes"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let snapshot = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "notes.txt"))
+
+        #expect(!FileManager.default.isExecutableFile(atPath: snapshot.path))
+        await cache.removeSessionDirectory()
+    }
+
     /// Reusing a memoized snapshot is activity too. A session whose drags are
     /// all cache hits writes nothing, so without touching the root on that path
     /// it still ages out and another instance's sweep deletes the very file
