@@ -4998,8 +4998,18 @@ final class AppState {
     }
 
     private func reopenTerminalTab(entry: ClosedTabEntry, worktreeID: String, tab: Tab) async {
-        guard case .terminal(let oldState) = tab,
-              let worktree = worktree(withId: worktreeID),
+        guard case .terminal(let oldState) = tab else {
+            return
+        }
+
+        if tabs.tabs(forWorktree: worktreeID).contains(where: { $0.id == tab.id }) {
+            selectWorktree(id: worktreeID)
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            closedTabHistory.remove(id: entry.id)
+            return
+        }
+
+        guard let worktree = worktree(withId: worktreeID),
               let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(
                 title: "Reopen Tab Failed",

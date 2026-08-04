@@ -217,6 +217,37 @@ struct ClosedTabAppStateTests {
         #expect(split.children.map { $0.firstLeaf().id } == ["fresh-1", "fresh-2"])
     }
 
+    @Test func reopeningManuallyRestoredTerminalDoesNotOpenDuplicateSessions() async {
+        var openAttempts = 0
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openAttempts += 1
+                return .init(id: "unexpected-session", foregroundPid: { nil })
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let tab = TerminalTabState(
+            id: "manually-restored-terminal",
+            title: "Terminal",
+            root: .leaf(PaneLeaf(id: "existing-session", sessionId: "existing-session")),
+            focusedLeafId: "existing-session"
+        )
+        let placement = ClosedTabPlacement(previousID: nil, nextID: nil, ordinal: 0)
+
+        _ = fixture.state.tabs.restore(tab: .terminal(tab), worktreeID: fixture.first.id, placement: placement)
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        _ = fixture.state.tabs.restore(tab: .terminal(tab), worktreeID: fixture.first.id, placement: placement)
+        fixture.state.activateWorktreeCenterTab(worktreeId: fixture.first.id, tabId: tab.id)
+
+        await fixture.state.reopenLastClosedTab()
+
+        #expect(openAttempts == 0)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).map(\.id) == [tab.id])
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.first.id) == tab.id)
+        #expect(!fixture.state.canReopenClosedTab)
+    }
+
     @Test func failedTerminalReopenRollsBackOpenedSessionsAndRetainsHistory() async {
         var openAttempts = 0
         var errorTitle: String?
