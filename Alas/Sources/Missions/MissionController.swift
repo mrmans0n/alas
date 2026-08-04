@@ -29,6 +29,7 @@ typealias MissionLinkedReviewRequest = @MainActor (
 typealias MissionProjectReviewRepositoryMatcher = @MainActor (
     _ projectID: String,
     _ baseRef: String,
+    _ baseRemoteName: String?,
     _ request: ReviewRequest
 ) async -> Bool
 
@@ -116,7 +117,7 @@ final class MissionController {
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("Issue refresh is unavailable.")
         },
-        reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _ in false },
+        reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _, _ in false },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in nil },
         branchOwner: @escaping MissionBranchOwner = { _, _, _, _ in nil },
@@ -1123,7 +1124,12 @@ final class MissionController {
            Self.review(request, matches: leg, issueIdentity: issueIdentity) {
             return true
         }
-        return await reviewRepositoryMatches(leg.projectId, leg.baseRef, request)
+        return await reviewRepositoryMatches(
+            leg.projectId,
+            leg.baseRef,
+            leg.baseRemoteName,
+            request
+        )
     }
 
     private static func baseBranch(for leg: MissionLeg) -> String {

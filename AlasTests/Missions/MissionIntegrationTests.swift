@@ -136,7 +136,7 @@ struct MissionIntegrationTests {
     func reviewRequiresTargetLegRepository() async throws {
         let fake = try MissionControllerFake(
             existing: MissionFixtures.twoLegMission(),
-            reviewRepositoryMatches: { projectID, _, _ in projectID == "app-project" }
+            reviewRepositoryMatches: { projectID, _, _, _ in projectID == "app-project" }
         )
         await fake.controller.load()
 
@@ -284,7 +284,7 @@ private final class MissionControllerFake {
 
     init(
         existing: MissionAggregate,
-        reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _ in true },
+        reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _, _ in true },
         issueRefresh: @escaping MissionIssueRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("No refresh configured.")
         }

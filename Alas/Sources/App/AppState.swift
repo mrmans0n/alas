@@ -745,7 +745,7 @@ final class AppState {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
             return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
-        }, reviewRepositoryMatches: { [weak self] projectID, baseRef, request in
+        }, reviewRepositoryMatches: { [weak self] projectID, baseRef, baseRemoteName, request in
             guard let self,
                   let project = self.projectsManager.projects.first(where: { $0.id == projectID }),
                   let remotes = try? await GitService().remotes(
@@ -761,6 +761,7 @@ final class AppState {
             return Self.missionReviewRemote(
                 identity: identity,
                 baseRef: baseRef,
+                persistedRemoteName: baseRemoteName,
                 remotes: remotes
             ) != nil
         }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
@@ -1332,6 +1333,7 @@ final class AppState {
     static func missionReviewRemote(
         identity: MissionIssueIdentity,
         baseRef: String,
+        persistedRemoteName: String? = nil,
         remotes: [GitRemote]
     ) -> CodeHostRemote? {
         let matchingRemotes = remotes
@@ -1340,6 +1342,15 @@ final class AppState {
                 candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
                     && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
             }
+        let configuredBaseRemote = persistedRemoteName?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        if let configuredBaseRemote,
+           !configuredBaseRemote.isEmpty,
+           baseRef.hasPrefix("\(configuredBaseRemote)/"),
+           remotes.contains(where: { $0.name == configuredBaseRemote }) {
+            return matchingRemotes.first(where: { $0.remoteName == configuredBaseRemote })
+        }
         let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
             forBaseBranch: baseRef,
             remotes: remotes
