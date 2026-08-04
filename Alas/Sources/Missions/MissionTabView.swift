@@ -306,6 +306,10 @@ enum MissionTabContext {
         aggregate.primaryLeg?.baseRef ?? fallback
     }
 
+    static func baseBranch(for leg: MissionLeg) -> String {
+        leg.baseRef
+    }
+
     static func rightPaneActivationKey(
         worktreeID: String,
         branch: String,
@@ -399,7 +403,14 @@ struct MissionTabView: View {
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
         let primaryWorktree = state.missionWorktree(worktree, for: aggregate)
-        let primaryRightPane = primaryWorktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
+        let primaryRightPane = primaryWorktree.flatMap { worktree in
+            aggregate.primaryLeg.flatMap { leg in
+                state.rightPaneStore.activeState(
+                    worktreeId: worktree.id,
+                    baseBranch: MissionTabContext.baseBranch(for: leg)
+                )
+            }
+        }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
@@ -416,7 +427,12 @@ struct MissionTabView: View {
         )
         let legPresentations = aggregate.legs.map { leg in
             let legWorktree = worktree(for: leg, aggregate: aggregate)
-            let legRightPane = legWorktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
+            let legRightPane = legWorktree.flatMap {
+                state.rightPaneStore.activeState(
+                    worktreeId: $0.id,
+                    baseBranch: MissionTabContext.baseBranch(for: leg)
+                )
+            }
             let legSession = linkedSession(aggregate: aggregate, leg: leg, worktree: legWorktree)
             return MissionLegPresentation(
                 aggregate: aggregate,

@@ -158,7 +158,10 @@ struct MissionAggregateSummary: Equatable {
             return lhs.id.rawValue < rhs.id.rawValue
         }
         statusCopy = Self.statusCopy(for: aggregate.legs)
-        diffCopy = Self.diffCopy(for: self.legs.compactMap(\.diffCounts))
+        let counts = self.legs.compactMap(\.diffCounts)
+        diffCopy = counts.count == self.legs.count
+            ? Self.diffCopy(for: counts)
+            : "Changes unavailable"
         attentionLegIDs = self.legs
             .filter { $0.state == .needsAttention }
             .map(\.id)

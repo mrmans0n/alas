@@ -74,7 +74,7 @@ struct MissionPresentationTests {
         let summary = MissionAggregateSummary(aggregate: aggregate, legs: presentations)
 
         #expect(summary.statusCopy == "1 working · 1 needs attention · 1 ready")
-        #expect(summary.diffCopy == "5 files · +15 −7")
+        #expect(summary.diffCopy == "Changes unavailable")
         #expect(summary.legs.map(\.id.rawValue) == [
             "mission-1-leg-app",
             "mission-1-leg-sdk",
@@ -87,6 +87,40 @@ struct MissionPresentationTests {
         #expect(summary.legs[1].errorCopy == "Agent authentication is required.")
         #expect(summary.legs[1].actions.retryAgent)
         #expect(summary.legs[2].stateLabel == "Ready")
+    }
+
+    @Test func aggregateSummaryTotalsChangesOnlyWhenEveryLegHasCounts() {
+        let aggregate = Self.threeLegAggregate()
+        let presentations = aggregate.legs.map { leg in
+            MissionLegPresentation(
+                aggregate: aggregate,
+                leg: leg,
+                worktree: Self.worktree(for: leg),
+                diffCounts: .init(fileCount: leg.ordinal + 1, additions: 5, deletions: 2)
+            )
+        }
+
+        let summary = MissionAggregateSummary(aggregate: aggregate, legs: presentations)
+
+        #expect(summary.diffCopy == "6 files · +15 −6")
+    }
+
+    @Test func missionPaneLookupKeepsPersistedQualifiedBase() {
+        let aggregate = Self.runningAggregate()
+        let leg = Self.leg(
+            id: aggregate.legs[0].id,
+            missionID: aggregate.mission.id,
+            ordinal: 0,
+            projectId: aggregate.legs[0].projectId,
+            baseRef: "team/origin/main",
+            baseRemoteName: "team/origin",
+            branch: aggregate.legs[0].branch,
+            worktreeId: aggregate.legs[0].worktreeId,
+            state: aggregate.legs[0].state,
+            setupCheckpoint: aggregate.legs[0].setupCheckpoint
+        )
+
+        #expect(MissionTabContext.baseBranch(for: leg) == "team/origin/main")
     }
 
     @Test func tabContextRejectsReplacementBranchAndUsesMissionBase() {
@@ -475,6 +509,8 @@ struct MissionPresentationTests {
         missionID: MissionID,
         ordinal: Int,
         projectId: String,
+        baseRef: String = "origin/main",
+        baseRemoteName: String? = "origin",
         branch: String,
         worktreeId: String?,
         state: MissionLegState,
@@ -488,8 +524,8 @@ struct MissionPresentationTests {
             missionID: missionID,
             ordinal: ordinal,
             projectId: projectId,
-            baseRef: "origin/main",
-            baseRemoteName: "origin",
+            baseRef: baseRef,
+            baseRemoteName: baseRemoteName,
             branch: branch,
             destinationPath: "/tmp/\(projectId)",
             worktreeId: worktreeId,
