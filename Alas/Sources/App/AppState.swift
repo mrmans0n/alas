@@ -103,6 +103,11 @@ final class AppState {
 
     @ObservationIgnored
     private var pendingACPDetachTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
+#if DEBUG
+    var pendingACPDetachCountForTesting: Int {
+        pendingACPDetachTasks.values.reduce(0) { $0 + $1.count }
+    }
+#endif
     @ObservationIgnored
     private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
     @ObservationIgnored
@@ -4927,24 +4932,32 @@ final class AppState {
         if let runner = manager.runners[sessionId] {
             runner.stop()
         }
-        let pending = PendingACPDetach(id: UUID(), task: Task { @MainActor in
+        let pendingID = UUID()
+        let task = Task { @MainActor in
             if let acpDetachRunner {
                 await acpDetachRunner(manager, sessionId)
             } else {
                 await manager.detach(sessionId: sessionId)
             }
-        })
-        pendingACPDetachTasks[worktreeId, default: [:]][sessionId] = pending
+        }
+        pendingACPDetachTasks[worktreeId, default: [:]][sessionId] = PendingACPDetach(id: pendingID, task: task)
+        Task { @MainActor [weak self] in
+            await task.value
+            self?.clearPendingACPDetach(worktreeId: worktreeId, sessionId: sessionId, id: pendingID)
+        }
     }
 
     private func awaitPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID) async {
         guard let pending = pendingACPDetachTasks[worktreeId]?[sessionId] else { return }
         await pending.task.value
-        if pendingACPDetachTasks[worktreeId]?[sessionId]?.id == pending.id {
-            pendingACPDetachTasks[worktreeId]?.removeValue(forKey: sessionId)
-            if pendingACPDetachTasks[worktreeId]?.isEmpty == true {
-                pendingACPDetachTasks.removeValue(forKey: worktreeId)
-            }
+        clearPendingACPDetach(worktreeId: worktreeId, sessionId: sessionId, id: pending.id)
+    }
+
+    private func clearPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID, id: UUID) {
+        guard pendingACPDetachTasks[worktreeId]?[sessionId]?.id == id else { return }
+        pendingACPDetachTasks[worktreeId]?.removeValue(forKey: sessionId)
+        if pendingACPDetachTasks[worktreeId]?.isEmpty == true {
+            pendingACPDetachTasks.removeValue(forKey: worktreeId)
         }
     }
 

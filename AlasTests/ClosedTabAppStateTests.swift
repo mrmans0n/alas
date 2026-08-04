@@ -180,6 +180,35 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
     }
 
+    @Test func completedACPDetachIsDroppedEvenWithoutReopen() async {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: "drop-detach", title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
+
+        await gate.release()
+        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(fixture.state.canReopenClosedTab)
+    }
+
     @Test func canceledTerminalCloseDoesNotRecordHistory() {
         let project = ProjectConfig(
             id: "closed-tabs-confirmation-project",
