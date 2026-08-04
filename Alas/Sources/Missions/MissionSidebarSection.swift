@@ -8,8 +8,8 @@ enum MissionSpaceFilter {
     ) -> Bool {
         let legProjectIDs = Set(aggregate.legs.map(\.projectId))
         guard !legProjectIDs.isEmpty else { return true }
-        let retainedMissingProject = !legProjectIDs.isSubset(of: existingProjectIds)
-        return retainedMissingProject || !legProjectIDs.isDisjoint(with: activeProjectIds)
+        let allLegProjectsMissing = legProjectIDs.isDisjoint(with: existingProjectIds)
+        return allLegProjectsMissing || !legProjectIDs.isDisjoint(with: activeProjectIds)
     }
 
     nonisolated static func isVisible(

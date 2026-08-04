@@ -50,6 +50,21 @@ struct MissionSidebarTests {
         ))
     }
 
+    @Test func partiallyOrphanedMultiLegMissionStaysScopedToSurvivingProjects() {
+        let mission = Self.multiLegMission()
+
+        #expect(MissionSpaceFilter.isVisible(
+            mission,
+            activeProjectIds: ["sdk"],
+            existingProjectIds: ["sdk", "server", "docs"]
+        ))
+        #expect(!MissionSpaceFilter.isVisible(
+            mission,
+            activeProjectIds: ["docs"],
+            existingProjectIds: ["sdk", "server", "docs"]
+        ))
+    }
+
     @Test func activeMissionsSortByLatestActivity() {
         let rows = MissionSidebarModel.make(
             aggregates: [
