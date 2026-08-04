@@ -98,6 +98,7 @@ struct EditorBufferTests {
         defer { EditorBuffer.remoteReadResultForTesting = nil }
 
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "main.py")
+        defer { buffer.close(persistDirtySnapshot: false) }
 
         var notifications = 0
         let token = buffer.onTextEdit { _ in notifications += 1 }
