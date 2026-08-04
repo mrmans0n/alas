@@ -35,6 +35,16 @@ struct ACPMessageList: View {
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     @Environment(\.theme) private var theme
+    // Cached rather than read fresh from `ACPTranscriptScrollerFlag.isEnabled`
+    // on every body evaluation (which happens per streamed chunk) so that a
+    // flag flip is the ONLY thing that changes it. `.id(scrollerFlagState)`
+    // below then forces SwiftUI to tear down and rebuild the whole transcript
+    // subtree when it changes — switching between the AppKit scroller and the
+    // legacy ScrollView mid-flight, sharing this view's scroll bookkeeping
+    // `@State`, is not something either implementation is designed to
+    // tolerate, so a full identity change (losing scroll position, as
+    // documented in the settings row) is the deliberate, safe behavior.
+    @State private var scrollerFlagState = ACPTranscriptScrollerFlag.isEnabled
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
     @State private var scrollBook = ACPTranscriptScrollBookkeeping()
@@ -137,7 +147,88 @@ struct ACPMessageList: View {
         }
     }
 
+    nonisolated static func usesAppKitScroller(flagEnabled: Bool) -> Bool {
+        flagEnabled
+    }
+
     var body: some View {
+        Group {
+            if Self.usesAppKitScroller(flagEnabled: scrollerFlagState) {
+                appKitScrollerBody
+            } else {
+                legacyScrollViewBody
+            }
+        }
+        .id(scrollerFlagState)
+        .onReceive(
+            NotificationCenter.default.publisher(for: ACPTranscriptScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            let flagEnabled = ACPTranscriptScrollerFlag.isEnabled
+            guard flagEnabled != scrollerFlagState else { return }
+            // `.id(scrollerFlagState)` rebuilds the transcript subtree, but
+            // this view's own `@State` sits OUTSIDE that subtree and
+            // survives the identity change. Reset the scroll bookkeeping
+            // and per-row caches explicitly so the incoming implementation
+            // starts clean instead of inheriting the outgoing one's
+            // restore state and cached geometry.
+            scrollBook.reset()
+            scrollViewRef = ACPWeakScrollViewRef()
+            latestTopVisibleAnchor = ACPMutableScrollAnchor()
+            modernRowFrameCache = ACPRowFrameCache()
+            visibleRowsCache = ACPVisibleRowsCache()
+            scrollerFlagState = flagEnabled
+        }
+        .background(
+            LinearGradient(
+                colors: [theme.color("bg-1"), theme.color("bg-0")],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+    }
+
+    private var appKitScrollerBody: some View {
+        ZStack(alignment: .bottomTrailing) {
+            ACPTranscriptScroller(
+                session: session,
+                transcript: transcript,
+                contentMaxWidth: contentMaxWidth,
+                typography: typography,
+                trustedImageRoot: trustedImageRoot,
+                onOpenDiff: onOpenDiff,
+                onLoadFullToolCallContent: onLoadFullToolCallContent,
+                forkTargets: forkTargets,
+                onFork: onFork,
+                rememberedScrollAnchor: rememberedScrollAnchor,
+                onRememberScrollAnchor: onRememberScrollAnchor,
+                onOpenTranscriptLink: onOpenTranscriptLink,
+                policy: policy,
+                scopeKey: scopeKey,
+                onUserInputResponse: onUserInputResponse,
+                onOpenElicitationURL: onOpenElicitationURL,
+                onDismissElicitationURLWait: onDismissElicitationURLWait,
+                onQueueEdit: onQueueEdit,
+                onQueueForceSend: onQueueForceSend,
+                onQueueRemove: onQueueRemove,
+                onQueueRetry: onQueueRetry,
+                onQueueReorder: onQueueReorder,
+                onQueueClearAll: onQueueClearAll,
+                onRetryContextRecovery: onRetryContextRecovery,
+                onOpenForkSource: onOpenForkSource,
+                agentDisplayName: agentDisplayName
+            )
+            if Self.shouldShowGoToNewestAffordance(
+                followsTranscriptTail: session.followsTranscriptTail
+            ) {
+                goToNewestButton {
+                    session.followsTranscriptTail = true
+                    transcript.resetWindowToTail()
+                    onRememberScrollAnchor(nil, nil, true)
+                }
+            }
+        }
+    }
+
+    private var legacyScrollViewBody: some View {
         ScrollViewReader { proxy in
             GeometryReader { viewport in
                 ZStack(alignment: .bottomTrailing) {
@@ -349,42 +440,42 @@ struct ACPMessageList: View {
                     if Self.shouldShowGoToNewestAffordance(
                         followsTranscriptTail: session.followsTranscriptTail
                     ) {
-                        Button {
+                        goToNewestButton {
                             goToNewestMessage(proxy: proxy)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 14, weight: .semibold))
-                                .frame(width: goToNewestButtonSize, height: goToNewestButtonSize)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(theme.color("fg"))
-                        .background(
-                            Circle()
-                                .fill(theme.color("bg-1").opacity(0.95))
-                                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                        )
-                        .overlay(
-                            Circle()
-                                .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
-                        )
-                        .accessibilityLabel("Go to newest message")
-                        .help("Go to newest message")
-                        .padding(.trailing, 20)
-                        .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
-                            composerSpacerHeight: composerSpacerHeight,
-                            gap: goToNewestButtonComposerGap
-                        ))
-                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
                     }
                 }
             }
         }
+    }
+
+    private func goToNewestButton(action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: goToNewestButtonSize, height: goToNewestButtonSize)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.color("fg"))
         .background(
-            LinearGradient(
-                colors: [theme.color("bg-1"), theme.color("bg-0")],
-                startPoint: .top, endPoint: .bottom
-            )
+            Circle()
+                .fill(theme.color("bg-1").opacity(0.95))
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         )
+        .overlay(
+            Circle()
+                .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
+        )
+        .accessibilityLabel("Go to newest message")
+        .help("Go to newest message")
+        .padding(.trailing, 20)
+        .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
+            composerSpacerHeight: composerSpacerHeight,
+            gap: goToNewestButtonComposerGap
+        ))
+        .transition(.opacity.combined(with: .scale(scale: 0.94)))
     }
 
     private func restoreTailIfNeeded(proxy: ScrollViewProxy, animated: Bool) {
@@ -1706,7 +1797,10 @@ enum ACPContentShrinkBookmarkResetState {
 /// on every write — which is exactly the transaction-feedback edge behind
 /// the transcript live-lock. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md.
 @MainActor
-private final class ACPTranscriptScrollBookkeeping {
+/// Internal rather than file-private so a test can drive `reset()` directly:
+/// the flag-flip path that needs it lives in a SwiftUI `onReceive` closure,
+/// which is not reachable from a unit test.
+final class ACPTranscriptScrollBookkeeping {
     var isRestoringTail = false
     var restoredRememberedAnchor: String?
     var latestRememberedScrollAnchorIndex: Int?
@@ -1732,6 +1826,38 @@ private final class ACPTranscriptScrollBookkeeping {
     /// estimate flip.
     var lastContentGrowthTailRestoreSourceHeight: CGFloat?
     var lastContentGrowthTailRestoreHeight: CGFloat?
+
+    /// Returns every field to its initial value, cancelling any scheduled
+    /// work first so a task queued against the outgoing scroll view cannot
+    /// land on the incoming one.
+    ///
+    /// Needed when the transcript switches between the legacy and AppKit
+    /// scrollers. That switch rebuilds the transcript subtree via
+    /// `.id(scrollerFlagState)`, but this object is `@State` on
+    /// `ACPMessageList` itself — outside the subtree the id replaces — so it
+    /// survives. `restoredRememberedAnchor` surviving is the sharp edge: the
+    /// rebuilt scroll view would see the current anchor as already restored,
+    /// skip `restoreRememberedAnchorIfNeeded`, and leave a paused chat at
+    /// the new scroll view's default position.
+    func reset() {
+        pendingTailScrollTask?.cancel()
+        pendingContentShrinkResetTask?.cancel()
+        isRestoringTail = false
+        restoredRememberedAnchor = nil
+        latestRememberedScrollAnchorIndex = nil
+        lastHeadStepAt = .distantPast
+        lastTailStepAt = .distantPast
+        pendingTailScrollTask = nil
+        pendingTailScrollGeneration = 0
+        pendingContentGrowthTailRestore = nil
+        pendingContentShrinkResetTask = nil
+        pendingContentShrinkResetGeneration = 0
+        contentShrinkBookmarkResetState = .none
+        scrollGeometryGeneration = 0
+        lastScrollProbe = nil
+        lastContentGrowthTailRestoreSourceHeight = nil
+        lastContentGrowthTailRestoreHeight = nil
+    }
 }
 
 /// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's
@@ -1915,7 +2041,10 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
 /// Version-agnostic so `ACPTranscriptScrollTracking` doesn't require blanket
 /// macOS 15 availability — the `ScrollGeometry` reference is confined to the
 /// `#available` branch above.
-private struct ACPScrollProbe: Equatable {
+/// Internal rather than file-private only because it appears in
+/// `ACPTranscriptScrollBookkeeping`'s stored properties, and that type is
+/// internal so its `reset()` can be unit-tested.
+struct ACPScrollProbe: Equatable {
     var generation: UInt64
     var minY: CGFloat
     var viewportHeight: CGFloat

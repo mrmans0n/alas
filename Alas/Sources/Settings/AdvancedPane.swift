@@ -6,14 +6,34 @@ struct AdvancedPane: View {
     @State private var pendingAction: CleanupAction?
     @State private var cleanupMessage: String?
     @State private var isCleaningStaleProjects = false
+    /// Mirrors `ACPTranscriptScrollerFlag.isEnabled` in observable state.
+    /// Reading the flag straight from a `Binding` getter renders the toggle
+    /// correctly once but never invalidates this view, so the switch could
+    /// keep drawing its old position after the override had already changed.
+    @State private var appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Advanced").font(.system(size: 18, weight: .semibold))
-                Text("Destructive maintenance actions for Alas project tracking.")
+                Text("Experimental features and destructive maintenance actions.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
+
+                SettingsGroup(title: "Experiments") {
+                    SettingsRow(
+                        name: "AppKit transcript scroller",
+                        desc: "Replaces the transcript's scrolling implementation with an AppKit-backed scroller, keeping pagination through long chat history jump-free. Toggling this re-creates the transcript view, so the scroll position in any open chats is lost."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { appKitScrollerEnabled },
+                            set: {
+                                appKitScrollerEnabled = $0
+                                ACPTranscriptScrollerFlag.setOverride($0)
+                            }
+                        ))
+                    }
+                }
 
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(
@@ -60,6 +80,13 @@ struct AdvancedPane: View {
             }
         } message: { action in
             Text(action.message(projectCount: state.projects.count))
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: ACPTranscriptScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            // Keeps the switch honest when the override changes from outside
+            // this pane — a `defaults write`, or another window's copy of it.
+            appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
         }
     }
 

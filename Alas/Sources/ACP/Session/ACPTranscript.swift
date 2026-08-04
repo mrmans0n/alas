@@ -462,16 +462,27 @@ final class ACPTranscript: ObservableObject {
 
     /// Reveal one more `tailWindow`-sized chunk of older messages.
     /// Clamps at zero. Idempotent at the head.
-    func stepHeadBack() {
+    ///
+    /// `boundTail: false` (AppKit scroller) keeps the current tail so the
+    /// window grows monotonically while the user browses history — the
+    /// mounted-view cap lives in the tiling controller, not the window model.
+    func stepHeadBack(boundTail: Bool = true) {
         let currentTail = visibleTailBound
         let newHead = max(0, visibleHead - Self.tailWindow)
-        let boundedTail = min(messages.count, newHead + Self.maxVisibleRows)
-        setVisibleWindow(head: newHead, tail: min(currentTail, boundedTail))
+        if boundTail {
+            let boundedTail = min(messages.count, newHead + Self.maxVisibleRows)
+            setVisibleWindow(head: newHead, tail: min(currentTail, boundedTail))
+        } else {
+            setVisibleWindow(head: newHead, tail: visibleTail)
+        }
     }
 
     /// Reveal one more chunk of newer messages while keeping the row currently
     /// near the viewport top inside the bounded window when possible.
-    func stepTailForward(preserving preservedIndex: Int?) {
+    ///
+    /// `boundHead: false` (AppKit scroller) keeps the current head so newer
+    /// rows extend the grown window instead of trimming the top.
+    func stepTailForward(preserving preservedIndex: Int?, boundHead: Bool = true) {
         let currentTail = visibleTailBound
         guard currentTail < messages.count else { return }
         var newTail = min(messages.count, currentTail + Self.tailWindow)
@@ -484,7 +495,7 @@ final class ACPTranscript: ObservableObject {
             }
         }
         guard newTail > currentTail else { return }
-        let boundedHead = max(0, newTail - Self.maxVisibleRows)
+        let boundedHead = boundHead ? max(0, newTail - Self.maxVisibleRows) : visibleHead
         setVisibleWindow(head: boundedHead, tail: newTail)
     }
 

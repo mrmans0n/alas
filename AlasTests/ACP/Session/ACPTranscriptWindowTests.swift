@@ -276,4 +276,42 @@ struct ACPTranscriptWindowTests {
 
         #expect(t.visibleTail == tailBefore)
     }
+
+    @Test("stepHeadBack(boundTail: false) keeps the tail while revealing older rows")
+    func unboundedHeadStepKeepsTail() {
+        let t = ACPTranscript()
+        for _ in 0..<200 {
+            t.messages.append(.systemNotice(id: UUID(), text: "x"))
+        }
+        t.resetWindowToTail()          // head 170, tail nil
+        t.freezeVisibleTail()          // tail 200
+        for _ in 0..<5 { t.stepHeadBack(boundTail: false) }
+        #expect(t.visibleHead == 20)   // 170 - 5*30
+        #expect(t.visibleTailBound == 200)  // never trimmed
+    }
+
+    @Test("stepHeadBack default still bounds the tail to maxVisibleRows")
+    func boundedHeadStepUnchanged() {
+        let t = ACPTranscript()
+        for _ in 0..<200 {
+            t.messages.append(.systemNotice(id: UUID(), text: "x"))
+        }
+        t.resetWindowToTail()
+        t.freezeVisibleTail()
+        for _ in 0..<5 { t.stepHeadBack() }
+        #expect(t.visibleHead == 20)
+        #expect(t.visibleTailBound == 20 + ACPTranscript.maxVisibleRows)
+    }
+
+    @Test("stepTailForward(boundHead: false) keeps the head while revealing newer rows")
+    func unboundedTailStepKeepsHead() {
+        let t = ACPTranscript()
+        for _ in 0..<200 {
+            t.messages.append(.systemNotice(id: UUID(), text: "x"))
+        }
+        t.setVisibleWindow(containing: 0)   // head 0, tail 90
+        t.stepTailForward(preserving: nil, boundHead: false)
+        #expect(t.visibleHead == 0)
+        #expect(t.visibleTailBound == 120)  // 90 + tailWindow
+    }
 }
