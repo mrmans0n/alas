@@ -1801,6 +1801,7 @@ final class AppState {
     private func presentMissingMissionRecoveryIfNeeded() {
         let activeProjectIDs = Set(activeSpaceProjects.map(\.id))
         guard missingMissionTab == nil,
+              globalTabs.activeMissionTab() == nil,
               let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
                   guard aggregate.mission.state != .completed else { return nil }
                   guard let leg = aggregate.legs.first(where: {

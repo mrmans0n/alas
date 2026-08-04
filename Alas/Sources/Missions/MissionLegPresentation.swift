@@ -57,8 +57,9 @@ struct MissionLegPresentation: Equatable, Identifiable {
         reviewDestination = leg.reviewIdentity?.url
 
         let isAttention = leg.state == .needsAttention
-        let retryWorktree = isAttention && leg.setupCheckpoint == .creatingWorktree
-        let retryAgent = isAttention && leg.setupCheckpoint == .startingAgent
+        let allowsRetry = aggregate.mission.state != .completed
+        let retryWorktree = allowsRetry && isAttention && leg.setupCheckpoint == .creatingWorktree
+        let retryAgent = allowsRetry && isAttention && leg.setupCheckpoint == .startingAgent
         let hasUsableWorktree = worktree != nil && !worktreeArchived
         let openAgent = hasUsableWorktree
             && leg.acpSessionId != nil

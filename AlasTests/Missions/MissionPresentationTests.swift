@@ -403,6 +403,23 @@ struct MissionPresentationTests {
         #expect(presentation.actions.recoverWorktree)
     }
 
+    @Test func completedMissionSuppressesStaleLegRetryActions() {
+        var aggregate = Self.threeLegAggregate()
+        aggregate.mission.state = .completed
+        aggregate.mission.completedAt = Date(timeIntervalSince1970: 300)
+        let failedLeg = aggregate.legs[1]
+
+        let presentation = MissionLegPresentation(
+            aggregate: aggregate,
+            leg: failedLeg,
+            worktree: Self.worktree(for: failedLeg),
+            availableACPAgentIDs: ["codex"]
+        )
+
+        #expect(!presentation.actions.retryAgent)
+        #expect(!presentation.actions.retryWorktree)
+    }
+
     @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() {
         var aggregate = Self.runningAggregate()
         aggregate.issue = .init(

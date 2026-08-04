@@ -720,6 +720,30 @@ struct MissionTabTests {
         #expect(presentation.actions.recoverWorktree)
     }
 
+    @Test func startupMissingMissionDoesNotReplaceRestoredGlobalTab() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: false,
+            competingMissionState: .running
+        )
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
+        let restoredTab = MissionTabState(
+            missionID: MissionID(rawValue: "mission-2"),
+            title: "Restored Mission"
+        )
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: restoredTab.missionID,
+            title: restoredTab.title
+        )
+        await fixture.state.missions.load()
+        await fixture.state.missions.recordMissingWorktree(fixture.aggregate.mission.id)
+
+        await fixture.state.reconcileMissionsForStartup()
+
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == restoredTab.missionID)
+        #expect(fixture.state.missingMissionTab == nil)
+    }
+
     @Test func startupDoesNotOpenMissingMissionFromAnInactiveSpace() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
 
