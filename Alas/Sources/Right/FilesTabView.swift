@@ -14,6 +14,10 @@ struct FilesTabView: View {
     let revealTick: Int
     let onClearReveal: () -> Void
 
+    /// Root of the worktree the tree belongs to. Nil disables dragging for the
+    /// whole tree; payload resolution rejects remote roots on its own.
+    var worktreeRoot: URL? = nil
+
     @Environment(\.theme) private var theme
 
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
@@ -152,6 +156,9 @@ struct FilesTabView: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu { contextMenu(for: terminal) }
+                    .dragOut {
+                        worktreeRoot.map { DragOutPayload.onDisk($0.appendingPathComponent(terminal.path)) }
+                    }
                     if open && canExpand {
                         switch terminal.childrenState {
                         case .loading, .loaded:
@@ -204,6 +211,9 @@ struct FilesTabView: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu { contextMenu(for: node) }
+                .dragOut {
+                    worktreeRoot.map { DragOutPayload.onDisk($0.appendingPathComponent(node.path)) }
+                }
             )
         }
     }
