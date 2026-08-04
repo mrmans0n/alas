@@ -349,4 +349,37 @@ struct RevisionSnapshotCacheTests {
 
         await cache.removeSessionDirectory()
     }
+
+    /// Reusing a memoized snapshot is activity too. A session whose drags are
+    /// all cache hits writes nothing, so without touching the root on that path
+    /// it still ages out and another instance's sweep deletes the very file
+    /// being handed to the drag.
+    @Test func reusingAMemoizedSnapshotRefreshesTheSessionRootModificationDate() async throws {
+        let repo = try await makeRepo(name: "touch-on-hit")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("a.txt")
+        try "a".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add a"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let first = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "a.txt"))
+
+        let backDated = Date().addingTimeInterval(-2 * RevisionSnapshotCache.staleSessionAge)
+        try FileManager.default.setAttributes(
+            [.modificationDate: backDated],
+            ofItemAtPath: cache.sessionDirectory.path
+        )
+
+        // Same (worktree, ref, path), and the file on disk is untouched, so
+        // this must be served from the cache without rewriting anything.
+        let second = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "a.txt"))
+        #expect(second == first)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: cache.sessionDirectory.path)
+        let mtime = try #require(attributes[.modificationDate] as? Date)
+        #expect(mtime > backDated)
+
+        await cache.removeSessionDirectory()
+    }
 }

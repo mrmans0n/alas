@@ -97,6 +97,11 @@ actor RevisionSnapshotCache {
 
         let key = "\(worktreePath.path)\u{0}\(ref)\u{0}\(path)"
         if let cached = snapshots[key], cached.isIntact {
+            // Reusing a snapshot is activity too. Without this, a session whose
+            // drags are all cache hits never refreshes its root mtime, and
+            // another instance's sweep would delete the very file being handed
+            // out here.
+            touchSessionDirectory()
             return cached.url
         }
         if missingSnapshots.contains(key) {
