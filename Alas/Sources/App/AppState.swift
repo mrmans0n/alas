@@ -1339,8 +1339,9 @@ final class AppState {
         persistedRemoteName: String? = nil,
         remotes: [GitRemote]
     ) -> CodeHostRemote? {
-        let matchingRemotes = remotes
+        let detectedProviderRemotes = remotes
             .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) }
+        let matchingRemotes = detectedProviderRemotes
             .filter { candidate in
                 candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
                     && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
@@ -1354,13 +1355,20 @@ final class AppState {
            remotes.contains(where: { $0.name == configuredBaseRemote }) {
             return matchingRemotes.first(where: { $0.remoteName == configuredBaseRemote })
         }
+        let longestPrefixMatch = matchingRemotes
+            .filter { baseRef.hasPrefix("\($0.remoteName)/") }
+            .max { $0.remoteName.count < $1.remoteName.count }
+        if let configuredBaseRemote,
+           !configuredBaseRemote.isEmpty,
+           baseRef.hasPrefix("\(configuredBaseRemote)/"),
+           !remotes.contains(where: { $0.name == configuredBaseRemote }) {
+            return longestPrefixMatch
+                ?? (detectedProviderRemotes.count == 1 ? matchingRemotes.first : nil)
+        }
         let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
             forBaseBranch: baseRef,
             remotes: remotes
         )
-        let longestPrefixMatch = matchingRemotes
-            .filter { baseRef.hasPrefix("\($0.remoteName)/") }
-            .max { $0.remoteName.count < $1.remoteName.count }
         return longestPrefixMatch
             ?? matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
             ?? matchingRemotes.first

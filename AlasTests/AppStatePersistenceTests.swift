@@ -177,6 +177,27 @@ struct AppStatePersistenceTests {
         #expect(remote.remoteName == "upstream")
     }
 
+    @Test func missionReviewRemoteDoesNotGuessStaleBaseAliasWhenMultipleRemotesExist() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let remote = AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [
+                GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ]
+        )
+
+        #expect(remote == nil)
+    }
+
     @Test func missionDiscoveryRemoteUsesTheTargetProjectRepository() throws {
         let remote = try #require(AppState.missionDiscoveryRemote(
             baseRef: "origin/main",
