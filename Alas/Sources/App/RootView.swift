@@ -81,7 +81,9 @@ struct RootView: View {
                 state.reloadTabs()
                 await state.reconcileMissionsForStartup()
                 if state.selectedWorktreeId == nil {
-                    state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
+                    state.selectInitialWorktree(
+                        id: state.resolvedSelectionForActiveSpaceForStartup()
+                    )
                 }
                 state.startAllProjectGitWatchers()
                 state.rescanAgents()
@@ -122,7 +124,9 @@ struct RootView: View {
                     set: { state.config.rightPaneWidth = $0 }
                 ),
                 sidebarVisible: state.config.sidebarVisible,
-                rightVisible: state.config.rightPaneVisible && rightPaneSelection.showsRightPane,
+                rightVisible: state.config.rightPaneVisible
+                    && rightPaneSelection.showsRightPane
+                    && state.globalTabs.activeMissionTab() == nil,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { centerContent() },
@@ -219,13 +223,39 @@ struct RootView: View {
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
             projectsManager: state.projectsManager,
+            activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
             allowsHiddenSelectedWorktree: allowsHiddenSelectedWorktreeForMission
         )
         switch resolver.resolve() {
+        case .globalMission(let tabState):
+            if let worktree = selectedWorktree() {
+                CenterPaneView(
+                    state: state,
+                    worktree: worktree,
+                    activeGlobalMissionTab: tabState,
+                    allowsPaneFocus: !state.isKeyboardOverlayOpen
+                )
+            } else {
+                VStack(spacing: 0) {
+                    GlobalMissionTabBarView(
+                        tabs: state.globalTabs.tabs,
+                        activeId: tabState.id,
+                        onActivate: { state.globalTabs.activate(tabId: $0) },
+                        onClose: { state.closeGlobalTab(tabId: $0) },
+                        onRevealSidebar: {
+                            state.config.sidebarVisible = true
+                            state.saveConfig()
+                        },
+                        sidebarHidden: !state.config.sidebarVisible
+                    )
+                    MissionTabView(state: state, worktree: nil, tabState: tabState)
+                }
+            }
         case .worktree(let wt):
             CenterPaneView(
                 state: state,
                 worktree: wt,
+                activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
                 allowsPaneFocus: !state.isKeyboardOverlayOpen
             )
         case .deleting(let wt):
@@ -262,8 +292,8 @@ struct RootView: View {
 
     private var allowsHiddenSelectedWorktreeForMission: Bool {
         guard let worktreeID = state.selectedWorktreeId,
-              let tab = state.tabs.activeTab(forWorktree: worktreeID),
-              case .mission = tab
+              let tab = state.globalTabs.activeMissionTab(),
+              state.missions.aggregate(id: tab.missionID)?.primaryLeg?.worktreeId == worktreeID
         else { return false }
         return true
     }
@@ -354,6 +384,101 @@ struct RootView: View {
                 )
             }
         )
+    }
+}
+
+private struct GlobalMissionTabBarView: View {
+    let tabs: [GlobalTab]
+    let activeId: TabID?
+    let onActivate: (TabID) -> Void
+    let onClose: (TabID) -> Void
+    let onRevealSidebar: () -> Void
+    let sidebarHidden: Bool
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if sidebarHidden {
+                TrafficLights()
+                    .padding(.leading, 12)
+                    .padding(.trailing, 10)
+                Button(action: onRevealSidebar) {
+                    Icon(name: "sidebar.left", size: 14)
+                        .frame(width: 28, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show sidebar")
+                    .padding(.trailing, 8)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(tabs) { tab in
+                        GlobalMissionTabButton(
+                            tab: tab,
+                            active: tab.id == activeId,
+                            onActivate: { onActivate(tab.id) },
+                            onClose: { onClose(tab.id) }
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: 34, alignment: .leading)
+            .windowDragHandle()
+        }
+        .frame(height: 34)
+        .background(theme.color("bg-0"))
+        .overlay(
+            Rectangle()
+                .fill(theme.color("border"))
+                .frame(height: 1),
+            alignment: .bottom
+        )
+    }
+}
+
+private struct GlobalMissionTabButton: View {
+    let tab: GlobalTab
+    let active: Bool
+    let onActivate: () -> Void
+    let onClose: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: onActivate) {
+            HStack(spacing: 6) {
+                Icon(name: "sparkles", size: 11, color: active ? theme.color("accent") : theme.color("fg-dim"))
+                    .frame(width: 12, height: 12)
+                Text(title)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 220, alignment: .leading)
+                TabCloseButton(dirtyLookup: { false }, onClose: onClose)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .background(active ? theme.color("bg-1") : .clear)
+            .overlay(
+                Rectangle()
+                    .fill(active ? theme.color("accent") : .clear)
+                    .frame(height: 2),
+                alignment: .bottom
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Close") { onClose() }
+        }
+    }
+
+    private var title: String {
+        switch tab {
+        case .mission(let state):
+            state.title
+        }
     }
 }
 
@@ -700,15 +825,12 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
-                if let wt = selectedWorktree() {
-                    state.handleCloseShortcut(worktreeId: wt.id)
-                }
+                state.handleCloseCenterShortcut(worktreeId: selectedWorktree()?.id)
             }
         let g = f
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
-                guard let number = notification.object as? Int,
-                      let wt = selectedWorktree() else { return }
-                state.tabs.activateTabNumber(number, worktreeId: wt.id)
+                guard let number = notification.object as? Int else { return }
+                state.activateCenterTabNumber(number, worktreeId: selectedWorktree()?.id)
             }
         let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in

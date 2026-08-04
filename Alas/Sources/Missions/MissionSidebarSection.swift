@@ -6,9 +6,10 @@ enum MissionSpaceFilter {
         activeProjectIds: Set<String>,
         existingProjectIds: Set<String>
     ) -> Bool {
-        guard let projectId = aggregate.primaryLeg?.projectId else { return true }
-        if !existingProjectIds.contains(projectId) { return true }
-        return activeProjectIds.contains(projectId)
+        let legProjectIDs = Set(aggregate.legs.map(\.projectId))
+        guard !legProjectIDs.isEmpty else { return true }
+        let allLegProjectsMissing = legProjectIDs.isDisjoint(with: existingProjectIds)
+        return allLegProjectsMissing || !legProjectIDs.isDisjoint(with: activeProjectIds)
     }
 
     nonisolated static func isVisible(
@@ -64,8 +65,17 @@ struct MissionSidebarModel: Equatable {
 }
 
 struct MissionSidebarRow: Equatable, Identifiable {
+    enum Tone: Equatable {
+        case progress
+        case success
+        case attention
+        case ready
+        case muted
+    }
+
     enum Status: Equatable {
         case creating(String)
+        case aggregate(String)
         case running
         case needsAttention
         case readyToComplete
@@ -75,6 +85,8 @@ struct MissionSidebarRow: Equatable, Identifiable {
             switch self {
             case .creating(let checkpoint):
                 "Creating · \(checkpoint)"
+            case .aggregate(let summary):
+                summary
             case .running:
                 "Running"
             case .needsAttention:
@@ -95,6 +107,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
     let repositorySlug: String
     let updatedAt: Date
     let status: Status
+    let tone: Tone
     let isNavigationEnabled: Bool
 
     init(aggregate: MissionAggregate, knownWorktreeIds _: Set<String> = []) {
@@ -105,7 +118,8 @@ struct MissionSidebarRow: Equatable, Identifiable {
         issueNumber = "#\(aggregate.issue.identity.number)"
         repositorySlug = aggregate.issue.identity.repositorySlug
         updatedAt = aggregate.mission.updatedAt
-        status = Self.status(for: aggregate.mission)
+        status = Self.status(for: aggregate)
+        tone = Self.tone(for: aggregate)
 
         isNavigationEnabled = true
     }
@@ -122,18 +136,39 @@ struct MissionSidebarRow: Equatable, Identifiable {
         return "\(prefix) · Open Mission details."
     }
 
-    private static func status(for mission: MissionRecord) -> Status {
-        switch mission.state {
+    private static func status(for aggregate: MissionAggregate) -> Status {
+        switch aggregate.mission.state {
         case .creating:
-            .creating(mission.setupCheckpoint.sidebarTitle)
+            .creating(aggregate.mission.setupCheckpoint.sidebarTitle)
         case .running:
-            .running
+            .aggregate(MissionAggregateSummary.statusCopy(for: aggregate.legs))
         case .needsAttention:
-            .needsAttention
+            .aggregate(MissionAggregateSummary.statusCopy(for: aggregate.legs))
         case .readyToComplete:
             .readyToComplete
         case .completed:
             .completed
+        }
+    }
+
+    private static func tone(for aggregate: MissionAggregate) -> Tone {
+        if aggregate.mission.state == .completed {
+            return .muted
+        }
+        if aggregate.legs.contains(where: { $0.state == .needsAttention }) {
+            return .attention
+        }
+        switch aggregate.mission.state {
+        case .creating:
+            return .progress
+        case .running:
+            return .success
+        case .needsAttention:
+            return .attention
+        case .readyToComplete:
+            return .ready
+        case .completed:
+            return .muted
         }
     }
 }
@@ -313,16 +348,16 @@ private struct MissionSidebarRowView: View {
     }
 
     private var statusColor: Color {
-        switch row.status {
-        case .creating:
+        switch row.tone {
+        case .progress:
             theme.color("accent")
-        case .running:
+        case .success:
             theme.color("add")
-        case .needsAttention:
+        case .attention:
             theme.color("warn")
-        case .readyToComplete:
+        case .ready:
             theme.color("warning")
-        case .completed:
+        case .muted:
             theme.color("fg-faint")
         }
     }

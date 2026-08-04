@@ -306,6 +306,13 @@ enum MissionTabContext {
         aggregate.primaryLeg?.baseRef ?? fallback
     }
 
+    static func baseBranch(
+        for leg: MissionLeg,
+        resolvedBaseRefs: [MissionLegID: String]
+    ) -> String {
+        resolvedBaseRefs[leg.id] ?? leg.baseRef
+    }
+
     static func rightPaneActivationKey(
         worktreeID: String,
         branch: String,
@@ -317,6 +324,61 @@ enum MissionTabContext {
     }
 }
 
+enum MissionCompletionConfirmation {
+    private static let consequence = "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the source issue."
+
+    static func message(
+        for aggregate: MissionAggregate,
+        projectNames: [String: String]
+    ) -> String {
+        let unfinished = aggregate.legs
+            .filter { $0.state != .ready }
+            .sorted { lhs, rhs in
+                if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+                return lhs.id.rawValue < rhs.id.rawValue
+            }
+        guard !unfinished.isEmpty else { return consequence }
+
+        let lines = unfinished.map { leg in
+            let projectName = projectNames[leg.projectId] ?? leg.projectId
+            return "• \(projectName) — \(leg.branch) — \(stateLabel(leg.state))"
+        }
+        return "\(consequence)\n\nUnfinished legs:\n\(lines.joined(separator: "\n"))"
+    }
+
+    private static func stateLabel(_ state: MissionLegState) -> String {
+        switch state {
+        case .creating: "Creating"
+        case .running: "Working"
+        case .needsAttention: "Needs attention"
+        case .ready: "Ready"
+        }
+    }
+}
+
+struct MissionLegCardActions {
+    let openAgent: () -> Void
+    let openChanges: () -> Void
+    let retryWorktree: () -> Void
+    let retryAgent: () -> Void
+    let recoverWorktree: () -> Void
+
+    init(
+        legID: MissionLegID,
+        openAgent: @escaping (MissionLegID) -> Void,
+        openChanges: @escaping (MissionLegID) -> Void,
+        retryWorktree: @escaping (MissionLegID) -> Void,
+        retryAgent: @escaping (MissionLegID) -> Void,
+        recoverWorktree: @escaping (MissionLegID) -> Void
+    ) {
+        self.openAgent = { openAgent(legID) }
+        self.openChanges = { openChanges(legID) }
+        self.retryWorktree = { retryWorktree(legID) }
+        self.retryAgent = { retryAgent(legID) }
+        self.recoverWorktree = { recoverWorktree(legID) }
+    }
+}
+
 struct MissionTabView: View {
     @Bindable var state: AppState
     let worktree: Worktree?
@@ -324,6 +386,8 @@ struct MissionTabView: View {
 
     @State private var completionConfirmationPresented = false
     @State private var agentPickerPresented = false
+    @State private var agentPickerLegID: MissionLegID?
+    @State private var addLegPresented = false
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -350,73 +414,131 @@ struct MissionTabView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This only marks the Mission completed in Alas. It does not stop the agent, archive the worktree, merge code, or change the source issue.")
+            Text(completionConfirmationMessage)
         }
         .popover(isPresented: $agentPickerPresented) {
             MissionAgentReplacementPopover(
                 agents: enabledACPAgents,
-                storedAgentID: state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.agentId ?? ""
+                storedAgentID: agentPickerLeg?.agentId ?? ""
             ) { agentID in
-                Task { await state.missions.retry(tabState.missionID, agentId: agentID) }
+                guard let legID = agentPickerLegID else { return }
+                Task { await retryAgent(legID: legID, agentID: agentID) }
             }
             .environment(\.theme, theme)
         }
-        .task(id: rightPaneActivationKey) {
-            guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-                  let worktree = state.missionWorktree(worktree, for: aggregate),
-                  !worktreeIsArchived
-            else { return }
-            await state.activateMissionRightPane(worktree: worktree, aggregate: aggregate)
-        }
-        .onDisappear {
-            guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-                  let worktree = state.missionWorktree(worktree, for: aggregate)
-            else { return }
-            state.restoreDefaultRightPaneBaseAfterMission(worktree: worktree)
+        .sheet(isPresented: $addLegPresented) {
+            AddMissionLegDialog(
+                presented: $addLegPresented,
+                state: state,
+                missionID: tabState.missionID
+            )
+            .environment(\.theme, theme)
         }
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {
-        let worktree = state.missionWorktree(worktree, for: aggregate)
-        let rightPane = worktree.flatMap { state.rightPaneStore.activeState(worktreeId: $0.id) }
+        let primaryWorktree = state.missionWorktree(worktree, for: aggregate)
+        let primaryRightPane = primaryWorktree.flatMap { worktree in
+            aggregate.primaryLeg.flatMap { leg in
+                state.rightPaneStore.activeState(
+                    worktreeId: worktree.id,
+                    baseBranch: MissionTabContext.baseBranch(
+                        for: leg,
+                        resolvedBaseRefs: state.resolvedMissionPaneBaseRefs
+                    )
+                )
+            }
+        }
         let session = linkedSession(aggregate)
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
-            worktree: worktree,
+            worktree: primaryWorktree,
             acpSummary: session.map {
                 MissionACPSummary(session: $0, agentName: agentName(for: $0.agentId))
             },
-            diffCounts: rightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
-            reviewSnapshot: rightPane?.reviewLoop.snapshot,
+            diffCounts: primaryRightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
+            reviewSnapshot: primaryRightPane?.reviewLoop.snapshot,
             worktreeArchived: worktreeIsArchived,
-            worktreeRecoveryAvailable: worktree == nil
+            worktreeRecoveryAvailable: primaryWorktree == nil
                 && aggregate.primaryLeg.map { leg in state.projects.contains { $0.id == leg.projectId } } == true,
             availableACPAgentIDs: Set(enabledACPAgents.map(\.id))
         )
+        let legPresentations = aggregate.legs.map { leg in
+            let legWorktree = worktree(for: leg, aggregate: aggregate)
+            let legRightPane = legWorktree.flatMap {
+                state.rightPaneStore.activeState(
+                    worktreeId: $0.id,
+                    baseBranch: MissionTabContext.baseBranch(
+                        for: leg,
+                        resolvedBaseRefs: state.resolvedMissionPaneBaseRefs
+                    )
+                )
+            }
+            let legSession = linkedSession(aggregate: aggregate, leg: leg, worktree: legWorktree)
+            return MissionLegPresentation(
+                aggregate: aggregate,
+                leg: leg,
+                projectName: state.projects.first(where: { $0.id == leg.projectId })?.name,
+                worktree: legWorktree,
+                acpSummary: legSession.map {
+                    MissionACPSummary(session: $0, agentName: agentName(for: $0.agentId))
+                },
+                diffCounts: legRightPane.map { MissionDiffCounts(changes: $0.displayChanges) },
+                reviewSnapshot: legRightPane?.reviewLoop.snapshot,
+                worktreeArchived: legWorktree.map { worktreeIsArchived($0) } ?? false,
+                worktreeRecoveryAvailable: legWorktree == nil && state.projects.contains { $0.id == leg.projectId },
+                availableACPAgentIDs: Set(enabledACPAgents.map(\.id))
+            )
+        }
+        let summary = MissionAggregateSummary(aggregate: aggregate, legs: legPresentations)
 
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                MissionHeaderSection(presentation: presentation)
-                MissionLegSection(
-                    presentation: presentation,
-                    session: session,
-                    agentName: session.map { agentName(for: $0.agentId) },
-                    onOpenAgent: openAgent,
-                    onOpenChanges: openChanges,
-                    onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
-                    onOpenReview: {
-                        if let url = presentation.reviewDestination {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                )
+                MissionHeaderSection(presentation: presentation, summary: summary)
+                ForEach(summary.legs) { leg in
+                    let legSession = linkedSession(for: leg, aggregate: aggregate)
+                    let actions = MissionLegCardActions(
+                        legID: leg.id,
+                        openAgent: openAgent,
+                        openChanges: openChanges,
+                        retryWorktree: retryWorktree,
+                        retryAgent: { legID in
+                            agentPickerLegID = legID
+                            agentPickerPresented = true
+                        },
+                        recoverWorktree: recoverWorktree
+                    )
+                    MissionLegSection(
+                        presentation: leg,
+                        session: legSession,
+                        agentName: legSession.map { agentName(for: $0.agentId) },
+                        onOpenAgent: actions.openAgent,
+                        onOpenChanges: actions.openChanges,
+                        onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
+                        onOpenReview: {
+                            if let url = leg.reviewDestination {
+                                NSWorkspace.shared.open(url)
+                            }
+                        },
+                        onRetryWorktree: actions.retryWorktree,
+                        onRetryAgent: actions.retryAgent,
+                        onRecoverWorktree: actions.recoverWorktree
+                    )
+                }
+                if aggregate.mission.state == .running {
+                    Button("Add Leg") { addLegPresented = true }
+                        .buttonStyle(.borderedProminent)
+                }
                 MissionIssueContextSection(presentation: presentation, onRefresh: refresh)
                 MissionActivitySection(events: presentation.events)
                 MissionReadinessSection(
                     presentation: presentation,
-                    onRetryWorktree: retryWorktree,
-                    onRetryAgent: { agentPickerPresented = true },
-                    onRecoverWorktree: recoverWorktree,
+                    onRetryWorktree: { retryWorktree(legID: aggregate.mission.primaryLegID) },
+                    onRetryAgent: {
+                        agentPickerLegID = aggregate.mission.primaryLegID
+                        agentPickerPresented = true
+                    },
+                    onRecoverWorktree: { recoverWorktree(legID: aggregate.mission.primaryLegID) },
                     onCompleteMission: { completionConfirmationPresented = true }
                 )
             }
@@ -429,33 +551,46 @@ struct MissionTabView: View {
         NewWorktreeDialog.acpCapableAgents(from: state.agentRegistry.enabled())
     }
 
+    private var completionConfirmationMessage: String {
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID) else {
+            return "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the source issue."
+        }
+        return MissionCompletionConfirmation.message(
+            for: aggregate,
+            projectNames: Dictionary(uniqueKeysWithValues: state.projects.map { ($0.id, $0.name) })
+        )
+    }
+
     private var worktreeIsArchived: Bool {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
               let worktree = state.missionWorktree(worktree, for: aggregate)
         else { return false }
-        return state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
-    }
-
-    private var rightPaneActivationKey: String {
-        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = state.missionWorktree(worktree, for: aggregate)
-        else { return tabState.id }
-        let baseRef = MissionTabContext.baseBranch(
-            for: aggregate,
-            fallback: state.config.worktrees.baseBranch
-        )
-        return MissionTabContext.rightPaneActivationKey(
-            worktreeID: worktree.id,
-            branch: worktree.branch,
-            baseRef: baseRef,
-            comparisonMode: state.config.changes.comparisonMode.rawValue,
-            worktreeArchived: worktreeIsArchived
-        )
+        return worktreeIsArchived(worktree)
     }
 
     private func linkedSession(_ aggregate: MissionAggregate) -> ACPSession? {
         guard let worktree = state.missionWorktree(worktree, for: aggregate),
               let id = aggregate.primaryLeg?.acpSessionId,
+              let manager = state.acpManager(forWorktreeId: worktree.id)
+        else { return nil }
+        return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
+    }
+
+    private var agentPickerLeg: MissionLeg? {
+        guard let aggregate = state.missions.aggregate(id: tabState.missionID),
+              let legID = agentPickerLegID
+        else { return nil }
+        return leg(in: aggregate, id: legID)
+    }
+
+    private func linkedSession(for presentation: MissionLegPresentation, aggregate: MissionAggregate) -> ACPSession? {
+        guard let leg = aggregate.legs.first(where: { $0.id == presentation.id }) else { return nil }
+        return linkedSession(aggregate: aggregate, leg: leg, worktree: worktree(for: leg, aggregate: aggregate))
+    }
+
+    private func linkedSession(aggregate _: MissionAggregate, leg: MissionLeg, worktree: Worktree?) -> ACPSession? {
+        guard let worktree,
+              let id = leg.acpSessionId,
               let manager = state.acpManager(forWorktreeId: worktree.id)
         else { return nil }
         return manager.liveSession(for: id) ?? manager.placeholderSession(id: id)
@@ -467,45 +602,99 @@ struct MissionTabView: View {
             ?? id
     }
 
-    private func openAgent() {
+    private func openAgent(legID: MissionLegID) {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = state.missionWorktree(worktree, for: aggregate),
-              !worktreeIsArchived,
-              let sessionID = state.missions.aggregate(id: tabState.missionID)?.primaryLeg?.acpSessionId
+              let leg = leg(in: aggregate, id: legID),
+              let worktree = worktree(for: leg, aggregate: aggregate),
+              !worktreeIsArchived(worktree),
+              let sessionID = leg.acpSessionId
         else { return }
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         Task { await state.openExistingACPSession(sessionId: sessionID) }
     }
 
-    private func openChanges() {
+    private func openChanges(legID: MissionLegID) {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID),
-              let worktree = state.missionWorktree(worktree, for: aggregate)
+              let leg = leg(in: aggregate, id: legID),
+              let worktree = worktree(for: leg, aggregate: aggregate)
         else { return }
-        Task { await state.openMissionChanges(worktree: worktree, missionID: tabState.missionID) }
+        Task { await state.openMissionChanges(worktree: worktree, missionID: tabState.missionID, legID: leg.id) }
     }
 
     private func refresh() {
         Task { await state.refreshMission(tabState.missionID) }
     }
 
-    private func retryWorktree() {
-        Task { await state.missions.retry(tabState.missionID) }
+    private func retryWorktree(legID: MissionLegID) {
+        Task { await state.missions.retry(tabState.missionID, legID: legID) }
     }
 
-    private func recoverWorktree() {
+    private func retryAgent(legID: MissionLegID, agentID: String) async {
+        await state.missions.retry(tabState.missionID, legID: legID, agentId: agentID)
+    }
+
+    private func recoverWorktree(legID: MissionLegID) {
         let aggregate = state.missions.aggregate(id: tabState.missionID)
-        guard let worktree = aggregate.flatMap({ state.missionWorktree(worktree, for: $0) }) else {
-            Task { await state.missions.retry(tabState.missionID) }
+        guard let aggregate,
+              let leg = leg(in: aggregate, id: legID)
+        else { return }
+        guard let worktree = worktree(for: leg, aggregate: aggregate) else {
+            Task { await state.missions.retry(tabState.missionID, legID: leg.id) }
             return
         }
-        guard worktreeIsArchived else { return }
+        guard worktreeIsArchived(worktree) else { return }
         state.unarchiveWorktree(projectId: worktree.projectId, path: worktree.path)
         state.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+    }
+
+    private func leg(in aggregate: MissionAggregate, id: MissionLegID) -> MissionLeg? {
+        return aggregate.legs.first { $0.id == id }
+    }
+
+    private func worktree(for leg: MissionLeg, aggregate: MissionAggregate) -> Worktree? {
+        let candidate: Worktree?
+        if let worktree,
+           worktree.projectId == leg.projectId,
+           worktree.branch == leg.branch,
+           leg.worktreeId == nil || worktree.id == leg.worktreeId {
+            candidate = worktree
+        } else {
+            candidate = state.missionWorktreeAtDestination(
+                projectID: leg.projectId,
+                destinationPath: leg.destinationPath
+            )
+        }
+        guard let candidate,
+              candidate.projectId == leg.projectId,
+              candidate.branch == leg.branch,
+              leg.worktreeId == nil || candidate.id == leg.worktreeId
+        else { return nil }
+        guard let persistedLineageID = leg.worktreeLineageID,
+              candidate.lineageID == persistedLineageID
+        else { return nil }
+        guard aggregate.mission.state == .completed else { return candidate }
+        let candidatePath = candidate.path.standardizedFileURL.path
+        let ownedByALaterMission = state.missions.aggregates.contains { other in
+            guard other.mission.id != aggregate.mission.id,
+                  other.mission.createdAt > aggregate.mission.createdAt
+            else { return false }
+            return other.legs.contains { otherLeg in
+                guard otherLeg.projectId == candidate.projectId else { return false }
+                return otherLeg.worktreeId == candidate.id
+                    || URL(fileURLWithPath: otherLeg.destinationPath).standardizedFileURL.path == candidatePath
+            }
+        }
+        return ownedByALaterMission ? nil : candidate
+    }
+
+    private func worktreeIsArchived(_ worktree: Worktree) -> Bool {
+        state.projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
     }
 }
 
 private struct MissionHeaderSection: View {
     let presentation: MissionTabPresentation
+    let summary: MissionAggregateSummary
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -525,6 +714,12 @@ private struct MissionHeaderSection: View {
                     .foregroundStyle(theme.color("fg-dim"))
                     .accessibilityIdentifier("mission-header-captured-at")
                     .background(MissionAccessibilityMarker(identifier: "mission-header-captured-at"))
+                HStack(spacing: 8) {
+                    Text(summary.statusCopy)
+                    Text(summary.diffCopy)
+                }
+                .font(.caption)
+                .foregroundStyle(theme.color("fg-dim"))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
@@ -559,21 +754,25 @@ private struct MissionStateChip: View {
 }
 
 private struct MissionLegSection: View {
-    let presentation: MissionTabPresentation
+    let presentation: MissionLegPresentation
     let session: ACPSession?
     let agentName: String?
     let onOpenAgent: () -> Void
     let onOpenChanges: () -> Void
     let onOpenIssue: () -> Void
     let onOpenReview: () -> Void
+    let onRetryWorktree: () -> Void
+    let onRetryAgent: () -> Void
+    let onRecoverWorktree: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .firstTextBaseline) {
-                Text(presentation.repositoryName)
+                Text(presentation.projectName)
                     .font(.headline)
                 Spacer()
+                MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
                 Text(presentation.branchCopy)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))
@@ -607,6 +806,23 @@ private struct MissionLegSection: View {
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(theme.color("fg-dim"))
+            if presentation.checkpointCopy != nil || presentation.errorCopy != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let checkpoint = presentation.checkpointCopy {
+                        Text(checkpoint)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.color("fg"))
+                            .accessibilityIdentifier("mission-leg-checkpoint-\(presentation.id.rawValue)")
+                    }
+                    if let error = presentation.errorCopy {
+                        Text(error)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.color("del"))
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("mission-leg-error-\(presentation.id.rawValue)")
+                    }
+                }
+            }
             HStack(spacing: 8) {
                 if presentation.agentDestination != nil {
                     Button("Open Agent", action: onOpenAgent)
@@ -617,6 +833,15 @@ private struct MissionLegSection: View {
                         .disabled(!presentation.actions.openChanges)
                 }
                 Button("Open Issue", action: onOpenIssue)
+                if presentation.actions.retryWorktree {
+                    Button("Retry Worktree", action: onRetryWorktree)
+                }
+                if presentation.actions.retryAgent {
+                    Button("Retry Agent", action: onRetryAgent)
+                }
+                if presentation.actions.recoverWorktree {
+                    Button("Recover Worktree", action: onRecoverWorktree)
+                }
             }
             .buttonStyle(.bordered)
         }
@@ -823,7 +1048,7 @@ private struct MissionAgentReplacementPopover: View {
     }
 }
 
-private struct MissionAccessibilityMarker: NSViewRepresentable {
+struct MissionAccessibilityMarker: NSViewRepresentable {
     let identifier: String
 
     func makeNSView(context: Context) -> NSView {

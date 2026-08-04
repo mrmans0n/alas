@@ -57,7 +57,7 @@ extension AppState {
     /// otherwise launch a new one. One tab per (script, worktree).
     func runOrFocusScript(_ script: RunScript, in worktree: Worktree) {
         if let existing = runningScriptTab(for: script, in: worktree) {
-            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
             return
         }
         launchScript(script, in: worktree)

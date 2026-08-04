@@ -5,7 +5,7 @@ import Testing
 @MainActor
 @Suite("Mission coordinator")
 struct MissionCoordinatorTests {
-    private static let draft = MissionDraft(
+    private static let primaryDraft = MissionDraft(
         issue: MissionFixtures.issue(),
         projectId: "project-1",
         baseRef: "origin/main",
@@ -16,6 +16,306 @@ struct MissionCoordinatorTests {
         initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         initialPrompt: "Fix issue #42."
     )
+
+    private static let draft = primaryDraft
+
+    private static let sdkDraft = MissionLegDraft(
+        projectId: "project-sdk",
+        baseRef: "origin/main",
+        baseRemoteName: "origin",
+        branch: "fix/parser-crash-sdk",
+        destinationPath: "/tmp/alas-mission-sdk",
+        agentId: "codex",
+        initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+        preparedPrompt: "Fix the SDK integration for issue #42."
+    )
+
+    private static let serverDraft = MissionLegDraft(
+        projectId: "project-server",
+        baseRef: "origin/main",
+        baseRemoteName: "origin",
+        branch: "fix/parser-crash-server",
+        destinationPath: "/tmp/alas-mission-server",
+        agentId: "claude",
+        initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+        preparedPrompt: "Fix the server integration for issue #42."
+    )
+
+    // Break caught: serializing setup by Mission ID prevents two durable legs
+    // from reaching their independent Git checkpoints together.
+    @Test("secondary legs advance independently")
+    func secondaryLegsAdvanceIndependently() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+        await fake.resumeWorktreeCreation(for: try #require(fake.startedLegIDs.first))
+        _ = await fake.waitUntilSettled(missionID)
+        fake.clearStartedLegIDs()
+
+        async let first = coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        async let second = coordinator.addLeg(missionID: missionID, draft: Self.serverDraft)
+        let legIDs = try await [first, second]
+
+        await fake.waitForWorktreeStarts(count: 2)
+
+        #expect(Set(fake.startedLegIDs) == Set(legIDs))
+
+        for legID in legIDs {
+            await fake.resumeWorktreeCreation(for: legID)
+        }
+    }
+
+    // Break caught: applying a secondary setup failure to the aggregate state
+    // would make a running Mission unavailable while another leg succeeds.
+    @Test("secondary leg failure is isolated from sibling setup")
+    func secondaryLegFailureIsIsolatedFromSiblingSetup() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+        await fake.resumeWorktreeCreation(for: try #require(fake.startedLegIDs.first))
+        _ = await fake.waitUntilSettled(missionID)
+        fake.clearStartedLegIDs()
+
+        async let sdk = coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        async let server = coordinator.addLeg(missionID: missionID, draft: Self.serverDraft)
+        let sdkLegID = try await sdk
+        let serverLegID = try await server
+        await fake.waitForWorktreeStarts(count: 2)
+        fake.worktreeResultsByLegID[sdkLegID] = .failure(.init(message: "SDK Git failed"))
+
+        await fake.resumeWorktreeCreation(for: sdkLegID)
+        await fake.resumeWorktreeCreation(for: serverLegID)
+        let aggregate = await fake.waitUntilLegsSettled(missionID, count: 2)
+
+        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.legs.first(where: { $0.id == sdkLegID })?.state == .needsAttention)
+        #expect(aggregate.legs.first(where: { $0.id == serverLegID })?.state == .running)
+    }
+
+    // Break caught: continuing with ACP after an in-flight Git operation returns
+    // can start new external work after the Mission has completed.
+    @Test("completion after Git returns prevents ACP startup")
+    func completionAfterGitReturnsPreventsACPStartup() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+
+        var leg = try #require(try await fake.persistence.leg(
+            missionID: missionID,
+            legID: MissionLegID(rawValue: "id-2")
+        ))
+        leg.state = .ready
+        leg.setupCheckpoint = .running
+        leg.readinessEvidence = .init(kind: .legacy, observedAt: .now)
+        try await fake.persistence.updateLeg(leg, event: nil)
+        try await fake.persistence.complete(
+            id: missionID,
+            at: .now,
+            event: MissionFixtures.event(
+                id: "completed-after-git",
+                missionID: missionID,
+                legID: leg.id,
+                kind: .completed
+            )
+        )
+        let completed = try #require(try await fake.persistence.aggregate(id: missionID))
+
+        await fake.resumeWorktreeCreation(for: leg.id)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(fake.startACPCalls == 0)
+        #expect(try await fake.persistence.aggregate(id: missionID) == completed)
+    }
+
+    @Test("completion while ACP startup is suspended preserves completed history")
+    func completionWhileACPStartupIsSuspendedPreservesCompletedHistory() async throws {
+        let fake = MissionCoordinatorFake(suspendACPStartup: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForACPStarts(count: 1)
+
+        let beforeCompletion = try #require(try await fake.persistence.aggregate(id: missionID))
+        let legID = try #require(beforeCompletion.primaryLeg?.id)
+        try await fake.persistence.complete(
+            id: missionID,
+            at: .now,
+            event: MissionFixtures.event(
+                id: "completed-during-agent-start",
+                missionID: missionID,
+                legID: legID,
+                kind: .completed
+            )
+        )
+        let completed = try #require(try await fake.persistence.aggregate(id: missionID))
+
+        await fake.resumeACPStartup(for: legID)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(try await fake.persistence.aggregate(id: missionID) == completed)
+    }
+
+    @Test(
+        "completion while worktree planning is suspended preserves completed history",
+        arguments: [false, true]
+    )
+    func completionWhileWorktreePlanningIsSuspendedPreservesCompletedHistory(
+        planningFails: Bool
+    ) async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreePlanning: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreePlanningStarts(count: 1)
+
+        let beforeCompletion = try #require(try await fake.persistence.aggregate(id: missionID))
+        let legID = try #require(beforeCompletion.primaryLeg?.id)
+        try await fake.persistence.complete(
+            id: missionID,
+            at: .now,
+            event: MissionFixtures.event(
+                id: "completed-during-worktree-planning-\(planningFails)",
+                missionID: missionID,
+                legID: legID,
+                kind: .completed
+            )
+        )
+        let completed = try #require(try await fake.persistence.aggregate(id: missionID))
+
+        await fake.resumeWorktreePlanning(for: legID, failure: planningFails)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(try await fake.persistence.aggregate(id: missionID) == completed)
+    }
+
+    // Break caught: completion can race after the ACP session reservation is
+    // durable but before the coordinator starts the next external operation.
+    @Test("completion after session reservation prevents ACP startup")
+    func completionAfterSessionReservationPreventsACPStartup() async throws {
+        let fake = MissionCoordinatorFake(completeWhenSessionReserved: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        for _ in 0..<200 {
+            if try await fake.persistence.aggregate(id: missionID)?.mission.state == .completed {
+                break
+            }
+            await Task.yield()
+        }
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: missionID))
+        #expect(aggregate.mission.state == .completed)
+        #expect(aggregate.primaryLeg?.acpSessionId != nil)
+        #expect(fake.startACPCalls == 0)
+        #expect(fake.reportedFailures.isEmpty)
+    }
+
+    @Test("completion before the final setup write is silent cancellation")
+    func completionBeforeFinalSetupWriteIsSilentCancellation() async throws {
+        let fake = MissionCoordinatorFake(completeAfterACPBeforeSetupPersistence: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        for _ in 0..<200 {
+            if try await fake.persistence.aggregate(id: missionID)?.mission.state == .completed {
+                break
+            }
+            await Task.yield()
+        }
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: missionID))
+        #expect(aggregate.mission.state == .completed)
+        #expect(fake.startACPCalls == 1)
+        #expect(fake.reportedFailures.isEmpty)
+        #expect(!aggregate.events.contains { $0.kind == .attentionRequired })
+    }
+
+    // Break caught: restart reconciliation awaits one creating leg to settle
+    // before advancing the next, serializing otherwise independent Git work.
+    @Test("restart advances creating legs independently")
+    func restartAdvancesCreatingLegsIndependently() async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreeCreation: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreeStarts(count: 1)
+        await fake.resumeWorktreeCreation(for: try #require(fake.startedLegIDs.first))
+        _ = await fake.waitUntilSettled(missionID)
+        fake.clearStartedLegIDs()
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: missionID))
+        let now = Date()
+        let sdkLeg = Self.leg(
+            id: MissionLegID(rawValue: "restart-sdk"),
+            missionID: missionID,
+            ordinal: 1,
+            draft: Self.sdkDraft,
+            at: now
+        )
+        let serverLeg = Self.leg(
+            id: MissionLegID(rawValue: "restart-server"),
+            missionID: missionID,
+            ordinal: 2,
+            draft: Self.serverDraft,
+            at: now
+        )
+        try await fake.persistence.addLeg(sdkLeg, event: MissionEvent(
+            id: "restart-sdk-added",
+            missionID: missionID,
+            legID: sdkLeg.id,
+            kind: .legAdded,
+            message: "Mission leg added.",
+            createdAt: now
+        ))
+        try await fake.persistence.addLeg(serverLeg, event: MissionEvent(
+            id: "restart-server-added",
+            missionID: missionID,
+            legID: serverLeg.id,
+            kind: .legAdded,
+            message: "Mission leg added.",
+            createdAt: now
+        ))
+        #expect(aggregate.mission.state == .running)
+
+        let reconciliation = Task { @MainActor in
+            await coordinator.reconcileInterrupted()
+        }
+        await fake.waitForWorktreeStarts(count: 2)
+
+        #expect(Set(fake.startedLegIDs) == Set([sdkLeg.id, serverLeg.id]))
+
+        await fake.resumeWorktreeCreation(for: sdkLeg.id)
+        await fake.waitForWorktreeStarts(count: 2)
+        await fake.resumeWorktreeCreation(for: serverLeg.id)
+        await reconciliation.value
+    }
+
+    private static func leg(
+        id: MissionLegID,
+        missionID: MissionID,
+        ordinal: Int,
+        draft: MissionLegDraft,
+        at: Date
+    ) -> MissionLeg {
+        MissionLeg(
+            id: id,
+            missionID: missionID,
+            ordinal: ordinal,
+            projectId: draft.projectId,
+            baseRef: draft.baseRef,
+            baseRemoteName: draft.baseRemoteName,
+            branch: draft.branch,
+            destinationPath: draft.destinationPath,
+            worktreeId: nil,
+            agentId: draft.agentId,
+            acpSessionId: nil,
+            initialPromptId: draft.initialPromptId,
+            pendingInitialPrompt: draft.preparedPrompt,
+            reviewIdentity: nil,
+            createdAt: at,
+            updatedAt: at
+        )
+    }
 
     @Test("success persists every checkpoint in order")
     func successPersistsEveryCheckpointInOrder() async throws {
@@ -74,7 +374,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch exists retry later")
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
@@ -94,7 +394,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "Could not establish a durable identity for the Mission worktree. Retry this Mission.")
         #expect(aggregate.primaryLeg?.worktreeLineageID == nil)
@@ -111,7 +411,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 0)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "A worktree already exists at the Mission destination. Choose a different branch or remove the existing worktree.")
         #expect(aggregate.primaryLeg?.worktreeId == nil)
@@ -127,7 +427,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 1)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
         #expect(aggregate.primaryLeg?.acpSessionId == fake.startedSessionIDs.first)
@@ -156,6 +456,8 @@ struct MissionCoordinatorTests {
         var retrying = MissionFixtures.creatingMission()
         retrying.mission.state = .needsAttention
         retrying.mission.setupCheckpoint = .startingAgent
+        retrying.legs[0].state = .needsAttention
+        retrying.legs[0].setupCheckpoint = .startingAgent
         retrying.legs[0].worktreeId = "worktree-1"
         retrying.legs[0].acpSessionId = "session-1"
         let fake = MissionCoordinatorFake(existing: [retrying])
@@ -163,12 +465,12 @@ struct MissionCoordinatorTests {
         fake.worktreeAtDestination = fake.worktree
         let controller = MissionController(environment: fake.environment)
 
-        await controller.retry(retrying.mission.id)
+        await controller.retry(retrying.mission.id, legID: retrying.legs[0].id)
         let aggregate = try #require(try await fake.persistence.aggregate(id: retrying.mission.id))
 
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
     @Test("missing worktree recovery restarts the worktree checkpoint")
@@ -176,6 +478,8 @@ struct MissionCoordinatorTests {
         var missing = MissionFixtures.creatingMission()
         missing.mission.state = .running
         missing.mission.setupCheckpoint = .running
+        missing.legs[0].state = .running
+        missing.legs[0].setupCheckpoint = .running
         missing.legs[0].worktreeId = "missing-worktree"
         missing.legs[0].acpSessionId = "missing-session"
         missing.legs[0].pendingInitialPrompt = nil
@@ -186,19 +490,19 @@ struct MissionCoordinatorTests {
         fake.worktreeAtDestination = nil
         let controller = MissionController(environment: fake.environment)
 
-        await controller.recordMissingWorktree(missing.mission.id)
+        await controller.recordMissingWorktree(missing.mission.id, legID: missing.legs[0].id)
         let marked = try #require(try await fake.persistence.aggregate(id: missing.mission.id))
-        #expect(marked.mission.state == .needsAttention)
-        #expect(marked.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(marked.primaryLeg?.state == .needsAttention)
+        #expect(marked.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
 
-        await controller.retry(missing.mission.id)
+        await controller.retry(missing.mission.id, legID: missing.legs[0].id)
         let recovered = await fake.waitUntilSettled(missing.mission.id)
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 1)
         #expect(fake.startedPromptIDs == [missing.legs[0].initialPromptId])
-        #expect(recovered.mission.state == .needsAttention)
-        #expect(recovered.mission.setupCheckpoint == .startingAgent)
+        #expect(recovered.primaryLeg?.state == .needsAttention)
+        #expect(recovered.primaryLeg?.setupCheckpoint == .startingAgent)
         #expect(recovered.primaryLeg?.worktreeId == fake.worktree.id)
         #expect(recovered.primaryLeg?.acpSessionId != "missing-session")
         #expect(recovered.primaryLeg?.pendingInitialPrompt != nil)
@@ -210,6 +514,9 @@ struct MissionCoordinatorTests {
         missing.mission.state = .needsAttention
         missing.mission.setupCheckpoint = .running
         missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.legs[0].state = .needsAttention
+        missing.legs[0].setupCheckpoint = .running
+        missing.legs[0].attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
         missing.legs[0].worktreeId = "worktree-1"
         missing.legs[0].worktreeLineageID = "lineage-1"
         missing.legs[0].acpSessionId = "session-1"
@@ -217,13 +524,13 @@ struct MissionCoordinatorTests {
         let fake = MissionCoordinatorFake(existing: [missing])
         let controller = MissionController(environment: fake.environment)
 
-        await controller.retry(missing.mission.id)
+        await controller.retry(missing.mission.id, legID: missing.legs[0].id)
         let recovered = try #require(try await fake.persistence.aggregate(id: missing.mission.id))
 
         #expect(fake.createWorktreeCalls == 0)
         #expect(fake.startACPCalls == 0)
-        #expect(recovered.mission.state == .running)
-        #expect(recovered.mission.setupCheckpoint == .running)
+        #expect(recovered.primaryLeg?.state == .running)
+        #expect(recovered.primaryLeg?.setupCheckpoint == .running)
         #expect(recovered.primaryLeg?.worktreeId == "worktree-1")
         #expect(recovered.primaryLeg?.worktreeLineageID == "lineage-1")
         #expect(recovered.primaryLeg?.acpSessionId == "session-1")
@@ -287,6 +594,20 @@ struct MissionCoordinatorTests {
         let repeatedRetry = try #require(try await fake.persistence.aggregate(id: id))
         #expect(repeatedRetry.primaryLeg?.acpSessionId == replacementSessionID)
         #expect(try sessionStore.loadSession(id: replacementSessionID)?.agentId == "claude")
+    }
+
+    @Test("agent replacement is ignored after Mission completion")
+    func agentReplacementIsIgnoredAfterCompletion() async throws {
+        let fake = MissionCoordinatorFake(agentResult: .failure(.init(message: "Install Codex")))
+        let controller = MissionController(environment: fake.environment)
+        let id = try await controller.create(Self.draft, allowDuplicate: false)
+        _ = await fake.waitUntilSettled(id)
+        await controller.complete(id)
+        let completed = try #require(try await fake.persistence.list(includeCompleted: true).first { $0.mission.id == id })
+
+        await controller.retry(id, agentId: "claude")
+
+        #expect(try await fake.persistence.list(includeCompleted: true).first { $0.mission.id == id } == completed)
     }
 
     @Test("agent replacement is ignored outside the agent checkpoint")
@@ -439,7 +760,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.createWorktreeCalls == 1)
         #expect(fake.startACPCalls == 0)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "Could not persist Mission setup progress. Retry this Mission.")
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
@@ -467,7 +788,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.startACPCalls == 1)
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
-        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.state == .running)
         #expect(failed.mission.setupCheckpoint == .startingAgent)
         #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
 
@@ -496,7 +817,7 @@ struct MissionCoordinatorTests {
 
         #expect(fake.startACPCalls == 1)
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId])
-        #expect(failed.mission.state == .needsAttention)
+        #expect(failed.mission.state == .running)
         #expect(failed.mission.setupCheckpoint == .startingAgent)
         #expect(failed.mission.attentionReason == "Install Codex")
         #expect(failed.primaryLeg?.pendingInitialPrompt == nil)
@@ -535,10 +856,68 @@ struct MissionCoordinatorTests {
         #expect(fake.startACPCalls == 2)
         #expect(fake.startedAgentIDs == ["codex", "claude"])
         #expect(fake.startedPromptIDs == [Self.draft.initialPromptId, Self.draft.initialPromptId])
+        #expect(fake.startedPrompts.last == Self.draft.initialPrompt)
         #expect(recovered.primaryLeg?.agentId == "claude")
         #expect(recovered.primaryLeg?.acpSessionId != "started-session")
         #expect(recovered.primaryLeg?.pendingInitialPrompt == nil)
         #expect(recovered.mission.state == .running)
+    }
+
+    @Test("agent replacement targets a secondary leg")
+    func agentReplacementTargetsSecondaryLeg() async throws {
+        let fake = MissionCoordinatorFake()
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let controller = MissionController(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        _ = await fake.waitUntilSettled(missionID)
+
+        fake.agentResult = .failure(.init(message: "Install Codex"))
+        let sdkLegID = try await coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        let failed = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let failedLeg = try #require(failed.legs.first(where: { $0.id == sdkLegID }))
+        #expect(failedLeg.state == .needsAttention)
+        #expect(failedLeg.agentId == "codex")
+        let failedSessionID = failedLeg.acpSessionId
+
+        fake.agentResult = nil
+        await controller.retry(missionID, legID: sdkLegID, agentId: "claude")
+        let recovered = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let recoveredLeg = try #require(recovered.legs.first(where: { $0.id == sdkLegID }))
+
+        #expect(Array(fake.startedAgentIDs.suffix(2)) == ["codex", "claude"])
+        #expect(fake.startedPrompts.last == Self.sdkDraft.preparedPrompt)
+        #expect(recoveredLeg.state == .running)
+        #expect(recoveredLeg.agentId == "claude")
+        #expect(recoveredLeg.acpSessionId != failedSessionID)
+    }
+
+    @Test("available worktree recovery targets a secondary leg")
+    func availableWorktreeRecoveryTargetsSecondaryLeg() async throws {
+        let fake = MissionCoordinatorFake()
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let controller = MissionController(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        _ = await fake.waitUntilSettled(missionID)
+        let sdkLegID = try await coordinator.addLeg(missionID: missionID, draft: Self.sdkDraft)
+        _ = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let startCount = fake.startACPCalls
+
+        await controller.recordMissingWorktree(missionID, legID: sdkLegID)
+        let marked = try #require(try await fake.persistence.aggregate(id: missionID))
+        let markedLeg = try #require(marked.legs.first(where: { $0.id == sdkLegID }))
+        #expect(markedLeg.state == .needsAttention)
+        #expect(markedLeg.pendingInitialPrompt != nil)
+
+        await controller.recordAvailableWorktree(missionID, legID: sdkLegID)
+        let recovered = await fake.waitUntilLegsSettled(missionID, count: 1)
+        let recoveredLeg = try #require(recovered.legs.first(where: { $0.id == sdkLegID }))
+        let primaryLeg = try #require(recovered.primaryLeg)
+
+        #expect(fake.startACPCalls == startCount + 1)
+        #expect(fake.startedPrompts.last == Self.sdkDraft.preparedPrompt)
+        #expect(recoveredLeg.state == .running)
+        #expect(recoveredLeg.pendingInitialPrompt == nil)
+        #expect(primaryLeg.state == .running)
     }
 
     @Test("restart reuses the recorded worktree at the Mission destination")
@@ -579,7 +958,7 @@ struct MissionCoordinatorTests {
         let retried = await fake.waitUntilSettled(existing.mission.id)
 
         #expect(fake.startACPCalls == 0)
-        #expect(retried.mission.state == .needsAttention)
+        #expect(retried.mission.state == .running)
         #expect(retried.mission.setupCheckpoint == .creatingWorktree)
         #expect(retried.mission.attentionReason == "Could not establish a durable identity for the Mission worktree. Retry this Mission.")
         #expect(retried.primaryLeg?.worktreeLineageID == nil)
@@ -619,7 +998,7 @@ struct MissionCoordinatorTests {
         #expect(fake.createWorktreeCalls == 0)
         #expect(fake.startACPCalls == 0)
         #expect(aggregate.primaryLeg?.worktreeId == fake.worktree.id)
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
     }
 
@@ -731,6 +1110,7 @@ private struct NotificationSnapshot: Equatable {
 @MainActor
 private final class MissionCoordinatorFake {
     let persistence: MissionPersistence
+    private let store: MissionStore
     var worktree = Worktree(
         id: "worktree-1",
         projectId: "project-1",
@@ -743,6 +1123,7 @@ private final class MissionCoordinatorFake {
     )
 
     var worktreeResult: Result<Worktree, WorktreeCreationFailure>
+    var worktreeResultsByLegID: [MissionLegID: Result<Worktree, WorktreeCreationFailure>] = [:]
     var agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>?
     var worktreeAtDestination: Worktree?
     var startACPOverride: ((MissionLeg, Worktree) async -> Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>)?
@@ -753,19 +1134,45 @@ private final class MissionCoordinatorFake {
     private(set) var startACPCalls = 0
     private(set) var startedSessionIDs: [String] = []
     private(set) var startedPromptIDs: [UUID] = []
+    private(set) var startedPrompts: [String] = []
     private(set) var startedAgentIDs: [String] = []
+    private(set) var startedLegIDs: [MissionLegID] = []
     private(set) var operations: [String] = []
     private(set) var notifications: [MissionAggregate] = []
     private(set) var reportedFailures: [(MissionID?, String)] = []
 
     private var idCounter = 0
     private var clock: TimeInterval = 1_000
+    private let suspendWorktreeCreation: Bool
+    private let suspendWorktreePlanning: Bool
+    private let suspendACPStartup: Bool
+    private let completeWhenSessionReserved: Bool
+    private let completeAfterACPBeforeSetupPersistence: Bool
+    private var completedAfterACP = false
+    private var startedLegs: [MissionLegID: MissionLeg] = [:]
+    private var worktreeCreationContinuations: [
+        MissionLegID: CheckedContinuation<Result<Worktree, WorktreeCreationFailure>, Never>
+    ] = [:]
+    private var worktreePlanningContinuations: [
+        MissionLegID: CheckedContinuation<Result<String, WorktreeCreationFailure>, Never>
+    ] = [:]
+    private var acpStartupContinuations: [
+        MissionLegID: CheckedContinuation<
+            Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>,
+            Never
+        >
+    ] = [:]
     var idValues: [String] = []
 
     init(
         existing: [MissionAggregate] = [],
         worktreeResult: Result<Worktree, WorktreeCreationFailure>? = nil,
-        agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil
+        agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil,
+        suspendWorktreeCreation: Bool = false,
+        suspendWorktreePlanning: Bool = false,
+        suspendACPStartup: Bool = false,
+        completeWhenSessionReserved: Bool = false,
+        completeAfterACPBeforeSetupPersistence: Bool = false
     ) {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-coordinator-\(UUID().uuidString).sqlite")
@@ -775,8 +1182,14 @@ private final class MissionCoordinatorFake {
             try! store.insert(aggregate)
         }
         persistence = MissionPersistence(path: path)
+        self.store = store
         self.worktreeResult = worktreeResult ?? .success(worktree)
         self.agentResult = agentResult
+        self.suspendWorktreeCreation = suspendWorktreeCreation
+        self.suspendWorktreePlanning = suspendWorktreePlanning
+        self.suspendACPStartup = suspendACPStartup
+        self.completeWhenSessionReserved = completeWhenSessionReserved
+        self.completeAfterACPBeforeSetupPersistence = completeAfterACPBeforeSetupPersistence
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
             worktreeAtDestination = worktree
         }
@@ -788,7 +1201,25 @@ private final class MissionCoordinatorFake {
             now: { [weak self] in
                 guard let self else { return .distantPast }
                 self.clock += 1
-                return Date(timeIntervalSince1970: self.clock)
+                let now = Date(timeIntervalSince1970: self.clock)
+                if self.completeAfterACPBeforeSetupPersistence,
+                   self.startACPCalls > 0,
+                   !self.completedAfterACP,
+                   let aggregate = try! self.store.list(includeCompleted: false).first {
+                    self.completedAfterACP = true
+                    try! self.store.complete(
+                        id: aggregate.mission.id,
+                        at: now,
+                        event: MissionFixtures.event(
+                            id: "completed-before-final-setup-write",
+                            missionID: aggregate.mission.id,
+                            legID: aggregate.primaryLeg?.id,
+                            kind: .completed,
+                            createdAt: now.timeIntervalSince1970
+                        )
+                    )
+                }
+                return now
             },
             makeID: { [weak self] in
                 guard let self else { return UUID().uuidString }
@@ -798,30 +1229,46 @@ private final class MissionCoordinatorFake {
                 self.idCounter += 1
                 return "id-\(self.idCounter)"
             },
-            plannedWorktreeID: { [weak self] _ in
+            plannedWorktreeID: { [weak self] leg in
                 guard let self else { return .failure(.init(message: "Fake released")) }
-                return .success(self.worktree.id)
+                if self.suspendWorktreePlanning {
+                    return await withCheckedContinuation { continuation in
+                        self.worktreePlanningContinuations[leg.id] = continuation
+                    }
+                }
+                return .success(self.worktree(for: leg).id)
             },
             worktreeAtDestination: { [weak self] projectID, path in
-                guard let self,
-                      projectID == self.worktree.projectId,
-                      URL(fileURLWithPath: path).standardizedFileURL.path == self.worktree.path.standardizedFileURL.path
-                else { return nil }
-                return self.worktreeAtDestination
+                guard let self else { return nil }
+                if projectID == self.worktree.projectId,
+                   URL(fileURLWithPath: path).standardizedFileURL.path == self.worktree.path.standardizedFileURL.path {
+                    return self.worktreeAtDestination
+                }
+                return self.createdWorktrees.first { worktree in
+                    worktree.projectId == projectID
+                        && worktree.path.standardizedFileURL.path
+                            == URL(fileURLWithPath: path).standardizedFileURL.path
+                }
             },
             createWorktree: { [weak self] leg in
                 guard let self else { return .failure(.init(message: "Fake released")) }
                 self.createWorktreeCalls += 1
+                self.startedLegIDs.append(leg.id)
+                self.startedLegs[leg.id] = leg
                 self.operations.append("createWorktree")
                 if self.aggregateObservedWhenGitStarted {
                     let aggregate = try? await self.persistence.aggregate(id: leg.missionID)
                     self.missionWasDurableWhenGitStarted = aggregate != nil
-                    self.worktreeReservationWasDurableWhenGitStarted = aggregate?.primaryLeg?.worktreeId == self.worktree.id
+                    self.worktreeReservationWasDurableWhenGitStarted = aggregate?.legs.first(where: { $0.id == leg.id })?.worktreeId == self.worktree(for: leg).id
                 }
-                if case .success(let worktree) = self.worktreeResult {
-                    self.worktreeAtDestination = worktree
+                let result = self.worktreeResult(for: leg)
+                if self.suspendWorktreeCreation {
+                    return await withCheckedContinuation { continuation in
+                        self.worktreeCreationContinuations[leg.id] = continuation
+                    }
                 }
-                return self.worktreeResult
+                self.recordCreatedWorktree(result)
+                return result
             },
             startACP: { [weak self] leg, _ in
                 guard let self else {
@@ -831,8 +1278,14 @@ private final class MissionCoordinatorFake {
                 self.operations.append("startACP")
                 self.startedAgentIDs.append(leg.agentId)
                 self.startedSessionIDs.append(leg.acpSessionId ?? "")
-                if leg.pendingInitialPrompt != nil {
+                if let prompt = leg.pendingInitialPrompt {
                     self.startedPromptIDs.append(leg.initialPromptId)
+                    self.startedPrompts.append(prompt)
+                }
+                if self.suspendACPStartup {
+                    return await withCheckedContinuation { continuation in
+                        self.acpStartupContinuations[leg.id] = continuation
+                    }
                 }
                 if let startACPOverride = self.startACPOverride {
                     return await startACPOverride(leg, self.worktree)
@@ -842,6 +1295,22 @@ private final class MissionCoordinatorFake {
             notifyChanged: { [weak self] aggregate in
                 guard let self else { return }
                 self.notifications.append(aggregate)
+                if self.completeWhenSessionReserved,
+                   aggregate.primaryLeg?.acpSessionId != nil,
+                   aggregate.mission.state != .completed {
+                    let now = self.clockDate()
+                    try! self.store.complete(
+                        id: aggregate.mission.id,
+                        at: now,
+                        event: MissionFixtures.event(
+                            id: "completed-after-session-reservation",
+                            missionID: aggregate.mission.id,
+                            legID: aggregate.primaryLeg?.id,
+                            kind: .completed,
+                            createdAt: now.timeIntervalSince1970
+                        )
+                    )
+                }
                 if aggregate.events.last?.kind == .created, aggregate.primaryLeg?.worktreeId == nil {
                     self.operations.append("insert:creatingWorktree")
                 } else if aggregate.mission.setupCheckpoint == .startingAgent,
@@ -864,6 +1333,11 @@ private final class MissionCoordinatorFake {
         )
     }
 
+    private func clockDate() -> Date {
+        clock += 1
+        return Date(timeIntervalSince1970: clock)
+    }
+
     func waitUntilSettled(_ id: MissionID) async -> MissionAggregate {
         for _ in 0..<200 {
             if let aggregate = try? await persistence.aggregate(id: id),
@@ -874,6 +1348,118 @@ private final class MissionCoordinatorFake {
             await Task.yield()
         }
         return try! await persistence.aggregate(id: id)!
+    }
+
+    func waitForWorktreeStarts(count: Int) async {
+        for _ in 0..<200 {
+            if startedLegIDs.count >= count { return }
+            await Task.yield()
+        }
+    }
+
+    func waitForWorktreePlanningStarts(count: Int) async {
+        for _ in 0..<200 {
+            if worktreePlanningContinuations.count >= count { return }
+            await Task.yield()
+        }
+    }
+
+    func waitForACPStarts(count: Int) async {
+        for _ in 0..<200 {
+            if startACPCalls >= count { return }
+            await Task.yield()
+        }
+    }
+
+    func clearStartedLegIDs() {
+        startedLegIDs = []
+    }
+
+    func resumeWorktreeCreation(for legID: MissionLegID) async {
+        guard let continuation = worktreeCreationContinuations.removeValue(forKey: legID) else { return }
+        let result = worktreeResult(for: legID)
+        recordCreatedWorktree(result)
+        continuation.resume(returning: result)
+    }
+
+    func resumeWorktreePlanning(for legID: MissionLegID, failure: Bool) async {
+        guard let continuation = worktreePlanningContinuations.removeValue(forKey: legID) else { return }
+        if failure {
+            continuation.resume(returning: .failure(.init(message: "Planning failed.")))
+        } else {
+            continuation.resume(returning: .success(worktree.id))
+        }
+    }
+
+    func resumeACPStartup(for legID: MissionLegID) async {
+        guard let continuation = acpStartupContinuations.removeValue(forKey: legID) else { return }
+        continuation.resume(returning: agentResult ?? .success("session-\(legID.rawValue)"))
+    }
+
+    func waitUntilLegsSettled(_ id: MissionID, count: Int) async -> MissionAggregate {
+        for _ in 0..<200 {
+            if let aggregate = try? await persistence.aggregate(id: id),
+               aggregate.legs.count >= count + 1,
+               aggregate.legs.filter({ $0.ordinal > 0 }).allSatisfy({ $0.state != .creating }) {
+                return aggregate
+            }
+            await Task.yield()
+        }
+        return try! await persistence.aggregate(id: id)!
+    }
+
+    private var createdWorktrees: [Worktree] = []
+
+    private func worktree(for leg: MissionLeg) -> Worktree {
+        if leg.projectId == worktree.projectId,
+           URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+                == worktree.path.standardizedFileURL.path {
+            return worktree
+        }
+        return Worktree(
+            id: "worktree-\(leg.id.rawValue)",
+            projectId: leg.projectId,
+            name: leg.branch,
+            branch: leg.branch,
+            path: URL(fileURLWithPath: leg.destinationPath),
+            status: .clean,
+            lastActivity: .now,
+            lineageID: "lineage-\(leg.id.rawValue)"
+        )
+    }
+
+    private func worktreeResult(for leg: MissionLeg) -> Result<Worktree, WorktreeCreationFailure> {
+        if let result = worktreeResultsByLegID[leg.id] { return result }
+        if leg.projectId == worktree.projectId,
+           URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+                == worktree.path.standardizedFileURL.path {
+            return worktreeResult
+        }
+        switch worktreeResult {
+        case .failure(let failure):
+            return .failure(failure)
+        case .success:
+            return .success(worktree(for: leg))
+        }
+    }
+
+    private func worktreeResult(for legID: MissionLegID) -> Result<Worktree, WorktreeCreationFailure> {
+        guard let leg = startedLegs[legID] else {
+            return worktreeResultsByLegID[legID] ?? worktreeResult
+        }
+        return worktreeResult(for: leg)
+    }
+
+    private func recordCreatedWorktree(_ result: Result<Worktree, WorktreeCreationFailure>) {
+        if case .success(let worktree) = result {
+            if worktree.projectId == self.worktree.projectId,
+               worktree.path.standardizedFileURL.path == self.worktree.path.standardizedFileURL.path {
+                worktreeAtDestination = worktree
+            } else {
+                createdWorktrees.removeAll { $0.id == worktree.id }
+                createdWorktrees.append(worktree)
+            }
+        }
     }
 }
 

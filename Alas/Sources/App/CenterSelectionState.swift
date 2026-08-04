@@ -1,6 +1,7 @@
 import Foundation
 
 enum CenterSelectionState: Equatable {
+    case globalMission(MissionTabState)
     case worktree(Worktree)
     case deleting(Worktree)
     case deleteFailed(Worktree, message: String)
@@ -12,10 +13,14 @@ struct CenterSelectionStateResolver {
     let selectedWorktreeId: String?
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
+    var activeGlobalMissionTab: MissionTabState?
     var allowsHiddenSelectedWorktree = false
 
     @MainActor
     func resolve() -> CenterSelectionState {
+        if let activeGlobalMissionTab {
+            return .globalMission(activeGlobalMissionTab)
+        }
         guard let id = selectedWorktreeId else { return .empty }
         if let op = projectsManager.operationState(for: id) {
             switch op {

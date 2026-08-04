@@ -138,6 +138,101 @@ struct AppStatePersistenceTests {
         #expect(remote.remoteName == "team/origin")
     }
 
+    @Test func missionReviewRemoteRejectsForkWhenConfiguredBaseRemoteExists() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "nacho/alas",
+            number: 42
+        )
+
+        let remote = AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "upstream/main",
+            persistedRemoteName: "upstream",
+            remotes: [
+                GitRemote(name: "origin", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ]
+        )
+
+        #expect(remote == nil)
+    }
+
+    @Test func missionReviewRemoteRepairsStaleConfiguredBaseAlias() throws {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let remote = try #require(AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
+        ))
+
+        #expect(remote.remoteName == "upstream")
+    }
+
+    @Test func missionReviewRemoteDoesNotGuessStaleBaseAliasWhenMultipleRemotesExist() {
+        let identity = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+
+        let remote = AppState.missionReviewRemote(
+            identity: identity,
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [
+                GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ]
+        )
+
+        #expect(remote == nil)
+    }
+
+    @Test func missionPaneBaseRefDoesNotGuessStaleBaseAliasWhenMultipleRemotesExist() {
+        let baseRef = AppState.missionPaneBaseRef(
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [
+                GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ],
+            supportedKinds: [.github]
+        )
+
+        #expect(baseRef == "origin/main")
+    }
+
+    @Test func missionDiscoveryRemoteUsesTheTargetProjectRepository() throws {
+        let remote = try #require(AppState.missionDiscoveryRemote(
+            baseRef: "origin/main",
+            remotes: [
+                GitRemote(name: "origin", url: "git@github.com:acme/sdk.git"),
+                GitRemote(name: "issue", url: "git@github.com:acme/alas.git"),
+            ],
+            supportedKinds: [.github, .gitlab]
+        ))
+
+        #expect(remote.remoteName == "origin")
+        #expect(remote.repositorySlug == "acme/sdk")
+    }
+
+    @Test func missionDiscoveryUsesQualifiedBaseForRemoteAndStrippedBranchForProvider() {
+        #expect(AppState.missionDiscoveryBaseBranch(
+            baseRef: "upstream/main",
+            remoteName: "upstream"
+        ) == "main")
+    }
+
     @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
         let current = try #require(CodeHostRemoteDetector.detect(
             from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],
@@ -195,6 +290,192 @@ struct AppStatePersistenceTests {
             identity: identity,
             remotes: [GitRemote(name: "origin", url: "git@gitlab.com:acquired/renamed-alas.git")]
         ))
+    }
+
+    @Test func openMissionDoesNotChangeSelectedWorktree() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectedWorktreeId = fixture.otherWorktree.id
+        await fixture.state.missions.load()
+
+        let result = fixture.state.openMission(id: fixture.aggregate.mission.id)
+
+        #expect(try result.get() == .mission(MissionTabState.fixture))
+        #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+    }
+
+    @Test func selectingWorktreeClearsActiveGlobalMissionWithoutClosingIt() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+
+        #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.globalTabs.tabs == [.mission(.fixture)])
+    }
+
+    @Test func openingWorktreeACPSessionClearsActiveGlobalMission() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        fixture.state.openNewACPSession(agentID: "test-agent")
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
+    }
+
+    @Test func openingWorktreeFileClearsActiveGlobalMission() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        fixture.state.openFile(relativePath: "Sources/App.swift", worktreeId: fixture.otherWorktree.id)
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
+    }
+
+    @Test func openingExternalWorktreeFileClearsActiveGlobalMission() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-mission-external-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: externalDir) }
+        let externalFile = externalDir.appendingPathComponent("external.txt")
+        try "outside\n".write(to: externalFile, atomically: true, encoding: .utf8)
+        let router = fixture.state.makeCLICommandRouter(sessionWorktreeLookup: { _ in fixture.otherWorktree.id })
+
+        let response = await router.handle(
+            .init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [externalFile.path]))
+        )
+
+        #expect(response == .ok)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
+    }
+
+    @Test func selectingInitialWorktreePreservesRestoredGlobalMission() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.selectInitialWorktree(id: fixture.otherWorktree.id)
+
+        #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+    }
+
+    @Test func centerShortcutsRouteThroughGlobalMissionOwnership() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        let terminal = fixture.state.tabs.appendTerminal(
+            worktreeId: fixture.otherWorktree.id,
+            title: "Shell",
+            sessionId: "session-1"
+        )
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        #expect(fixture.state.activateCenterTabNumber(1, worktreeId: fixture.otherWorktree.id) == MissionTabState.fixture.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+        #expect(fixture.state.activateCenterTabNumber(2, worktreeId: fixture.otherWorktree.id) == terminal.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+
+        fixture.state.globalTabs.activate(tabId: MissionTabState.fixture.id)
+        fixture.state.handleCloseCenterShortcut(worktreeId: fixture.otherWorktree.id)
+
+        #expect(fixture.state.globalTabs.tabs.isEmpty)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.otherWorktree.id) == [terminal])
+    }
+
+    @Test func reloadTabsPreservesGlobalMissionWhenWorktreeIsMissing() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: false)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        fixture.state.reloadTabs()
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+        let orphanedTabs = fixture.state.tabs.tabs(forWorktree: fixture.worktree.id)
+        #expect(orphanedTabs.count == 1)
+        if let first = orphanedTabs.first, case .terminal = first {
+            // The migration scans the unavailable worktree's persisted file,
+            // extracts only its Mission tab, and preserves ordinary tabs.
+        } else {
+            Issue.record("Expected the orphaned terminal tab to survive Mission migration")
+        }
+    }
+
+    @Test func closingMissingMissionGlobalTabClearsRecoveryPresentation() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: false)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.closeGlobalTab(tabId: MissionTabState.fixture.id)
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.missingMissionTab == nil)
+    }
+
+    @Test func migratedMissionTabRemainsGlobalAcrossAnSDKOnlySpace() async throws {
+        let fixture = try MissionCrossSpaceNavigationFixture()
+        let store = PersistenceStore()
+        try store.write(
+            TabsFile(
+                version: 1,
+                tabs: [.mission(.crossRepoFixture)],
+                activeTabId: MissionTabState.crossRepoFixture.id
+            ),
+            to: fixture.tabsDirectory.appendingPathComponent("\(fixture.appWorktree.id).json")
+        )
+        let worktreeTabs = TabsManager(tabsDirectory: fixture.tabsDirectory)
+        worktreeTabs.loadAll(worktreeIds: [fixture.appWorktree.id, fixture.sdkWorktree.id])
+        let globalTabs = GlobalTabsManager(fileURL: fixture.globalTabsFile)
+
+        try globalTabs.loadAndMigrate(worktreeTabs: worktreeTabs)
+
+        #expect(worktreeTabs.tabs(forWorktree: fixture.appWorktree.id).isEmpty)
+        #expect(globalTabs.tabs == [.mission(.crossRepoFixture)])
+
+        let state = fixture.makeState(globalTabs: globalTabs)
+        await state.missions.load()
+        #expect(state.switchToSpace(id: "sdk-space"))
+        #expect(state.activeSpaceProjects.map(\.id) == ["sdk-project"])
+        #expect(globalTabs.tabs == [.mission(.crossRepoFixture)])
+
+        globalTabs.activate(tabId: MissionTabState.crossRepoFixture.id)
+        let aggregate = try #require(state.missions.aggregate(id: fixture.aggregate.mission.id))
+        let presentation = MissionAggregateSummary(
+            aggregate: aggregate,
+            legs: aggregate.legs.map { leg in
+                MissionLegPresentation(
+                    aggregate: aggregate,
+                    leg: leg,
+                    worktree: state.projectsManager.worktrees(projectId: leg.projectId)
+                        .first(where: { $0.id == leg.worktreeId })
+                )
+            }
+        )
+
+        #expect(globalTabs.activeMissionTab() == .crossRepoFixture)
+        #expect(presentation.legs.map(\.id) == [.app, .sdk])
     }
 
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemote() {
@@ -345,6 +626,26 @@ struct AppStatePersistenceTests {
         #expect(owner == "acme")
     }
 
+    @Test func missionBranchOwnerUsesTheTargetProjectsProvider() {
+        let sharedIssue = MissionIssueIdentity(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "acme/alas",
+            number: 42
+        )
+        let remotes = [GitRemote(name: "origin", url: "git@gitlab.com:acme/sdk.git")]
+
+        let owner = AppState.missionBranchOwner(
+            identity: sharedIssue,
+            baseRef: "origin/main",
+            branchRemoteName: "origin",
+            remotes: remotes,
+            supportedKinds: [.github, .gitlab]
+        )
+
+        #expect(owner == "acme")
+    }
+
     @Test func missionPaneBaseRefRequalifiesAStaleRemoteAlias() {
         let identity = MissionIssueIdentity(
             provider: .github,
@@ -358,6 +659,17 @@ struct AppStatePersistenceTests {
             baseRef: "origin/main",
             persistedRemoteName: "origin",
             remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
+        )
+
+        #expect(baseRef == "upstream/main")
+    }
+
+    @Test func secondaryMissionPaneBaseUsesTheLegRepositoryRemote() {
+        let baseRef = AppState.missionPaneBaseRef(
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [GitRemote(name: "upstream", url: "git@gitlab.com:acme/sdk.git")],
+            supportedKinds: [.github, .gitlab]
         )
 
         #expect(baseRef == "upstream/main")
@@ -779,6 +1091,214 @@ struct AppStatePersistenceTests {
             providerCapabilities: .readOnly,
             errorMessage: nil
         )
+    }
+}
+
+@MainActor
+private struct MissionGlobalNavigationFixture {
+    let aggregate: MissionAggregate
+    let worktree: Worktree
+    let otherWorktree: Worktree
+    let state: AppState
+
+    init(includeWorktree: Bool) throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-global-navigation-\(UUID().uuidString).sqlite")
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].pendingInitialPrompt = nil
+        let store = try MissionStore(path: databaseURL.path)
+        try store.insert(aggregate)
+
+        let project = ProjectConfig(
+            id: "project-1",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let worktree = Worktree(
+            id: "worktree-1",
+            projectId: project.id,
+            name: "fix/parser-crash",
+            branch: "fix/parser-crash",
+            path: URL(fileURLWithPath: "/tmp/alas-mission"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0),
+            lineageID: aggregate.legs[0].worktreeLineageID
+        )
+        let otherWorktree = Worktree(
+            id: "worktree-2",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/alas"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let appState = AppState(
+            store: NavigationStore(projectsFile: ProjectsFile(projects: [project])),
+            missionPersistence: MissionPersistence(path: databaseURL.path),
+            globalTabs: GlobalTabsManager(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mission-global-navigation-\(UUID().uuidString).json")
+            )
+        )
+        if includeWorktree {
+            appState.projectsManager.insertOptimisticWorktree(worktree)
+        }
+        appState.projectsManager.insertOptimisticWorktree(otherWorktree)
+
+        self.aggregate = aggregate
+        self.worktree = worktree
+        self.otherWorktree = otherWorktree
+        self.state = appState
+    }
+
+    private struct NavigationStore: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == ProjectsFile.self ? projectsFile as? T : nil
+        }
+    }
+}
+
+private extension MissionTabState {
+    static let fixture = MissionTabState(
+        missionID: MissionID(rawValue: "mission-1"),
+        title: "Fix parser crash"
+    )
+
+    static let crossRepoFixture = MissionTabState(
+        missionID: .fixture,
+        title: "Fixture Mission"
+    )
+}
+
+@MainActor
+private struct MissionCrossSpaceNavigationFixture {
+    let root: URL
+    let tabsDirectory: URL
+    let globalTabsFile: URL
+    let aggregate: MissionAggregate
+    let appWorktree: Worktree
+    let sdkWorktree: Worktree
+    private let projectsFile: ProjectsFile
+    private let spacesFile: SpacesFile
+    private let missionDatabaseURL: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mission-cross-space-\(UUID().uuidString)", isDirectory: true)
+        tabsDirectory = root.appendingPathComponent("tabs", isDirectory: true)
+        globalTabsFile = root.appendingPathComponent("global-tabs.json")
+        missionDatabaseURL = root.appendingPathComponent("missions.sqlite")
+
+        let appProject = ProjectConfig(
+            id: "app-project",
+            name: "Alas",
+            path: "/tmp/alas",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let sdkProject = ProjectConfig(
+            id: "sdk-project",
+            name: "Alas SDK",
+            path: "/tmp/alas-sdk",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 1)
+        )
+        projectsFile = ProjectsFile(projects: [appProject, sdkProject])
+        spacesFile = SpacesFile(
+            version: 1,
+            activeSpaceId: "app-space",
+            spaces: [
+                SpaceConfig(
+                    id: "app-space",
+                    name: "App",
+                    emoji: "1",
+                    projectIds: [appProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: Date(timeIntervalSince1970: 0)
+                ),
+                SpaceConfig(
+                    id: "sdk-space",
+                    name: "SDK",
+                    emoji: "2",
+                    projectIds: [sdkProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: Date(timeIntervalSince1970: 1)
+                ),
+            ]
+        )
+        aggregate = MissionFixtures.twoLegMission()
+        let timestamp = aggregate.mission.createdAt
+        let appLeg = aggregate.legs[0]
+        let sdkLeg = aggregate.legs[1]
+        let missionID = aggregate.mission.id
+        appWorktree = Worktree(
+            id: "app-worktree",
+            projectId: appProject.id,
+            name: appLeg.branch,
+            branch: appLeg.branch,
+            path: URL(fileURLWithPath: appLeg.destinationPath),
+            status: .clean,
+            lastActivity: timestamp,
+            lineageID: appLeg.worktreeLineageID
+        )
+        sdkWorktree = Worktree(
+            id: "sdk-worktree",
+            projectId: sdkProject.id,
+            name: sdkLeg.branch,
+            branch: sdkLeg.branch,
+            path: URL(fileURLWithPath: sdkLeg.destinationPath),
+            status: .clean,
+            lastActivity: timestamp,
+            lineageID: sdkLeg.worktreeLineageID
+        )
+        let missionStore = try MissionStore(path: missionDatabaseURL.path)
+        var initial = aggregate
+        initial.legs = [appLeg]
+        try missionStore.insert(initial)
+        try missionStore.addLeg(
+            sdkLeg,
+            event: MissionEvent(
+                id: "cross-repo-sdk-leg-added",
+                missionID: missionID,
+                legID: sdkLeg.id,
+                kind: .legAdded,
+                message: "Mission leg added for \(sdkLeg.branch).",
+                createdAt: timestamp
+            )
+        )
+    }
+
+    func makeState(globalTabs: GlobalTabsManager) -> AppState {
+        let state = AppState(
+            store: Store(projectsFile: projectsFile, spacesFile: spacesFile),
+            missionPersistence: MissionPersistence(path: missionDatabaseURL.path),
+            globalTabs: globalTabs
+        )
+        state.projectsManager.insertOptimisticWorktree(appWorktree)
+        state.projectsManager.insertOptimisticWorktree(sdkWorktree)
+        return state
+    }
+
+    private struct Store: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+        let spacesFile: SpacesFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == SpacesFile.self { return spacesFile as? T }
+            return nil
+        }
     }
 }
 

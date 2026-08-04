@@ -8,9 +8,13 @@ enum MissionReadinessSignal: Equatable, Sendable {
     case refreshUnavailable
 }
 
-enum MissionReadinessDecision: Equatable, Sendable {
+enum MissionLegReadinessDecision: Equatable, Sendable {
     case unchanged(reviewIdentity: MissionReviewIdentity?)
-    case ready(reviewIdentity: MissionReviewIdentity?, message: String)
+    case ready(
+        reviewIdentity: MissionReviewIdentity?,
+        evidence: MissionLegReadinessEvidence,
+        message: String
+    )
     case needsAttention(String)
 }
 
@@ -18,13 +22,11 @@ enum MissionReadinessEvaluator {
     static let missingWorktreeMessage = "The Mission worktree is no longer available."
 
     static func evaluate(
-        currentState: MissionState,
-        signal: MissionReadinessSignal
-    ) -> MissionReadinessDecision {
-        if currentState == .completed {
-            return .unchanged(reviewIdentity: nil)
-        }
-        if currentState == .readyToComplete {
+        currentState: MissionLegState,
+        signal: MissionReadinessSignal,
+        observedAt: Date
+    ) -> MissionLegReadinessDecision {
+        if currentState == .ready {
             if case .review(_, let identity) = signal {
                 return .unchanged(reviewIdentity: identity)
             }
@@ -35,12 +37,17 @@ enum MissionReadinessEvaluator {
         case .review(.merged, let identity):
             return .ready(
                 reviewIdentity: identity,
+                evidence: .init(kind: .mergedReview, observedAt: observedAt),
                 message: "\(identity.provider.reviewRequestLabel) \(identity.provider.reviewRequestNumberPrefix)\(identity.number) merged."
             )
         case .review(_, let identity):
             return .unchanged(reviewIdentity: identity)
         case .worktreeArchived:
-            return .ready(reviewIdentity: nil, message: "Worktree archived in Alas.")
+            return .ready(
+                reviewIdentity: nil,
+                evidence: .init(kind: .archivedWorktree, observedAt: observedAt),
+                message: "Worktree archived in Alas."
+            )
         case .worktreeMissing:
             return .needsAttention(missingWorktreeMessage)
         case .projectRemoved:

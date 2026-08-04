@@ -5,6 +5,44 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CenterSelectionStateResolverTests {
+    @Test func composesGlobalMissionAndWorktreeTabsInOneStrip() {
+        let mission = MissionTabState.fixture
+        let terminal = Tab.terminal(TerminalTabState(
+            id: "terminal-1",
+            title: "Terminal",
+            sessionId: "session-1"
+        ))
+
+        let composition = CenterTabComposition(
+            globalTabs: [.mission(mission)],
+            worktreeTabs: [terminal],
+            activeGlobalMissionTab: mission,
+            activeWorktreeTabId: terminal.id
+        )
+
+        #expect(composition.tabs == [.mission(mission), terminal])
+        #expect(composition.activeId == mission.id)
+    }
+
+    @Test func bulkClosurePlanUsesTheComposedTabOrder() {
+        let firstMission = MissionTabState.fixture
+        let secondMission = MissionTabState(
+            missionID: MissionID(rawValue: "mission-2"),
+            title: "Second Mission"
+        )
+        let terminalID = "terminal-1"
+        let plan = CenterTabClosurePlan(orderedTabIDs: [
+            firstMission.id,
+            secondMission.id,
+            terminalID,
+        ])
+
+        #expect(plan.others(keeping: secondMission.id) == [firstMission.id, terminalID])
+        #expect(plan.all() == [firstMission.id, secondMission.id, terminalID])
+        #expect(plan.left(of: terminalID) == [firstMission.id, secondMission.id])
+        #expect(plan.right(of: firstMission.id) == [secondMission.id, terminalID])
+    }
+
     @Test func emptyWhenNoSelection() {
         let mgr = ProjectsManager(persistedProjects: [])
         let resolver = CenterSelectionStateResolver(
@@ -14,6 +52,23 @@ struct CenterSelectionStateResolverTests {
         )
         let result = resolver.resolve()
         #expect(result == .empty)
+    }
+
+    @Test func globalMissionTakesPrecedenceOverSelectedWorktree() {
+        let project = ProjectConfig.fixture
+        let worktree = Worktree.fixture(projectId: project.id)
+        let manager = ProjectsManager(persistedProjects: [project])
+        manager.insertOptimisticWorktree(worktree)
+        let missionTab = MissionTabState.fixture
+
+        let result = CenterSelectionStateResolver(
+            selectedWorktreeId: worktree.id,
+            projects: [project],
+            projectsManager: manager,
+            activeGlobalMissionTab: missionTab
+        ).resolve()
+
+        #expect(result == .globalMission(missionTab))
     }
 
     @Test func returnsWorktreeWhenNoOperationState() {
@@ -155,4 +210,35 @@ struct CenterSelectionStateResolverTests {
         let result = resolver.resolve()
         #expect(result == .empty)
     }
+}
+
+private extension ProjectConfig {
+    static let fixture = ProjectConfig(
+        id: "project-1",
+        name: "Alas",
+        path: "/tmp/alas",
+        color: "#5fb7c4",
+        addedAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+private extension Worktree {
+    static func fixture(projectId: String = "project-1") -> Worktree {
+        Worktree(
+            id: "worktree-1",
+            projectId: projectId,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/alas"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+    }
+}
+
+private extension MissionTabState {
+    static let fixture = MissionTabState(
+        missionID: MissionID(rawValue: "mission-1"),
+        title: "Fix parser crash"
+    )
 }

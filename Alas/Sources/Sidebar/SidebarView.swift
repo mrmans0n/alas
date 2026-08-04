@@ -52,7 +52,10 @@ struct SidebarView: View {
                                         else { collapsedProjects.remove(project.id) }
                                     }
                                 ),
-                                selectedWorktreeId: state.selectedWorktreeId,
+                                selectedWorktreeId: Self.effectiveSelectedWorktreeId(
+                                    selectedWorktreeId: state.selectedWorktreeId,
+                                    activeMissionTab: state.globalTabs.activeMissionTab()
+                                ),
                                 isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                 operationState: { wt in
                                     state.projectsManager.operationState(for: wt.id)
@@ -254,6 +257,13 @@ struct SidebarView: View {
         return (base, ggWorktreeMode)
     }
 
+    nonisolated static func effectiveSelectedWorktreeId(
+        selectedWorktreeId: String?,
+        activeMissionTab: MissionTabState?
+    ) -> String? {
+        activeMissionTab == nil ? selectedWorktreeId : nil
+    }
+
     private func showTransientSpaceTitle() {
         hideTitleTask?.cancel()
         spaceTitleVisible = true
@@ -277,6 +287,9 @@ struct SidebarView: View {
     }
 
     private var selectedMissionID: MissionID? {
+        if let tabState = state.globalTabs.activeMissionTab() {
+            return tabState.missionID
+        }
         if let tabState = state.missingMissionTab {
             return tabState.missionID
         }

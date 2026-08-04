@@ -66,9 +66,28 @@ struct MissionLegID: RawRepresentable, Codable, Hashable, Sendable {
 enum MissionState: String, Codable, Equatable, Hashable, Sendable {
     case creating
     case running
+    // Temporary source compatibility while mission setup callers migrate to MissionLeg.
     case needsAttention
     case readyToComplete
     case completed
+}
+
+enum MissionLegState: String, Codable, Equatable, Hashable, Sendable {
+    case creating
+    case running
+    case needsAttention
+    case ready
+}
+
+enum MissionLegReadinessKind: String, Codable, Equatable, Sendable {
+    case mergedReview
+    case archivedWorktree
+    case legacy
+}
+
+struct MissionLegReadinessEvidence: Codable, Equatable, Sendable {
+    let kind: MissionLegReadinessKind
+    let observedAt: Date
 }
 
 enum MissionSetupCheckpoint: String, Codable, Equatable, Sendable {
@@ -79,6 +98,7 @@ enum MissionSetupCheckpoint: String, Codable, Equatable, Sendable {
 
 enum MissionEventKind: String, Codable, Equatable, Sendable {
     case created
+    case legAdded
     case worktreeCreated
     case agentStarted
     case retryStarted
@@ -134,12 +154,36 @@ struct MissionRecord: Codable, Equatable, Sendable {
     let id: MissionID
     var title: String
     var state: MissionState
+    // Temporary source compatibility while mission setup callers migrate to MissionLeg.
     var setupCheckpoint: MissionSetupCheckpoint
     let primaryLegID: MissionLegID
+    // Temporary source compatibility while mission setup callers migrate to MissionLeg.
     var attentionReason: String?
     let createdAt: Date
     var updatedAt: Date
     var completedAt: Date?
+
+    init(
+        id: MissionID,
+        title: String,
+        state: MissionState = .creating,
+        setupCheckpoint: MissionSetupCheckpoint = .creatingWorktree,
+        primaryLegID: MissionLegID,
+        attentionReason: String? = nil,
+        createdAt: Date,
+        updatedAt: Date,
+        completedAt: Date?
+    ) {
+        self.id = id
+        self.title = title
+        self.state = state
+        self.setupCheckpoint = setupCheckpoint
+        self.primaryLegID = primaryLegID
+        self.attentionReason = attentionReason
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.completedAt = completedAt
+    }
 }
 
 struct MissionLeg: Codable, Equatable, Sendable {
@@ -156,8 +200,15 @@ struct MissionLeg: Codable, Equatable, Sendable {
     var agentId: String
     var acpSessionId: String?
     let initialPromptId: UUID
+    let preparedInitialPrompt: String
     var pendingInitialPrompt: String?
     var reviewIdentity: MissionReviewIdentity?
+    var state: MissionLegState
+    var setupCheckpoint: MissionSetupCheckpoint
+    var attentionReason: String?
+    var readinessEvidence: MissionLegReadinessEvidence?
+    let createdAt: Date
+    var updatedAt: Date
 
     init(
         id: MissionLegID,
@@ -173,8 +224,15 @@ struct MissionLeg: Codable, Equatable, Sendable {
         agentId: String,
         acpSessionId: String?,
         initialPromptId: UUID,
+        preparedInitialPrompt: String? = nil,
         pendingInitialPrompt: String?,
-        reviewIdentity: MissionReviewIdentity?
+        reviewIdentity: MissionReviewIdentity?,
+        state: MissionLegState = .creating,
+        setupCheckpoint: MissionSetupCheckpoint = .creatingWorktree,
+        attentionReason: String? = nil,
+        readinessEvidence: MissionLegReadinessEvidence? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
     ) {
         self.id = id
         self.missionID = missionID
@@ -189,8 +247,15 @@ struct MissionLeg: Codable, Equatable, Sendable {
         self.agentId = agentId
         self.acpSessionId = acpSessionId
         self.initialPromptId = initialPromptId
+        self.preparedInitialPrompt = preparedInitialPrompt ?? pendingInitialPrompt ?? ""
         self.pendingInitialPrompt = pendingInitialPrompt
         self.reviewIdentity = reviewIdentity
+        self.state = state
+        self.setupCheckpoint = setupCheckpoint
+        self.attentionReason = attentionReason
+        self.readinessEvidence = readinessEvidence
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }
 
@@ -210,8 +275,7 @@ struct MissionAggregate: Equatable, Sendable {
     var events: [MissionEvent]
 
     var primaryLeg: MissionLeg? {
-        guard legs.count == 1 else { return nil }
-        return legs.first { $0.id == mission.primaryLegID }
+        legs.first { $0.id == mission.primaryLegID }
     }
 }
 
@@ -247,4 +311,15 @@ struct MissionDraft: Equatable, Sendable {
         self.initialPromptId = initialPromptId
         self.initialPrompt = initialPrompt
     }
+}
+
+struct MissionLegDraft: Equatable, Sendable {
+    let projectId: String
+    let baseRef: String
+    let baseRemoteName: String?
+    let branch: String
+    let destinationPath: String
+    let agentId: String
+    let initialPromptId: UUID
+    let preparedPrompt: String
 }

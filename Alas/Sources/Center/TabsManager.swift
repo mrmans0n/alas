@@ -42,7 +42,8 @@ final class TabsManager {
     /// persisted tabs have been read from disk. Views use this to
     /// distinguish "no tabs yet (still loading)" from "genuinely empty".
     private(set) var hasLoaded = false
-    private let store = PersistenceStore()
+    private let store: any PersistenceStoreProtocol
+    private let tabsDirectory: URL
     private let bufferStore: EditorBufferStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
     private var bufferKeys: [TabID: BufferKey] = [:]
@@ -79,9 +80,16 @@ final class TabsManager {
     var terminalRuntimeTitles: [String: String] = [:]
     private let lsp: WorkspaceLSPManager?
 
-    init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
+    init(
+        bufferStore: EditorBufferStore = EditorBufferStore(),
+        lsp: WorkspaceLSPManager? = nil,
+        store: any PersistenceStoreProtocol = PersistenceStore(),
+        tabsDirectory: URL = Paths.tabsDir
+    ) {
         self.bufferStore = bufferStore
         self.lsp = lsp
+        self.store = store
+        self.tabsDirectory = tabsDirectory
     }
 
     func tabs(forWorktree id: String) -> [Tab] {
@@ -145,11 +153,30 @@ final class TabsManager {
 
     func loadAll(worktreeIds: [String]) {
         for id in worktreeIds {
-            if let file = try? store.readIfExists(TabsFile.self, from: Paths.tabsFile(forWorktreeId: id)) {
+            if let file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
                 byWorktree[id] = file
             }
         }
         hasLoaded = true
+    }
+
+    /// Loads every persisted tab file, including files whose worktree is not
+    /// currently discoverable. Legacy Mission tabs must be migrated before an
+    /// orphaned worktree can otherwise make them unreachable.
+    func loadAllPersisted() {
+        guard let relativeFiles = try? FileManager.default.subpathsOfDirectory(
+            atPath: tabsDirectory.path
+        ) else { return }
+        let worktreeIDs = relativeFiles.compactMap { relativeFile -> String? in
+            guard relativeFile.hasSuffix(".json") else { return nil }
+            let file = tabsDirectory.appendingPathComponent(relativeFile)
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { return nil }
+            let relativePath = String(relativeFile.dropLast(".json".count))
+            guard !relativePath.isEmpty else { return nil }
+            return relativePath.contains("/") ? "/\(relativePath)" : relativePath
+        }
+        loadAll(worktreeIds: worktreeIDs)
     }
 
     @discardableResult
@@ -783,7 +810,6 @@ final class TabsManager {
     ) -> Tab {
         let state = MissionTabState(
             missionID: missionID,
-            worktreeId: worktreeId,
             title: title
         )
 
@@ -839,6 +865,78 @@ final class TabsManager {
             byWorktree[worktreeID] = file
             persist(worktreeID)
         }
+    }
+
+    func missionTabs() -> [MissionTabState] {
+        byWorktree.keys.sorted().flatMap { worktreeID in
+            (byWorktree[worktreeID]?.tabs ?? []).compactMap { tab in
+                guard case .mission(let state) = tab else { return nil }
+                return state
+            }
+        }
+    }
+
+    func activeMissionTab(preferredWorktreeID: String? = nil) -> MissionTabState? {
+        var worktreeIDs = byWorktree.keys.sorted()
+        if let preferredWorktreeID,
+           let index = worktreeIDs.firstIndex(of: preferredWorktreeID) {
+            worktreeIDs.remove(at: index)
+            worktreeIDs.insert(preferredWorktreeID, at: 0)
+        }
+        for worktreeID in worktreeIDs {
+            guard let file = byWorktree[worktreeID],
+                  let activeTabID = file.activeTabId,
+                  let activeTab = file.tabs.first(where: { $0.id == activeTabID }),
+                  case .mission(let state) = activeTab
+            else { continue }
+            return state
+        }
+        return nil
+    }
+
+    func extractMissionTabs() throws -> [MissionTabState] {
+        var extracted: [MissionTabState] = []
+
+        for worktreeID in byWorktree.keys.sorted() {
+            guard var file = byWorktree[worktreeID] else { continue }
+            let missionIndices = file.tabs.indices.filter { index in
+                if case .mission = file.tabs[index] { return true }
+                return false
+            }
+            guard !missionIndices.isEmpty else { continue }
+
+            extracted.append(contentsOf: missionIndices.compactMap { index in
+                guard case .mission(let state) = file.tabs[index] else { return nil }
+                return state
+            })
+
+            let activeMissionIndex = file.activeTabId.flatMap { activeID -> Int? in
+                guard let index = file.tabs.firstIndex(where: { $0.id == activeID }),
+                      case .mission = file.tabs[index]
+                else { return nil }
+                return index
+            }
+            let activeMissionFallbackID = activeMissionIndex.flatMap { index in
+                file.tabs.dropFirst(index + 1).first(where: { tab in
+                    if case .mission = tab { return false }
+                    return true
+                })?.id ?? file.tabs[..<index].last(where: { tab in
+                    if case .mission = tab { return false }
+                    return true
+                })?.id
+            }
+            file.tabs.removeAll { tab in
+                if case .mission = tab { return true }
+                return false
+            }
+            if activeMissionIndex != nil {
+                file.activeTabId = activeMissionFallbackID
+            }
+            try store.write(file, to: tabsFile(forWorktreeId: worktreeID))
+            byWorktree[worktreeID] = file
+        }
+
+        return extracted
     }
 
     @discardableResult
@@ -1396,7 +1494,11 @@ final class TabsManager {
 
     private func persist(_ worktreeId: String) {
         guard let file = byWorktree[worktreeId] else { return }
-        try? store.write(file, to: Paths.tabsFile(forWorktreeId: worktreeId))
+        try? store.write(file, to: tabsFile(forWorktreeId: worktreeId))
+    }
+
+    private func tabsFile(forWorktreeId worktreeId: String) -> URL {
+        tabsDirectory.appendingPathComponent("\(worktreeId).json")
     }
 
     // MARK: - Buffer lifecycle

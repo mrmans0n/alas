@@ -14,58 +14,70 @@ struct MissionReadinessEvaluatorTests {
         url: URL(string: "https://github.com/acme/alas/pull/91")!
     )
 
-    @Test func mergedReviewMakesRunningMissionReady() {
+    @Test func mergedReviewMakesRunningLegReadyWithStickyEvidence() {
+        let observedAt = Date(timeIntervalSince1970: 101)
         let decision = MissionReadinessEvaluator.evaluate(
             currentState: .running,
-            signal: .review(state: .merged, identity: Self.reviewIdentity)
+            signal: .review(state: .merged, identity: Self.reviewIdentity),
+            observedAt: observedAt
         )
 
         #expect(decision == .ready(
             reviewIdentity: Self.reviewIdentity,
+            evidence: .init(kind: .mergedReview, observedAt: observedAt),
             message: "PR #91 merged."
         ))
     }
 
-    @Test func openReviewLinksWithoutMakingMissionReady() {
+    @Test func openReviewLinksWithoutMakingLegReady() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,
-            signal: .review(state: .open, identity: Self.reviewIdentity)
+            signal: .review(state: .open, identity: Self.reviewIdentity),
+            observedAt: Date(timeIntervalSince1970: 101)
         ) == .unchanged(reviewIdentity: Self.reviewIdentity))
     }
 
     @Test func closedUnmergedReviewDoesNotMakeMissionReady() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,
-            signal: .review(state: .closed, identity: Self.reviewIdentity)
+            signal: .review(state: .closed, identity: Self.reviewIdentity),
+            observedAt: Date(timeIntervalSince1970: 101)
         ) == .unchanged(reviewIdentity: Self.reviewIdentity))
     }
 
-    @Test func explicitArchiveMakesRunningMissionReady() {
+    @Test func explicitArchiveMakesRunningLegReady() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,
-            signal: .worktreeArchived
-        ) == .ready(reviewIdentity: nil, message: "Worktree archived in Alas."))
+            signal: .worktreeArchived,
+            observedAt: Date(timeIntervalSince1970: 101)
+        ) == .ready(
+            reviewIdentity: nil,
+            evidence: .init(kind: .archivedWorktree, observedAt: Date(timeIntervalSince1970: 101)),
+            message: "Worktree archived in Alas."
+        ))
     }
 
     @Test func externallyMissingWorktreeNeedsAttention() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,
-            signal: .worktreeMissing
+            signal: .worktreeMissing,
+            observedAt: Date(timeIntervalSince1970: 101)
         ) == .needsAttention("The Mission worktree is no longer available."))
     }
 
     @Test func missingWorktreeAfterAgentFailureResetsToRecreationCheckpoint() async throws {
         var failedAgent = Self.runningAggregate()
-        failedAgent.mission.state = .needsAttention
-        failedAgent.mission.setupCheckpoint = .startingAgent
-        failedAgent.mission.attentionReason = "ACP setup failed."
+        failedAgent.markPrimaryLegNeedsAttention(
+            checkpoint: .startingAgent,
+            reason: "ACP setup failed."
+        )
         let fake = try MissionLifecycleFake(aggregate: failedAgent, worktreeAvailable: false)
         await fake.controller.load()
 
         await fake.controller.recordMissingWorktree(Self.missionID)
         var aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
 
@@ -76,11 +88,47 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
     }
 
+    @Test func missingLegacyPrimaryWorktreeReconstructsAConsumedPrompt() async throws {
+        var legacy = Self.runningAggregate()
+        legacy.legs[0] = MissionLeg(
+            id: legacy.legs[0].id,
+            missionID: legacy.legs[0].missionID,
+            ordinal: legacy.legs[0].ordinal,
+            projectId: legacy.legs[0].projectId,
+            baseRef: legacy.legs[0].baseRef,
+            baseRemoteName: legacy.legs[0].baseRemoteName,
+            branch: legacy.legs[0].branch,
+            destinationPath: legacy.legs[0].destinationPath,
+            worktreeId: legacy.legs[0].worktreeId,
+            worktreeLineageID: legacy.legs[0].worktreeLineageID,
+            agentId: legacy.legs[0].agentId,
+            acpSessionId: legacy.legs[0].acpSessionId,
+            initialPromptId: legacy.legs[0].initialPromptId,
+            preparedInitialPrompt: "",
+            pendingInitialPrompt: nil,
+            reviewIdentity: legacy.legs[0].reviewIdentity,
+            state: legacy.legs[0].state,
+            setupCheckpoint: legacy.legs[0].setupCheckpoint,
+            attentionReason: legacy.legs[0].attentionReason,
+            readinessEvidence: legacy.legs[0].readinessEvidence,
+            createdAt: legacy.legs[0].createdAt,
+            updatedAt: legacy.legs[0].updatedAt
+        )
+        let fake = try MissionLifecycleFake(aggregate: legacy, worktreeAvailable: false)
+        await fake.controller.load()
+
+        await fake.controller.recordMissingWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.primaryLeg?.pendingInitialPrompt == MissionPromptBuilder.build(snapshot: aggregate.issue))
+    }
+
     @Test func retryAndCompletionAreSerialized() async throws {
         var missing = Self.runningAggregate()
-        missing.mission.state = .needsAttention
-        missing.mission.setupCheckpoint = .running
-        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
         let gate = MissionWorktreeCreationGate()
         let fake = try MissionLifecycleFake(
             aggregate: missing,
@@ -104,25 +152,24 @@ struct MissionReadinessEvaluatorTests {
     @Test func removedProjectNeedsAttention() {
         #expect(MissionReadinessEvaluator.evaluate(
             currentState: .running,
-            signal: .projectRemoved
+            signal: .projectRemoved,
+            observedAt: Date(timeIntervalSince1970: 101)
         ) == .needsAttention("The Mission project is no longer available."))
     }
 
-    @Test func readyStateIsStickyAcrossRefreshFailure() {
+    @Test func readyLegIsStickyAcrossRefreshFailure() {
         #expect(MissionReadinessEvaluator.evaluate(
-            currentState: .readyToComplete,
-            signal: .refreshUnavailable
+            currentState: .ready,
+            signal: .refreshUnavailable,
+            observedAt: Date(timeIntervalSince1970: 101)
         ) == .unchanged(reviewIdentity: nil))
     }
 
-    @Test func readyAndCompletedStatesIgnoreMissingArtifactSignals() {
+    @Test func readyLegIgnoresMissingArtifactSignals() {
         #expect(MissionReadinessEvaluator.evaluate(
-            currentState: .readyToComplete,
-            signal: .worktreeMissing
-        ) == .unchanged(reviewIdentity: nil))
-        #expect(MissionReadinessEvaluator.evaluate(
-            currentState: .completed,
-            signal: .projectRemoved
+            currentState: .ready,
+            signal: .worktreeMissing,
+            observedAt: Date(timeIntervalSince1970: 101)
         ) == .unchanged(reviewIdentity: nil))
     }
 
@@ -786,8 +833,10 @@ struct MissionReadinessEvaluatorTests {
 
     @Test func startupRestoresAReappearedMissionWorktree() async throws {
         var missing = Self.runningAggregate()
-        missing.mission.state = .needsAttention
-        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
         missing.legs[0].worktreeLineageID = "lineage-1"
         let fake = try MissionLifecycleFake(aggregate: missing)
         await fake.controller.load()
@@ -802,10 +851,12 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.events.last?.message == "Mission worktree became available again.")
     }
 
-    @Test func startupDoesNotRestoreAReplacementMissionWorktree() async throws {
+    @Test func startupDiscoversReviewPastAReplacementMissionWorktree() async throws {
         var missing = Self.runningAggregate()
-        missing.mission.state = .needsAttention
-        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
         missing.legs[0].worktreeLineageID = "original-lineage"
         let replacementReview = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         var discoveryCalls = 0
@@ -822,18 +873,17 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
-        #expect(aggregate.mission.setupCheckpoint == .running)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.events.last?.kind != .retryStarted)
-        #expect(discoveryCalls == 0)
+        #expect(discoveryCalls == 1)
     }
 
     @Test func reappearedWorktreeResumesPendingAgentSetup() async throws {
         var missing = Self.runningAggregate()
-        missing.mission.state = .needsAttention
-        missing.mission.setupCheckpoint = .running
-        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
         missing.legs[0].worktreeLineageID = "lineage-1"
         missing.legs[0].pendingInitialPrompt = "Fix the issue."
         let fake = try MissionLifecycleFake(aggregate: missing)
@@ -843,8 +893,30 @@ struct MissionReadinessEvaluatorTests {
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
         #expect(fake.externalOperations == ["startACP"])
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
+    }
+
+    @Test func reappearedWorktreeDoesNotMutateACompletedMission() async throws {
+        var missing = Self.runningAggregate()
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
+        let fake = try MissionLifecycleFake(aggregate: missing)
+        await fake.controller.load()
+        await fake.controller.complete(Self.missionID)
+        let completed = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+        let eventCount = completed.events.count
+
+        await fake.controller.recordAvailableWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .completed)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.events.count == eventCount)
+        #expect(fake.externalOperations.isEmpty)
     }
 
     @Test func startupRefreshesAMergedLinkedReviewWithoutAWorktree() async throws {
@@ -896,7 +968,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "main")
+                #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
@@ -979,7 +1051,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "main")
+                #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme")
                 return request
@@ -1455,7 +1527,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "main")
+                #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
@@ -1512,6 +1584,8 @@ struct MissionReadinessEvaluatorTests {
         var creating = Self.runningAggregate()
         creating.mission.state = .creating
         creating.mission.setupCheckpoint = .running
+        creating.legs[0].state = .creating
+        creating.legs[0].setupCheckpoint = .running
         let fake = try MissionLifecycleFake(aggregate: creating)
         await fake.controller.load()
 
@@ -1530,6 +1604,8 @@ struct MissionReadinessEvaluatorTests {
         var creating = Self.runningAggregate()
         creating.mission.state = .creating
         creating.mission.setupCheckpoint = .running
+        creating.legs[0].state = .creating
+        creating.legs[0].setupCheckpoint = .running
         let fake = try MissionLifecycleFake(
             aggregate: creating,
             worktreeArchived: { _, _ in true }
@@ -1572,15 +1648,17 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
     @Test func startupPreservesWorktreeCreationFailureWhenNoArtifactExists() async throws {
         var failed = MissionFixtures.creatingMission()
-        failed.mission.state = .needsAttention
-        failed.mission.setupCheckpoint = .creatingWorktree
-        failed.mission.attentionReason = "branch exists retry later"
+        failed.mission.state = .running
+        failed.markPrimaryLegNeedsAttention(
+            checkpoint: .creatingWorktree,
+            reason: "branch exists retry later"
+        )
         failed.legs[0].worktreeId = "worktree-1"
         let fake = try MissionLifecycleFake(aggregate: failed, worktreeAvailable: false)
         await fake.controller.load()
@@ -1588,23 +1666,24 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
         #expect(aggregate.mission.attentionReason == "branch exists retry later")
     }
 
     @Test func startupResetsALaterCheckpointWhenItsWorktreeIsMissing() async throws {
         var failedAgent = Self.runningAggregate()
-        failedAgent.mission.state = .needsAttention
-        failedAgent.mission.setupCheckpoint = .startingAgent
-        failedAgent.mission.attentionReason = "ACP setup failed."
+        failedAgent.markPrimaryLegNeedsAttention(
+            checkpoint: .startingAgent,
+            reason: "ACP setup failed."
+        )
         let fake = try MissionLifecycleFake(aggregate: failedAgent, worktreeAvailable: false)
         await fake.controller.load()
 
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
@@ -1616,15 +1695,16 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
     @Test func startupResetsALaterCheckpointForAReplacementBranch() async throws {
         var failedAgent = Self.runningAggregate()
-        failedAgent.mission.state = .needsAttention
-        failedAgent.mission.setupCheckpoint = .startingAgent
-        failedAgent.mission.attentionReason = "ACP setup failed."
+        failedAgent.markPrimaryLegNeedsAttention(
+            checkpoint: .startingAgent,
+            reason: "ACP setup failed."
+        )
         let fake = try MissionLifecycleFake(
             aggregate: failedAgent,
             worktreeBranch: "unrelated-branch"
@@ -1634,18 +1714,19 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.setupCheckpoint == .running)
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
-    @Test func startupDoesNotRefreshLinkedReviewFromAReplacementBranch() async throws {
+    @Test func startupRefreshesLinkedReviewPastAReplacementWorktree() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
+        linked.legs[0].worktreeLineageID = "original-lineage"
         var linkedReviewCalls = 0
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            worktreeBranch: "unrelated-branch",
+            worktreeLineageID: "replacement-lineage",
             linkedReviewRequest: { identity, projectID, _ in
                 linkedReviewCalls += 1
                 guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
@@ -1657,9 +1738,9 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
-        #expect(linkedReviewCalls == 0)
+        #expect(linkedReviewCalls == 1)
     }
 
     @Test func startupDoesNotArchiveAReplacementWorktreeOnTheWrongBranch() async throws {
@@ -1672,7 +1753,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission worktree is no longer available.")
     }
 
@@ -1697,7 +1778,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .needsAttention)
+        #expect(aggregate.mission.state == .running)
         #expect(aggregate.mission.attentionReason == "The Mission project is no longer available.")
     }
 
@@ -1715,10 +1796,24 @@ struct MissionReadinessEvaluatorTests {
         #expect(fake.externalOperations.isEmpty)
     }
 
+    @Test func readinessSignalsDoNotMutateACompletedMission() async throws {
+        let fake = try MissionLifecycleFake(worktreeAvailable: false)
+        await fake.controller.load()
+        await fake.controller.complete(Self.missionID)
+        let completed = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        await fake.controller.recordMissingWorktree(Self.missionID)
+        let unchanged = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(unchanged == completed)
+    }
+
     @Test func completionPreservesOriginalLineageWhenOnlyAReplacementExists() async throws {
         var missing = Self.runningAggregate()
-        missing.mission.state = .needsAttention
-        missing.mission.attentionReason = MissionReadinessEvaluator.missingWorktreeMessage
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
         missing.legs[0].worktreeLineageID = "original-lineage"
         let fake = try MissionLifecycleFake(
             aggregate: missing,
@@ -1738,6 +1833,12 @@ struct MissionReadinessEvaluatorTests {
         var settled = Self.runningAggregate()
         settled.mission.state = state
         settled.mission.attentionReason = state == .needsAttention ? "Review setup." : nil
+        if state == .needsAttention {
+            settled.markPrimaryLegNeedsAttention(
+                checkpoint: .running,
+                reason: "Review setup."
+            )
+        }
         let fake = try MissionLifecycleFake(aggregate: settled)
         await fake.controller.load()
 
@@ -1778,6 +1879,9 @@ struct MissionReadinessEvaluatorTests {
         aggregate.legs[0].worktreeId = "worktree-1"
         aggregate.legs[0].acpSessionId = "session-1"
         aggregate.legs[0].pendingInitialPrompt = nil
+        aggregate.legs[0].state = .running
+        aggregate.legs[0].setupCheckpoint = .running
+        aggregate.legs[0].attentionReason = nil
         return aggregate
     }
 
@@ -1854,6 +1958,21 @@ struct MissionReadinessEvaluatorTests {
 private struct IssueRefreshCall: Equatable {
     let identity: MissionIssueIdentity
     let projectID: String
+}
+
+private extension MissionAggregate {
+    mutating func markPrimaryLegNeedsAttention(
+        checkpoint: MissionSetupCheckpoint,
+        reason: String
+    ) {
+        mission.state = .needsAttention
+        mission.setupCheckpoint = checkpoint
+        mission.attentionReason = reason
+        guard let index = legs.firstIndex(where: { $0.id == mission.primaryLegID }) else { return }
+        legs[index].state = .needsAttention
+        legs[index].setupCheckpoint = checkpoint
+        legs[index].attentionReason = reason
+    }
 }
 
 @MainActor

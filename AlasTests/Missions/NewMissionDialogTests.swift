@@ -6,6 +6,30 @@ import Testing
 @MainActor
 @Suite("New Mission dialog")
 struct NewMissionDialogTests {
+    @Test("active branch reservations include secondary Mission legs")
+    func activeBranchReservationsIncludeSecondaryLegs() {
+        var active = MissionFixtures.creatingMission()
+        active.mission.state = .running
+        active.legs.append(MissionFixtures.runningLeg(
+            projectId: "sdk",
+            branch: "feature/sdk-change",
+            ordinal: 1
+        ))
+        var completed = active
+        completed.mission.state = .completed
+
+        let reserved = NewMissionDialogModel.Environment.activeMissionBranches(
+            in: [active, completed],
+            projectID: "sdk"
+        )
+
+        #expect(reserved == ["feature/sdk-change"])
+        #expect(NewMissionDialogModel.Environment.activeMissionDestinationPaths(
+            in: [active, completed],
+            projectID: "sdk"
+        ) == Set([URL(fileURLWithPath: "/tmp/sdk").standardizedFileURL.path]))
+    }
+
     @Test("resolution moves through resolving and seeds confirmation once")
     func resolvedIssueSeedsEditableConfirmationOnce() async {
         let fake = NewMissionDialogFake(suspendResolution: true)

@@ -5,27 +5,23 @@ typealias TabID = String
 struct MissionTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let missionID: MissionID
-    let worktreeId: String
     var title: String
 
-    init(missionID: MissionID, worktreeId: String, title: String) {
+    init(missionID: MissionID, title: String) {
         id = "mission:\(missionID.rawValue)"
         self.missionID = missionID
-        self.worktreeId = worktreeId
         self.title = title
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case missionID
-        case worktreeId
         case title
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         missionID = try container.decode(MissionID.self, forKey: .missionID)
-        worktreeId = try container.decode(String.self, forKey: .worktreeId)
         title = try container.decode(String.self, forKey: .title)
         id = "mission:\(missionID.rawValue)"
     }
@@ -34,7 +30,6 @@ struct MissionTabState: Codable, Equatable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(missionID, forKey: .missionID)
-        try container.encode(worktreeId, forKey: .worktreeId)
         try container.encode(title, forKey: .title)
     }
 }

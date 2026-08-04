@@ -6,6 +6,27 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct RepoGroupViewLayoutTests {
+    @Test func globalMissionSelectionSuppressesRememberedWorktreeSelection() {
+        #expect(
+            SidebarView.effectiveSelectedWorktreeId(
+                selectedWorktreeId: "worktree-1",
+                activeMissionTab: MissionTabState(
+                    missionID: MissionID(rawValue: "mission-1"),
+                    title: "Parser crash"
+                )
+            ) == nil
+        )
+    }
+
+    @Test func worktreeSelectionRemainsVisibleWithoutActiveGlobalMission() {
+        #expect(
+            SidebarView.effectiveSelectedWorktreeId(
+                selectedWorktreeId: "worktree-1",
+                activeMissionTab: nil
+            ) == "worktree-1"
+        )
+    }
+
     @Test func repoHeaderAnchorDoesNotShiftWhenExpanded() throws {
         let collapsedX = try repoIconMinX(collapsed: true)
         let expandedX = try repoIconMinX(collapsed: false)
