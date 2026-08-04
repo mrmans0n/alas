@@ -1281,6 +1281,7 @@
 		D9FD24854A41DF2E9214E078 /* ReviewDraftCommentController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BC051640BBB02A2EBF6E4F /* ReviewDraftCommentController.swift */; };
 		DA0C1B28A1161C52F83C05DF /* CodeHostIssueProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = E28E0A73F117113D1DC84A91 /* CodeHostIssueProvider.swift */; };
 		DA5ED6D708DD8C0B5563AB4F /* WindowDragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32D6E47CC4523FDE263C764C /* WindowDragHandle.swift */; };
+		DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC461E04DD9DDF78F8825942 /* ViewDragOut.swift */; };
 		DAA6F5DABE3214693628C730 /* ACPFilesystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435D9E527A76820947F426A8 /* ACPFilesystem.swift */; };
 		DABD0B9B7817F4A080512501 /* FilesTabLoadingIndicatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C8541BE5617C7E212CCD034 /* FilesTabLoadingIndicatorTests.swift */; };
 		DADDDA3FA289B52415EF4379 /* ACPDelayedHoverVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC76F9150CC29A324D785C29 /* ACPDelayedHoverVisibilityTests.swift */; };
@@ -1312,6 +1313,7 @@
 		DF2960A73C07F97DA0A615D4 /* ReviewDraftSummaryRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = C432B6C03738D6ACB4293471 /* ReviewDraftSummaryRail.swift */; };
 		DF8CAD5714483408B8BD72F7 /* GitService+Discard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90817EC3BAA727EF6D9FBD97 /* GitService+Discard.swift */; };
 		DF93C8550C7A78C2A03CF56A /* ReviewEvidenceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF257B37B6E9EA4D97C67D4 /* ReviewEvidenceModel.swift */; };
+		DFA62A97A39B75AD9C7D4DC3 /* DragOutActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08FE8C7594DE6CD4038A2113 /* DragOutActivationTests.swift */; };
 		DFD997286ABB95FBEA6A3AF2 /* ACPWorktreeSessionBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B9DC1F684C319AFDB497B6 /* ACPWorktreeSessionBootstrapper.swift */; };
 		E073EEE9E37052E17CB026A0 /* GGInboxStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C511B229168DDEA87173A41 /* GGInboxStore.swift */; };
 		E099FB5101ED328389233B35 /* MermaidDiagramLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 888112C4BC28BBC55C6804FA /* MermaidDiagramLayoutTests.swift */; };
@@ -1566,6 +1568,7 @@
 		08ACB3B79B74153668DA29D8 /* LSPTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPTransportTests.swift; sourceTree = "<group>"; };
 		08C66CE5C7DDA561C0970A50 /* ACPWorktreeSessionBootstrapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPWorktreeSessionBootstrapperTests.swift; sourceTree = "<group>"; };
 		08F7B16F39935718801DAA95 /* AppStateCLIRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCLIRoutingTests.swift; sourceTree = "<group>"; };
+		08FE8C7594DE6CD4038A2113 /* DragOutActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragOutActivationTests.swift; sourceTree = "<group>"; };
 		09007B6E90DE89B7215A5D44 /* ImageDiffMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffMode.swift; sourceTree = "<group>"; };
 		09140CEE45083CFDCE8D262B /* ACPRemoteMCPFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPRemoteMCPFilterTests.swift; sourceTree = "<group>"; };
 		0914F0E19514D1DF89C74B41 /* MergeConflictResolvedEmptyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictResolvedEmptyView.swift; sourceTree = "<group>"; };
@@ -2870,6 +2873,7 @@
 		EBFDEDA4A9F2B99529C9442D /* ACPSessionForkPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionForkPersistenceTests.swift; sourceTree = "<group>"; };
 		EC01D9A0927AF9DD7524CEB7 /* LanguageServerConfigMasonPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerConfigMasonPrefill.swift; sourceTree = "<group>"; };
 		EC35CACDC7D469C7D0382F31 /* ACPUserInputFormState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUserInputFormState.swift; sourceTree = "<group>"; };
+		EC461E04DD9DDF78F8825942 /* ViewDragOut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewDragOut.swift; sourceTree = "<group>"; };
 		EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProjectDialog.swift; sourceTree = "<group>"; };
 		EC6FA61556FA530605C9FE81 /* RemoteNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteNetwork.swift; sourceTree = "<group>"; };
 		EC7FA2ABE27A4CC2EB0BCA18 /* ACPTranscriptCurrentPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptCurrentPlanTests.swift; sourceTree = "<group>"; };
@@ -3312,6 +3316,7 @@
 				FB02326DBD7A82431A33C50F /* DraftAmendPrefillTests.swift */,
 				4FB0C89AA6E07A2402934FD2 /* DraftCommitTabsManagerTests.swift */,
 				EB44F87B415733A4B2F2A990 /* DraftCommitTabStateTests.swift */,
+				08FE8C7594DE6CD4038A2113 /* DragOutActivationTests.swift */,
 				C43475DF341E0772A37EE034 /* DragOutPayloadTests.swift */,
 				99890AC2531648EB5E9716A8 /* DragOutSessionTests.swift */,
 				5DEE18D06DCB7DE3C8C8D91A /* EditorBufferExternalEditableTests.swift */,
@@ -4890,6 +4895,7 @@
 				38228AE1419253ADBC80E226 /* DragOutPayload.swift */,
 				4610C65B69BD08EF8DF12311 /* DragOutSession.swift */,
 				12DA5ED8195BBE603DFC5B61 /* RevisionSnapshotCache.swift */,
+				EC461E04DD9DDF78F8825942 /* ViewDragOut.swift */,
 			);
 			path = DragOut;
 			sourceTree = "<group>";
@@ -6533,6 +6539,7 @@
 				B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */,
 				EE06DE97F2DCEFAD2B48B05C /* UpdateThrottle.swift in Sources */,
 				C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */,
+				DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */,
 				B7D79703ABCAFBC04A0091E5 /* VisualEffectView.swift in Sources */,
 				7C286DF876CD8F71D07B6A93 /* WebSocketFrame.swift in Sources */,
 				4E08D715B766E9D04B4BA0B0 /* WindowAppearance.swift in Sources */,
@@ -6855,6 +6862,7 @@
 				5936DF2636F0B74BEAB33A57 /* DraftAmendPrefillTests.swift in Sources */,
 				804D11E10C7478C00C0F5C40 /* DraftCommitTabStateTests.swift in Sources */,
 				881AE2B2D456B36573346AD6 /* DraftCommitTabsManagerTests.swift in Sources */,
+				DFA62A97A39B75AD9C7D4DC3 /* DragOutActivationTests.swift in Sources */,
 				521917DA3E0979CFC9F1CE8A /* DragOutPayloadTests.swift in Sources */,
 				3C91EAB9AE55849DE5CF1BC7 /* DragOutSessionTests.swift in Sources */,
 				604583AA3E3CE525933DA2AA /* EditorBufferExternalEditableTests.swift in Sources */,
