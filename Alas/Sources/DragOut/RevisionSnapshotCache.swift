@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Materializes `git show <ref>:<path>` into a temp file so a historical
@@ -53,10 +54,30 @@ actor RevisionSnapshotCache {
         return String(ref.unicodeScalars.map { allowedRefComponentCharacters.contains($0) ? Character($0) : "-" })
     }
 
+    /// Short, deterministic, filesystem-safe stand-in for a worktree's full
+    /// path. The full path (e.g. `/Users/nacho/.alas/.worktrees/...`) is not
+    /// usable as a single path component — it would blow past the 255-byte
+    /// filename limit — so it is SHA256-hashed and truncated to 12 hex
+    /// characters. Must not use `String.hashValue`: that hash is reseeded
+    /// per process, so it would not even stay stable across two calls in the
+    /// same run, let alone the same session.
+    nonisolated static func worktreeComponent(_ worktreePath: URL) -> String {
+        SHA256.hash(data: Data(worktreePath.path.utf8))
+            .prefix(6)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     /// Where the blob at `ref:path` is written. The original relative path is
-    /// preserved so the receiving app sees the real filename.
-    nonisolated func snapshotURL(ref: String, path: String) -> URL {
+    /// preserved so the receiving app sees the real filename. Segmented by
+    /// worktree first: `RevisionSnapshotCache.shared` is shared across every
+    /// open worktree tab in the app, so without this segment two repos
+    /// dragging the same `(ref, path)` (e.g. both have `stash@{0}` +
+    /// `README.md`) would write to and read back the same on-disk file,
+    /// silently handing one repo's bytes to the other's drag.
+    nonisolated func snapshotURL(worktreePath: URL, ref: String, path: String) -> URL {
         sessionDirectory
+            .appendingPathComponent(Self.worktreeComponent(worktreePath), isDirectory: true)
             .appendingPathComponent(Self.refComponent(ref), isDirectory: true)
             .appendingPathComponent(path)
     }
@@ -74,7 +95,7 @@ actor RevisionSnapshotCache {
 
         sweepStaleSessionsIfNeeded()
 
-        let key = "\(ref)\u{0}\(path)"
+        let key = "\(worktreePath.path)\u{0}\(ref)\u{0}\(path)"
         if let cached = snapshots[key], FileManager.default.fileExists(atPath: cached.path) {
             return cached
         }
@@ -82,11 +103,13 @@ actor RevisionSnapshotCache {
             return nil
         }
 
-        let destination = snapshotURL(ref: ref, path: path)
+        let destination = snapshotURL(worktreePath: worktreePath, ref: ref, path: path)
         do {
             let result = try await Process.gitData(["show", "\(ref):\(path)"], cwd: worktreePath)
             guard result.exitCode == 0 else {
-                missingSnapshots.insert(key)
+                if !Task.isCancelled {
+                    missingSnapshots.insert(key)
+                }
                 return nil
             }
             try FileManager.default.createDirectory(
@@ -95,7 +118,13 @@ actor RevisionSnapshotCache {
             )
             try result.stdout.write(to: destination, options: .atomic)
         } catch {
-            missingSnapshots.insert(key)
+            // A thrown error here is either a cancellation (the task was
+            // cancelled while `git show` was in flight, so `Process.runData`
+            // tore the process down but returned normally with a non-zero
+            // exit code above — that path is handled there) or a genuine
+            // failure such as the 30s watchdog timeout. Neither means git
+            // actually answered "this path is not in that tree", so the
+            // miss must not be memoized: a retry could still succeed.
             return nil
         }
 

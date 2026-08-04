@@ -33,9 +33,23 @@ struct RevisionSnapshotCacheTests {
 
     @Test func snapshotURLPreservesRelativePath() {
         let cache = RevisionSnapshotCache(sessionID: "fixed-session")
-        let url = cache.snapshotURL(ref: "a1b2c3d", path: "Sources/Right/ChangedRow.swift")
+        let worktree = URL(fileURLWithPath: "/tmp/some-repo")
+        let url = cache.snapshotURL(worktreePath: worktree, ref: "a1b2c3d", path: "Sources/Right/ChangedRow.swift")
         #expect(Array(url.pathComponents.suffix(4)) == ["a1b2c3d", "Sources", "Right", "ChangedRow.swift"])
         #expect(url.path.hasPrefix(cache.sessionDirectory.path))
+    }
+
+    @Test func snapshotURLDiffersByWorktreeForTheSameRefAndPath() {
+        let cache = RevisionSnapshotCache(sessionID: "fixed-session")
+        let worktreeA = URL(fileURLWithPath: "/tmp/repo-a")
+        let worktreeB = URL(fileURLWithPath: "/tmp/repo-b")
+        let urlA = cache.snapshotURL(worktreePath: worktreeA, ref: "HEAD", path: "README.md")
+        let urlB = cache.snapshotURL(worktreePath: worktreeB, ref: "HEAD", path: "README.md")
+        #expect(urlA != urlB)
+        // Deterministic within a session: the same worktree must keep
+        // producing the same destination across calls, or a cache hit for
+        // one call would miss the file a later call actually wrote.
+        #expect(cache.snapshotURL(worktreePath: worktreeA, ref: "HEAD", path: "README.md") == urlA)
     }
 
     @Test func snapshotWritesTheBlobAtThatRevisionNotTheWorkingTree() async throws {
@@ -125,6 +139,77 @@ struct RevisionSnapshotCacheTests {
         #expect(FileManager.default.fileExists(atPath: sibling.sessionDirectory.path))
 
         await sibling.removeSessionDirectory()
+        await cache.removeSessionDirectory()
+    }
+
+    @Test func differentWorktreesDoNotShareCacheEntries() async throws {
+        let repoA = try await makeRepo(name: "worktree-a")
+        defer { try? FileManager.default.removeItem(at: repoA) }
+        let repoB = try await makeRepo(name: "worktree-b")
+        defer { try? FileManager.default.removeItem(at: repoB) }
+
+        // Same relative path, same ref name, different repos. Before the
+        // worktree was folded into the cache key, this collided on a single
+        // dictionary entry: the second repo's lookup would hit the first
+        // repo's cached URL and hand back the wrong file's bytes.
+        let fileA = repoA.appendingPathComponent("shared.txt")
+        try "content from repo A".write(to: fileA, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "shared.txt"], cwd: repoA)
+        _ = try await Process.git(["commit", "-q", "-m", "a"], cwd: repoA)
+
+        let fileB = repoB.appendingPathComponent("shared.txt")
+        try "content from repo B".write(to: fileB, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "shared.txt"], cwd: repoB)
+        _ = try await Process.git(["commit", "-q", "-m", "b"], cwd: repoB)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+
+        let snapshotA = await cache.snapshot(worktreePath: repoA, ref: "HEAD", path: "shared.txt")
+        let unwrappedA = try #require(snapshotA)
+        #expect(try String(contentsOf: unwrappedA, encoding: .utf8) == "content from repo A")
+
+        let snapshotB = await cache.snapshot(worktreePath: repoB, ref: "HEAD", path: "shared.txt")
+        let unwrappedB = try #require(snapshotB)
+        #expect(try String(contentsOf: unwrappedB, encoding: .utf8) == "content from repo B")
+
+        await cache.removeSessionDirectory()
+    }
+
+    @Test func cancelledSnapshotIsNotMemoizedAsMissing() async throws {
+        let repo = try await makeRepo(name: "cancel")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // A sizeable blob gives `git show` real decompress/pipe/write work
+        // to do, so cancelling right after kicking off the task has a
+        // realistic chance of landing while the process is still running
+        // rather than after it has already exited on its own. 5MB is
+        // enough margin over Swift's task-scheduling overhead without
+        // making this test a heavy I/O cost in CI. If the process happens
+        // to finish first, the assertions below still hold (nothing was
+        // ever memoized as missing), so this test cannot go spuriously red
+        // — it just wouldn't have exercised the interesting path on that
+        // particular run.
+        let file = repo.appendingPathComponent("big.bin")
+        let bytes = Data(count: 5 * 1024 * 1024)
+        try bytes.write(to: file)
+        _ = try await Process.git(["add", "big.bin"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add big blob"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+
+        let task = Task {
+            await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "big.bin")
+        }
+        task.cancel()
+        _ = await task.value
+
+        // A fresh, uncancelled lookup for the same key must still succeed:
+        // the earlier cancellation must not have poisoned the cache with a
+        // "this blob does not exist" entry.
+        let retried = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "big.bin")
+        let unwrapped = try #require(retried)
+        #expect(try Data(contentsOf: unwrapped) == bytes)
+
         await cache.removeSessionDirectory()
     }
 }
