@@ -95,6 +95,42 @@ struct MissionStoreTests {
         #expect(!tableNames.contains("missions_v5"))
     }
 
+    @Test("v6 migration rejects a v5 database without the required Mission tables")
+    func missingV5TablesMigrationRollsBack() throws {
+        let path = temporaryPath()
+        let v5 = try SQLiteDatabase(path: path)
+        try v5.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        try v5.exec("INSERT INTO schema_version (version) VALUES (5)")
+
+        #expect(throws: MissionStore.Error.malformedRecord) {
+            _ = try MissionStore(path: path)
+        }
+
+        #expect(try v5.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 5)
+        let tableNames = try v5.query("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .compactMap { $0["name"] as? String }
+        #expect(Set(tableNames) == Set(["schema_version"]))
+    }
+
+    @Test("v6 migration rejects an event whose leg does not belong to its Mission")
+    func invalidV5EventLegMigrationRollsBack() throws {
+        let path = temporaryPath()
+        let v5 = try MissionStoreTestDatabase.v5(path: URL(fileURLWithPath: path))
+        try v5.exec("UPDATE mission_events SET leg_id = 'missing-leg' WHERE id = 'event-1'")
+
+        #expect(throws: MissionStore.Error.malformedRecord) {
+            _ = try MissionStore(path: path)
+        }
+
+        #expect(try v5.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 5)
+        #expect(try v5.query("SELECT leg_id FROM mission_events WHERE id = 'event-1'").first?["leg_id"] as? String == "missing-leg")
+        let tableNames = try v5.query("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .compactMap { $0["name"] as? String }
+        #expect(tableNames.contains("missions"))
+        #expect(tableNames.contains("mission_events"))
+        #expect(!tableNames.contains("missions_v5"))
+    }
+
     @Test("manual sources round trip and reject an active duplicate")
     func manualSourceRoundTripsAndRejectsAnActiveDuplicate() throws {
         let store = try MissionStore(path: temporaryPath())
@@ -112,12 +148,12 @@ struct MissionStoreTests {
     @Test("provider-neutral refresh replaces content and preserves an unchanged identity")
     func replacesSourceSnapshot() throws {
         let store = try MissionStore(path: temporaryPath())
-        let aggregate = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        let aggregate = MissionFixtures.creatingMission()
         try store.insert(aggregate)
-        let refreshed = MissionFixtures.manualSource(
+        let refreshed = MissionSourceSnapshot(issue: MissionFixtures.issue(
             title: "Fix parser crash in YAML files",
-            body: "Updated provider-neutral context."
-        )
+            capturedAt: 150
+        ))
 
         let migrated = try store.replaceSourceSnapshot(
             missionID: aggregate.mission.id,
@@ -135,6 +171,61 @@ struct MissionStoreTests {
         #expect(loaded.source == refreshed)
         #expect(loaded.mission.title == refreshed.title)
         #expect(loaded.events.last?.kind == .sourceRefreshed)
+    }
+
+    @Test("manual sources cannot be replaced through the refresh API")
+    func rejectsManualSourceReplacement() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        try store.insert(aggregate)
+        let source = aggregate.source
+        func replacement(
+            canonicalURL: URL? = nil,
+            contentOrigin: MissionSourceContentOrigin? = nil,
+            isEditable: Bool? = nil,
+            isRefreshable: Bool? = nil
+        ) -> MissionSourceSnapshot {
+            MissionSourceSnapshot(
+                identity: source.identity,
+                canonicalURL: canonicalURL ?? source.canonicalURL,
+                providerLabel: source.providerLabel,
+                displayReference: source.displayReference,
+                repositoryLocator: source.repositoryLocator,
+                title: "Replacement title",
+                body: "Replacement body",
+                state: source.state,
+                labels: source.labels,
+                assignees: source.assignees,
+                providerUpdatedAt: source.providerUpdatedAt,
+                capturedAt: Date(timeIntervalSince1970: 150),
+                refreshError: source.refreshError,
+                contentOrigin: contentOrigin ?? source.contentOrigin,
+                isEditable: isEditable ?? source.isEditable,
+                isRefreshable: isRefreshable ?? source.isRefreshable
+            )
+        }
+        let replacements = [
+            replacement(canonicalURL: URL(string: "https://linear.app/acme/issue/ALA-99/other")!),
+            replacement(contentOrigin: .provider),
+            replacement(isEditable: false),
+            replacement(isRefreshable: true),
+        ]
+
+        for (index, snapshot) in replacements.enumerated() {
+            #expect(throws: MissionStore.Error.sourceNotRefreshable) {
+                try store.replaceSourceSnapshot(
+                    missionID: aggregate.mission.id,
+                    snapshot: snapshot,
+                    event: MissionFixtures.event(
+                        id: "manual-replacement-\(index)",
+                        missionID: aggregate.mission.id,
+                        kind: .sourceRefreshed,
+                        createdAt: 150 + Double(index)
+                    )
+                )
+            }
+            #expect(try store.aggregate(id: aggregate.mission.id)?.source == source)
+        }
     }
 
     @Test("manual source edits preserve identity, URL, and capabilities")
@@ -806,6 +897,56 @@ struct MissionStoreTests {
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
         #expect(loaded.issue == aggregate.issue)
+        #expect(loaded.events.map(\.id) == ["mission-1-event-1"])
+    }
+
+    @Test("rejects a repository redirect whose stable ID does not match its locator")
+    func rejectsIncoherentRepositoryRedirectIdentity() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+        let source = aggregate.source
+        let replacement = MissionSourceSnapshot(
+            identity: .init(
+                providerID: .github,
+                stableID: "github.com/unrelated/project#42"
+            ),
+            canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
+            providerLabel: source.providerLabel,
+            displayReference: source.displayReference,
+            repositoryLocator: .init(
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "acquired/renamed-alas"
+            ),
+            title: "Fresh after rename",
+            body: source.body,
+            state: source.state,
+            labels: source.labels,
+            assignees: source.assignees,
+            providerUpdatedAt: source.providerUpdatedAt,
+            capturedAt: Date(timeIntervalSince1970: 150),
+            refreshError: nil,
+            contentOrigin: source.contentOrigin,
+            isEditable: source.isEditable,
+            isRefreshable: source.isRefreshable
+        )
+
+        #expect(throws: MissionStore.Error.sourceIdentityChanged) {
+            try store.replaceSourceSnapshot(
+                missionID: aggregate.mission.id,
+                snapshot: replacement,
+                event: MissionFixtures.event(
+                    id: "incoherent-rename-refresh",
+                    missionID: aggregate.mission.id,
+                    kind: .sourceRefreshed,
+                    createdAt: 150
+                )
+            )
+        }
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.source == aggregate.source)
         #expect(loaded.events.map(\.id) == ["mission-1-event-1"])
     }
 

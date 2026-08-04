@@ -8,6 +8,7 @@ final class MissionStore {
         case duplicateActiveSourceIdentity
         case sourceIdentityChanged
         case sourceNotEditable
+        case sourceNotRefreshable
         // Temporary compatibility while issue-only callers migrate.
         case duplicateActiveIssueIdentity
         case issueIdentityChanged
@@ -290,6 +291,12 @@ final class MissionStore {
         return try immediateTransaction {
             try requireMission(missionID)
             let storedSource = try source(missionID: missionID)
+            guard storedSource.identity.providerID != .manual else {
+                throw Error.sourceNotRefreshable
+            }
+            guard Self.hasCoherentCodeHostIdentity(snapshot) else {
+                throw Error.sourceIdentityChanged
+            }
             let identityChanged = storedSource.identity != snapshot.identity
             if identityChanged,
                !Self.isAllowedCodeHostRedirect(from: storedSource, to: snapshot) {
@@ -748,7 +755,22 @@ final class MissionStore {
     private func migrateToV6() throws {
         let tableNames = try db.query("SELECT name FROM sqlite_master WHERE type = 'table'")
             .compactMap { $0["name"] as? String }
-        guard tableNames.contains("missions") else { return }
+        let requiredV5Tables = Set([
+            "missions",
+            "mission_issue_sources",
+            "mission_legs",
+            "mission_events",
+        ])
+        let existingTables = Set(tableNames)
+        guard existingTables.contains("missions") else {
+            guard existingTables == Set(["schema_version", "mission_legs"]) else {
+                throw Error.malformedRecord
+            }
+            return
+        }
+        guard requiredV5Tables.isSubset(of: existingTables) else {
+            throw Error.malformedRecord
+        }
 
         try db.exec("ALTER TABLE missions RENAME TO missions_v5")
         try db.exec("ALTER TABLE mission_legs RENAME TO mission_legs_v5")
@@ -917,7 +939,15 @@ final class MissionStore {
           ON leg.id = missions.primary_leg_id AND leg.mission_id = missions.id
         WHERE leg.id IS NULL
         """).first?["count"] as? Int64
+        let invalidEventLegs = try db.query("""
+        SELECT COUNT(*) AS count
+        FROM mission_events AS event
+        LEFT JOIN mission_legs AS leg
+          ON leg.id = event.leg_id AND leg.mission_id = event.mission_id
+        WHERE event.leg_id IS NOT NULL AND leg.id IS NULL
+        """).first?["count"] as? Int64
         guard missingPrimaryLegs == 0,
+              invalidEventLegs == 0,
               try db.query("PRAGMA foreign_key_check").isEmpty
         else { throw Error.malformedRecord }
     }
@@ -1070,7 +1100,8 @@ final class MissionStore {
         from stored: MissionSourceSnapshot,
         to replacement: MissionSourceSnapshot
     ) -> Bool {
-        guard stored.identity.providerID == replacement.identity.providerID,
+        guard hasCoherentCodeHostIdentity(replacement),
+              stored.identity.providerID == replacement.identity.providerID,
               stored.identity.providerID == .github || stored.identity.providerID == .gitlab,
               let oldLocator = stored.repositoryLocator,
               let newLocator = replacement.repositoryLocator,
@@ -1080,6 +1111,27 @@ final class MissionStore {
               stored.displayReference == replacement.displayReference
         else { return false }
         return true
+    }
+
+    private static func hasCoherentCodeHostIdentity(_ source: MissionSourceSnapshot) -> Bool {
+        let expectedProvider: CodeHostKind
+        switch source.identity.providerID {
+        case .github:
+            expectedProvider = .github
+        case .gitlab:
+            expectedProvider = .gitlab
+        default:
+            return true
+        }
+        guard let locator = source.repositoryLocator,
+              locator.provider == expectedProvider,
+              let displayReference = source.displayReference,
+              displayReference.first == "#",
+              let number = Int(displayReference.dropFirst()),
+              number > 0
+        else { return false }
+        let expectedStableID = "\(locator.host)/\(locator.repositorySlug)#\(number)".lowercased()
+        return source.identity.stableID.lowercased() == expectedStableID
     }
 
     private func migrateReviewIdentities(
