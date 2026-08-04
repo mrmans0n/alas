@@ -786,7 +786,9 @@ final class MissionController {
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
-                guard let aggregate = try await persistence.aggregate(id: id) else { return }
+                guard let aggregate = try await persistence.aggregate(id: id),
+                      aggregate.mission.state != .completed
+                else { return }
                 let legs = if let legID {
                     aggregate.legs.filter { $0.id == legID }
                 } else {

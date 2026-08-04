@@ -1775,6 +1775,7 @@ final class AppState {
         let activeProjectIDs = Set(activeSpaceProjects.map(\.id))
         guard missingMissionTab == nil,
               let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
+                  guard aggregate.mission.state != .completed else { return nil }
                   guard let leg = aggregate.legs.first(where: {
                       $0.state == .needsAttention
                           && $0.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage

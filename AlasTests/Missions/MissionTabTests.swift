@@ -621,6 +621,22 @@ struct MissionTabTests {
         #expect(fixture.state.selectedWorktreeId == nil)
     }
 
+    @Test func startupDoesNotOpenRecoveryForACompletedMission() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
+        await fixture.state.missions.load()
+        await fixture.state.missions.recordMissingWorktree(fixture.aggregate.mission.id)
+        await fixture.state.missions.complete(fixture.aggregate.mission.id)
+
+        await fixture.state.reconcileMissionsForStartup()
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        #expect(aggregate.mission.state == .completed)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+    }
+
     @Test func missionDetailRendersStoredHeaderCaptureAndLegFields() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
         await fixture.state.missions.load()

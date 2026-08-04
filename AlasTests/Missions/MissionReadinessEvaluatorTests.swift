@@ -899,6 +899,28 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.setupCheckpoint == .startingAgent)
     }
 
+    @Test func reappearedWorktreeDoesNotMutateACompletedMission() async throws {
+        var missing = Self.runningAggregate()
+        missing.markPrimaryLegNeedsAttention(
+            checkpoint: .running,
+            reason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
+        let fake = try MissionLifecycleFake(aggregate: missing)
+        await fake.controller.load()
+        await fake.controller.complete(Self.missionID)
+        let completed = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+        let eventCount = completed.events.count
+
+        await fake.controller.recordAvailableWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.mission.state == .completed)
+        #expect(aggregate.primaryLeg?.state == .needsAttention)
+        #expect(aggregate.primaryLeg?.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.events.count == eventCount)
+        #expect(fake.externalOperations.isEmpty)
+    }
+
     @Test func startupRefreshesAMergedLinkedReviewWithoutAWorktree() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
