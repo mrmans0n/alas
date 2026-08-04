@@ -655,6 +655,14 @@ struct DiffReviewFileSection: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("diff-review-show-full-diff-\(file.id.rawValue)")
+            .background(
+                ReviewDraftCommentActionPressMarker(
+                    identifier: "diff-review-show-full-diff-\(file.id.rawValue)",
+                    label: "Show full diff"
+                ) {
+                    showFullDiffOverride = true
+                }
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
