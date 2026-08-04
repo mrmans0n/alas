@@ -739,6 +739,23 @@ private struct MissionLegSection: View {
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(theme.color("fg-dim"))
+            if presentation.checkpointCopy != nil || presentation.errorCopy != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let checkpoint = presentation.checkpointCopy {
+                        Text(checkpoint)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.color("fg"))
+                            .accessibilityIdentifier("mission-leg-checkpoint-\(presentation.id.rawValue)")
+                    }
+                    if let error = presentation.errorCopy {
+                        Text(error)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.color("del"))
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("mission-leg-error-\(presentation.id.rawValue)")
+                    }
+                }
+            }
             HStack(spacing: 8) {
                 if presentation.agentDestination != nil {
                     Button("Open Agent", action: onOpenAgent)

@@ -83,6 +83,8 @@ struct MissionPresentationTests {
         #expect(summary.attentionLegIDs.map(\.rawValue) == ["mission-1-leg-sdk"])
         #expect(summary.legs[0].agentCopy == "Codex · Working")
         #expect(summary.legs[1].stateLabel == "Needs attention")
+        #expect(summary.legs[1].checkpointCopy == "ACP agent startup needs attention.")
+        #expect(summary.legs[1].errorCopy == "Agent authentication is required.")
         #expect(summary.legs[1].actions.retryAgent)
         #expect(summary.legs[2].stateLabel == "Ready")
     }
