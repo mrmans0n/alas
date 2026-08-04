@@ -4177,11 +4177,23 @@ final class AppState {
 
     func handleCloseCenterShortcut(worktreeId: String?) {
         if let activeGlobalTabID = globalTabs.activeTabId {
-            globalTabs.close(tabId: activeGlobalTabID)
+            closeGlobalTab(tabId: activeGlobalTabID)
             return
         }
         guard let worktreeId else { return }
         handleCloseShortcut(worktreeId: worktreeId)
+    }
+
+    func closeGlobalTab(tabId: TabID) {
+        let missionID = globalTabs.tabs.first(where: { $0.id == tabId }).flatMap { tab -> MissionID? in
+            guard case .mission(let mission) = tab else { return nil }
+            return mission.missionID
+        }
+        globalTabs.close(tabId: tabId)
+        if missingMissionTab?.missionID == missionID {
+            missingMissionTab = nil
+            missingMissionRecoveryTarget = nil
+        }
     }
 
     @discardableResult
@@ -4698,7 +4710,7 @@ final class AppState {
 
     func closeTab(worktreeId: String, tabId: TabID) {
         if globalTabs.tabs.contains(where: { $0.id == tabId }) {
-            globalTabs.close(tabId: tabId)
+            closeGlobalTab(tabId: tabId)
             return
         }
         let allTabs = tabs.tabs(forWorktree: worktreeId)
@@ -4805,7 +4817,7 @@ final class AppState {
         let ids = Set(tabIds)
         guard !ids.isEmpty else { return }
         for id in stateGlobalTabIDs().intersection(ids) {
-            globalTabs.close(tabId: id)
+            closeGlobalTab(tabId: id)
         }
 
         let allTabs = tabs.tabs(forWorktree: worktreeId)

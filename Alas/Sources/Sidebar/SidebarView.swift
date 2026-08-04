@@ -277,6 +277,9 @@ struct SidebarView: View {
     }
 
     private var selectedMissionID: MissionID? {
+        if let tabState = state.globalTabs.activeMissionTab() {
+            return tabState.missionID
+        }
         if let tabState = state.missingMissionTab {
             return tabState.missionID
         }

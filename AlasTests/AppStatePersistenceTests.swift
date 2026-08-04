@@ -336,6 +336,18 @@ struct AppStatePersistenceTests {
         }
     }
 
+    @Test func closingMissingMissionGlobalTabClearsRecoveryPresentation() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: false)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.closeGlobalTab(tabId: MissionTabState.fixture.id)
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.missingMissionTab == nil)
+        #expect(fixture.state.missingMissionRecoveryTarget == nil)
+    }
+
     @Test func migratedMissionTabRemainsGlobalAcrossAnSDKOnlySpace() async throws {
         let fixture = try MissionCrossSpaceNavigationFixture()
         let store = PersistenceStore()
