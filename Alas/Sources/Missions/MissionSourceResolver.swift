@@ -34,32 +34,12 @@ struct MissionIssueResolver {
     let environment: Environment
 
     func resolve(_ rawReference: String) async throws -> ResolvedMissionIssue {
-        let resolver = MissionSourceResolver(environment: .init(
+        let resolver = CodeHostIssueResolver(environment: .init(
             projects: environment.projects,
-            selectedProjectID: environment.selectedProjectId,
+            selectedProjectId: environment.selectedProjectId,
             remotes: environment.remotes,
-            providers: .init([
-                CodeHostMissionSourceProvider(providers: environment.providers),
-                ManualMissionSourceProvider(),
-            ])
+            providers: environment.providers
         ))
-        let result = try await resolver.resolve(rawReference)
-        guard let snapshot = MissionIssueSnapshot(source: result.source),
-              let selectedProjectID = result.selectedProjectID,
-              let project = environment.projects().first(where: { $0.id == selectedProjectID }),
-              let locator = result.repositoryLocator,
-              let remote = CodeHostRemoteDetector.detectAllMatching(try await environment.remotes(project), kind: locator.provider).first(where: {
-                  $0.host.caseInsensitiveCompare(locator.host) == .orderedSame
-                      && $0.repositorySlug.caseInsensitiveCompare(locator.repositorySlug) == .orderedSame
-              })
-        else {
-            throw CodeHostProviderError.malformedOutput("The resolved source is not a configured code host issue.")
-        }
-        return .init(
-            snapshot: snapshot,
-            remote: remote,
-            candidateProjectIds: result.candidateProjectIDs,
-            selectedProjectId: selectedProjectID
-        )
+        return try await resolver.resolve(rawReference)
     }
 }

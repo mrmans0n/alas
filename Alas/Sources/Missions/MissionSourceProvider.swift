@@ -53,9 +53,15 @@ protocol MissionSourceProviding: Sendable {
 
 struct MissionSourceProviderRegistry: Sendable {
     private let providers: [any MissionSourceProviding]
+    private let providersByID: [MissionSourceProviderID: any MissionSourceProviding]
 
     init(_ providers: [any MissionSourceProviding]) {
         self.providers = providers.filter { $0.id != .manual } + providers.filter { $0.id == .manual }
+        providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0) })
+    }
+
+    func provider(for id: MissionSourceProviderID) -> (any MissionSourceProviding)? {
+        providersByID[id]
     }
 
     func resolve(
@@ -64,10 +70,24 @@ struct MissionSourceProviderRegistry: Sendable {
         selectedProjectID: String?,
         remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
     ) async throws -> ResolvedMissionSource {
-        guard let provider = providers.first(where: { $0.recognizes(reference) }) else {
+        let matchingProviders = providers.filter { $0.recognizes(reference) }
+        guard !matchingProviders.isEmpty else {
             throw CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
         }
-        return try await provider.resolve(reference, projects: projects, selectedProjectID: selectedProjectID, remotes: remotes)
+        var lastError: Error?
+        for provider in matchingProviders {
+            do {
+                return try await provider.resolve(
+                    reference,
+                    projects: projects,
+                    selectedProjectID: selectedProjectID,
+                    remotes: remotes
+                )
+            } catch let error as CodeHostProviderError where error.isMissingConfiguredRemote {
+                lastError = error
+            }
+        }
+        throw lastError ?? CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
     }
 }
 
@@ -154,11 +174,14 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
 }
 
 struct CodeHostMissionSourceProvider: MissionSourceProviding {
-    let id: MissionSourceProviderID = .github
+    let id: MissionSourceProviderID
+    private let kind: CodeHostKind
     private let providers: CodeHostIssueProviderRegistry
 
-    init(providers: CodeHostIssueProviderRegistry) {
-        self.providers = providers
+    init(kind: CodeHostKind = .github, providers: CodeHostIssueProviderRegistry) {
+        self.kind = kind
+        id = kind.missionSourceProviderID
+        self.providers = .init(providers.provider(for: kind).map { [$0] } ?? [])
     }
 
     func recognizes(_ reference: MissionSourceReference) -> Bool {
@@ -166,7 +189,10 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
         case .short:
             return true
         case .url(let url):
-            return (try? MissionIssueInput.parse(url.absoluteString)) != nil
+            guard case .url(let parsedKind, _, _, _) = try? MissionIssueInput.parse(url.absoluteString) else {
+                return false
+            }
+            return parsedKind == kind
         }
     }
 
@@ -176,10 +202,17 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
         selectedProjectID: String?,
         remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
     ) async throws -> ResolvedMissionSource {
+        let adapterKind = kind
+        let adapterRemotes: @Sendable (ProjectConfig) async throws -> [GitRemote] = { project in
+            try await remotes(project).filter { remote in
+                guard let detected = CodeHostRemoteDetector.detect(from: [remote]) else { return true }
+                return detected.kind == adapterKind
+            }
+        }
         let resolver = CodeHostIssueResolver(environment: .init(
             projects: { projects },
             selectedProjectId: { selectedProjectID },
-            remotes: remotes,
+            remotes: adapterRemotes,
             providers: providers
         ))
         do {
@@ -193,7 +226,12 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
             )
         } catch {
             guard Self.isFetchFailure(error),
-                  let fallback = try? manualFallback(for: reference, projects: projects, selectedProjectID: selectedProjectID)
+                  let fallback = try? await manualFallback(
+                      for: reference,
+                      projects: projects,
+                      selectedProjectID: selectedProjectID,
+                      remotes: adapterRemotes
+                  )
             else {
                 throw error
             }
@@ -229,21 +267,59 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
     private func manualFallback(
         for reference: MissionSourceReference,
         projects: [ProjectConfig],
+        selectedProjectID: String?,
+        remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
+    ) async throws -> ResolvedMissionSource {
+        switch reference {
+        case .url(let inputURL):
+            guard case let .url(kind, host, slug, number) = try MissionIssueInput.parse(inputURL.absoluteString) else {
+                throw CodeHostProviderError.malformedOutput("A manual fallback is only available for code host URLs.")
+            }
+            return try fallback(
+                url: inputURL,
+                kind: kind,
+                host: host,
+                slug: slug,
+                number: number,
+                projects: projects,
+                selectedProjectID: selectedProjectID
+            )
+        case .short(let number):
+            guard let selectedProjectID,
+                  let project = projects.first(where: { $0.id == selectedProjectID }),
+                  let remote = CodeHostRemoteDetector.detect(from: try await remotes(project), matching: kind)
+            else {
+                throw CodeHostProviderError.malformedOutput("A manual fallback is only available for a configured code host remote.")
+            }
+            let url = issueURL(for: remote, number: number)
+            return try fallback(
+                url: url,
+                kind: remote.kind,
+                host: remote.host,
+                slug: remote.repositorySlug,
+                number: number,
+                projects: [project],
+                selectedProjectID: selectedProjectID
+            )
+        }
+    }
+
+    private func fallback(
+        url: URL,
+        kind: CodeHostKind,
+        host: String,
+        slug: String,
+        number: Int,
+        projects: [ProjectConfig],
         selectedProjectID: String?
     ) throws -> ResolvedMissionSource {
-        guard case .url(let inputURL) = reference,
-              case let .url(kind, host, slug, number) = try MissionIssueInput.parse(inputURL.absoluteString)
-        else {
-            throw CodeHostProviderError.malformedOutput("A manual fallback is only available for code host URLs.")
-        }
-        let providerID: MissionSourceProviderID = kind == .github ? .github : .gitlab
         let identity = MissionSourceIdentity(
-            providerID: providerID,
+            providerID: kind.missionSourceProviderID,
             stableID: "\(host)/\(slug)#\(number)".lowercased()
         )
         let locator = MissionRepositoryLocator(provider: kind, host: host, repositorySlug: slug)
         let source = try ManualMissionSourceProvider.snapshot(
-            for: inputURL,
+            for: url,
             identity: identity,
             repositoryLocator: locator,
             displayReference: "#\(number)",
@@ -257,6 +333,11 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
         )
     }
 
+    private func issueURL(for remote: CodeHostRemote, number: Int) -> URL {
+        let path = remote.kind == .gitlab ? "-/issues/\(number)" : "issues/\(number)"
+        return remote.webURL.appendingPathComponent(path)
+    }
+
     private func rawReference(for reference: MissionSourceReference) -> String {
         switch reference {
         case .short(let number): "#\(number)"
@@ -267,7 +348,7 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
     private static func isFetchFailure(_ error: Error) -> Bool {
         if error is CodeHostIssueProviderError { return true }
         guard let error = error as? CodeHostProviderError else { return false }
-        switch error {
+        return switch error {
         case .cliMissing, .unauthenticated, .commandFailed:
             true
         case .unsupportedProvider, .malformedOutput:
@@ -279,5 +360,12 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
 private extension Error {
     var userFacingMessage: String {
         (self as? LocalizedError)?.errorDescription ?? localizedDescription
+    }
+}
+
+private extension CodeHostProviderError {
+    var isMissingConfiguredRemote: Bool {
+        guard case .malformedOutput(let message) = self else { return false }
+        return message == "The selected project has no supported code host remote."
     }
 }

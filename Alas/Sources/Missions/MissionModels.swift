@@ -141,6 +141,30 @@ struct MissionIssueSnapshot: Codable, Equatable, Sendable {
     let capturedAt: Date
     var refreshError: String?
 
+    init(
+        identity: MissionIssueIdentity,
+        canonicalURL: URL,
+        title: String,
+        body: String,
+        state: MissionIssueState,
+        labels: [String],
+        assignees: [String],
+        providerUpdatedAt: Date?,
+        capturedAt: Date,
+        refreshError: String?
+    ) {
+        self.identity = identity
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.body = body
+        self.state = state
+        self.labels = labels
+        self.assignees = assignees
+        self.providerUpdatedAt = providerUpdatedAt
+        self.capturedAt = capturedAt
+        self.refreshError = refreshError
+    }
+
     init?(source: MissionSourceSnapshot) {
         guard let repositoryLocator = source.repositoryLocator,
               let displayReference = source.displayReference,
@@ -217,6 +241,42 @@ struct MissionSourceSnapshot: Codable, Equatable, Sendable {
     let contentOrigin: MissionSourceContentOrigin
     let isEditable: Bool
     let isRefreshable: Bool
+
+    init(
+        identity: MissionSourceIdentity,
+        canonicalURL: URL,
+        providerLabel: String,
+        displayReference: String?,
+        repositoryLocator: MissionRepositoryLocator?,
+        title: String,
+        body: String,
+        state: MissionSourceState,
+        labels: [String],
+        assignees: [String],
+        providerUpdatedAt: Date?,
+        capturedAt: Date,
+        refreshError: String?,
+        contentOrigin: MissionSourceContentOrigin,
+        isEditable: Bool,
+        isRefreshable: Bool
+    ) {
+        self.identity = identity
+        self.canonicalURL = canonicalURL
+        self.providerLabel = providerLabel
+        self.displayReference = displayReference
+        self.repositoryLocator = repositoryLocator
+        self.title = title
+        self.body = body
+        self.state = state
+        self.labels = labels
+        self.assignees = assignees
+        self.providerUpdatedAt = providerUpdatedAt
+        self.capturedAt = capturedAt
+        self.refreshError = refreshError
+        self.contentOrigin = contentOrigin
+        self.isEditable = isEditable
+        self.isRefreshable = isRefreshable
+    }
 
     init(issue: MissionIssueSnapshot) {
         let providerID: MissionSourceProviderID = switch issue.identity.provider {
