@@ -78,6 +78,48 @@ final class ACPTranscriptScrollerReconciler {
     private var isLayingOutRows = false
     private var pendingRelayout = false
 
+    /// A scroll anchor whose row was removed by an update, kept so the
+    /// position can be recovered if the row comes back.
+    ///
+    /// This exists because a transcript can drop rows and put the same rows
+    /// straight back: `ACPSessionManager.runMirrorRefresh` replaces a mirrored
+    /// session's transcript with its tail on every 2.5s poll, and the backfill
+    /// it schedules prepends the older messages again one update later. Across
+    /// that pair the row the user is reading does not exist, so neither offset
+    /// compensation (which clamps to 0 at the top of the document and silently
+    /// loses the correction) nor `performReset`'s anchor (which finds nothing
+    /// to aim at and declines to move) can hold the position — the user ends
+    /// up a page or more below where they were. Remembering the vanished
+    /// anchor and restoring it when the row reappears is what the legacy path
+    /// gets for free from `restoreRememberedAnchorIfNeeded`, which re-scrolls
+    /// to a remembered MESSAGE id after any rebuild.
+    ///
+    /// `applyBudget` bounds how long a vanished anchor stays interesting: a
+    /// row that returns many updates later is no longer what the user is
+    /// looking at, and restoring to it then would be its own teleport. The
+    /// coordinator additionally drops it outright on any user-driven scroll
+    /// (`invalidatePendingAnchorRestore`), so a live gesture is never fought.
+    private struct PendingAnchorRestore {
+        let id: String
+        let offsetWithinRow: CGFloat
+        var applyBudget: Int
+    }
+    private var pendingAnchorRestore: PendingAnchorRestore?
+
+    /// Number of subsequent `apply()` calls a vanished anchor stays eligible
+    /// for restoration. The mirror-refresh pair lands on consecutive updates;
+    /// a small budget covers an interleaved unrelated update without letting
+    /// a long-gone anchor resurface.
+    private static let pendingAnchorApplyBudget = 3
+
+    /// How long after a user-driven scroll tick the tail re-pin stays
+    /// suppressed — see `repinsToTail(followsTail:wasFollowingTail:)`.
+    static let userScrollSuppressionWindow: TimeInterval = 0.25
+
+    /// `ProcessInfo.systemUptime` of the last user-driven scroll tick, or nil
+    /// if the user has never moved this viewport.
+    private var lastUserScrollUptime: TimeInterval?
+
     init(
         tiling: ACPTranscriptTilingController,
         pool: ACPTranscriptRowHostingPool,
@@ -153,6 +195,12 @@ final class ACPTranscriptScrollerReconciler {
         // real width is diffed as a normal (likely initial) update.
         guard width > 0 else { return }
 
+        // Whether this update should end by re-pinning to the tail. Read
+        // BEFORE any mutation below moves the document or the offset, and
+        // gated on the viewport actually SITTING at the tail rather than on
+        // `followsTail` alone — see `repinsToTail(followsTail:wasFollowingTail:)`.
+        let repins = repinsToTail(followsTail: followsTail, wasFollowingTail: lastFollowsTail)
+
         let newIds = specs.map(\.id)
         var newSpecs: [String: ACPTranscriptRowSpec] = [:]
         newSpecs.reserveCapacity(specs.count)
@@ -168,6 +216,10 @@ final class ACPTranscriptScrollerReconciler {
         isApplyingSpecs = true
         defer { isApplyingSpecs = false }
 
+        // Read before the mutations below, so a row that this update removes
+        // can still be identified afterwards.
+        let anchorBeforeUpdate = repins ? nil : captureScrollAnchor()
+
         contentWidth = width
         if isPureWidthChange {
             // Apply the ordinary incremental diff at the new width (so
@@ -177,7 +229,7 @@ final class ACPTranscriptScrollerReconciler {
             // visible content is never wrong), and debounce the full
             // re-measure-every-row reset until the resize settles — so a
             // live drag doesn't rebuild thousands of hosting views per tick.
-            applyDiff(idDiff, specs: specs, widthChanged: true, followsTail: followsTail)
+            applyDiff(idDiff, specs: specs, widthChanged: true, repinsToTail: repins)
             widthSettleTimer.poke()
         } else {
             let change: Diff = widthChanged ? .reset : idDiff
@@ -193,22 +245,152 @@ final class ACPTranscriptScrollerReconciler {
                 // settle window.
                 widthSettleTimer.cancel()
             }
-            applyDiff(change, specs: specs, widthChanged: widthChanged, followsTail: followsTail)
+            applyDiff(change, specs: specs, widthChanged: widthChanged, repinsToTail: repins)
         }
+
+        trackAnchorAcrossUpdate(anchorBeforeUpdate, repinsToTail: repins)
 
         orderedIds = newIds
         specsById = newSpecs
         keepMountedOffscreenIds = Set(specs.lazy.filter(\.keepsMountedOffscreen).map(\.id))
         lastAppliedSpecs = specs
         lastFollowsTail = followsTail
-        if followsTail {
+        if repins {
             scroller.scrollToBottom()
         }
         layoutMountedRows()
     }
 
+    /// Drops any remembered vanished anchor. Called by the coordinator on
+    /// user-driven scrolling: once the user has moved the viewport themselves,
+    /// a row reappearing is no longer a reason to move it back.
+    func invalidatePendingAnchorRestore() {
+        pendingAnchorRestore = nil
+    }
+
+    /// Carries the reading position across an update that removes the row it
+    /// was anchored to — see `PendingAnchorRestore`.
+    ///
+    /// Three outcomes, in priority order: the anchor row went away (remember
+    /// it), a previously remembered row came back (restore and forget), or
+    /// neither (age out anything remembered). Restoration deliberately runs
+    /// after the diff's own compensation, overwriting it: compensation
+    /// computed against a document that was missing the block is exactly what
+    /// produced the wrong offset.
+    private func trackAnchorAcrossUpdate(_ before: ScrollAnchor?, repinsToTail: Bool) {
+        guard !repinsToTail else {
+            pendingAnchorRestore = nil
+            return
+        }
+        if case .row(let id, let offsetWithinRow) = before, tiling.row(withId: id) == nil {
+            pendingAnchorRestore = PendingAnchorRestore(
+                id: id, offsetWithinRow: offsetWithinRow,
+                applyBudget: Self.pendingAnchorApplyBudget
+            )
+            return
+        }
+        guard var pending = pendingAnchorRestore else { return }
+        if let row = tiling.row(withId: pending.id) {
+            pendingAnchorRestore = nil
+            scroller.setScrollY(row.minY + min(pending.offsetWithinRow, row.height))
+            return
+        }
+        pending.applyBudget -= 1
+        pendingAnchorRestore = pending.applyBudget > 0 ? pending : nil
+    }
+
+    /// Whether an update should end by re-pinning the viewport to the tail:
+    /// tail-follow is on AND the viewport is currently sitting at the tail.
+    ///
+    /// Those two are not the same thing, and treating `followsTail` alone as
+    /// the answer is what made the transcript jump to the newest message
+    /// while the user was scrolling back. `ACPScrollDirectionClassifier
+    /// .pauseTolerance` deliberately withholds the tail-follow pause for the
+    /// first 160pt of upward travel (so trackpad micro-hops and layout reflow
+    /// can't stop the follow), so throughout that band the coordinator is
+    /// still reporting `followsTail: true` while the user is demonstrably
+    /// scrolling away. Any update landing in that window — a streamed chunk,
+    /// a queue change, any SwiftUI invalidation at all, since `updateNSView`
+    /// runs `apply()` unconditionally — slammed the viewport back to the
+    /// bottom mid-gesture.
+    ///
+    /// Position alone is NOT enough to decide this, and gating on it alone
+    /// was wrong: between `bottomTolerance` and `pauseTolerance` (37–160pt
+    /// off the bottom) the session still reports that it follows the tail, so
+    /// suppressing the pin there indefinitely leaves a state with neither
+    /// behavior — streaming content accumulates below the viewport while the
+    /// "go to newest" affordance stays hidden, because it keys off
+    /// `session.followsTranscriptTail` which nothing has paused. The
+    /// suppression is therefore scoped to an ACTIVE GESTURE: the viewport
+    /// must be off the tail AND the user must have moved it within
+    /// `userScrollSuppressionWindow`. Once the gesture ends, an update
+    /// re-pins exactly as it always did, so the inconsistent state cannot
+    /// outlive the gesture that caused it.
+    ///
+    /// "The user moved it" is `noteUserScroll()`, driven by the scroller's own
+    /// programmatic/non-programmatic split, not by `NSApp.currentEvent` —
+    /// under responsive scrolling that event is absent for ~97% of scroll
+    /// ticks (see `ACPTranscriptScroller.shouldStepHeadBack`), so a gesture
+    /// detector built on it would suppress almost nothing.
+    ///
+    /// The state machine still converges from here: scrolling back within
+    /// `bottomTolerance` re-arms the glue through the coordinator's
+    /// `.userAtBottom` → `resumeTailFollow`, and travelling past
+    /// `pauseTolerance` pauses the follow outright. What it no longer does is
+    /// fight a gesture that is still in progress.
+    ///
+    /// The "at the tail" test is skipped on the RISING EDGE of tail-follow —
+    /// `followsTail` true where `wasFollowingTail` is false. That transition
+    /// is somebody deliberately (re-)arming the follow from wherever the
+    /// viewport happens to be: the "go to newest" button (which sets
+    /// `session.followsTranscriptTail` and resets the render window WITHOUT
+    /// scrolling, leaving this re-pin as the only thing that makes it jump —
+    /// ACPMessageList.swift:222-226), `Coordinator.resumeTailFollow`, and the
+    /// initial load. Requiring the viewport to already be at the tail there
+    /// would defeat the whole point of the gesture.
+    ///
+    /// Must be read before an update mutates row geometry: afterwards, a tail
+    /// insertion has already grown the document and `distanceFromBottom`
+    /// answers a different question.
+    private func repinsToTail(followsTail: Bool, wasFollowingTail: Bool) -> Bool {
+        guard followsTail else { return false }
+        if !wasFollowingTail { return true }
+        guard scroller.distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance else {
+            return true
+        }
+        return !isUserScrollInFlight()
+    }
+
+    /// Whether the user has moved the viewport recently enough that an
+    /// update landing now would be interrupting a gesture still in progress.
+    ///
+    /// Scroll ticks arrive every ~8–25ms within a gesture (including the
+    /// momentum tail and the elastic bounce at either end), so the window
+    /// only has to outlast the gaps between them, not the gesture itself.
+    /// It deliberately does not outlast the gesture by much: everything the
+    /// window suppresses is behavior the user gets back the moment they stop.
+    private func isUserScrollInFlight() -> Bool {
+        guard let lastUserScrollUptime else { return false }
+        return ProcessInfo.processInfo.systemUptime - lastUserScrollUptime
+            <= Self.userScrollSuppressionWindow
+    }
+
+    /// Records that the viewport was just moved by the user rather than by
+    /// this reconciler. Called by the coordinator's scroll handler for every
+    /// non-programmatic tick — the scroller's own
+    /// `programmaticAdjustmentDepth` is what tells the two apart, which is
+    /// reliable where the event stream is not.
+    func noteUserScroll() {
+        lastUserScrollUptime = ProcessInfo.processInfo.systemUptime
+    }
+
+    /// `repinsToTail` is the caller's already-made decision about whether this
+    /// update ends by re-pinning to the tail (see
+    /// `repinsToTail(followsTail:wasFollowingTail:)`),
+    /// not the raw tail-follow flag: `performReset` must not capture and
+    /// restore a scroll anchor it is only going to overwrite.
     private func applyDiff(
-        _ change: Diff, specs: [ACPTranscriptRowSpec], widthChanged: Bool, followsTail: Bool
+        _ change: Diff, specs: [ACPTranscriptRowSpec], widthChanged: Bool, repinsToTail: Bool
     ) {
         switch change {
         case .unchanged:
@@ -217,7 +399,7 @@ final class ACPTranscriptScrollerReconciler {
             let insertedSpecs = Array(specs[index..<(index + count)])
             let compensation = tiling.insert(
                 rows: measure(insertedSpecs), at: index,
-                viewportMinY: effectiveViewportMinY(forInsertionAt: index)
+                viewportMinY: effectiveViewportMinY(forMutationAt: index)
             )
             if compensation != 0 {
                 scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
@@ -226,7 +408,10 @@ final class ACPTranscriptScrollerReconciler {
             }
             updateChangedContent(specs: specs)
         case .removed(let index, let count):
-            let compensation = tiling.remove(at: index, count: count, viewportMinY: scroller.scrollY)
+            let compensation = tiling.remove(
+                at: index, count: count,
+                viewportMinY: effectiveViewportMinY(forMutationAt: index)
+            )
             if compensation != 0 {
                 scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
             } else {
@@ -238,7 +423,7 @@ final class ACPTranscriptScrollerReconciler {
             // of `keep` and `pool.releaseAll(except:)` cleans them up.
             updateChangedContent(specs: specs)
         case .reset:
-            performReset(specs: specs, widthChanged: widthChanged, followsTail: followsTail)
+            performReset(specs: specs, widthChanged: widthChanged, repinsToTail: repinsToTail)
         }
     }
 
@@ -260,11 +445,15 @@ final class ACPTranscriptScrollerReconciler {
     ///     reset after browsing deep into a long transcript allocated and
     ///     synchronously measured a hosting view per row in the whole render
     ///     window.
-    private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, followsTail: Bool) {
-        // While following the tail, `apply()`'s own `scrollToBottom()` (or
-        // `performWidthSettledReset`'s) is the correct final position and
-        // must win — don't fight it with a restored anchor.
-        let anchor = followsTail ? nil : captureScrollAnchor()
+    private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, repinsToTail: Bool) {
+        // When the update ends by re-pinning, `apply()`'s own
+        // `scrollToBottom()` (or `performWidthSettledReset`'s) is the correct
+        // final position and must win — don't fight it with a restored
+        // anchor. When it does NOT re-pin — including a tail-following
+        // viewport the user has scrolled off the tail, which no longer
+        // re-pins — the anchor is what keeps the reset from moving the
+        // content under them.
+        let anchor = repinsToTail ? nil : captureScrollAnchor()
         tiling.replaceAll(rows: resetHeights(specs: specs, widthChanged: widthChanged))
         scroller.setDocumentHeight(tiling.documentHeight)
         restoreScrollAnchor(anchor)
@@ -412,8 +601,9 @@ final class ACPTranscriptScrollerReconciler {
     /// definition rather than re-spelling the literal.
     static let syntheticIdPrefix = "__"
 
-    /// The viewport top to hand `ACPTranscriptTilingController.insert` when
-    /// it decides whether an insertion needs offset compensation.
+    /// The viewport top to hand `ACPTranscriptTilingController.insert` /
+    /// `.remove` when they decide whether a mutation needs offset
+    /// compensation.
     ///
     /// Normally that is simply the real viewport top: content grafted in at
     /// or above it must push the offset down by the same amount to keep the
@@ -425,15 +615,28 @@ final class ACPTranscriptScrollerReconciler {
     /// rule then declines to compensate and the whole inserted block, tens
     /// of rows and thousands of points, shoves the reading position down.
     ///
-    /// When every row above the insertion point is synthetic there is no
-    /// real content up there to hold still, so the insertion is logically
+    /// When every row above the mutation point is synthetic there is no
+    /// real content up there to hold still, so the mutation is logically
     /// above the viewport however small `scrollY` happens to be: report the
-    /// insertion point itself as the viewport top so the rule fires. (An
-    /// insertion at index 0 satisfies this vacuously, which is also exactly
+    /// mutation point itself as the viewport top so the rule fires. (A
+    /// mutation at index 0 satisfies this vacuously, which is also exactly
     /// right — inserting above every row is what `prepend` always
-    /// compensated for unconditionally.) Insertions with real message rows
+    /// compensated for unconditionally.) Mutations with real message rows
     /// above them — every append, every mid-list insert — are unaffected.
-    private func effectiveViewportMinY(forInsertionAt index: Int) -> CGFloat {
+    ///
+    /// REMOVALS go through the same rule as insertions, and must: a model
+    /// that removes a block and then re-inserts the same block is not
+    /// hypothetical, it is the steady state for a mirrored session
+    /// (`ACPSessionManager.runMirrorRefresh` replaces the transcript with its
+    /// tail every poll, then `scheduleBackfillIfNeeded` prepends the older
+    /// messages straight back). With only the insertion side overridden, the
+    /// removal declined to compensate while the matching re-insertion
+    /// compensated in full, so each round trip teleported the viewport DOWN
+    /// by the block's entire height — thousands of points, landing the user
+    /// a page or more below where they had been reading. The two sides have
+    /// to answer "is this above me?" identically or the round trip cannot
+    /// net out.
+    private func effectiveViewportMinY(forMutationAt index: Int) -> CGFloat {
         let viewportMinY = scroller.scrollY
         guard index <= orderedIds.count,
               orderedIds[0..<index].allSatisfy({ $0.hasPrefix(Self.syntheticIdPrefix) })
@@ -453,8 +656,9 @@ final class ACPTranscriptScrollerReconciler {
     private func performWidthSettledReset() {
         isApplyingSpecs = true
         defer { isApplyingSpecs = false }
-        performReset(specs: lastAppliedSpecs, widthChanged: true, followsTail: lastFollowsTail)
-        if lastFollowsTail {
+        let repins = repinsToTail(followsTail: lastFollowsTail, wasFollowingTail: lastFollowsTail)
+        performReset(specs: lastAppliedSpecs, widthChanged: true, repinsToTail: repins)
+        if repins {
             scroller.scrollToBottom()
         }
         layoutMountedRows()
@@ -501,11 +705,36 @@ final class ACPTranscriptScrollerReconciler {
     /// `setFollowsTail(false)` as it pauses, before mounting anything, so
     /// the state read here is current and this never fights a user who has
     /// genuinely left the tail.
-    /// `scroller.scrollToBottom()` is idempotent when already there — its
+    /// The re-pin additionally requires the viewport to have BEEN at the tail
+    /// when the invalidation arrived, not merely `lastFollowsTail`. Those two
+    /// are not the same thing, and conflating them made scrolling back
+    /// impossible: `ACPScrollDirectionClassifier.pauseTolerance` deliberately
+    /// withholds the tail-follow pause for the first 160pt of upward travel
+    /// (so trackpad micro-hops and layout reflow don't stop the follow), so
+    /// every scroll tick inside that band still reports `lastFollowsTail ==
+    /// true`. Each such tick mounts the rows the scroll exposed, and
+    /// `performLayoutPass`'s mount-time `measuredHeight(forWidth:)` reassigns
+    /// `rootView`, which SwiftUI answers by invalidating the hosting view's
+    /// intrinsic size — landing right here. Re-pinning then yanked the user
+    /// straight back to the bottom, so they could never travel the 160pt that
+    /// would have paused the follow in the first place: the transcript
+    /// oscillated within one row-height of the bottom and never escaped.
+    /// (Note that this fires on a bare scroll gesture with no model update
+    /// and no content change at all — the invalidation is a side effect of
+    /// measuring, not evidence that anything grew.)
+    ///
+    /// Gating on `repinsToTail(followsTail:wasFollowingTail:)` — which
+    /// additionally requires
+    /// the viewport to BE at the tail — keeps the behavior this method exists for —
+    /// content growing under a viewport that IS sitting at the tail keeps the
+    /// tail glued — while leaving a viewport the user has already moved off
+    /// the tail alone. `bottomTolerance` (not `pauseTolerance`) is the right
+    /// threshold: the question here is "is the viewport at the tail right
+    /// now", which is exactly what that constant answers for the classifier.
+    /// While genuinely pinned, `scrollToBottom()` remains idempotent — its
     /// `setScrollY` clamp reports no `onScroll` change (`reportScroll` skips
-    /// when the offset is unchanged) — so calling it unconditionally on
-    /// every tail-following remeasure, not just ones that grow the tail,
-    /// costs nothing extra in the common case.
+    /// when the offset is unchanged) — so calling it on every tail-following
+    /// remeasure, not just ones that grow the tail, costs nothing extra.
     /// Updates the tail-follow state that `remeasureRow` re-pins against,
     /// without waiting for the `apply()` that will carry the same value.
     ///
@@ -529,9 +758,13 @@ final class ACPTranscriptScrollerReconciler {
     func remeasureRow(id: String) {
         guard !isApplyingSpecs else { return }
         guard let spec = specsById[id] else { return }
+        // Read BEFORE measuring: `applyMeasuredHeight` can change both the
+        // document height and the offset, after which "was the viewport at
+        // the tail when this arrived?" is no longer answerable.
+        let repins = repinsToTail(followsTail: lastFollowsTail, wasFollowingTail: lastFollowsTail)
         let (view, _) = pool.view(for: spec)
         applyMeasuredHeight(id: id, view: view)
-        if lastFollowsTail {
+        if repins {
             scroller.scrollToBottom()
         }
     }

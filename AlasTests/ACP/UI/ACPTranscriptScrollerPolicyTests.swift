@@ -633,16 +633,30 @@ struct ACPTranscriptScrollerViewportHeightReconciliationTests {
 
 @Suite("ACPTranscriptScroller policies")
 struct ACPTranscriptScrollerPolicyTests {
-    @Test("head step fires near the top during a user scroll when older rows exist")
+    @Test("head step fires near the top when older rows exist")
     func headStep() {
         #expect(ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 800, isUserDriven: true, threshold: 1500))
+            visibleHead: 30, scrollY: 800, threshold: 1500))
         #expect(!ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 0, scrollY: 800, isUserDriven: true, threshold: 1500))
+            visibleHead: 0, scrollY: 800, threshold: 1500))
         #expect(!ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 2000, isUserDriven: true, threshold: 1500))
-        #expect(!ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 800, isUserDriven: false, threshold: 1500))
+            visibleHead: 30, scrollY: 2000, threshold: 1500))
+    }
+
+    /// Pagination is geometric, not event-gated. `NSApp.currentEvent` is only
+    /// the scroll event while the bounds change happens inside event
+    /// dispatch, and under `NSScrollView`'s responsive scrolling it usually
+    /// does not: 97% of scroll ticks measured in the running app classified
+    /// as not user-driven, which left the user parked at the top of the
+    /// render window waiting seconds for a tick to coincide with a
+    /// recognizable event before older messages loaded at all.
+    @Test("head step does not wait for a recognizable user event")
+    func headStepIsNotEventGated() {
+        // The exact state a trackpad fling leaves behind: at the top of the
+        // window, older rows available, and no fresh event to be found.
+        #expect(ACPTranscriptScroller.shouldStepHeadBack(
+            visibleHead: 30, scrollY: 0, threshold: 1500))
+        #expect(!ACPUserScrollEvent.isUserDriven(nil))
     }
 
     @Test("a head step already awaiting its compensating update does not queue another")
@@ -654,10 +668,10 @@ struct ACPTranscriptScrollerPolicyTests {
         // the head queues several steps that arrive as one 60-150 row
         // insertion measured in a single synchronous pass.
         #expect(!ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 800, isUserDriven: true, threshold: 1500,
+            visibleHead: 30, scrollY: 800, threshold: 1500,
             hasPendingHeadStep: true))
         #expect(ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 800, isUserDriven: true, threshold: 1500,
+            visibleHead: 30, scrollY: 800, threshold: 1500,
             hasPendingHeadStep: false))
     }
 
@@ -665,15 +679,15 @@ struct ACPTranscriptScrollerPolicyTests {
     func tailStep() {
         #expect(ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500,
+            threshold: 1500,
             previousScrollY: 1000, newScrollY: 1050))
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 200, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500,
+            threshold: 1500,
             previousScrollY: 1000, newScrollY: 1050))
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 5000,
-            isUserDriven: true, threshold: 1500,
+            threshold: 1500,
             previousScrollY: 1000, newScrollY: 1050))
     }
 
@@ -685,7 +699,7 @@ struct ACPTranscriptScrollerPolicyTests {
         // page in hidden newer messages.
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500,
+            threshold: 1500,
             previousScrollY: 1050, newScrollY: 1000))
     }
 
@@ -693,7 +707,7 @@ struct ACPTranscriptScrollerPolicyTests {
     func tailStepWithholdsWithoutPreviousOffset() {
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500,
+            threshold: 1500,
             previousScrollY: nil, newScrollY: 1050))
     }
 
@@ -703,7 +717,7 @@ struct ACPTranscriptScrollerPolicyTests {
         // (0.5pt) must not be treated as a deliberate downward scroll.
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: true, threshold: 1500,
+            threshold: 1500,
             previousScrollY: 1000, newScrollY: 1000.2))
     }
 
@@ -716,15 +730,18 @@ struct ACPTranscriptScrollerPolicyTests {
 
 /// Regression coverage for the review's fix-round-2 finding: a click on the
 /// scrollbar track arrives as a plain `.leftMouseDown`, which
-/// `ACPUserScrollEvent.isUserDriven` alone rejects. `handleScroll` now
-/// widens the tail-follow pause/resume classification and the head-step
-/// gate to `ACPUserScrollEvent.isHeadPaginationDriven` — which additionally
-/// accepts a `.leftMouseDown` when it is a genuine scrollbar-track hit AND
-/// the geometry actually moved upward — while leaving `shouldStepTailForward`
-/// on the plain `isUserDriven` signal, mirroring
-/// `ACPMessageList.handleScrollGeometry` exactly (compare
-/// `ACPMessageList.swift`'s `handleScrollGeometry`/
-/// `shouldStepHeadBackFromGeometry` call sites).
+/// `ACPUserScrollEvent.isUserDriven` alone rejects. `handleScroll` widens the
+/// tail-follow pause/resume classification to
+/// `ACPUserScrollEvent.isHeadPaginationDriven` — which additionally accepts a
+/// `.leftMouseDown` when it is a genuine scrollbar-track hit AND the geometry
+/// actually moved upward.
+///
+/// That classification governs the tail-follow PAUSE only. Pagination (head
+/// and tail) no longer consults the event stream at all — see
+/// `ACPTranscriptScroller.shouldStepHeadBack`'s doc comment on why the event
+/// signal is unusable under responsive scrolling — so a track click paginates
+/// for the same reason any other way of arriving near the window's edge
+/// does: the geometry says so.
 ///
 /// `handleScroll` itself is a private, `NSApp.currentEvent`-driven method
 /// that needs a real `NSEvent` routed through an actual window's view
@@ -790,38 +807,40 @@ struct ACPTranscriptScrollerScrollbarTrackClickTests {
         #expect(decision == .noChange)
     }
 
-    @Test("an upward scrollbar-track click can also trigger head pagination")
-    func scrollbarTrackClickTriggersHeadPagination() {
-        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
-            .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: true
-        )
-        #expect(ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 100, isUserDriven: isHeadPaginationDriven, threshold: Self.threshold
-        ))
+    /// However the viewport got near the top of the render window — a track
+    /// click, a trackpad fling whose events were never seen, a restored
+    /// anchor — older rows load. The event classification that decides
+    /// whether to PAUSE tail-follow does not decide this.
+    @Test("head pagination follows the geometry, whatever the click was")
+    func headPaginationIsGeometricNotEventClassified() {
+        for isScrollbarTrackHit in [true, false] {
+            let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+                .leftMouseDown, previousMinY: 2000, newMinY: 100,
+                isScrollbarTrackHit: isScrollbarTrackHit
+            )
+            #expect(isHeadPaginationDriven == isScrollbarTrackHit)
+            // Same answer either way: the viewport is near the top and older
+            // rows exist.
+            #expect(ACPTranscriptScroller.shouldStepHeadBack(
+                visibleHead: 30, scrollY: 100, threshold: Self.threshold
+            ))
+        }
     }
 
-    @Test("a non-scrollbar click does not trigger head pagination")
-    func nonScrollbarClickDoesNotTriggerHeadPagination() {
-        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
-            .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: false
-        )
-        #expect(!ACPTranscriptScroller.shouldStepHeadBack(
-            visibleHead: 30, scrollY: 100, isUserDriven: isHeadPaginationDriven, threshold: Self.threshold
+    /// Tail pagination's intent signal is the direction the viewport moved,
+    /// not the event that moved it: a click that jumps DOWN the document
+    /// pages in newer messages, one that jumps up does not.
+    @Test("tail pagination follows the direction of travel, not the event")
+    func tailPaginationFollowsDirectionOfTravel() {
+        #expect(ACPTranscriptScroller.shouldStepTailForward(
+            visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
+            threshold: Self.threshold,
+            previousScrollY: 2000, newScrollY: 2050
         ))
-    }
-
-    @Test("a scrollbar-track click does not drive tail pagination, matching the legacy plain-isUserDriven gate")
-    func scrollbarTrackClickDoesNotDriveTailPagination() {
-        // `shouldStepTailForward` mirrors `ACPMessageList
-        // .shouldStepTailForwardFromBottomGeometry`, which the legacy path
-        // gates on plain `isUserDriven`, NOT `isHeadPaginationDriven` — a
-        // scrollbar-track click must not page in hidden newer messages.
-        let plainIsUserDriven = ACPUserScrollEvent.isUserDriven(.leftMouseDown)
-        #expect(!plainIsUserDriven)
         #expect(!ACPTranscriptScroller.shouldStepTailForward(
             visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
-            isUserDriven: plainIsUserDriven, threshold: Self.threshold,
-            previousScrollY: 2000, newScrollY: 2050
+            threshold: Self.threshold,
+            previousScrollY: 2050, newScrollY: 2000
         ))
     }
 }
