@@ -91,6 +91,26 @@ struct AddMissionLegDialogTests {
         #expect(displayed.contains("[redacted]"))
     }
 
+    @Test func liveRemoteDestinationValidationIgnoresLocalFilesystemCollision() throws {
+        let localCollision = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-add-leg-remote-collision-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: localCollision, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: localCollision) }
+        let project = ProjectConfig(
+            id: "remote-project",
+            name: "remote-project",
+            path: "/workspace/remote-project",
+            color: "blue",
+            addedAt: Date(timeIntervalSince1970: 100),
+            host: "devbox"
+        )
+        let state = AppState()
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        let environment = AddMissionLegModel.Environment.live(state: state)
+
+        #expect(environment.destinationAvailable(project.id, localCollision))
+    }
+
     @Test func dialogShowsSharedIssueBodyAndExistingLegManifest() async throws {
         let fixture = try DialogFixture()
         await fixture.state.missions.load()

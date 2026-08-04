@@ -388,13 +388,16 @@ extension AddMissionLegModel.Environment {
                 )
             },
             destinationAvailable: { [weak state] projectID, destination in
-                guard let state else { return false }
+                guard let state,
+                      let project = state.projects.first(where: { $0.id == projectID })
+                else { return false }
                 let candidate = destination.standardizedFileURL.path
                 let reserved = NewMissionDialogModel.Environment.activeMissionDestinationPaths(
                     in: state.missions.aggregates,
                     projectID: projectID
                 ).contains(candidate)
-                return !FileManager.default.fileExists(atPath: candidate)
+                let localDestinationExists = project.host == nil && FileManager.default.fileExists(atPath: candidate)
+                return !localDestinationExists
                     && !reserved
                     && !state.projectsManager.worktrees(projectId: projectID).contains {
                         $0.path.standardizedFileURL.path == candidate
