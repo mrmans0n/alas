@@ -2452,6 +2452,31 @@ struct ACPSessionRunnerTests {
         #expect(decoded.content == "two\nthree")
     }
 
+    @Test("serveRead refuses an unbounded range that would return the whole file")
+    func serveReadRefusesRangeThatDoesNotBound() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("huge.txt")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(ACPSessionRunner.maxWholeFileReadBytes) + 1)
+        try handle.close()
+
+        // `sliceLines` runs to end of file unless `limit` is present and
+        // positive, so each of these asks for the whole file while looking
+        // like a range. Exempting them was a limit anyone could step around.
+        for (line, limit) in [(1, nil as Int?), (nil, 0), (2, -1)] {
+            let outcome = await ACPSessionRunner.serveRead(
+                target: file, liveBuffer: nil, line: line, limit: limit
+            )
+            guard case .failure = outcome else {
+                Issue.record("line: \(String(describing: line)), limit: \(String(describing: limit)) should be refused")
+                return
+            }
+        }
+    }
+
     @Test("serveRead refuses a whole-file read past the limit and names the way out")
     func serveReadRefusesOversizedWholeFileRead() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")

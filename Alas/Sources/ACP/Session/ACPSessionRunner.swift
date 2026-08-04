@@ -307,11 +307,10 @@ final class ACPSessionRunner {
                             // Refusing here still spares the JSON encode — a
                             // second copy — and the undeliverable response
                             // that would otherwise strand the adapter.
-                            if let refusal = Self.wholeFileReadRefusal(
+                            let sliced = Self.sliceLines(full, line: params.line, limit: params.limit)
+                            if let refusal = Self.readRefusal(
                                 name: (target as NSString).lastPathComponent,
-                                bytes: full.utf8.count,
-                                line: params.line,
-                                limit: params.limit
+                                bytes: sliced.utf8.count
                             ) {
                                 self.connection.client.respondToFileRequest(
                                     id: id,
@@ -319,7 +318,7 @@ final class ACPSessionRunner {
                                 )
                                 continue
                             }
-                            let body = try JSONEncoder().encode(ACPFsReadResult(content: Self.sliceLines(full, line: params.line, limit: params.limit)))
+                            let body = try JSONEncoder().encode(ACPFsReadResult(content: sliced))
                             self.connection.client.respondToFileRequest(id: id, result: .success(body))
                             continue
                         }
@@ -957,29 +956,28 @@ final class ACPSessionRunner {
     /// Sendable outcome of an off-main agent `fs/read_text_file`. Kept minimal
     /// (only value types) so it can cross back to the main actor without an
     /// `@unchecked Sendable` escape hatch.
-    /// Whether a whole-file read should be refused, and what to tell the
+    /// Whether a read result is too large to return, and what to tell the
     /// adapter if so.
     ///
-    /// Shared by the local and remote read paths so the two cannot drift into
-    /// different answers for the same request — they already differ in *when*
-    /// they can apply it, which is enough of a difference to keep in one
-    /// place.
+    /// Judged on the bytes actually being returned. An earlier version asked
+    /// instead whether a range had been requested, which a caller could
+    /// satisfy without bounding anything: `sliceLines` runs to end of file
+    /// unless `limit` is present *and positive*, so `line: 1` alone — or
+    /// `limit: 0` — asks for the whole file while looking like a range.
     ///
-    /// `bytes` being `nil` means the size could not be determined; that is not
-    /// grounds for refusing a read that would otherwise work.
-    nonisolated static func wholeFileReadRefusal(
-        name: String,
-        bytes: Int?,
-        line: Int?,
-        limit: Int?
-    ) -> String? {
-        // A ranged read returns a bounded slice however large the file is,
-        // which is exactly what the adapter is being pointed at below.
-        guard line == nil, limit == nil else { return nil }
-        guard let bytes, bytes > maxWholeFileReadBytes else { return nil }
+    /// Shared by the local and remote read paths so the two cannot drift into
+    /// different answers for the same request.
+    nonisolated static func readRefusal(name: String, bytes: Int) -> String? {
+        guard bytes > maxWholeFileReadBytes else { return nil }
         return "\(name) is \(bytes) bytes, over the "
-            + "\(maxWholeFileReadBytes)-byte limit for reading a whole file. "
-            + "Request a range with the line and limit parameters."
+            + "\(maxWholeFileReadBytes)-byte limit for a single read. "
+            + "Request a smaller range with the line and limit parameters."
+    }
+
+    /// Whether a request bounds its own result. Only a positive `limit` does;
+    /// see `readRefusal`.
+    nonisolated static func requestIsBounded(limit: Int?) -> Bool {
+        (limit ?? 0) > 0
     }
 
     /// Largest file returned in full by `fs/read_text_file`.
@@ -1010,14 +1008,18 @@ final class ACPSessionRunner {
         limit: Int?
     ) async -> FileReadOutcome {
         do {
-            if let refusal = Self.wholeFileReadRefusal(
-                name: target.lastPathComponent,
-                bytes: liveBuffer.map { $0.utf8.count }
-                    ?? (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
-                line: line,
-                limit: limit
-            ) {
-                return .failure(message: refusal)
+            // Cheap first pass: a request that does not bound its own result
+            // cannot return less than the source, so an oversized source can
+            // be refused without reading it.
+            if !Self.requestIsBounded(limit: limit) {
+                let sourceBytes = liveBuffer.map { $0.utf8.count }
+                    ?? (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                if let sourceBytes,
+                   let refusal = Self.readRefusal(
+                       name: target.lastPathComponent, bytes: sourceBytes
+                   ) {
+                    return .failure(message: refusal)
+                }
             }
             let full: String
             if let liveBuffer {
@@ -1027,6 +1029,13 @@ final class ACPSessionRunner {
                 full = String(data: data, encoding: .utf8) ?? ""
             }
             let sliced = sliceLines(full, line: line, limit: limit)
+            // Authoritative: whatever was asked for, this is what would be
+            // returned, and a generous `limit` can still ask for everything.
+            if let refusal = Self.readRefusal(
+                name: target.lastPathComponent, bytes: sliced.utf8.count
+            ) {
+                return .failure(message: refusal)
+            }
             let body = try JSONEncoder().encode(ACPFsReadResult(content: sliced))
             return .success(body)
         } catch {
