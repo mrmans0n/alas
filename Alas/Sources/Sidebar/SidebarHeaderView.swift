@@ -1,16 +1,24 @@
 import SwiftUI
 
 struct SidebarHeaderView: View {
+    let worktreeSortMode: AppConfig.WorktreeSortMode
+    let onSetWorktreeSortMode: (AppConfig.WorktreeSortMode) -> Void
     let onSettings: () -> Void
     let onAddProject: () -> Void
     let onSearch: () -> Void
     let onHideSidebar: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             TrafficLights()
             Spacer()
             HStack(alignment: .center, spacing: 2) {
+                WorktreeSortMenu(
+                    selection: worktreeSortMode,
+                    onSelect: onSetWorktreeSortMode,
+                    headerHovered: hovering
+                )
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
                 ToolbarBtn(icon: "folder-plus", tooltip: "Add repository", action: onAddProject)
                 ToolbarBtn(icon: "gear", tooltip: "Settings", action: onSettings)
@@ -19,6 +27,8 @@ struct SidebarHeaderView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .windowDragHandle()
     }
 }

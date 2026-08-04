@@ -28,12 +28,9 @@ struct WorktreesPane: View {
                         desc: "Sort order for the worktrees sidebar list. Manual reordering of a repo overrides this for that repo."
                     ) {
                         Picker("", selection: defaultOrderingBinding) {
-                            Text("Last update time (most recent first)").tag(AppConfig.WorktreeSortMode.lastUpdateDesc)
-                            Text("Last update time (least recent first)").tag(AppConfig.WorktreeSortMode.lastUpdateAsc)
-                            Text("Creation time (newest first)").tag(AppConfig.WorktreeSortMode.creationDesc)
-                            Text("Creation time (oldest first)").tag(AppConfig.WorktreeSortMode.creationAsc)
-                            Text("Branch name").tag(AppConfig.WorktreeSortMode.branchAsc)
-                            Text("Manual").tag(AppConfig.WorktreeSortMode.manual)
+                            ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
+                                Text(WorktreeSortPresentation.title(for: mode)).tag(mode)
+                            }
                         }
                         .pickerStyle(.menu)
                         .settingsDropdownFrame()
@@ -104,13 +101,7 @@ struct WorktreesPane: View {
     private var defaultOrderingBinding: Binding<AppConfig.WorktreeSortMode> {
         Binding(
             get: { state.config.worktrees.defaultOrdering },
-            set: { newValue in
-                state.config.worktrees.defaultOrdering = newValue
-                state.saveConfig()
-                if state.projectsManager.reapplyOrderingForAllProjects() {
-                    state.saveProjects()
-                }
-            }
+            set: { state.setDefaultWorktreeOrdering($0) }
         )
     }
 

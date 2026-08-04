@@ -1986,6 +1986,15 @@ final class AppState {
         return saved
     }
 
+    func setDefaultWorktreeOrdering(_ mode: AppConfig.WorktreeSortMode) {
+        guard config.worktrees.defaultOrdering != mode else { return }
+        config.worktrees.defaultOrdering = mode
+        saveConfig()
+        if projectsManager.reapplyOrderingForAllProjects() {
+            saveProjects()
+        }
+    }
+
     struct LanguageServerConfigChangeTracker {
         private var lastSavedLanguageServers: [LanguageServerConfig]
 
