@@ -94,4 +94,22 @@ struct AppConfigShortcutsCodingTests {
         #expect(decoded.shortcutOverrides[ShortcutAction.replaceInEditor.rawValue] == .some(nil))
         #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
     }
+
+    @Test func dropsOverridesThatCollideWithReservedBindingsOnDecode() throws {
+        var cfg = AppConfig.defaults
+        let preserved = ShortcutBinding(key: "j", modifiers: [.command, .option])
+        cfg.shortcutOverrides = [
+            ShortcutAction.searchFiles.rawValue: ShortcutBinding(key: "t", modifiers: [.command, .shift]),
+            ShortcutAction.switchRepository.rawValue: nil,
+            ShortcutAction.toggleRightPane.rawValue: preserved,
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.searchFiles.rawValue] == nil)
+        #expect(decoded.shortcutOverrides.keys.contains(ShortcutAction.switchRepository.rawValue))
+        #expect(decoded.shortcutOverrides[ShortcutAction.switchRepository.rawValue] == .some(nil))
+        #expect(decoded.shortcutOverrides[ShortcutAction.toggleRightPane.rawValue] == .some(preserved))
+    }
 }

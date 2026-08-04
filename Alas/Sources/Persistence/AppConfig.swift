@@ -791,6 +791,7 @@ extension AppConfig {
         shortcutOverrides =
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
         migrateLegacyFindAndReplaceShortcutOverride()
+        removeShortcutOverridesCollidingWithReservedBindings()
     }
 }
 
@@ -806,6 +807,14 @@ private extension AppConfig {
         }
         shortcutOverrides.updateValue(legacyOverride, forKey: replaceKey)
         shortcutOverrides.removeValue(forKey: legacyKey)
+    }
+
+    mutating func removeShortcutOverridesCollidingWithReservedBindings() {
+        let reserved = Set(ShortcutAction.reservedBindings)
+        for (key, override) in shortcutOverrides {
+            guard let binding = override, reserved.contains(binding) else { continue }
+            shortcutOverrides.removeValue(forKey: key)
+        }
     }
 }
 
