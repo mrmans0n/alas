@@ -29,8 +29,9 @@ private struct MissingMissionRecoveryTarget: Equatable {
     }
 
     func matches(_ leg: MissionLeg) -> Bool {
-        worktreeID == leg.worktreeId
-            || destinationPath == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
+        projectID == leg.projectId
+            && (worktreeID == leg.worktreeId
+                || destinationPath == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path)
     }
 }
 
@@ -2132,11 +2133,7 @@ final class AppState {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
             projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
         } ?? false
-        let wasSelectedMissingMissionProject =
-            missingMissionRecoveryTarget?.projectID == projectId
-                || missingMissionTab.flatMap { tab in
-                    missions.aggregate(id: tab.missionID)?.legs.contains { $0.projectId == projectId }
-                } == true
+        let wasSelectedMissingMissionProject = missingMissionRecoveryTarget?.projectID == projectId
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
