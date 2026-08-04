@@ -134,7 +134,11 @@ struct MissionPresentationTests {
             setupCheckpoint: aggregate.legs[0].setupCheckpoint
         )
 
-        #expect(MissionTabContext.baseBranch(for: leg) == "team/origin/main")
+        #expect(MissionTabContext.baseBranch(for: leg, resolvedBaseRefs: [:]) == "team/origin/main")
+        #expect(MissionTabContext.baseBranch(
+            for: leg,
+            resolvedBaseRefs: [leg.id: "upstream/main"]
+        ) == "upstream/main")
     }
 
     @Test func tabContextRejectsReplacementBranchAndUsesMissionBase() {

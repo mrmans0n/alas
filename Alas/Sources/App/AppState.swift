@@ -51,6 +51,7 @@ final class AppState {
     var selectedWorktreeId: String?
     private(set) var missingMissionTab: MissionTabState?
     private var missingMissionRecoveryTarget: MissingMissionRecoveryTarget?
+    private(set) var resolvedMissionPaneBaseRefs: [MissionLegID: String] = [:]
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
     private var _tabs: TabsManager?
@@ -1054,14 +1055,19 @@ final class AppState {
         leg: MissionLeg,
         worktree: Worktree
     ) async -> String {
-        guard let remotes = try? await GitService().remotes(worktreePath: worktree.path)
-        else { return leg.baseRef }
-        return Self.missionPaneBaseRef(
-            baseRef: leg.baseRef,
-            persistedRemoteName: leg.baseRemoteName,
-            remotes: remotes,
-            supportedKinds: CodeHostProviderRegistry.live().supportedKinds
-        )
+        let resolvedBaseRef: String
+        if let remotes = try? await GitService().remotes(worktreePath: worktree.path) {
+            resolvedBaseRef = Self.missionPaneBaseRef(
+                baseRef: leg.baseRef,
+                persistedRemoteName: leg.baseRemoteName,
+                remotes: remotes,
+                supportedKinds: CodeHostProviderRegistry.live().supportedKinds
+            )
+        } else {
+            resolvedBaseRef = leg.baseRef
+        }
+        resolvedMissionPaneBaseRefs[leg.id] = resolvedBaseRef
+        return resolvedBaseRef
     }
 
     static func missionPaneBaseRef(
