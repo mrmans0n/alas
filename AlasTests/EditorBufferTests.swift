@@ -82,6 +82,39 @@ struct EditorBufferTests {
         #expect(matcher.matches(event: event))
     }
 
+    /// Regression: remote file content was applied to storage without
+    /// notifying edit observers, so `CodeEditorCoordinator` never re-applied
+    /// the theme's base style (font, foreground color) or ran syntax
+    /// highlighting. Editors in SSH repos therefore showed the wrong colors.
+    @Test func remoteLoadNotifiesObserversWhenContentArrives() async throws {
+        let root = tempWorktree()
+        RemoteHostRegistry.shared.register(root: root.path, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+
+        let expectedContent = "print(\"hello\")\n"
+        EditorBuffer.remoteReadResultForTesting = { _, _ in
+            .file(data: Data(expectedContent.utf8), mtime: Date(timeIntervalSince1970: 1_000))
+        }
+        defer { EditorBuffer.remoteReadResultForTesting = nil }
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "main.py")
+        defer { buffer.close(persistDirtySnapshot: false) }
+
+        var notifications = 0
+        let token = buffer.onTextEdit { _ in notifications += 1 }
+        defer { buffer.removeOnEdit(token) }
+
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while buffer.storage.string != expectedContent && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(buffer.storage.string == expectedContent)
+        #expect(buffer.originalText == expectedContent)
+        #expect(buffer.loadKind == .loaded)
+        #expect(notifications > 0, "Remote content arrival must notify edit observers so the coordinator can re-apply editor styling")
+    }
+
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "hello\nworld\n", perms: 0o644)
