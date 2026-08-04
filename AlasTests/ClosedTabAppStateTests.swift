@@ -420,6 +420,49 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.harness.detector.isRegistered(sessionId: "fresh-1"))
     }
 
+    @Test func reopeningTerminalDoesNotRestoreAfterWorktreeCleanupDuringRemotePrep() async {
+        let gate = AsyncGate()
+        var openAttempts = 0
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openAttempts += 1
+                return .init(id: "unexpected-session", foregroundPid: { nil })
+            },
+            remoteAccelerationPreparer: { _ in
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let original = TerminalTabState(
+            id: "remote-prep-removed-worktree",
+            title: "Terminal",
+            root: .leaf(PaneLeaf(id: "old-terminal", sessionId: "old-terminal")),
+            focusedLeafId: "old-terminal"
+        )
+        _ = fixture.state.tabs.restore(
+            tab: .terminal(original),
+            worktreeID: fixture.first.id,
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: original.id)
+
+        let reopenTask = Task { @MainActor in
+            await fixture.state.reopenLastClosedTab()
+        }
+        await gate.waitUntilEntered()
+
+        fixture.state.archiveWorktree(fixture.first)
+
+        await gate.release()
+        await reopenTask.value
+
+        #expect(openAttempts == 0)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
+        #expect(fixture.state.selectedWorktreeId != fixture.first.id)
+        #expect(!fixture.state.canReopenClosedTab)
+    }
+
     @Test func reopenDiscardsStaleWorktreeEntryAndRestoresNextEntry() async {
         let fixture = makeFixture()
         let valid = fixture.state.tabs.appendEditor(worktreeId: fixture.first.id, title: "valid", relativePath: "valid")

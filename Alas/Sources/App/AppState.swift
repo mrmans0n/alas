@@ -41,6 +41,7 @@ final class AppState {
     typealias MissionArchiveRecorder = @MainActor (String) async -> Void
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
+    typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -95,6 +96,8 @@ final class AppState {
     private let closeTabConfirmer: CloseTabConfirmer?
     @ObservationIgnored
     private let acpDetachRunner: ACPDetachRunner?
+    @ObservationIgnored
+    private let remoteAccelerationPreparer: RemoteAccelerationPreparer?
 
     private struct PendingACPDetach {
         let id: UUID
@@ -587,6 +590,7 @@ final class AppState {
         closeTabConfirmer: CloseTabConfirmer? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
         acpDetachRunner: ACPDetachRunner? = nil,
+        remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
         missionBranchTipOverride: MissionBranchTip? = nil,
@@ -605,6 +609,7 @@ final class AppState {
         self.terminalSessionOpener = terminalSessionOpener
         self.closeTabConfirmer = closeTabConfirmer
         self.acpDetachRunner = acpDetachRunner
+        self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
@@ -3957,6 +3962,10 @@ final class AppState {
     }
 
     private func prepareRemoteAccelerationIfNeeded(for project: ProjectConfig) async {
+        if let remoteAccelerationPreparer {
+            await remoteAccelerationPreparer(project)
+            return
+        }
         guard let host = project.host else { return }
         if let running = remoteAccelerationTasks[host] {
             await running.value
@@ -5059,8 +5068,8 @@ final class AppState {
             return
         }
 
-        guard let worktree = worktree(withId: worktreeID),
-              let project = projects.first(where: { $0.id == worktree.projectId }) else {
+        guard let initialWorktree = worktree(withId: worktreeID),
+              let initialProject = projects.first(where: { $0.id == initialWorktree.projectId }) else {
             showFileActionError(
                 title: "Reopen Tab Failed",
                 message: "Could not find the terminal tab's worktree or project."
@@ -5068,7 +5077,14 @@ final class AppState {
             return
         }
 
-        await prepareRemoteAccelerationIfNeeded(for: project)
+        await prepareRemoteAccelerationIfNeeded(for: initialProject)
+
+        guard closedTabHistory.last?.id == entry.id else { return }
+        guard let worktree = worktree(withId: worktreeID),
+              let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            closedTabHistory.remove(id: entry.id)
+            return
+        }
 
         var openedIDs: [String] = []
         do {
