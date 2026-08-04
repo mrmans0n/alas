@@ -92,7 +92,8 @@ struct RightPaneView: View {
                                 showIgnored: state.config.files.showIgnored,
                                 revealPath: rps.revealPath,
                                 revealTick: rps.revealTick,
-                                onClearReveal: { rps.clearReveal() }
+                                onClearReveal: { rps.clearReveal() },
+                                worktreeRoot: rps.worktree.path
                             )
                         }
                     } else {

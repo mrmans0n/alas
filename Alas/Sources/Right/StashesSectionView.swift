@@ -12,6 +12,7 @@ struct StashesSectionView: View {
     let onApply: (GitStash) -> Void
     let onPop: (GitStash) -> Void
     let onDrop: (GitStash) -> Void
+    var dragPayload: ((GitStash, GitStashFile) -> DragOutPayload?)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -136,6 +137,7 @@ struct StashesSectionView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .dragOut { dragPayload?(stash, file) }
             }
         }
     }

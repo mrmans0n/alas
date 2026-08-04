@@ -25,6 +25,7 @@ struct ConflictsSection: View {
     let onCancelBulkResolve: () -> Void
     /// Triggered when the user closes the post-run banner.
     let onDismissBulkReport: () -> Void
+    var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 
     @State private var pendingBothDeletedConfirm: ChangedFile?
 
@@ -148,6 +149,11 @@ struct ConflictsSection: View {
 
     @ViewBuilder
     private func row(for file: ChangedFile) -> some View {
+        rowContent(for: file)
+    }
+
+    @ViewBuilder
+    private func rowContent(for file: ChangedFile) -> some View {
         switch file.conflict {
         case .bothDeleted:
             bothDeletedRow(file)
@@ -181,6 +187,7 @@ struct ConflictsSection: View {
         .contextMenu {
             menuItems(for: file)
         }
+        .dragOut { dragPayload?(file) }
     }
 
     private func bothDeletedRow(_ file: ChangedFile) -> some View {
@@ -217,6 +224,7 @@ struct ConflictsSection: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .dragOut { dragPayload?(file) }
     }
 
     private func deleteSideRow(_ file: ChangedFile) -> some View {
@@ -234,6 +242,7 @@ struct ConflictsSection: View {
                     Spacer()
                 }
                 .contentShape(Rectangle())
+                .dragOut { dragPayload?(file) }
             }
             .buttonStyle(.plain)
             Button(isOursDeleted ? "Keep theirs" : "Keep ours") {

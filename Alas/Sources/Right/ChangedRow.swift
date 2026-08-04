@@ -22,6 +22,7 @@ struct ChangedRow: View {
     var openFileEnabled:  Bool = true
     var viewAtHEADEnabled: Bool = true
     var ignoreMenu:       AnyView? = nil
+    var dragPayload: (() -> DragOutPayload?)? = nil
     @Environment(\.theme) var theme
 
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
@@ -38,11 +39,15 @@ struct ChangedRow: View {
                 if let onStage {
                     StageChip(state: resolvedStageState, action: onStage)
                 }
-                FileTypeIconView(filename: basename, size: 18)
-                Text(basename)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 6) {
+                    FileTypeIconView(filename: basename, size: 18)
+                    Text(basename)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .contentShape(Rectangle())
+                .dragOut { dragPayload?() }
                 Spacer()
                 if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
                 if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
