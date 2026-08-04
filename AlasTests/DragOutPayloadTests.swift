@@ -16,12 +16,22 @@ struct DragOutPayloadTests {
         #expect(payload == .onDisk(URL(fileURLWithPath: "/tmp/wt/a/b.txt")))
     }
 
-    @Test func trackedStashFileUsesTheStashRef() {
+    @Test func trackedStashFileUsesTheStashSHA() {
         let root = URL(fileURLWithPath: "/tmp/wt")
         let stash = GitStash(ref: "stash@{0}", subject: "wip", relativeTime: "1m", sha: "abc")
         let file = GitStashFile(path: "a.txt", status: "M", add: 1, del: 0)
         let payload = DragOutPayload.stashFile(worktreePath: root, stash: stash, file: file)
-        #expect(payload == .revision(worktreePath: root, ref: "stash@{0}", path: "a.txt"))
+        #expect(payload == .revision(worktreePath: root, ref: "abc", path: "a.txt"))
+    }
+
+    /// `stash@{N}` is positional, so a stash pushed between rendering the row
+    /// and starting the drag would resolve to a different stash entirely.
+    @Test func stashFileIgnoresThePositionalReflogName() {
+        let root = URL(fileURLWithPath: "/tmp/wt")
+        let stash = GitStash(ref: "stash@{7}", subject: "wip", relativeTime: "1m", sha: "abc")
+        let file = GitStashFile(path: "a.txt", status: "M", add: 1, del: 0)
+        let payload = DragOutPayload.stashFile(worktreePath: root, stash: stash, file: file)
+        #expect(payload == .revision(worktreePath: root, ref: "abc", path: "a.txt"))
     }
 
     @Test func untrackedStashFileUsesTheThirdParent() {
@@ -29,7 +39,7 @@ struct DragOutPayloadTests {
         let stash = GitStash(ref: "stash@{0}", subject: "wip", relativeTime: "1m", sha: "abc")
         let file = GitStashFile(path: "new.txt", status: "A", add: 3, del: 0, isUntracked: true)
         let payload = DragOutPayload.stashFile(worktreePath: root, stash: stash, file: file)
-        #expect(payload == .revision(worktreePath: root, ref: "stash@{0}^3", path: "new.txt"))
+        #expect(payload == .revision(worktreePath: root, ref: "abc^3", path: "new.txt"))
     }
 
     @Test func commitFileUsesTheCommitSHA() {

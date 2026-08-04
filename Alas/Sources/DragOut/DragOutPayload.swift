@@ -35,7 +35,10 @@ extension DragOutPayload {
     static func stashFile(worktreePath: URL, stash: GitStash, file: GitStashFile) -> DragOutPayload {
         .revision(
             worktreePath: worktreePath,
-            ref: file.isUntracked ? "\(stash.ref)^3" : stash.ref,
+            // The stash's SHA, not its `stash@{N}` reflog name: that name is
+            // positional, so a stash pushed between rendering the row and
+            // starting the drag would silently resolve to a different stash.
+            ref: file.isUntracked ? "\(stash.sha)^3" : stash.sha,
             path: file.path
         )
     }

@@ -3,7 +3,7 @@ import Foundation
 
 /// Materializes `git show <ref>:<path>` into a temp file so a historical
 /// revision can be dragged out of Alas as a real file. Snapshots are memoized
-/// per `(ref, path)` for the lifetime of the app session.
+/// per `(worktree, ref, path)` for the lifetime of the app session.
 actor RevisionSnapshotCache {
     static let shared = RevisionSnapshotCache()
 
@@ -26,7 +26,7 @@ actor RevisionSnapshotCache {
     nonisolated let sessionDirectory: URL
 
     private var snapshots: [String: URL] = [:]
-    /// `(ref, path)` keys already known to have no blob, so a repeated failed
+    /// `(worktree, ref, path)` keys already known to have no blob, so a repeated failed
     /// lookup — e.g. dragging a deleted file's row — does not re-spawn `git
     /// show` for every gesture callback while the drag is held.
     private var missingSnapshots: Set<String> = []
