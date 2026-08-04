@@ -33,6 +33,19 @@ struct FileContextMenuConfiguration: Equatable {
         if target.localURL != nil { actions.append(.revealInFinder) }
         return Self(target: target, actions: actions)
     }
+
+    static func filesTab(target: FileContextMenuTarget) -> Self {
+        var actions: [FileContextMenuAction] = []
+        if target.kind == .file { actions.append(.openInAlas) }
+        if target.localURL != nil {
+            actions.append(.open)
+            if target.kind == .file { actions.append(.openWith) }
+        }
+        if target.kind == .file { actions.append(.fileHistory) }
+        actions += [.copyRelativePath, .copyFullPath]
+        if target.localURL != nil { actions.append(.revealInFinder) }
+        return Self(target: target, actions: actions)
+    }
 }
 
 struct FileContextMenuActions: View {

@@ -46,4 +46,30 @@ struct FileContextMenuActionsTests {
             .fileHistory, .copyRelativePath, .copyFullPath
         ])
     }
+
+    @Test func filesTabFileHasGeneralFinderActionsOnly() {
+        let target = FileContextMenuTarget(kind: .file, localURL: URL(fileURLWithPath: "/repo/README.md"))
+        #expect(FileContextMenuConfiguration.filesTab(target: target).actions == [
+            .openInAlas, .open, .openWith, .fileHistory,
+            .copyRelativePath, .copyFullPath, .revealInFinder
+        ])
+    }
+
+    @Test func filesTabDirectoryOmitsEditorHistoryAndOpenWith() {
+        let target = FileContextMenuTarget(kind: .dir, localURL: URL(fileURLWithPath: "/repo/Sources"))
+        #expect(FileContextMenuConfiguration.filesTab(target: target).actions == [
+            .open, .copyRelativePath, .copyFullPath, .revealInFinder
+        ])
+    }
+
+    @Test func remoteFilesTabTargetsKeepPortableActions() {
+        let file = FileContextMenuTarget(kind: .file, localURL: nil)
+        let directory = FileContextMenuTarget(kind: .dir, localURL: nil)
+        #expect(FileContextMenuConfiguration.filesTab(target: file).actions == [
+            .openInAlas, .fileHistory, .copyRelativePath, .copyFullPath
+        ])
+        #expect(FileContextMenuConfiguration.filesTab(target: directory).actions == [
+            .copyRelativePath, .copyFullPath
+        ])
+    }
 }
