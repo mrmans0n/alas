@@ -116,8 +116,23 @@ actor RevisionSnapshotCache {
                 at: destination.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try result.stdout.write(to: destination, options: .atomic)
+            // `git show` returns the LFS *pointer* text for an LFS-tracked
+            // path, not the real asset, so a naive write here would drag out
+            // a ~130-byte stub that opens as a broken file in the receiving
+            // app. Try resolving it against the local LFS object store and
+            // write that instead; `lfsObjectData` returns nil for anything
+            // that is not a valid pointer, so a non-LFS file falls through
+            // to the plain git bytes unchanged. If the path is a pointer but
+            // the object has never been fetched locally, this also returns
+            // nil and the pointer is written as-is — an honest reflection of
+            // what's actually available, rather than failing the drag.
+            let bytes = await GitLFSBlobResolver.lfsObjectData(
+                forPointerData: result.stdout,
+                worktreePath: worktreePath
+            ) ?? result.stdout
+            try bytes.write(to: destination, options: .atomic)
             snapshots[key] = Snapshot(recording: destination)
+            touchSessionDirectory()
             return destination
         } catch {
             // A thrown error here is either a cancellation (the task was
@@ -163,6 +178,24 @@ actor RevisionSnapshotCache {
             let current = Self.fingerprint(of: url)
             return current.size == size && current.modified == modified
         }
+    }
+
+    /// Bumps the session root's modification date to now.
+    ///
+    /// A snapshot write happens deep inside `<session>/<worktree>/<ref>/...`,
+    /// which does not touch the root directory's own mtime — only creating a
+    /// direct child does. Without this, `sweepStaleSessionsIfNeeded()` reads
+    /// the root's mtime as "whenever this session started" rather than "when
+    /// it was last used", and a long-running instance (this user routinely
+    /// keeps several open for days) looks abandoned to another instance's
+    /// sweep after `staleSessionAge` elapses, even while it is actively
+    /// writing snapshots. Failing to update the timestamp is never fatal to
+    /// the drag: at worst the session looks a little more idle than it is.
+    private func touchSessionDirectory() {
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: sessionDirectory.path
+        )
     }
 
     func removeSessionDirectory() {

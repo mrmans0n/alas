@@ -12,7 +12,10 @@ enum GitLFSBlobResolver {
         return NSImage(data: objectData)
     }
 
-    private static func lfsObjectData(forPointerData data: Data, worktreePath: URL) async -> Data? {
+    /// Resolves an LFS pointer's bytes to the real object data from the local
+    /// LFS store, or nil when `data` is not a valid pointer, or when the
+    /// object is not present locally (LFS files can be un-fetched).
+    static func lfsObjectData(forPointerData data: Data, worktreePath: URL) async -> Data? {
         guard let pointer = parsePointer(data) else { return nil }
         guard let commonDir = await gitCommonDirectory(worktreePath: worktreePath) else { return nil }
         guard let storageDir = await lfsStorageDirectory(

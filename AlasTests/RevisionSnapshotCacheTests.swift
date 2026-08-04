@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Alas
@@ -11,6 +12,41 @@ struct RevisionSnapshotCacheTests {
         _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: dir)
         _ = try await Process.git(["config", "user.name", "Test"], cwd: dir)
         return dir
+    }
+
+    private func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Writes an LFS pointer file at `fileName`, and, unless `withObject` is
+    /// false, the real object bytes it resolves to under the repo's default
+    /// `.git/lfs/objects` store — mirroring what `git lfs` itself would leave
+    /// on disk after a real fetch, without needing `git-lfs` installed to
+    /// produce it.
+    private func writeLFSPointer(
+        for data: Data,
+        named fileName: String,
+        in repo: URL,
+        withObject: Bool = true
+    ) throws {
+        let oid = sha256Hex(data)
+        let pointer = """
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:\(oid)
+        size \(data.count)
+
+        """
+        try pointer.write(
+            to: repo.appendingPathComponent(fileName),
+            atomically: true,
+            encoding: .utf8
+        )
+        guard withObject else { return }
+        let objectDir = repo.appendingPathComponent(".git/lfs/objects")
+            .appendingPathComponent(String(oid.prefix(2)))
+            .appendingPathComponent(String(oid.dropFirst(2).prefix(2)))
+        try FileManager.default.createDirectory(at: objectDir, withIntermediateDirectories: true)
+        try data.write(to: objectDir.appendingPathComponent(oid))
     }
 
     @Test func refComponentReplacesUnsafeCharacters() {
@@ -231,6 +267,85 @@ struct RevisionSnapshotCacheTests {
         let retried = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "big.bin")
         let unwrapped = try #require(retried)
         #expect(try Data(contentsOf: unwrapped) == bytes)
+
+        await cache.removeSessionDirectory()
+    }
+
+    /// `git show` on an LFS-tracked path returns the pointer stub, not the
+    /// asset. A snapshot of such a path must resolve to the real bytes from
+    /// the local LFS store, or a "broken image" is what lands in Finder.
+    @Test func snapshotResolvesAnLFSPointerToTheRealObjectData() async throws {
+        let repo = try await makeRepo(name: "lfs")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let payload = Data("this stands in for real image bytes".utf8)
+        try writeLFSPointer(for: payload, named: "logo.png", in: repo)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "lfs image"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let snapshot = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "logo.png")
+
+        let unwrapped = try #require(snapshot)
+        #expect(try Data(contentsOf: unwrapped) == payload)
+        await cache.removeSessionDirectory()
+    }
+
+    /// LFS objects can be un-fetched locally. In that case there is no real
+    /// asset to substitute, so the honest outcome is writing the pointer
+    /// unchanged rather than failing the drag.
+    @Test func snapshotWritesThePointerVerbatimWhenTheLFSObjectIsNotFetchedLocally() async throws {
+        let repo = try await makeRepo(name: "lfs-missing")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let payload = Data("bytes that were never fetched locally".utf8)
+        try writeLFSPointer(for: payload, named: "logo.png", in: repo, withObject: false)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "lfs image, object absent"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let snapshot = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "logo.png")
+
+        let unwrapped = try #require(snapshot)
+        let written = try String(contentsOf: unwrapped, encoding: .utf8)
+        #expect(written.hasPrefix("version https://git-lfs.github.com/spec/v1"))
+        await cache.removeSessionDirectory()
+    }
+
+    /// A snapshot write happens deep inside `<session>/<worktree>/<ref>/...`,
+    /// which does not by itself touch the session root's own mtime once that
+    /// subtree already exists — only creating a *direct* child of the root
+    /// does. Without an explicit touch, a long-running instance's session
+    /// root looks abandoned to another instance's stale sweep even while it
+    /// is actively writing snapshots.
+    @Test func snapshotOfADeepNestedFileRefreshesTheSessionRootModificationDate() async throws {
+        let repo = try await makeRepo(name: "touch-root")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let fileA = repo.appendingPathComponent("a.txt")
+        try "a".write(to: fileA, atomically: true, encoding: .utf8)
+        let fileB = repo.appendingPathComponent("b.txt")
+        try "b".write(to: fileB, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt", "b.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "a and b"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        // Establish the <session>/<worktree>/<ref>/ subtree first, so the
+        // second snapshot below writes a new file into an already-existing
+        // directory rather than creating a fresh direct child of the session
+        // root — the exact "deep nested write" scenario the fix targets.
+        _ = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "a.txt"))
+
+        let backDated = Date().addingTimeInterval(-2 * RevisionSnapshotCache.staleSessionAge)
+        try FileManager.default.setAttributes(
+            [.modificationDate: backDated],
+            ofItemAtPath: cache.sessionDirectory.path
+        )
+        let attributesBeforeSecondWrite = try FileManager.default.attributesOfItem(atPath: cache.sessionDirectory.path)
+        let mtimeBeforeSecondWrite = try #require(attributesBeforeSecondWrite[.modificationDate] as? Date)
+
+        _ = try #require(await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "b.txt"))
+
+        let attributesAfterSecondWrite = try FileManager.default.attributesOfItem(atPath: cache.sessionDirectory.path)
+        let mtimeAfterSecondWrite = try #require(attributesAfterSecondWrite[.modificationDate] as? Date)
+        #expect(mtimeAfterSecondWrite > mtimeBeforeSecondWrite)
 
         await cache.removeSessionDirectory()
     }
