@@ -330,6 +330,20 @@ struct AppStatePersistenceTests {
         #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
     }
 
+    @Test func openingWorktreeFileClearsActiveGlobalMission() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        fixture.state.openFile(relativePath: "Sources/App.swift", worktreeId: fixture.otherWorktree.id)
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
+    }
+
     @Test func selectingInitialWorktreePreservesRestoredGlobalMission() async throws {
         let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
         await fixture.state.missions.load()

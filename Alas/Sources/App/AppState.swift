@@ -3782,7 +3782,7 @@ final class AppState {
             if let leafId = matchedLeafId {
                 _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leafId)
             }
-            tabs.activate(worktreeId: worktreeId, tabId: tabId)
+            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabId)
         }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -5167,10 +5167,12 @@ final class AppState {
         if ImageFileType.isSupported(relativePath: relativePath),
            !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
+            activateWorktreeTabPresentation()
             return
         }
         if BinaryFileType.isKnownBinary(relativePath: relativePath) {
             _ = tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: relativePath)
+            activateWorktreeTabPresentation()
             return
         }
 
@@ -5181,6 +5183,7 @@ final class AppState {
             revealCharacter: revealCharacter,
             revealEndLine: revealEndLine
         )
+        activateWorktreeTabPresentation()
     }
 
     func revealInFiles(worktreeId: String, path: String) {
@@ -6654,7 +6657,7 @@ final class AppState {
                 )
                 let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
                 let tab = tabs.append(acpSession: tabState, to: worktree.id)
-                tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+                activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
                 await manager.attach(
                     to: target.id,
                     freshlyCreated: true
@@ -6690,7 +6693,7 @@ final class AppState {
                 ACPComposerDraft(segments: [.text(initialPrompt)]),
                 for: session
             )
-            tabs.activate(worktreeId: worktree.id, tabId: tabState.id)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabState.id)
             return
         }
 
@@ -6753,7 +6756,7 @@ final class AppState {
             return nil
         }.first
         if let id = tabIdToFocus {
-            tabs.activate(worktreeId: worktree.id, tabId: id)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
             return
         }
 
@@ -6917,7 +6920,7 @@ final class AppState {
             return false
         }
         if let existing {
-            tabs.activate(worktreeId: worktreeId, tabId: existing.id)
+            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: existing.id)
         } else {
             let basename = (relativePath as NSString).lastPathComponent
             let title: String
@@ -6936,7 +6939,7 @@ final class AppState {
                 originalPath: originalPath,
                 compareWithHEAD: compareWithHEAD
             )
-            tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
         }
     }
 
@@ -6952,11 +6955,11 @@ final class AppState {
             return false
         }
         if let existing {
-            tabs.activate(worktreeId: worktreeId, tabId: existing.id)
+            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: existing.id)
             return
         }
         let tab = tabs.appendStashDiff(worktreeId: worktreeId, stash: stash, file: file)
-        tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+        activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
     }
 
     func openCommitTab(worktreeId: String, commit: CommitInfo) {
@@ -6970,11 +6973,11 @@ final class AppState {
             return false
         }
         if let existing {
-            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
         } else {
             let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
             let tab = tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
-            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         }
     }
 
@@ -6985,7 +6988,7 @@ final class AppState {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
         let tab = tabs.openOrFocusFileSnapshot(worktreeId: worktree.id, relativePath: relativePath, ref: "HEAD")
-        tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
     func openFileHistory(relativePath: String, worktreeId: String) {
@@ -6995,7 +6998,7 @@ final class AppState {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
         let tab = tabs.openOrFocusFileHistory(worktreeId: worktree.id, relativePath: relativePath)
-        tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
     /// Project-scoped gg inbox capability. This intentionally does not use a
@@ -7483,7 +7486,7 @@ extension AppState: RemoteSessionsProvider {
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
         let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)
         let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
-        tabs.activate(worktreeId: resolved.worktree.id, tabId: tab.id)
+        activateWorktreeCenterTab(worktreeId: resolved.worktree.id, tabId: tab.id)
 
         if let remoteSessionAttachScheduler {
             remoteSessionAttachScheduler(manager, session.id)
