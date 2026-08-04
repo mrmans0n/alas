@@ -828,7 +828,9 @@ final class RightPaneState: GGSplitCommitServicing {
             if self.commits != commits { self.commits = commits }
             self.ggStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
             ggStackRefreshTask?.cancel()
-            ggStackRefreshTask = Task { @MainActor [weak self] in await self?.refreshGGStack() }
+            ggStackRefreshTask = Task { @MainActor [weak self] in
+                await self?.refreshGGStack(forceRemote: forceReviewLoopRemote)
+            }
             if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
             let commitRemote = CodeHostRemoteDetector.detect(
@@ -922,7 +924,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     @MainActor
-    func refreshGGStack() async {
+    func refreshGGStack(forceRemote: Bool = false) async {
         let snapshotGeneration = snapshotInvalidationGeneration
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
@@ -943,16 +945,15 @@ final class RightPaneState: GGSplitCommitServicing {
             return
         }
         ggEffectiveConfig = GGConfigReader.effectiveConfig(repoPath: worktree.path.path)
-        // `gg ls --json` reaches out to gh/glab for PR state — skip when
-        // the branch and commit set are unchanged since the last query. PR-
-        // state churn from the outside world refreshes on the next commits
-        // change (a manual-refresh hook can come with the phase-2 drawer).
+        // `gg ls --json` reaches out to gh/glab for PR state — skip watcher-
+        // driven refreshes when the branch and commit set are unchanged.
+        // Explicit remote refreshes must still pick up approval and CI changes.
         // The branch is part of the key because `gg ls` answers for the
         // *current* branch — a checkout to a different branch that happens
         // to share the same commits (e.g. right after `git checkout -b`)
         // must not reuse the old branch's cached stack.
         let key = currentGGStackCommitsKey
-        guard key != ggStackCommitsKey else {
+        guard forceRemote || key != ggStackCommitsKey else {
             await reconcileGGUndoCandidateIfNeeded()
             return
         }

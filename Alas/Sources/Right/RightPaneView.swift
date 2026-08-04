@@ -195,7 +195,7 @@ struct RightPaneView: View {
                 comparisonMode: state.config.changes.comparisonMode
             )
             rps = activated
-            await activated.refresh()
+            await activated.refresh(forceReviewLoopRemote: true)
         }
         // When the right pane is hidden or unmounted (no worktree selected),
         // stop the active state's filesystem watcher and 5-min sync timer
