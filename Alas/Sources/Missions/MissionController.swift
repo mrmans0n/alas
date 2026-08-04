@@ -203,7 +203,10 @@ final class MissionController {
                         // therefore needs a fresh, durable session ID instead of mutating
                         // the prior session or accidentally hydrating it for the new agent.
                         leg.acpSessionId = environment.makeID()
-                        leg.pendingInitialPrompt = leg.preparedInitialPrompt
+                        leg.pendingInitialPrompt = Self.preparedRetryPrompt(
+                            for: leg,
+                            issue: aggregate.issue
+                        )
                         // Retry input is a prepared, persisted draft. Do not rebuild it from
                         // current issue state after a session has consumed it.
                         try await persistence.updateLeg(leg, event: nil)
@@ -488,6 +491,17 @@ final class MissionController {
             for leg in aggregate.legs {
                 await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
             }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    func refreshReviewWithoutWorktree(_ id: MissionID, legID: MissionLegID) async {
+        do {
+            guard let aggregate = try await persistence.aggregate(id: id),
+                  let leg = aggregate.legs.first(where: { $0.id == legID })
+            else { return }
+            await refreshReviewWithoutWorktree(for: aggregate, leg: leg)
         } catch {
             loadError = error.localizedDescription
         }
@@ -959,7 +973,10 @@ final class MissionController {
                        leg.pendingInitialPrompt == nil {
                         // Losing the worktree creates a fresh delegation target; the
                         // prior prompt receipt belongs to the vanished session.
-                        leg.pendingInitialPrompt = leg.preparedInitialPrompt
+                        leg.pendingInitialPrompt = Self.preparedRetryPrompt(
+                            for: leg,
+                            issue: aggregate.issue
+                        )
                     }
                     leg.state = .needsAttention
                     leg.setupCheckpoint = if case .worktreeMissing = signal { .running } else { targetLeg.setupCheckpoint }
@@ -1122,6 +1139,19 @@ final class MissionController {
             leg.baseRef,
             persistedRemoteName: leg.baseRemoteName
         )
+    }
+
+    private static func preparedRetryPrompt(
+        for leg: MissionLeg,
+        issue: MissionIssueSnapshot
+    ) -> String? {
+        let prepared = leg.preparedInitialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prepared.isEmpty { return leg.preparedInitialPrompt }
+        // Schema v3 only supported one primary leg. If that session consumed
+        // its prompt before v5 added immutable prepared prompts, reconstruct
+        // the same issue-scoped input instead of starting recovery empty.
+        guard leg.ordinal == 0 else { return nil }
+        return MissionPromptBuilder.build(snapshot: issue)
     }
 
     private func replace(_ aggregate: MissionAggregate) {

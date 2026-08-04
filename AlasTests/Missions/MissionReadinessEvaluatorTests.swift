@@ -88,6 +88,41 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.setupCheckpoint == .creatingWorktree)
     }
 
+    @Test func missingLegacyPrimaryWorktreeReconstructsAConsumedPrompt() async throws {
+        var legacy = Self.runningAggregate()
+        legacy.legs[0] = MissionLeg(
+            id: legacy.legs[0].id,
+            missionID: legacy.legs[0].missionID,
+            ordinal: legacy.legs[0].ordinal,
+            projectId: legacy.legs[0].projectId,
+            baseRef: legacy.legs[0].baseRef,
+            baseRemoteName: legacy.legs[0].baseRemoteName,
+            branch: legacy.legs[0].branch,
+            destinationPath: legacy.legs[0].destinationPath,
+            worktreeId: legacy.legs[0].worktreeId,
+            worktreeLineageID: legacy.legs[0].worktreeLineageID,
+            agentId: legacy.legs[0].agentId,
+            acpSessionId: legacy.legs[0].acpSessionId,
+            initialPromptId: legacy.legs[0].initialPromptId,
+            preparedInitialPrompt: "",
+            pendingInitialPrompt: nil,
+            reviewIdentity: legacy.legs[0].reviewIdentity,
+            state: legacy.legs[0].state,
+            setupCheckpoint: legacy.legs[0].setupCheckpoint,
+            attentionReason: legacy.legs[0].attentionReason,
+            readinessEvidence: legacy.legs[0].readinessEvidence,
+            createdAt: legacy.legs[0].createdAt,
+            updatedAt: legacy.legs[0].updatedAt
+        )
+        let fake = try MissionLifecycleFake(aggregate: legacy, worktreeAvailable: false)
+        await fake.controller.load()
+
+        await fake.controller.recordMissingWorktree(Self.missionID)
+        let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        #expect(aggregate.primaryLeg?.pendingInitialPrompt == MissionPromptBuilder.build(snapshot: aggregate.issue))
+    }
+
     @Test func retryAndCompletionAreSerialized() async throws {
         var missing = Self.runningAggregate()
         missing.markPrimaryLegNeedsAttention(

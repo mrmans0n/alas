@@ -975,28 +975,32 @@ final class AppState {
         guard missions.aggregate(id: id) != nil else { return }
 
         await missions.refreshIssue(id)
-        guard let aggregate = missions.aggregate(id: id),
-              let leg = aggregate.primaryLeg
-        else { return }
+        guard let aggregate = missions.aggregate(id: id) else { return }
 
-        let worktree = resolvedMissionWorktree(for: aggregate)
-        if let worktree,
-           !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
-            let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
-            let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
-            await rightPane.refresh(forceReviewLoopRemote: true)
-            if let snapshot = rightPaneStore.reviewSnapshot(
-                worktreeId: worktree.id,
-                baseBranch: paneBaseRef
-            ) {
-                await missions.discoverMergedReview(
+        for leg in aggregate.legs {
+            let candidate = missionWorktreeAtDestination(
+                projectID: leg.projectId,
+                destinationPath: leg.destinationPath
+            )
+            let worktree = missionWorktree(candidate, for: leg, aggregate: aggregate)
+            if let worktree,
+               !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
+                let paneBaseRef = await missionPaneBaseRef(for: aggregate, leg: leg, worktree: worktree)
+                let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
+                await rightPane.refresh(forceReviewLoopRemote: true)
+                if let snapshot = rightPaneStore.reviewSnapshot(
                     worktreeId: worktree.id,
-                    baseRef: leg.baseRef,
-                    snapshot: snapshot
-                )
+                    baseBranch: paneBaseRef
+                ) {
+                    await missions.discoverMergedReview(
+                        worktreeId: worktree.id,
+                        baseRef: leg.baseRef,
+                        snapshot: snapshot
+                    )
+                }
+            } else {
+                await missions.refreshReviewWithoutWorktree(id, legID: leg.id)
             }
-        } else {
-            await missions.refreshReviewWithoutWorktree(id)
         }
     }
 
