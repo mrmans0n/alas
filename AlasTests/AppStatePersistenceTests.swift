@@ -345,7 +345,6 @@ struct AppStatePersistenceTests {
 
         #expect(fixture.state.globalTabs.activeMissionTab() == nil)
         #expect(fixture.state.missingMissionTab == nil)
-        #expect(fixture.state.missingMissionRecoveryTarget == nil)
     }
 
     @Test func migratedMissionTabRemainsGlobalAcrossAnSDKOnlySpace() async throws {

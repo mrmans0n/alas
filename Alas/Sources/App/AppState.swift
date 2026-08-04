@@ -19,10 +19,12 @@ enum MissionOpenError: LocalizedError, Equatable {
 
 private struct MissingMissionRecoveryTarget: Equatable {
     let worktreeID: String
+    let projectID: String
     let destinationPath: String
 
     init(missionID: MissionID, leg: MissionLeg) {
         worktreeID = leg.worktreeId ?? "mission:\(missionID.rawValue)"
+        projectID = leg.projectId
         destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
     }
 
@@ -2130,9 +2132,11 @@ final class AppState {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
             projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
         } ?? false
-        let wasSelectedMissingMissionProject = missingMissionTab.flatMap { tab in
-            missions.aggregate(id: tab.missionID)?.primaryLeg?.projectId
-        } == projectId
+        let wasSelectedMissingMissionProject =
+            missingMissionRecoveryTarget?.projectID == projectId
+                || missingMissionTab.flatMap { tab in
+                    missions.aggregate(id: tab.missionID)?.legs.contains { $0.projectId == projectId }
+                } == true
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
