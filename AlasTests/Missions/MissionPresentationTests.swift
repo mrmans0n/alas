@@ -420,6 +420,32 @@ struct MissionPresentationTests {
         #expect(!presentation.actions.retryWorktree)
     }
 
+    @Test func completedMissionSuppressesMissingLegRecoveryAction() {
+        var aggregate = Self.threeLegAggregate()
+        aggregate.mission.state = .completed
+        aggregate.mission.completedAt = Date(timeIntervalSince1970: 300)
+        let failedLeg = Self.leg(
+            id: MissionLegID(rawValue: "mission-1-leg-missing"),
+            missionID: aggregate.mission.id,
+            ordinal: 3,
+            projectId: "missing",
+            branch: "mission/42-missing",
+            worktreeId: nil,
+            state: .needsAttention,
+            setupCheckpoint: .running,
+            attentionReason: MissionReadinessEvaluator.missingWorktreeMessage
+        )
+
+        let presentation = MissionLegPresentation(
+            aggregate: aggregate,
+            leg: failedLeg,
+            worktree: nil,
+            worktreeRecoveryAvailable: true
+        )
+
+        #expect(!presentation.actions.recoverWorktree)
+    }
+
     @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() {
         var aggregate = Self.runningAggregate()
         aggregate.issue = .init(
