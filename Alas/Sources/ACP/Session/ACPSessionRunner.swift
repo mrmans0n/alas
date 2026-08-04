@@ -936,6 +936,14 @@ final class ACPSessionRunner {
     /// Sendable outcome of an off-main agent `fs/read_text_file`. Kept minimal
     /// (only value types) so it can cross back to the main actor without an
     /// `@unchecked Sendable` escape hatch.
+    /// Largest file returned in full by `fs/read_text_file`.
+    ///
+    /// Sized by what a consumer can use rather than by what the machine can
+    /// hold: this is already far past any model's context window, so a
+    /// response beyond it is waste in both directions. Ranged reads are not
+    /// subject to it.
+    static let maxWholeFileReadBytes = 64 * 1024 * 1024
+
     enum FileReadOutcome: Sendable {
         case success(Data)
         case failure(message: String)
@@ -956,6 +964,31 @@ final class ACPSessionRunner {
         limit: Int?
     ) async -> FileReadOutcome {
         do {
+            // Refuse a whole-file read that is too large to be worth
+            // returning, before anything is loaded.
+            //
+            // An unbounded `fs/read_text_file` is answered by building the
+            // file, a `String` copy of it and the encoded JSON all at once,
+            // and the result then has to cross the broker socket. Nothing
+            // downstream can use a response that size — it is orders of
+            // magnitude past any model's context — so the honest answer is to
+            // say so while the request can still be retried usefully, rather
+            // than spend the memory and fail late with a transport error.
+            //
+            // Only whole-file reads are refused. A ranged read returns a
+            // bounded slice however large the file is, which is what the
+            // adapter is being pointed at.
+            if line == nil, limit == nil {
+                let bytes = liveBuffer.map { $0.utf8.count }
+                    ?? (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                if let bytes, bytes > Self.maxWholeFileReadBytes {
+                    return .failure(
+                        message: "\(target.lastPathComponent) is \(bytes) bytes, over the "
+                            + "\(Self.maxWholeFileReadBytes)-byte limit for reading a whole file. "
+                            + "Request a range with the line and limit parameters."
+                    )
+                }
+            }
             let full: String
             if let liveBuffer {
                 full = liveBuffer

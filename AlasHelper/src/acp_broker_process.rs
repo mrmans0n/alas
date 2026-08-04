@@ -969,12 +969,12 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
                 continue;
             }
             let request_runtime = runtime.clone();
-            let request_order = Arc::clone(&order);
+            let request_reservation = order.reserve();
             let request_inflight = Arc::clone(&inflight);
             request_inflight.fetch_add(1, Ordering::AcqRel);
             if std::thread::Builder::new()
                 .spawn(move || {
-                    let _ = handle_connection(request_runtime, stream, request_order);
+                    let _ = handle_connection(request_runtime, stream, request_reservation);
                     request_inflight.fetch_sub(1, Ordering::AcqRel);
                 })
                 .is_err()
@@ -1005,8 +1005,9 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
     }
 }
 
-/// Hands out turns so requests are dispatched in the order they finished
-/// arriving, rather than in whatever order the scheduler wakes their threads.
+/// Hands out turns so requests reach the broker in the order they were
+/// accepted, rather than in whatever order their threads happen to finish
+/// reading or the scheduler happens to wake them.
 ///
 /// One helper already orders its own calls per broker, but a broker outlives
 /// the app that started it and more than one helper can adopt the same one —
@@ -1015,55 +1016,172 @@ fn serve_broker_ipc(runtime: Runtime, dir: PathBuf) -> Result<(), AcpBrokerProce
 /// applied before the `session/prompt` it was sent to stop, the same silent
 /// failure the helper's queue prevents within one process.
 ///
-/// The turn is taken once a request has finished arriving, not at accept.
-/// Ordering by acceptance would mean holding it across a read allowed to take
-/// minutes for a legacy sender still encoding, letting one slow caller stall
-/// every other client of the broker — reintroducing at the supervisor exactly
-/// what moving dispatch off the serve loop removed at the helper.
+/// A place is reserved at accept and held only for `RESERVATION_GRACE`. That
+/// split is the whole design. Ordering purely by acceptance would mean holding
+/// a place across a read allowed to take minutes for a legacy sender still
+/// encoding, letting one slow caller stall every other client of the broker —
+/// reintroducing at the supervisor exactly what moving dispatch off the serve
+/// loop removed at the helper. Ordering purely by arrival lets a small
+/// `session/cancel` overtake the large `session/prompt` that was sent first,
+/// which is the bug. A request that arrives promptly — a maximal prompt
+/// crosses this socket in ~0.2s — keeps the place it was accepted in; one that
+/// dawdles forfeits it and is ordered by arrival instead.
 #[cfg(unix)]
 #[derive(Default)]
 struct RequestOrder {
-    state: Mutex<(u64, u64)>,
+    state: Mutex<OrderState>,
     turn: Condvar,
 }
 
+/// How long a reserved place is held for a request that has not arrived yet.
+/// Far above what any request needs to cross the socket, far below the minutes
+/// a legacy sender may spend encoding before it writes anything.
 #[cfg(unix)]
-impl RequestOrder {
-    /// Claims the next place in line and waits for it. The returned guard
-    /// advances the queue on drop, including on panic — otherwise one failed
-    /// handler would stall every later request for this broker for good.
-    fn take_turn(&self) -> RequestTurn<'_> {
-        let ticket = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            let ticket = state.0;
-            state.0 += 1;
-            ticket
-        };
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        while state.1 != ticket {
-            state = self
-                .turn
-                .wait(state)
-                .unwrap_or_else(|error| error.into_inner());
+const RESERVATION_GRACE: Duration = Duration::from_secs(5);
+
+#[cfg(unix)]
+#[derive(Default)]
+struct OrderState {
+    next: u64,
+    serving: u64,
+    /// Accepted but not yet arrived, with the instant each stops holding its
+    /// place.
+    pending: std::collections::BTreeMap<u64, std::time::Instant>,
+    /// Arrived and waiting to run.
+    ready: std::collections::BTreeSet<u64>,
+}
+
+#[cfg(unix)]
+impl OrderState {
+    /// Steps `serving` past every place that no longer has a claim on it:
+    /// abandoned connections, and reservations whose grace has run out.
+    fn advance(&mut self) {
+        while self.serving < self.next {
+            if self.ready.contains(&self.serving) {
+                // Arrived and waiting — it runs next, so the queue stops here.
+                break;
+            }
+            match self.pending.get(&self.serving) {
+                Some(deadline) if std::time::Instant::now() < *deadline => break,
+                Some(_) => {
+                    self.pending.remove(&self.serving);
+                    self.serving += 1;
+                }
+                // Neither pending nor ready: the connection went away.
+                None => self.serving += 1,
+            }
         }
-        RequestTurn { order: self }
     }
 }
 
 #[cfg(unix)]
-struct RequestTurn<'a> {
-    order: &'a RequestOrder,
+impl RequestOrder {
+    /// Takes a place in line for a connection that has just been accepted.
+    fn reserve(self: &Arc<Self>) -> Reservation {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let ticket = state.next;
+        state.next += 1;
+        state
+            .pending
+            .insert(ticket, std::time::Instant::now() + RESERVATION_GRACE);
+        Reservation {
+            order: Arc::clone(self),
+            ticket,
+            claimed: false,
+        }
+    }
+}
+
+/// A place held for a request that has not arrived yet.
+#[cfg(unix)]
+struct Reservation {
+    order: Arc<RequestOrder>,
+    ticket: u64,
+    claimed: bool,
 }
 
 #[cfg(unix)]
-impl Drop for RequestTurn<'_> {
+impl Reservation {
+    /// The request has arrived. Waits for this place to come up and returns a
+    /// guard that advances the queue when the request is done — on drop, so a
+    /// panicking handler cannot stall every later request for this broker.
+    fn claim(mut self) -> RequestTurn {
+        self.claimed = true;
+        let order = Arc::clone(&self.order);
+        let mut state = order
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.pending.remove(&self.ticket);
+        // If the grace ran out while this was still arriving, the place has
+        // already been given to whoever was behind it. Rejoin at the back
+        // rather than wait for a turn that will never come round again —
+        // waiting on a forfeited ticket is a deadlock, not a delay.
+        let ticket = if state.serving > self.ticket {
+            let ticket = state.next;
+            state.next += 1;
+            ticket
+        } else {
+            self.ticket
+        };
+        state.ready.insert(ticket);
+        loop {
+            state.advance();
+            if state.serving == ticket {
+                drop(state);
+                return RequestTurn { order, ticket };
+            }
+            // Timed, because the head may be a reservation that has to be
+            // waited out rather than woken: nothing signals a grace expiring.
+            let (guard, _) = order
+                .turn
+                .wait_timeout(state, RESERVATION_GRACE)
+                .unwrap_or_else(|error| error.into_inner());
+            state = guard;
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if self.claimed {
+            return;
+        }
+        // The request never arrived — a failed read, or a peer that hung up.
+        // Give the place back now rather than making everyone behind it wait
+        // out a grace period for a connection that is already gone.
+        let mut state = self
+            .order
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.pending.remove(&self.ticket);
+        state.ready.remove(&self.ticket);
+        state.advance();
+        self.order.turn.notify_all();
+    }
+}
+
+#[cfg(unix)]
+struct RequestTurn {
+    order: Arc<RequestOrder>,
+    ticket: u64,
+}
+
+#[cfg(unix)]
+impl Drop for RequestTurn {
     fn drop(&mut self) {
         let mut state = self
             .order
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        state.1 += 1;
+        state.ready.remove(&self.ticket);
+        if state.serving == self.ticket {
+            state.serving += 1;
+        }
+        state.advance();
         self.order.turn.notify_all();
     }
 }
@@ -1075,15 +1193,16 @@ impl Drop for RequestTurn<'_> {
 fn handle_connection(
     runtime: Runtime,
     stream: UnixStream,
-    order: Arc<RequestOrder>,
+    reservation: Reservation,
 ) -> io::Result<()> {
+    // The reservation was taken in the accept loop, so the place reflects
+    // when this connection was accepted rather than when its thread happened
+    // to start — see `RequestOrder`.
     let (line, _framing) = {
         let mut reader = ipc_reader(&stream)?;
         read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
     };
-    // Ticketed here, not before the read: a caller allowed minutes to finish
-    // arriving must not hold the turn of one that already has.
-    let _turn = order.take_turn();
+    let _turn = reservation.claim();
     handle_ipc_line(runtime, stream, line)
 }
 
@@ -2488,46 +2607,115 @@ mod tests {
         );
     }
 
-    /// Turns are handed out in the order they are claimed, not in whatever
-    /// order the scheduler wakes the waiters. A mutex would satisfy the
-    /// mutual-exclusion half of this and still let a `session/cancel` overtake
-    /// the `session/prompt` it was sent to stop.
+    /// A request keeps the place it was accepted in, even when a later one
+    /// finishes arriving first.
     ///
-    /// Each worker holds its turn for a spell that *shrinks* with its ticket,
-    /// so the two behaviours produce different answers: granted in order, the
-    /// holds are serial and the record comes out ascending; granted freely,
-    /// they overlap and the shortest holds finish first.
+    /// This is the `session/cancel` overtaking `session/prompt` case: the
+    /// prompt is large and slower to cross the socket, the cancel is tiny.
+    /// Ordering by arrival applies the cancel to a turn that has not started,
+    /// after which the prompt runs uncancelled and the user believes they
+    /// stopped it.
     #[cfg(unix)]
     #[test]
-    fn request_turns_are_granted_in_the_order_they_are_claimed() {
-        const WORKERS: u64 = 8;
+    fn an_earlier_accepted_request_runs_first_even_if_it_arrives_second() {
         let order = Arc::new(RequestOrder::default());
         let observed = Arc::new(Mutex::new(Vec::new()));
 
-        // Held so every worker is queued behind it before any can proceed.
-        let first = order.take_turn();
-        let mut workers = Vec::new();
-        for index in 0..WORKERS {
-            let order = Arc::clone(&order);
+        // Accepted first: the slow, large one.
+        let first = order.reserve();
+        // Accepted second: the small one that will arrive well before it.
+        let second = order.reserve();
+
+        let quick = {
             let observed = Arc::clone(&observed);
-            workers.push(std::thread::spawn(move || {
-                let _turn = order.take_turn();
-                std::thread::sleep(Duration::from_millis(30 * (WORKERS - index)));
+            std::thread::spawn(move || {
+                let _turn = second.claim();
                 observed
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
-                    .push(index);
-            }));
-            // Sequences the claims only; it does not sequence the grants.
-            std::thread::sleep(Duration::from_millis(20));
+                    .push("second");
+            })
+        };
+
+        // Long enough that the second request is unambiguously waiting, and
+        // well inside the grace the first one is holding.
+        std::thread::sleep(Duration::from_millis(300));
+        {
+            let _turn = first.claim();
+            observed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push("first");
         }
-        drop(first);
-        for worker in workers {
-            worker.join().expect("worker");
-        }
+        quick.join().expect("second worker");
 
         let observed = observed.lock().unwrap_or_else(|error| error.into_inner());
-        assert_eq!(*observed, (0..WORKERS).collect::<Vec<_>>());
+        assert_eq!(*observed, vec!["first", "second"]);
+    }
+
+    /// A request that arrives after its grace has run out must still be
+    /// served. Its place is gone by then, so it rejoins at the back — waiting
+    /// for a turn that has already passed is a deadlock, and a legacy sender
+    /// allowed minutes to encode reaches exactly this path.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_arriving_after_its_grace_still_gets_a_turn() {
+        let order = Arc::new(RequestOrder::default());
+        let slow = order.reserve();
+
+        // Someone accepted later goes ahead once the grace lapses.
+        let next = order.reserve();
+        {
+            let _turn = next.claim();
+        }
+
+        // The slow one now arrives, long past its place. It must run, not hang.
+        let started = std::time::Instant::now();
+        let ran = std::thread::spawn(move || {
+            let _turn = slow.claim();
+        });
+        // Generous: the point is that it finishes at all.
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !ran.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            ran.is_finished(),
+            "a request that outlived its reservation never got a turn after {:?}",
+            started.elapsed()
+        );
+        ran.join().expect("slow worker");
+    }
+
+    /// A reserved place is held only for a grace period, so a caller that
+    /// never delivers cannot stall everyone accepted after it. That bound is
+    /// what makes reserving at accept affordable at all: a legacy sender is
+    /// allowed minutes to encode before it writes, and nobody can be made to
+    /// wait that out.
+    #[cfg(unix)]
+    #[test]
+    fn a_reservation_that_never_arrives_stops_holding_its_place() {
+        let order = Arc::new(RequestOrder::default());
+        let abandoned = order.reserve();
+        let next = order.reserve();
+
+        // Never claimed, and deliberately not dropped either — this stands in
+        // for a connection still being read from, not one that went away.
+        let started = std::time::Instant::now();
+        {
+            let _turn = next.claim();
+        }
+        let waited = started.elapsed();
+        drop(abandoned);
+
+        assert!(
+            waited >= RESERVATION_GRACE,
+            "the place should be held for its grace: {waited:?}"
+        );
+        assert!(
+            waited < RESERVATION_GRACE * 3,
+            "the place should be forfeited once grace passes, not held on: {waited:?}"
+        );
     }
 
     /// A peer that drains a reply slowly must not be able to hold its handler
