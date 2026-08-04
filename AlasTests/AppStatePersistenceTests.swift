@@ -344,6 +344,30 @@ struct AppStatePersistenceTests {
         #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
     }
 
+    @Test func openingExternalWorktreeFileClearsActiveGlobalMission() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-mission-external-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: externalDir) }
+        let externalFile = externalDir.appendingPathComponent("external.txt")
+        try "outside\n".write(to: externalFile, atomically: true, encoding: .utf8)
+        let router = fixture.state.makeCLICommandRouter(sessionWorktreeLookup: { _ in fixture.otherWorktree.id })
+
+        let response = await router.handle(
+            .init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [externalFile.path]))
+        )
+
+        #expect(response == .ok)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
+    }
+
     @Test func selectingInitialWorktreePreservesRestoredGlobalMission() async throws {
         let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
         await fixture.state.missions.load()

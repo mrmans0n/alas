@@ -3620,6 +3620,7 @@ final class AppState {
                 guard let self else { return }
                 if BinaryFileType.isKnownBinary(relativePath: url.path) {
                     _ = self.tabs.openBinaryPreview(worktreeId: worktreeId, relativePath: url.path)
+                    self.activateWorktreeTabPresentation()
                     if self.selectedWorktreeId != worktreeId,
                        let worktree = self.worktree(withId: worktreeId) {
                         self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -3633,6 +3634,7 @@ final class AppState {
                     revealCharacter: nil,
                     originatingRelativePath: nil
                 )
+                self.activateWorktreeTabPresentation()
                 if self.selectedWorktreeId != worktreeId,
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -3656,6 +3658,7 @@ final class AppState {
                     revealCharacter: 0,
                     revealEndLine: lines.upperBound
                 )
+                self.activateWorktreeTabPresentation()
                 if self.selectedWorktreeId != worktreeId,
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
