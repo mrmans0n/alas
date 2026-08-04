@@ -9,6 +9,17 @@ actor RevisionSnapshotCache {
     /// Container holding one directory per app session, under the temp dir.
     static let rootDirectoryName = "alas-drag"
 
+    /// A session directory older than this is treated as abandoned by a
+    /// crashed or exited process. The threshold must be generous: the user
+    /// routinely runs multiple Alas instances at once, and a live instance's
+    /// snapshots must never be deleted out from under an in-flight drag.
+    static let staleSessionAge: TimeInterval = 24 * 60 * 60
+
+    /// Characters that are safe to use verbatim in a path component.
+    private static let allowedRefComponentCharacters = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+    )
+
     /// This session's snapshot root. Immutable, so callers read it without
     /// hopping onto the actor.
     nonisolated let sessionDirectory: URL
@@ -23,12 +34,19 @@ actor RevisionSnapshotCache {
     }
 
     /// Directory-safe form of a git ref. `stash@{0}^3` is not a usable path
-    /// component, so every character outside `[A-Za-z0-9._-]` becomes `-`.
-    /// Distinct refs stay distinct for everything Alas drags; a collision would
-    /// at worst reuse a snapshot of the same path, never a different one.
+    /// component, so every character outside `[A-Za-z0-9._-]` is
+    /// percent-encoded (`stash@{0}^3` becomes `stash%40%7B0%7D%5E3`).
+    /// Percent-encoding is reversible and therefore injective, so distinct
+    /// refs never collide on disk — unlike a lossy replacement scheme, which
+    /// could map both `feature/foo` and a literal branch named `feature-foo`
+    /// to the same path and silently overwrite one snapshot with the other's
+    /// content. This directory name is internal and never shown to the user;
+    /// the preserved relative *filename* is what the receiving app sees.
     nonisolated static func refComponent(_ ref: String) -> String {
-        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
-        return String(ref.map { allowed.contains($0) ? $0 : "-" })
+        if let encoded = ref.addingPercentEncoding(withAllowedCharacters: allowedRefComponentCharacters) {
+            return encoded
+        }
+        return String(ref.unicodeScalars.map { allowedRefComponentCharacters.contains($0) ? Character($0) : "-" })
     }
 
     /// Where the blob at `ref:path` is written. The original relative path is
@@ -73,7 +91,10 @@ actor RevisionSnapshotCache {
 
     /// Removes session directories left behind by earlier runs. Done on first
     /// use rather than at launch so it never sits on the startup path, and so a
-    /// crashed session still gets cleaned up by the next one.
+    /// crashed session still gets cleaned up by the next one. Only entries
+    /// older than `staleSessionAge` are removed: concurrent Alas instances
+    /// must not delete each other's live snapshots, so anything that could
+    /// plausibly belong to a still-running instance is left alone.
     private func sweepStaleSessionsIfNeeded() {
         guard !didSweep else { return }
         didSweep = true
@@ -81,10 +102,16 @@ actor RevisionSnapshotCache {
             .appendingPathComponent(Self.rootDirectoryName, isDirectory: true)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: nil
+            includingPropertiesForKeys: [.contentModificationDateKey]
         ) else { return }
+        let cutoff = Date().addingTimeInterval(-Self.staleSessionAge)
         for entry in entries
         where entry.lastPathComponent != sessionDirectory.lastPathComponent {
+            guard
+                let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey]),
+                let modified = values.contentModificationDate,
+                modified < cutoff
+            else { continue }
             try? FileManager.default.removeItem(at: entry)
         }
     }

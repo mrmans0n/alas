@@ -14,7 +14,7 @@ struct RevisionSnapshotCacheTests {
     }
 
     @Test func refComponentReplacesUnsafeCharacters() {
-        #expect(RevisionSnapshotCache.refComponent("stash@{0}^3") == "stash--0--3")
+        #expect(RevisionSnapshotCache.refComponent("stash@{0}^3") == "stash%40%7B0%7D%5E3")
     }
 
     @Test func refComponentKeepsShasIntact() {
@@ -25,6 +25,10 @@ struct RevisionSnapshotCacheTests {
         let tracked = RevisionSnapshotCache.refComponent("stash@{0}")
         let untracked = RevisionSnapshotCache.refComponent("stash@{0}^3")
         #expect(tracked != untracked)
+    }
+
+    @Test func refComponentIsInjectiveForCollidingRefs() {
+        #expect(RevisionSnapshotCache.refComponent("feature/foo") != RevisionSnapshotCache.refComponent("feature-foo"))
     }
 
     @Test func snapshotURLPreservesRelativePath() {
@@ -77,5 +81,26 @@ struct RevisionSnapshotCacheTests {
 
         await cache.removeSessionDirectory()
         #expect(!FileManager.default.fileExists(atPath: cache.sessionDirectory.path))
+    }
+
+    @Test func sweepDoesNotDeleteFreshSiblingSessionDirectories() async throws {
+        let repo = try await makeRepo(name: "sweep")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("a.txt")
+        try "x".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "a"], cwd: repo)
+
+        let sibling = RevisionSnapshotCache(sessionID: "sibling-\(UUID().uuidString)")
+        _ = await sibling.snapshot(worktreePath: repo, ref: "HEAD", path: "a.txt")
+        #expect(FileManager.default.fileExists(atPath: sibling.sessionDirectory.path))
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        _ = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "a.txt")
+
+        #expect(FileManager.default.fileExists(atPath: sibling.sessionDirectory.path))
+
+        await sibling.removeSessionDirectory()
+        await cache.removeSessionDirectory()
     }
 }
