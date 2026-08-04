@@ -28,13 +28,19 @@ struct AppStatePersistenceTests {
 
     private final class RecordingStore: PersistenceStoreProtocol, @unchecked Sendable {
         let initialProjectsFile: ProjectsFile
+        var writtenConfig: AppConfig?
         var writtenProjectsFile: ProjectsFile?
+        var configWriteCount = 0
 
         init(initialProjectsFile: ProjectsFile) {
             self.initialProjectsFile = initialProjectsFile
         }
 
         func write<T: Encodable>(_ value: T, to _: URL) throws {
+            if let config = value as? AppConfig {
+                writtenConfig = config
+                configWriteCount += 1
+            }
             if let projectsFile = value as? ProjectsFile {
                 writtenProjectsFile = projectsFile
             }
@@ -43,6 +49,66 @@ struct AppStatePersistenceTests {
         func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
             type == ProjectsFile.self ? initialProjectsFile as? T : nil
         }
+    }
+
+    @Test func setDefaultWorktreeOrderingPersistsAndPreservesManualOverrides() {
+        let inherited = ProjectConfig(
+            id: "inherited", name: "Inherited", path: "/repo/inherited",
+            color: "blue", addedAt: .now
+        )
+        let manualNew = Worktree.makeId(path: URL(fileURLWithPath: "/repo/manual/wts/new"))
+        let manualOld = Worktree.makeId(path: URL(fileURLWithPath: "/repo/manual/wts/old"))
+        let manual = ProjectConfig(
+            id: "manual", name: "Manual", path: "/repo/manual",
+            color: "red", addedAt: .now,
+            worktreeOrder: [manualOld, manualNew],
+            worktreeOrderIsManual: true
+        )
+        let store = RecordingStore(initialProjectsFile: .init(projects: [inherited, manual]))
+        let state = AppState(store: store)
+        let now = Date(timeIntervalSince1970: 2_000)
+
+        func worktree(projectID: String, path: String, branch: String, activity: Date) -> Worktree {
+            let url = URL(fileURLWithPath: path)
+            return Worktree(
+                id: Worktree.makeId(path: url), projectId: projectID,
+                name: branch, branch: branch, path: url, status: .clean,
+                lastActivity: activity, createdAt: activity
+            )
+        }
+
+        let rows = [
+            worktree(projectID: inherited.id, path: inherited.path, branch: "main", activity: now),
+            worktree(projectID: inherited.id, path: "/repo/inherited/wts/zeta", branch: "zeta", activity: now),
+            worktree(projectID: inherited.id, path: "/repo/inherited/wts/alpha", branch: "alpha", activity: now.addingTimeInterval(-60)),
+            worktree(projectID: manual.id, path: "/repo/manual/wts/old", branch: "old", activity: now.addingTimeInterval(-60)),
+            worktree(projectID: manual.id, path: manual.path, branch: "main", activity: now),
+            worktree(projectID: manual.id, path: "/repo/manual/wts/new", branch: "new", activity: now),
+        ]
+        for row in rows {
+            state.projectsManager.insertOptimisticWorktree(row)
+            state.projectsManager.setOperationState(id: row.id, state: nil)
+        }
+
+        state.setDefaultWorktreeOrdering(.branchAsc)
+
+        #expect(state.config.worktrees.defaultOrdering == .branchAsc)
+        #expect(store.writtenConfig?.worktrees.defaultOrdering == .branchAsc)
+        #expect(state.projectsManager.worktrees(projectId: inherited.id).map(\.branch)
+            == ["main", "alpha", "zeta"])
+        #expect(state.projectsManager.worktrees(projectId: manual.id).map(\.branch)
+            == ["main", "old", "new"])
+        #expect(state.projectsManager.projects[1].worktreeOrderIsManual)
+    }
+
+    @Test func setDefaultWorktreeOrderingDoesNotPersistTheActiveModeAgain() {
+        let store = RecordingStore(initialProjectsFile: .init(projects: []))
+        let state = AppState(store: store)
+
+        state.setDefaultWorktreeOrdering(state.config.worktrees.defaultOrdering)
+
+        #expect(store.configWriteCount == 0)
+        #expect(store.writtenProjectsFile == nil)
     }
 
     @Test func missionBaseReferenceNormalizesOnlyKnownRemoteAliases() {

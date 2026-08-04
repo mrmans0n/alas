@@ -104,13 +104,7 @@ struct WorktreesPane: View {
     private var defaultOrderingBinding: Binding<AppConfig.WorktreeSortMode> {
         Binding(
             get: { state.config.worktrees.defaultOrdering },
-            set: { newValue in
-                state.config.worktrees.defaultOrdering = newValue
-                state.saveConfig()
-                if state.projectsManager.reapplyOrderingForAllProjects() {
-                    state.saveProjects()
-                }
-            }
+            set: { state.setDefaultWorktreeOrdering($0) }
         )
     }
 
