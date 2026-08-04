@@ -701,7 +701,7 @@ final class MissionController {
                   leg.projectId,
                   issueIdentity,
                   leg.branch,
-                  Self.baseBranch(for: leg),
+                  leg.baseRef,
                   headSHA,
                   headOwner
               ),

@@ -970,7 +970,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "main")
+                #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
@@ -1053,7 +1053,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "main")
+                #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme")
                 return request
@@ -1529,7 +1529,7 @@ struct MissionReadinessEvaluatorTests {
                 #expect(projectID == "project-1")
                 #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
-                #expect(baseRef == "main")
+                #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request

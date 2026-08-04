@@ -152,6 +152,13 @@ struct AppStatePersistenceTests {
         #expect(remote.repositorySlug == "acme/sdk")
     }
 
+    @Test func missionDiscoveryUsesQualifiedBaseForRemoteAndStrippedBranchForProvider() {
+        #expect(AppState.missionDiscoveryBaseBranch(
+            baseRef: "upstream/main",
+            remoteName: "upstream"
+        ) == "main")
+    }
+
     @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
         let current = try #require(CodeHostRemoteDetector.detect(
             from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],

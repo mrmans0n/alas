@@ -1285,7 +1285,10 @@ final class AppState {
                 remote: remote,
                 branch: branch,
                 headOwner: headOwner,
-                baseBranch: baseRef,
+                baseBranch: Self.missionDiscoveryBaseBranch(
+                    baseRef: baseRef,
+                    remoteName: remote.remoteName
+                ),
                 headSHA: headSHA,
                 cwd: cwd
             )
@@ -1314,6 +1317,10 @@ final class AppState {
             .filter { baseRef.hasPrefix("\($0.remoteName)/") }
             .max { $0.remoteName.count < $1.remoteName.count }
             ?? candidates.first
+    }
+
+    static func missionDiscoveryBaseBranch(baseRef: String, remoteName: String) -> String {
+        MissionBaseReference.branchName(baseRef, persistedRemoteName: remoteName)
     }
 
     static func missionReviewRemote(
