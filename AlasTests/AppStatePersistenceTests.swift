@@ -5,11 +5,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AppStatePersistenceTests {
-    private static let githubIssueIdentity = MissionIssueIdentity(
+    private static let githubSourceLocator = MissionRepositoryLocator(
         provider: .github,
         host: "github.com",
-        repositorySlug: "acme/alas",
-        number: 42
+        repositorySlug: "acme/alas"
     )
 
     private struct MemoryStore: PersistenceStoreProtocol {
@@ -174,27 +173,26 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemoteUsesPersistedProviderForEnterpriseHost() throws {
-        let identity = MissionIssueIdentity(
+        let locator = MissionRepositoryLocator(
             provider: .github,
             host: "github.example.com",
-            repositorySlug: "acme/alas",
-            number: 42
+            repositorySlug: "acme/alas"
         )
 
         let remote = try #require(AppState.missionReviewRemote(
-            identity: identity,
+            locator: locator,
             baseRef: "origin/main",
             remotes: [GitRemote(name: "origin", url: "git@github.example.com:acme/alas.git")]
         ))
 
         #expect(remote.kind == .github)
-        #expect(remote.host == identity.host)
-        #expect(remote.repositorySlug == identity.repositorySlug)
+        #expect(remote.host == locator.host)
+        #expect(remote.repositorySlug == locator.repositorySlug)
     }
 
     @Test func missionReviewRemotePrefersTheLongestMatchingAlias() throws {
         let remote = try #require(AppState.missionReviewRemote(
-            identity: Self.githubIssueIdentity,
+            locator: Self.githubSourceLocator,
             baseRef: "team/origin/main",
             remotes: [
                 GitRemote(name: "team", url: "git@github.com:acme/alas.git"),
@@ -206,15 +204,14 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemoteRejectsForkWhenConfiguredBaseRemoteExists() {
-        let identity = MissionIssueIdentity(
+        let locator = MissionRepositoryLocator(
             provider: .github,
             host: "github.com",
-            repositorySlug: "nacho/alas",
-            number: 42
+            repositorySlug: "nacho/alas"
         )
 
         let remote = AppState.missionReviewRemote(
-            identity: identity,
+            locator: locator,
             baseRef: "upstream/main",
             persistedRemoteName: "upstream",
             remotes: [
@@ -228,7 +225,7 @@ struct AppStatePersistenceTests {
 
     @Test func missionReviewRemoteRepairsStaleConfiguredBaseAlias() throws {
         let remote = try #require(AppState.missionReviewRemote(
-            identity: Self.githubIssueIdentity,
+            locator: Self.githubSourceLocator,
             baseRef: "origin/main",
             persistedRemoteName: "origin",
             remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
@@ -239,7 +236,7 @@ struct AppStatePersistenceTests {
 
     @Test func missionReviewRemoteDoesNotGuessStaleBaseAliasWhenMultipleRemotesExist() {
         let remote = AppState.missionReviewRemote(
-            identity: Self.githubIssueIdentity,
+            locator: Self.githubSourceLocator,
             baseRef: "origin/main",
             persistedRemoteName: "origin",
             remotes: [
@@ -286,13 +283,13 @@ struct AppStatePersistenceTests {
         ) == "main")
     }
 
-    @Test func missionIssueQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
+    @Test func missionSourceQueryUsesPersistedSlugSoProviderCanFollowRenameRedirect() throws {
         let current = try #require(CodeHostRemoteDetector.detect(
             from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],
             matching: .github
         ))
 
-        let query = AppState.missionIssueQueryRemote(identity: Self.githubIssueIdentity, candidates: [current])
+        let query = CodeHostMissionSourceProvider.queryRemote(locator: Self.githubSourceLocator, candidates: [current])
 
         #expect(query.repositorySlug == "acme/alas")
         #expect(query.host == "github.com")
@@ -300,34 +297,33 @@ struct AppStatePersistenceTests {
         #expect(query.webURL == URL(string: "https://github.com/acme/alas"))
     }
 
-    @Test func missionIssueQueryKeepsAnExactCurrentRemote() throws {
+    @Test func missionSourceQueryKeepsAnExactCurrentRemote() throws {
         let current = try #require(CodeHostRemoteDetector.detect(
             from: [GitRemote(name: "upstream", url: "git@gitlab.example.com:platform/mobile/alas.git")],
             matching: .gitlab
         ))
-        let identity = MissionIssueIdentity(
+        let locator = MissionRepositoryLocator(
             provider: .gitlab,
             host: "gitlab.example.com",
-            repositorySlug: "platform/mobile/alas",
-            number: 77
+            repositorySlug: "platform/mobile/alas"
         )
 
-        let query = AppState.missionIssueQueryRemote(identity: identity, candidates: [current])
+        let query = CodeHostMissionSourceProvider.queryRemote(locator: locator, candidates: [current])
 
         #expect(query == current)
     }
 
     @Test func startupCanonicalRefreshIsLimitedToSameHostSlugChanges() {
         #expect(AppState.missionRepositoryNeedsCanonicalRefresh(
-            identity: Self.githubIssueIdentity,
+            locator: Self.githubSourceLocator,
             remotes: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")]
         ))
         #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
-            identity: Self.githubIssueIdentity,
+            locator: Self.githubSourceLocator,
             remotes: [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
         ))
         #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
-            identity: Self.githubIssueIdentity,
+            locator: Self.githubSourceLocator,
             remotes: [GitRemote(name: "origin", url: "git@gitlab.com:acquired/renamed-alas.git")]
         ))
     }
@@ -551,6 +547,23 @@ struct AppStatePersistenceTests {
         #expect(owner == "nacho")
     }
 
+    @Test func missionBranchOwnerIgnoresPushRemoteOnDifferentHost() {
+        let remotes = [
+            GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            GitRemote(name: "mirror", url: "git@gitlab.example.com:nacho/alas.git"),
+        ]
+
+        let owner = AppState.missionBranchOwner(
+            baseRef: "upstream/main",
+            branchRemoteName: "upstream",
+            pushRemoteName: "mirror",
+            remotes: remotes,
+            supportedKinds: [.github, .gitlab]
+        )
+
+        #expect(owner == "acme")
+    }
+
     @Test func effectiveMissionPushRemoteUsesGitPrecedence() {
         #expect(AppState.effectiveMissionPushRemote(
             branchPushRemoteName: "fork",
@@ -644,15 +657,14 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionPaneBaseRefRequalifiesAStaleRemoteAlias() {
-        let identity = MissionIssueIdentity(
+        let locator = MissionRepositoryLocator(
             provider: .github,
             host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
+            repositorySlug: "acme/alas"
         )
 
         let baseRef = AppState.missionPaneBaseRef(
-            identity: identity,
+            locator: locator,
             baseRef: "origin/main",
             persistedRemoteName: "origin",
             remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
@@ -673,15 +685,14 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionPaneBaseRefPreservesAnUnqualifiedSlashBranch() {
-        let identity = MissionIssueIdentity(
+        let locator = MissionRepositoryLocator(
             provider: .github,
             host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
+            repositorySlug: "acme/alas"
         )
 
         let baseRef = AppState.missionPaneBaseRef(
-            identity: identity,
+            locator: locator,
             baseRef: "release/1.0",
             persistedRemoteName: "",
             remotes: [GitRemote(name: "release", url: "git@github.com:acme/alas.git")]
@@ -960,7 +971,7 @@ struct AppStatePersistenceTests {
         let aggregate = try await Self.waitForMissionState(.needsAttention, persistence: persistence)
 
         #expect(aggregate.mission.attentionReason == "The Mission project is no longer available.")
-        #expect(aggregate.issue.identity == MissionFixtures.issue().identity)
+        #expect(aggregate.source.identity == MissionSourceSnapshot(issue: MissionFixtures.issue()).identity)
         #expect(aggregate.primaryLeg?.projectId == project.id)
     }
 

@@ -32,8 +32,13 @@ final class NewMissionDialogModel {
 
     var reference = "" {
         didSet {
-            guard reference != oldValue, phase == .resolving else { return }
-            invalidateResolution()
+            guard reference != oldValue else { return }
+            if phase == .resolving {
+                invalidateResolution()
+            } else if phase == .entry {
+                pendingManualFallback = nil
+                errorMessage = nil
+            }
         }
     }
 
@@ -945,17 +950,20 @@ extension NewMissionDialogModel.Environment {
                 )
             },
             destinationAvailable: { [weak state] projectID, destination in
-                guard let state else { return false }
+                guard let state,
+                      let project = state.projects.first(where: { $0.id == projectID })
+                else { return false }
                 let candidate = destination.standardizedFileURL.path
-                let reserved = Self.activeMissionDestinationPaths(
-                    in: state.missions.aggregates,
-                    projectID: projectID
-                ).contains(candidate)
-                return !FileManager.default.fileExists(atPath: candidate)
-                    && !reserved
-                    && !state.projectsManager.worktrees(projectId: projectID).contains {
-                        $0.path.standardizedFileURL.path == candidate
-                    }
+                return Self.destinationAvailable(
+                    project: project,
+                    destination: destination,
+                    activeMissionDestinationPaths: Self.activeMissionDestinationPaths(
+                        in: state.missions.aggregates,
+                        projectID: projectID
+                    ),
+                    worktreePaths: state.projectsManager.worktrees(projectId: projectID).map(\.path),
+                    localDestinationExists: FileManager.default.fileExists(atPath: candidate)
+                )
             },
             createMission: { [weak state] draft, allowDuplicate in
                 guard let state else {
@@ -1003,5 +1011,19 @@ extension NewMissionDialogModel.Environment {
                 .filter { $0.projectId == projectID }
                 .map { URL(fileURLWithPath: $0.destinationPath).standardizedFileURL.path }
         })
+    }
+
+    static func destinationAvailable(
+        project: ProjectConfig,
+        destination: URL,
+        activeMissionDestinationPaths: Set<String>,
+        worktreePaths: [URL],
+        localDestinationExists: Bool
+    ) -> Bool {
+        let candidate = destination.standardizedFileURL.path
+        let localCollision = project.host == nil && localDestinationExists
+        return !localCollision
+            && !activeMissionDestinationPaths.contains(candidate)
+            && !worktreePaths.contains { $0.standardizedFileURL.path == candidate }
     }
 }

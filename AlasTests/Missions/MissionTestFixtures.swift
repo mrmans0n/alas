@@ -71,7 +71,7 @@ enum MissionFixtures {
                 updatedAt: Date(timeIntervalSince1970: createdAt),
                 completedAt: nil
             ),
-            issue: issue,
+            source: MissionSourceSnapshot(issue: issue),
             legs: [leg(
                 id: legID,
                 missionID: missionID,
@@ -204,7 +204,7 @@ extension MissionFixtures {
                 updatedAt: createdAt,
                 completedAt: nil
             ),
-            issue: issue(),
+            source: MissionSourceSnapshot(issue: issue()),
             legs: [app, sdk],
             events: []
         )

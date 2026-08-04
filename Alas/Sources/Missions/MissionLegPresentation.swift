@@ -76,8 +76,9 @@ struct MissionLegPresentation: Equatable, Identifiable {
         actions = MissionTabPresentation.Actions(
             openAgent: openAgent,
             openChanges: hasUsableWorktree,
-            openIssue: true,
-            refresh: true,
+            openSource: true,
+            refreshSource: true,
+            editSourceContext: aggregate.source.isEditable,
             retryWorktree: retryWorktree,
             retryAgent: retryAgent,
             recoverWorktree: canRecover,

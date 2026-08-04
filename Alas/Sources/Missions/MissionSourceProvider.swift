@@ -75,6 +75,7 @@ struct MissionSourceProviderRegistry: Sendable {
             throw CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
         }
         var lastError: Error?
+        var lastManualFallback: MissionSourceResolutionFailure?
         for provider in matchingProviders {
             do {
                 return try await provider.resolve(
@@ -85,9 +86,19 @@ struct MissionSourceProviderRegistry: Sendable {
                 )
             } catch let error as CodeHostProviderError where error.isMissingConfiguredRemote {
                 lastError = error
+            } catch let error as MissionSourceResolutionFailure where reference.isShort {
+                lastManualFallback = error
+                lastError = error
             }
         }
-        throw lastError ?? CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
+        throw lastManualFallback ?? lastError ?? CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
+    }
+}
+
+private extension MissionSourceReference {
+    var isShort: Bool {
+        guard case .short = self else { return false }
+        return true
     }
 }
 
@@ -136,7 +147,9 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
         return .init(
             identity: identity ?? .init(providerID: .manual, stableID: canonicalURL.absoluteString),
             canonicalURL: canonicalURL,
-            providerLabel: repositoryLocator?.provider.displayName ?? "Manual",
+            providerLabel: repositoryLocator?.provider.displayName
+                ?? URLComponents(url: canonicalURL, resolvingAgainstBaseURL: false)?.host
+                ?? "Manual",
             displayReference: displayReference,
             repositoryLocator: repositoryLocator,
             title: "",
@@ -165,6 +178,8 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
         if (scheme == "http" && components.port == 80) || (scheme == "https" && components.port == 443) {
             components.port = nil
         }
+        components.user = nil
+        components.password = nil
         components.fragment = nil
         guard let canonicalURL = components.url else {
             throw CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
@@ -177,10 +192,12 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
     let id: MissionSourceProviderID
     private let kind: CodeHostKind
     private let providers: CodeHostIssueProviderRegistry
+    private let supportedRoutingKinds: Set<CodeHostKind>
 
     init(kind: CodeHostKind = .github, providers: CodeHostIssueProviderRegistry) {
         self.kind = kind
         id = kind.missionSourceProviderID
+        supportedRoutingKinds = providers.supportedKinds
         self.providers = .init(providers.provider(for: kind).map { [$0] } ?? [])
     }
 
@@ -202,9 +219,22 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
         selectedProjectID: String?,
         remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
     ) async throws -> ResolvedMissionSource {
+        try await validateShortReferenceRemoteKind(
+            reference,
+            projects: projects,
+            selectedProjectID: selectedProjectID,
+            remotes: remotes
+        )
         let adapterKind = kind
         let adapterRemotes: @Sendable (ProjectConfig) async throws -> [GitRemote] = { project in
-            try await remotes(project).filter { remote in
+            let projectRemotes = try await remotes(project)
+            if reference.isShort,
+               project.id == selectedProjectID,
+               let preferredRemote = Self.preferredUnclassifiedFetchRemote(projectRemotes)
+            {
+                return [preferredRemote]
+            }
+            return projectRemotes.filter { remote in
                 guard let detected = CodeHostRemoteDetector.detect(from: [remote]) else { return true }
                 return detected.kind == adapterKind
             }
@@ -225,18 +255,60 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
                 selectedProjectID: result.selectedProjectId
             )
         } catch {
-            guard Self.isFetchFailure(error),
-                  let fallback = try? await manualFallback(
-                      for: reference,
-                      projects: projects,
-                      selectedProjectID: selectedProjectID,
-                      remotes: adapterRemotes
-                  )
+            guard let fallback = try? await manualFallback(
+                for: reference,
+                projects: projects,
+                selectedProjectID: selectedProjectID,
+                remotes: adapterRemotes
+            ),
+                Self.shouldOfferManualFallback(for: reference, after: error)
             else {
                 throw error
             }
             throw MissionSourceResolutionFailure(fallback: fallback, message: error.userFacingMessage)
         }
+    }
+
+    private func validateShortReferenceRemoteKind(
+        _ reference: MissionSourceReference,
+        projects: [ProjectConfig],
+        selectedProjectID: String?,
+        remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
+    ) async throws {
+        guard case .short = reference else { return }
+        guard let selectedProjectID,
+              let project = projects.first(where: { $0.id == selectedProjectID })
+        else { return }
+        let projectRemotes = try await remotes(project)
+        guard let preferredRemote = Self.preferredFetchRemote(projectRemotes),
+              let preferred = CodeHostRemoteDetector.detect(
+                  from: [preferredRemote]
+              )
+        else { return }
+        guard preferred.kind == kind else {
+            throw CodeHostProviderError.malformedOutput("The selected project has no supported code host remote.")
+        }
+    }
+
+    private static func preferredFetchRemote(_ remotes: [GitRemote]) -> GitRemote? {
+        let fetchRemotes = remotes
+            .filter { $0.direction == .fetch }
+            .sorted { lhs, rhs in
+                let lhsPriority = lhs.name == "origin" ? 0 : 1
+                let rhsPriority = rhs.name == "origin" ? 0 : 1
+                if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+                return lhs.name < rhs.name
+            }
+        return fetchRemotes.first
+    }
+
+    private static func preferredUnclassifiedFetchRemote(
+        _ remotes: [GitRemote]
+    ) -> GitRemote? {
+        guard let preferred = preferredFetchRemote(remotes),
+              CodeHostRemoteDetector.detect(from: [preferred]) == nil
+        else { return nil }
+        return preferred
     }
 
     func refresh(
@@ -246,22 +318,69 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
     ) async throws -> MissionSourceSnapshot {
         guard let issue = MissionIssueSnapshot(source: source),
               let locator = source.repositoryLocator,
-              let remote = CodeHostRemoteDetector.detectAllMatching(try await remotes(project), kind: locator.provider).first(where: {
-                  $0.host.caseInsensitiveCompare(locator.host) == .orderedSame
-                      && $0.repositorySlug.caseInsensitiveCompare(locator.repositorySlug) == .orderedSame
-              }),
-              let provider = providers.provider(for: remote.kind)
+              let provider = providers.provider(for: locator.provider)
         else {
             throw CodeHostProviderError.malformedOutput("The source repository is no longer configured for this project.")
         }
+        let candidates = CodeHostRemoteDetector
+            .detectAllMatching(try await remotes(project), kind: locator.provider)
+            .filter { $0.host.caseInsensitiveCompare(locator.host) == .orderedSame }
+        guard let authenticationRemote = candidates.first else {
+            throw CodeHostProviderError.malformedOutput("The source repository is no longer configured for this project.")
+        }
+        let queryRemote = Self.queryRemote(locator: locator, candidates: candidates)
         let cwd = URL(fileURLWithPath: project.path)
         guard await provider.isAvailable(cwd: cwd) else {
             throw CodeHostProviderError.cliMissing(provider.executable)
         }
-        guard await provider.isAuthenticated(remote: remote, cwd: cwd) else {
-            throw CodeHostProviderError.unauthenticated(remote.host)
+        guard await provider.isAuthenticated(remote: authenticationRemote, cwd: cwd) else {
+            throw CodeHostProviderError.unauthenticated(authenticationRemote.host)
         }
-        return .init(issue: try await provider.issue(remote: remote, number: issue.identity.number, cwd: cwd))
+        let snapshot = try await provider.issue(remote: queryRemote, number: issue.identity.number, cwd: cwd)
+        guard snapshot.identity.provider == locator.provider,
+              snapshot.identity.host.caseInsensitiveCompare(locator.host) == .orderedSame,
+              candidates.contains(where: { candidate in
+                  candidate.repositorySlug.caseInsensitiveCompare(snapshot.identity.repositorySlug) == .orderedSame
+              })
+        else {
+            throw CodeHostProviderError.malformedOutput(
+                "The Mission source repository no longer matches a configured project remote."
+            )
+        }
+        return .init(issue: snapshot)
+    }
+    static func queryRemote(
+        locator: MissionRepositoryLocator,
+        candidates: [CodeHostRemote]
+    ) -> CodeHostRemote {
+        guard let currentRemote = candidates.first else {
+            preconditionFailure("A Mission source query requires an authenticated remote.")
+        }
+        return candidates.first { candidate in
+            candidate.repositorySlug.caseInsensitiveCompare(locator.repositorySlug) == .orderedSame
+        } ?? legacyRemote(locator: locator, using: currentRemote)
+    }
+
+    private static func legacyRemote(
+        locator: MissionRepositoryLocator,
+        using currentRemote: CodeHostRemote
+    ) -> CodeHostRemote {
+        let parts = locator.repositorySlug.split(separator: "/").map(String.init)
+        let owner = parts.dropLast().joined(separator: "/")
+        let repository = parts.last ?? locator.repositorySlug
+        var components = URLComponents()
+        components.scheme = currentRemote.webURL.scheme ?? "https"
+        components.host = currentRemote.webURL.host ?? locator.host
+        components.port = currentRemote.webURL.port
+        components.path = "/\(locator.repositorySlug)"
+        return CodeHostRemote(
+            kind: locator.provider,
+            host: locator.host,
+            owner: owner,
+            repository: repository,
+            remoteName: currentRemote.remoteName,
+            webURL: components.url ?? currentRemote.webURL
+        )
     }
 
     private func manualFallback(
@@ -275,14 +394,25 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
             guard case let .url(kind, host, slug, number) = try MissionIssueInput.parse(inputURL.absoluteString) else {
                 throw CodeHostProviderError.malformedOutput("A manual fallback is only available for code host URLs.")
             }
+            let matchingProjects = await matchingProjects(
+                projects,
+                kind: kind,
+                host: host,
+                slug: slug,
+                remotes: remotes
+            )
+            let fallbackProjects = matchingProjects.isEmpty ? projects : matchingProjects
+            let fallbackSelectedProjectID = fallbackProjects.contains { $0.id == selectedProjectID }
+                ? selectedProjectID
+                : fallbackProjects.first?.id
             return try fallback(
                 url: inputURL,
                 kind: kind,
                 host: host,
                 slug: slug,
                 number: number,
-                projects: projects,
-                selectedProjectID: selectedProjectID
+                projects: fallbackProjects,
+                selectedProjectID: fallbackSelectedProjectID
             )
         case .short(let number):
             guard let selectedProjectID,
@@ -338,6 +468,26 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
         return remote.webURL.appendingPathComponent(path)
     }
 
+    private func matchingProjects(
+        _ projects: [ProjectConfig],
+        kind: CodeHostKind,
+        host: String,
+        slug: String,
+        remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
+    ) async -> [ProjectConfig] {
+        var matches: [ProjectConfig] = []
+        for project in projects {
+            guard let projectRemotes = try? await remotes(project),
+                  CodeHostRemoteDetector.detectAllMatching(projectRemotes, kind: kind).contains(where: { remote in
+                      remote.host.caseInsensitiveCompare(host) == .orderedSame
+                          && remote.repositorySlug.caseInsensitiveCompare(slug) == .orderedSame
+                  })
+            else { continue }
+            matches.append(project)
+        }
+        return matches
+    }
+
     private func rawReference(for reference: MissionSourceReference) -> String {
         switch reference {
         case .short(let number): "#\(number)"
@@ -355,11 +505,25 @@ struct CodeHostMissionSourceProvider: MissionSourceProviding {
             false
         }
     }
+
+    private static func shouldOfferManualFallback(
+        for reference: MissionSourceReference,
+        after error: Error
+    ) -> Bool {
+        if error.isMissingConfiguredRemote { return false }
+        if isFetchFailure(error) { return true }
+        if case .url = reference { return true }
+        return false
+    }
 }
 
 private extension Error {
     var userFacingMessage: String {
         (self as? LocalizedError)?.errorDescription ?? localizedDescription
+    }
+
+    var isMissingConfiguredRemote: Bool {
+        (self as? CodeHostProviderError)?.isMissingConfiguredRemote ?? false
     }
 }
 
@@ -367,5 +531,6 @@ private extension CodeHostProviderError {
     var isMissingConfiguredRemote: Bool {
         guard case .malformedOutput(let message) = self else { return false }
         return message == "The selected project has no supported code host remote."
+            || message == "No configured project matches this issue repository."
     }
 }

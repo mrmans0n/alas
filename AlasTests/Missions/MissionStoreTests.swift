@@ -253,6 +253,7 @@ struct MissionStoreTests {
         #expect(loaded.source.isRefreshable == aggregate.source.isRefreshable)
         #expect(loaded.source.title == "Edited title")
         #expect(loaded.source.body == "Edited body")
+        #expect(loaded.source.capturedAt == Date(timeIntervalSince1970: 175))
         #expect(loaded.mission.title == "Edited title")
         #expect(loaded.events.last?.kind == .sourceRefreshed)
         #expect(loaded.events.last?.message == "Source context updated.")
@@ -632,10 +633,10 @@ struct MissionStoreTests {
             )
         )
 
-        #expect(try store.activeMission(issueIdentity: aggregate.issue.identity) == nil)
+        #expect(try store.activeMission(sourceIdentity: aggregate.source.identity) == nil)
         #expect(try store.aggregate(id: aggregate.mission.id)?.primaryLeg?.worktreeLineageID == "device:inode")
         try store.insert(MissionFixtures.creatingMission(id: "mission-2"))
-        #expect(try store.activeMission(issueIdentity: aggregate.issue.identity)?.mission.id == MissionID(rawValue: "mission-2"))
+        #expect(try store.activeMission(sourceIdentity: aggregate.source.identity)?.mission.id == MissionID(rawValue: "mission-2"))
     }
 
     @Test("manual completion preserves unfinished leg state")
@@ -777,9 +778,9 @@ struct MissionStoreTests {
             labels: ["bug", "high-priority"],
             capturedAt: 150
         )
-        try store.replaceIssueSnapshot(
+        try store.replaceSourceSnapshot(
             missionID: aggregate.mission.id,
-            snapshot: refreshed,
+            snapshot: MissionSourceSnapshot(issue: refreshed),
             event: MissionFixtures.event(
                 id: "refreshed",
                 missionID: aggregate.mission.id,
@@ -789,7 +790,7 @@ struct MissionStoreTests {
         )
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(loaded.issue == refreshed)
+        #expect(loaded.source == MissionSourceSnapshot(issue: refreshed))
         #expect(loaded.mission.title == refreshed.title)
         #expect(loaded.events.last?.kind == .sourceRefreshed)
     }
@@ -818,9 +819,9 @@ struct MissionStoreTests {
             refreshError: issue.refreshError
         )
 
-        try store.replaceIssueSnapshot(
+        try store.replaceSourceSnapshot(
             missionID: aggregate.mission.id,
-            snapshot: differentlyCasedIssue,
+            snapshot: MissionSourceSnapshot(issue: differentlyCasedIssue),
             event: MissionFixtures.event(
                 id: "casing-refresh",
                 missionID: aggregate.mission.id,
@@ -830,8 +831,8 @@ struct MissionStoreTests {
         )
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(loaded.issue.identity == aggregate.issue.identity)
-        #expect(loaded.issue.title == "Fresh title")
+        #expect(loaded.source.identity == aggregate.source.identity)
+        #expect(loaded.source.title == "Fresh title")
     }
 
     @Test("refresh-error write keeps a success committed after the failure read")
@@ -847,9 +848,9 @@ struct MissionStoreTests {
             title: "Success committed after the failure read",
             capturedAt: 200
         )
-        try store.replaceIssueSnapshot(
+        try store.replaceSourceSnapshot(
             missionID: aggregate.mission.id,
-            snapshot: refreshed,
+            snapshot: MissionSourceSnapshot(issue: refreshed),
             event: MissionFixtures.event(
                 id: "success-after-read",
                 missionID: aggregate.mission.id,
@@ -869,10 +870,10 @@ struct MissionStoreTests {
         )
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(stale.issue.title != refreshed.title)
-        #expect(loaded.issue.title == refreshed.title)
-        #expect(loaded.issue.capturedAt == refreshed.capturedAt)
-        #expect(loaded.issue.refreshError == "Authentication is required for github.com.")
+        #expect(stale.source.title != refreshed.title)
+        #expect(loaded.source.title == refreshed.title)
+        #expect(loaded.source.capturedAt == refreshed.capturedAt)
+        #expect(loaded.source.refreshError == "Authentication is required for github.com.")
     }
 
     @Test("rejects a refreshed snapshot that changes the mission issue identity")
@@ -883,9 +884,9 @@ struct MissionStoreTests {
         let changedIdentity = MissionFixtures.issue(number: 43, capturedAt: 150)
 
         #expect(throws: MissionStore.Error.sourceIdentityChanged) {
-            try store.replaceIssueSnapshot(
+            try store.replaceSourceSnapshot(
                 missionID: aggregate.mission.id,
-                snapshot: changedIdentity,
+                snapshot: MissionSourceSnapshot(issue: changedIdentity),
                 event: MissionFixtures.event(
                     id: "wrong-identity-refresh",
                     missionID: aggregate.mission.id,
@@ -896,7 +897,7 @@ struct MissionStoreTests {
         }
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(loaded.issue == aggregate.issue)
+        #expect(loaded.source == aggregate.source)
         #expect(loaded.events.map(\.id) == ["mission-1-event-1"])
     }
 
@@ -954,35 +955,37 @@ struct MissionStoreTests {
     func migratesRepositoryRenameDuringRefresh() throws {
         let store = try MissionStore(path: temporaryPath())
         var aggregate = MissionFixtures.creatingMission()
+        let issue = try #require(MissionIssueSnapshot(source: aggregate.source))
+        let locator = try #require(aggregate.source.repositoryLocator)
         aggregate.legs[0].reviewIdentity = MissionReviewIdentity(
-            provider: aggregate.issue.identity.provider,
-            host: aggregate.issue.identity.host,
-            repositorySlug: aggregate.issue.identity.repositorySlug,
+            provider: locator.provider,
+            host: locator.host,
+            repositorySlug: locator.repositorySlug,
             number: 17,
             url: URL(string: "https://github.com/acme/alas/pull/17")!
         )
         try store.insert(aggregate)
         let renamed = MissionIssueSnapshot(
             identity: .init(
-                provider: aggregate.issue.identity.provider,
-                host: aggregate.issue.identity.host,
+                provider: issue.identity.provider,
+                host: issue.identity.host,
                 repositorySlug: "acquired/renamed-alas",
-                number: aggregate.issue.identity.number
+                number: issue.identity.number
             ),
             canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
             title: "Fresh after rename",
-            body: aggregate.issue.body,
-            state: aggregate.issue.state,
-            labels: aggregate.issue.labels,
-            assignees: aggregate.issue.assignees,
-            providerUpdatedAt: aggregate.issue.providerUpdatedAt,
+            body: aggregate.source.body,
+            state: issue.state,
+            labels: aggregate.source.labels,
+            assignees: aggregate.source.assignees,
+            providerUpdatedAt: aggregate.source.providerUpdatedAt,
             capturedAt: Date(timeIntervalSince1970: 150),
             refreshError: nil
         )
 
-        try store.replaceIssueSnapshot(
+        try store.replaceSourceSnapshot(
             missionID: aggregate.mission.id,
-            snapshot: renamed,
+            snapshot: MissionSourceSnapshot(issue: renamed),
             event: MissionFixtures.event(
                 id: "rename-refresh",
                 missionID: aggregate.mission.id,
@@ -992,7 +995,7 @@ struct MissionStoreTests {
         )
 
         let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
-        #expect(loaded.issue.identity == renamed.identity)
+        #expect(loaded.source.identity == MissionSourceSnapshot(issue: renamed).identity)
         #expect(loaded.primaryLeg?.reviewIdentity?.repositorySlug == "acquired/renamed-alas")
         #expect(loaded.primaryLeg?.reviewIdentity?.number == 17)
     }
@@ -1001,20 +1004,21 @@ struct MissionStoreTests {
     func rejectsRepositoryRenameWithActiveCanonicalMission() throws {
         let store = try MissionStore(path: temporaryPath())
         let legacy = MissionFixtures.creatingMission(id: "legacy-mission")
+        let legacyIssue = try #require(MissionIssueSnapshot(source: legacy.source))
         let canonicalIssue = MissionIssueSnapshot(
             identity: .init(
-                provider: legacy.issue.identity.provider,
-                host: legacy.issue.identity.host,
+                provider: legacyIssue.identity.provider,
+                host: legacyIssue.identity.host,
                 repositorySlug: "acquired/renamed-alas",
-                number: legacy.issue.identity.number
+                number: legacyIssue.identity.number
             ),
             canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
             title: "Canonical issue",
-            body: legacy.issue.body,
-            state: legacy.issue.state,
-            labels: legacy.issue.labels,
-            assignees: legacy.issue.assignees,
-            providerUpdatedAt: legacy.issue.providerUpdatedAt,
+            body: legacy.source.body,
+            state: legacyIssue.state,
+            labels: legacy.source.labels,
+            assignees: legacy.source.assignees,
+            providerUpdatedAt: legacy.source.providerUpdatedAt,
             capturedAt: Date(timeIntervalSince1970: 150),
             refreshError: nil
         )
@@ -1023,9 +1027,9 @@ struct MissionStoreTests {
         try store.insert(canonical)
 
         #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
-            try store.replaceIssueSnapshot(
+            try store.replaceSourceSnapshot(
                 missionID: legacy.mission.id,
-                snapshot: canonicalIssue,
+                snapshot: MissionSourceSnapshot(issue: canonicalIssue),
                 event: MissionFixtures.event(
                     id: "rename-refresh",
                     missionID: legacy.mission.id,
@@ -1036,7 +1040,7 @@ struct MissionStoreTests {
         }
 
         let loaded = try #require(try store.aggregate(id: legacy.mission.id))
-        #expect(loaded.issue == legacy.issue)
+        #expect(loaded.source == legacy.source)
         #expect(loaded.events.map(\.id) == ["legacy-mission-event-1"])
     }
 
@@ -1044,11 +1048,13 @@ struct MissionStoreTests {
     func repositoryRenameMigratesExplicitDuplicateCohort() throws {
         let store = try MissionStore(path: temporaryPath())
         let first = MissionFixtures.creatingMission(id: "first-mission")
+        let firstIssue = try #require(MissionIssueSnapshot(source: first.source))
         var second = MissionFixtures.creatingMission(id: "second-mission")
+        let secondLocator = try #require(second.source.repositoryLocator)
         second.legs[0].reviewIdentity = MissionReviewIdentity(
-            provider: second.issue.identity.provider,
-            host: second.issue.identity.host,
-            repositorySlug: second.issue.identity.repositorySlug,
+            provider: secondLocator.provider,
+            host: secondLocator.host,
+            repositorySlug: secondLocator.repositorySlug,
             number: 17,
             url: URL(string: "https://github.com/acme/alas/pull/17")!
         )
@@ -1056,25 +1062,25 @@ struct MissionStoreTests {
         try store.insert(second, allowDuplicate: true)
         let renamed = MissionIssueSnapshot(
             identity: .init(
-                provider: first.issue.identity.provider,
-                host: first.issue.identity.host,
+                provider: firstIssue.identity.provider,
+                host: firstIssue.identity.host,
                 repositorySlug: "acquired/renamed-alas",
-                number: first.issue.identity.number
+                number: firstIssue.identity.number
             ),
             canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
             title: "Fresh after rename",
-            body: first.issue.body,
-            state: first.issue.state,
-            labels: first.issue.labels,
-            assignees: first.issue.assignees,
-            providerUpdatedAt: first.issue.providerUpdatedAt,
+            body: first.source.body,
+            state: firstIssue.state,
+            labels: first.source.labels,
+            assignees: first.source.assignees,
+            providerUpdatedAt: first.source.providerUpdatedAt,
             capturedAt: Date(timeIntervalSince1970: 150),
             refreshError: nil
         )
 
-        try store.replaceIssueSnapshot(
+        try store.replaceSourceSnapshot(
             missionID: first.mission.id,
-            snapshot: renamed,
+            snapshot: MissionSourceSnapshot(issue: renamed),
             event: MissionFixtures.event(
                 id: "rename-refresh",
                 missionID: first.mission.id,
@@ -1086,9 +1092,9 @@ struct MissionStoreTests {
 
         let loadedFirst = try #require(try store.aggregate(id: first.mission.id))
         let loadedSecond = try #require(try store.aggregate(id: second.mission.id))
-        #expect(loadedFirst.issue.identity == renamed.identity)
-        #expect(loadedSecond.issue.identity == renamed.identity)
-        #expect(loadedSecond.issue.canonicalURL == renamed.canonicalURL)
+        #expect(loadedFirst.source.identity == MissionSourceSnapshot(issue: renamed).identity)
+        #expect(loadedSecond.source.identity == MissionSourceSnapshot(issue: renamed).identity)
+        #expect(loadedSecond.source.canonicalURL == renamed.canonicalURL)
         #expect(loadedSecond.primaryLeg?.reviewIdentity?.repositorySlug == "acquired/renamed-alas")
         #expect(loadedSecond.events.map(\.id) == ["second-mission-event-1"])
     }
@@ -1097,6 +1103,7 @@ struct MissionStoreTests {
     func completedMissionRefreshRejectsRepositoryRenameCollision() throws {
         let store = try MissionStore(path: temporaryPath())
         let completed = MissionFixtures.creatingMission(id: "completed-mission")
+        let completedIssue = try #require(MissionIssueSnapshot(source: completed.source))
         try store.insert(completed)
         var completedLeg = try #require(completed.primaryLeg)
         completedLeg.state = .ready
@@ -1117,18 +1124,18 @@ struct MissionStoreTests {
         try store.insert(activeLegacy)
         let canonicalIssue = MissionIssueSnapshot(
             identity: .init(
-                provider: completed.issue.identity.provider,
-                host: completed.issue.identity.host,
+                provider: completedIssue.identity.provider,
+                host: completedIssue.identity.host,
                 repositorySlug: "acquired/renamed-alas",
-                number: completed.issue.identity.number
+                number: completedIssue.identity.number
             ),
             canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
             title: "Canonical issue",
-            body: completed.issue.body,
-            state: completed.issue.state,
-            labels: completed.issue.labels,
-            assignees: completed.issue.assignees,
-            providerUpdatedAt: completed.issue.providerUpdatedAt,
+            body: completed.source.body,
+            state: completedIssue.state,
+            labels: completed.source.labels,
+            assignees: completed.source.assignees,
+            providerUpdatedAt: completed.source.providerUpdatedAt,
             capturedAt: Date(timeIntervalSince1970: 150),
             refreshError: nil
         )
@@ -1139,9 +1146,9 @@ struct MissionStoreTests {
         try store.insert(activeCanonical)
 
         #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
-            try store.replaceIssueSnapshot(
+            try store.replaceSourceSnapshot(
                 missionID: completed.mission.id,
-                snapshot: canonicalIssue,
+                snapshot: MissionSourceSnapshot(issue: canonicalIssue),
                 event: MissionFixtures.event(
                     id: "rename-refresh",
                     missionID: completed.mission.id,
@@ -1152,9 +1159,9 @@ struct MissionStoreTests {
             )
         }
 
-        #expect(try store.aggregate(id: completed.mission.id)?.issue == completed.issue)
-        #expect(try store.aggregate(id: activeLegacy.mission.id)?.issue == activeLegacy.issue)
-        #expect(try store.aggregate(id: activeCanonical.mission.id)?.issue == canonicalIssue)
+        #expect(try store.aggregate(id: completed.mission.id)?.source == completed.source)
+        #expect(try store.aggregate(id: activeLegacy.mission.id)?.source == activeLegacy.source)
+        #expect(try store.aggregate(id: activeCanonical.mission.id)?.source == MissionSourceSnapshot(issue: canonicalIssue))
     }
 
     @Test("lists active missions before completed missions")

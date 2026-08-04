@@ -193,6 +193,41 @@ struct NewMissionDialogTests {
         #expect(model.projectId == "alas")
     }
 
+    @Test("editing the reference clears a pending manual fallback")
+    func editingReferenceClearsPendingManualFallback() async {
+        let fallbackSource = MissionFixtures.manualSource(
+            url: "https://github.com/mrmans0n/alas/issues/1842",
+            title: "",
+            body: ""
+        )
+        let fallback = ResolvedMissionSource(
+            source: fallbackSource,
+            repositoryLocator: .init(provider: .github, host: "github.com", repositorySlug: "mrmans0n/alas"),
+            candidateProjectIDs: ["alas"],
+            selectedProjectID: "alas"
+        )
+        let fake = NewMissionDialogFake(
+            resolutionFailure: MissionSourceResolutionFailure(
+                fallback: fallback,
+                message: "Authentication is required for github.com."
+            )
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "https://github.com/mrmans0n/alas/issues/1842"
+
+        await model.resolve()
+        #expect(model.pendingManualFallback != nil)
+        #expect(model.errorMessage == "Authentication is required for github.com.")
+
+        model.reference = "https://linear.app/acme/issue/ALAS-123/fix-sync"
+        await model.continueManually()
+
+        #expect(model.phase == .entry)
+        #expect(model.pendingManualFallback == nil)
+        #expect(model.errorMessage == nil)
+        #expect(model.resolved == nil)
+    }
+
     @Test("a manually entered active Mission branch blocks creation")
     func reservedManualBranchBlocksCreation() async {
         let fake = NewMissionDialogFake(
@@ -539,6 +574,48 @@ struct NewMissionDialogTests {
 
         #expect(created == MissionID(rawValue: "new-mission"))
         #expect(fake.createdDrafts.last?.destinationPath == "\(fixed.path)-3")
+    }
+
+    @Test("remote Mission destinations ignore local filesystem collisions")
+    func remoteMissionDestinationsIgnoreLocalFilesystemCollisions() {
+        let destination = URL(fileURLWithPath: "/remote/worktrees/alas/feature-1842")
+        let localProject = ProjectConfig(
+            id: "local",
+            name: "alas",
+            path: "/repos/alas",
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let remoteProject = ProjectConfig(
+            id: "remote",
+            name: "alas",
+            path: "/remote/repos/alas",
+            color: "green",
+            addedAt: .distantPast,
+            host: "devbox"
+        )
+
+        #expect(!NewMissionDialogModel.Environment.destinationAvailable(
+            project: localProject,
+            destination: destination,
+            activeMissionDestinationPaths: [],
+            worktreePaths: [],
+            localDestinationExists: true
+        ))
+        #expect(NewMissionDialogModel.Environment.destinationAvailable(
+            project: remoteProject,
+            destination: destination,
+            activeMissionDestinationPaths: [],
+            worktreePaths: [],
+            localDestinationExists: true
+        ))
+        #expect(!NewMissionDialogModel.Environment.destinationAvailable(
+            project: remoteProject,
+            destination: destination,
+            activeMissionDestinationPaths: [destination.standardizedFileURL.path],
+            worktreePaths: [],
+            localDestinationExists: true
+        ))
     }
 
     @Test("duplicate suffix skips active Mission reservations")

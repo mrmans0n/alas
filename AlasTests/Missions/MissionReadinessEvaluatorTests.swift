@@ -120,7 +120,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.recordMissingWorktree(Self.missionID)
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.primaryLeg?.pendingInitialPrompt == MissionPromptBuilder.build(snapshot: aggregate.issue))
+        #expect(aggregate.primaryLeg?.pendingInitialPrompt == MissionPromptBuilder.build(source: aggregate.source))
     }
 
     @Test func retryAndCompletionAreSerialized() async throws {
@@ -729,12 +729,12 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in MissionSourceSnapshot(issue: closed) })
         await fake.controller.load()
 
-        await fake.controller.refreshIssue(Self.missionID)
+        await fake.controller.refreshSource(Self.missionID)
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.issue == closed)
+        #expect(aggregate.source == MissionSourceSnapshot(issue: closed))
         #expect(aggregate.mission.state == .running)
-        #expect(fake.notifications.last?.issue.title == "Fresh issue title")
+        #expect(fake.notifications.last?.source.title == "Fresh issue title")
     }
 
     @Test func providerRefreshWithManualContentRequiresConfirmation() async throws {
@@ -765,6 +765,98 @@ struct MissionReadinessEvaluatorTests {
         #expect(after.events == before.events)
     }
 
+    @Test func providerRefreshForManuallyEnteredCodeHostSourceRequiresConfirmation() async throws {
+        var aggregate = Self.runningAggregate()
+        let original = aggregate.source
+        aggregate.source = MissionSourceSnapshot(
+            identity: original.identity,
+            canonicalURL: original.canonicalURL,
+            providerLabel: original.providerLabel,
+            displayReference: original.displayReference,
+            repositoryLocator: original.repositoryLocator,
+            title: "Manual title",
+            body: "Manual context that should not be overwritten without confirmation.",
+            state: original.state,
+            labels: original.labels,
+            assignees: original.assignees,
+            providerUpdatedAt: original.providerUpdatedAt,
+            capturedAt: original.capturedAt,
+            refreshError: original.refreshError,
+            contentOrigin: .manual,
+            isEditable: true,
+            isRefreshable: true
+        )
+        let refreshed = MissionSourceSnapshot(issue: MissionFixtures.issue(
+            title: "Provider title",
+            capturedAt: 250
+        ))
+        let fake = try MissionLifecycleFake(
+            aggregate: aggregate,
+            sourceRefresh: { _, _ in refreshed }
+        )
+        await fake.controller.load()
+
+        let result = await fake.controller.refreshSource(Self.missionID)
+        let after = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        guard case .confirmationRequired(let proposal) = result else {
+            Issue.record("Expected confirmationRequired, got \(result).")
+            return
+        }
+        #expect(proposal.snapshot == refreshed)
+        #expect(after.source == aggregate.source)
+        #expect(after.events == aggregate.events)
+    }
+
+    @Test func manualSourceEditRejectsPendingRefreshProposal() async throws {
+        var aggregate = Self.runningAggregate()
+        let original = aggregate.source
+        aggregate.source = MissionSourceSnapshot(
+            identity: original.identity,
+            canonicalURL: original.canonicalURL,
+            providerLabel: original.providerLabel,
+            displayReference: original.displayReference,
+            repositoryLocator: original.repositoryLocator,
+            title: "Manual title",
+            body: "Manual context",
+            state: original.state,
+            labels: original.labels,
+            assignees: original.assignees,
+            providerUpdatedAt: original.providerUpdatedAt,
+            capturedAt: original.capturedAt,
+            refreshError: original.refreshError,
+            contentOrigin: .manual,
+            isEditable: true,
+            isRefreshable: true
+        )
+        let refreshed = MissionSourceSnapshot(issue: MissionFixtures.issue(
+            title: "Provider title",
+            capturedAt: 250
+        ))
+        let fake = try MissionLifecycleFake(
+            aggregate: aggregate,
+            sourceRefresh: { _, _ in refreshed }
+        )
+        await fake.controller.load()
+
+        let result = await fake.controller.refreshSource(Self.missionID)
+        guard case .confirmationRequired(let proposal) = result else {
+            Issue.record("Expected confirmationRequired, got \(result).")
+            return
+        }
+
+        await fake.controller.updateManualSource(
+            id: Self.missionID,
+            title: "Edited while confirmation is open",
+            body: "Newer manual context"
+        )
+        #expect(await fake.controller.confirmSourceRefresh(proposal) == false)
+        let after = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+        #expect(after.source.title == "Edited while confirmation is open")
+        #expect(after.source.body == "Newer manual context")
+        #expect(after.source.capturedAt != proposal.expectedCapturedAt)
+    }
+
     @Test func repositoryRenamePublishesEveryMigratedDuplicateMission() async throws {
         var first = MissionFixtures.creatingMission(id: "mission-1")
         first.mission.state = .running
@@ -778,20 +870,21 @@ struct MissionReadinessEvaluatorTests {
         second.legs[0].worktreeId = "worktree-2"
         second.legs[0].worktreeLineageID = "lineage-2"
         second.legs[0].pendingInitialPrompt = nil
+        let firstIssue = try #require(MissionIssueSnapshot(source: first.source))
         let renamed = MissionIssueSnapshot(
             identity: .init(
-                provider: first.issue.identity.provider,
-                host: first.issue.identity.host,
+                provider: firstIssue.identity.provider,
+                host: firstIssue.identity.host,
                 repositorySlug: "acquired/renamed-alas",
-                number: first.issue.identity.number
+                number: firstIssue.identity.number
             ),
             canonicalURL: URL(string: "https://github.com/acquired/renamed-alas/issues/42")!,
             title: "Fresh after rename",
-            body: first.issue.body,
-            state: first.issue.state,
-            labels: first.issue.labels,
-            assignees: first.issue.assignees,
-            providerUpdatedAt: first.issue.providerUpdatedAt,
+            body: first.source.body,
+            state: firstIssue.state,
+            labels: first.source.labels,
+            assignees: first.source.assignees,
+            providerUpdatedAt: first.source.providerUpdatedAt,
             capturedAt: Date(timeIntervalSince1970: 250),
             refreshError: nil
         )
@@ -802,11 +895,11 @@ struct MissionReadinessEvaluatorTests {
         )
         await fake.controller.load()
 
-        await fake.controller.refreshIssue(first.mission.id)
+        await fake.controller.refreshSource(first.mission.id)
 
-        #expect(fake.controller.aggregate(id: first.mission.id)?.issue.identity == renamed.identity)
-        #expect(fake.controller.aggregate(id: second.mission.id)?.issue.identity == renamed.identity)
-        #expect(fake.notifications.contains { $0.mission.id == second.mission.id && $0.issue.identity == renamed.identity })
+        #expect(fake.controller.aggregate(id: first.mission.id)?.source.identity == MissionSourceSnapshot(issue: renamed).identity)
+        #expect(fake.controller.aggregate(id: second.mission.id)?.source.identity == MissionSourceSnapshot(issue: renamed).identity)
+        #expect(fake.notifications.contains { $0.mission.id == second.mission.id && $0.source.identity == MissionSourceSnapshot(issue: renamed).identity })
     }
 
     @Test func providerRefreshFailureRetainsSnapshotAndPersistsError() async throws {
@@ -815,23 +908,23 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.load()
         let before = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        await fake.controller.refreshIssue(Self.missionID)
+        await fake.controller.refreshSource(Self.missionID)
         let after = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
         #expect(fake.issueRefreshCalls == [IssueRefreshCall(
-            identity: before.issue.identity,
+            identity: before.source.identity,
             projectID: "project-1"
         )])
-        #expect(after.issue.identity == before.issue.identity)
-        #expect(after.issue.canonicalURL == before.issue.canonicalURL)
-        #expect(after.issue.title == before.issue.title)
-        #expect(after.issue.body == before.issue.body)
-        #expect(after.issue.state == before.issue.state)
-        #expect(after.issue.labels == before.issue.labels)
-        #expect(after.issue.assignees == before.issue.assignees)
-        #expect(after.issue.providerUpdatedAt == before.issue.providerUpdatedAt)
-        #expect(after.issue.capturedAt == before.issue.capturedAt)
-        #expect(after.issue.refreshError == "Authentication is required for github.com.")
+        #expect(after.source.identity == before.source.identity)
+        #expect(after.source.canonicalURL == before.source.canonicalURL)
+        #expect(after.source.title == before.source.title)
+        #expect(after.source.body == before.source.body)
+        #expect(after.source.state == before.source.state)
+        #expect(after.source.labels == before.source.labels)
+        #expect(after.source.assignees == before.source.assignees)
+        #expect(after.source.providerUpdatedAt == before.source.providerUpdatedAt)
+        #expect(after.source.capturedAt == before.source.capturedAt)
+        #expect(after.source.refreshError == "Authentication is required for github.com.")
         #expect(after.mission.state == .running)
     }
 
@@ -845,18 +938,18 @@ struct MissionReadinessEvaluatorTests {
         })
         await fake.controller.load()
 
-        let slowFailure = Task { await fake.controller.refreshIssue(Self.missionID) }
+        let slowFailure = Task { await fake.controller.refreshSource(Self.missionID) }
         await race.waitForSlowFailureToStart()
 
-        await fake.controller.refreshIssue(Self.missionID)
+        await fake.controller.refreshSource(Self.missionID)
         await race.releaseSlowFailure()
         await slowFailure.value
 
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.issue.title == "Newer issue title")
-        #expect(aggregate.issue.capturedAt == Date(timeIntervalSince1970: 500))
-        #expect(aggregate.issue.refreshError == nil)
+        #expect(aggregate.source.title == "Newer issue title")
+        #expect(aggregate.source.capturedAt == Date(timeIntervalSince1970: 500))
+        #expect(aggregate.source.refreshError == nil)
     }
 
     @Test func startupRestoresAReappearedMissionWorktree() async throws {
@@ -1980,7 +2073,7 @@ struct MissionReadinessEvaluatorTests {
 }
 
 private struct IssueRefreshCall: Equatable {
-    let identity: MissionIssueIdentity
+    let identity: MissionSourceIdentity
     let projectID: String
 }
 
@@ -2090,9 +2183,7 @@ private final class MissionLifecycleFake {
                 notifyChanged: { recorder.notifications.append($0) }
             ),
             sourceRefresh: { source, projectID in
-                if let issue = MissionIssueSnapshot(source: source) {
-                    recorder.issueRefreshCalls.append(.init(identity: issue.identity, projectID: projectID))
-                }
+                recorder.issueRefreshCalls.append(.init(identity: source.identity, projectID: projectID))
                 return try await sourceRefresh(source, projectID)
             },
             reviewRepositoryMatches: { _, _, _, request in

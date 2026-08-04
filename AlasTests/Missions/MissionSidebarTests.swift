@@ -261,7 +261,7 @@ struct MissionSidebarTests {
                 updatedAt: Date(timeIntervalSince1970: 120),
                 completedAt: missionState == .completed ? Date(timeIntervalSince1970: 120) : nil
             ),
-            issue: MissionFixtures.issue(),
+            source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
             legs: [
                 primary,
                 Self.leg(

@@ -17,10 +17,29 @@ struct MissionSourceResolverTests {
             stableID: "https://jira.example.com/browse/ALAS-123?view=full"
         ))
         #expect(result.source.canonicalURL.absoluteString == "https://jira.example.com/browse/ALAS-123?view=full")
+        #expect(result.source.providerLabel == "jira.example.com")
         #expect(result.source.contentOrigin == .manual)
         #expect(result.repositoryLocator == nil)
         #expect(result.candidateProjectIDs == ["project-a", "project-b"])
         #expect(result.selectedProjectID == "project-b")
+        #expect(await recorder.resolveCount == 0)
+    }
+
+    @Test func unconfiguredIssuesURLBecomesPlainManualSource() async throws {
+        let recorder = SourceProviderRecorder()
+        let resolver = MissionSourceResolver(environment: Self.environment(recorder: recorder))
+
+        let result = try await resolver.resolve("https://linear.example.com/acme/app/issues/42")
+
+        #expect(result.source.identity == .init(
+            providerID: .manual,
+            stableID: "https://linear.example.com/acme/app/issues/42"
+        ))
+        #expect(result.source.providerLabel == "linear.example.com")
+        #expect(result.source.repositoryLocator == nil)
+        #expect(result.source.contentOrigin == .manual)
+        #expect(!result.source.isRefreshable)
+        #expect(result.repositoryLocator == nil)
         #expect(await recorder.resolveCount == 0)
     }
 
@@ -43,12 +62,58 @@ struct MissionSourceResolverTests {
         }
     }
 
+    @Test func urlFallbackUsesMatchingRepositoryProjects() async {
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providerError: CodeHostProviderError.unauthenticated("github.com"),
+            remotes: { project in
+                if project.id == Self.projectA.id {
+                    [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
+                } else {
+                    [GitRemote(name: "origin", url: "git@github.com:other/project.git")]
+                }
+            }
+        ))
+
+        do {
+            _ = try await resolver.resolve("https://github.com/acme/alas/issues/42")
+            Issue.record("Expected adapter fallback")
+        } catch let error as MissionSourceResolutionFailure {
+            #expect(error.fallback.candidateProjectIDs == ["project-a"])
+            #expect(error.fallback.selectedProjectID == "project-a")
+            #expect(error.fallback.repositoryLocator == .init(provider: .github, host: "github.com", repositorySlug: "acme/alas"))
+            #expect(error.fallback.source.isRefreshable)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func unresolvedCodeHostURLCarriesManualFallback() async {
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            remotes: { _ in [GitRemote(name: "origin", url: "git@github.com:other/project.git")] }
+        ))
+
+        do {
+            _ = try await resolver.resolve("https://github.com/acme/alas/issues/42")
+            Issue.record("Expected adapter fallback")
+        } catch let error as MissionSourceResolutionFailure {
+            #expect(error.fallback.source.identity == .init(providerID: .github, stableID: "github.com/acme/alas#42"))
+            #expect(error.fallback.source.canonicalURL.absoluteString == "https://github.com/acme/alas/issues/42")
+            #expect(error.fallback.repositoryLocator == .init(provider: .github, host: "github.com", repositorySlug: "acme/alas"))
+            #expect(error.fallback.source.contentOrigin == .manual)
+            #expect(error.fallback.source.isEditable)
+            #expect(error.fallback.source.isRefreshable)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func manualURLRemovesFragmentsAndDefaultPortsWhileKeepingPathAndQuery() async throws {
         let resolver = MissionSourceResolver(environment: Self.environment())
 
-        let result = try await resolver.resolve("https://tracker.example.com:443/a/b?state=open#details")
+        let result = try await resolver.resolve("https://user:token@tracker.example.com:443/a/b?state=open#details")
 
         #expect(result.source.canonicalURL.absoluteString == "https://tracker.example.com/a/b?state=open")
+        #expect(result.source.identity.stableID == "https://tracker.example.com/a/b?state=open")
     }
 
     @Test func rejectsFileAndRelativeReferences() async {
@@ -157,6 +222,107 @@ struct MissionSourceResolverTests {
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
+    }
+
+    @Test func shortReferenceUsesSelectedProjectsPreferredRemoteKind() async throws {
+        let issueProviders = CodeHostIssueProviderRegistry([
+            FakeIssueProvider(kind: .github),
+            FakeIssueProvider(kind: .gitlab),
+        ])
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([
+                CodeHostMissionSourceProvider(
+                    kind: .github,
+                    providers: issueProviders
+                ),
+                CodeHostMissionSourceProvider(
+                    kind: .gitlab,
+                    providers: issueProviders
+                ),
+                ManualMissionSourceProvider(),
+            ]),
+            remotes: { _ in [
+                GitRemote(name: "origin", url: "git@gitlab.example.com:platform/mobile/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ] }
+        ))
+
+        let result = try await resolver.resolve("#42")
+
+        #expect(result.source.identity.providerID == .gitlab)
+        #expect(result.source.identity.stableID == "gitlab.example.com/platform/mobile/alas#42")
+        #expect(result.repositoryLocator == .init(
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            repositorySlug: "platform/mobile/alas"
+        ))
+    }
+
+    @Test func shortReferenceTriesLaterAdaptersBeforeManualFallback() async throws {
+        let issueProviders = CodeHostIssueProviderRegistry([
+            FakeIssueProvider(kind: .github, isAuthenticated: false),
+            FakeIssueProvider(kind: .gitlab),
+        ])
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([
+                CodeHostMissionSourceProvider(
+                    kind: .github,
+                    providers: issueProviders
+                ),
+                CodeHostMissionSourceProvider(
+                    kind: .gitlab,
+                    providers: issueProviders
+                ),
+                ManualMissionSourceProvider(),
+            ]),
+            remotes: { _ in [
+                GitRemote(name: "origin", url: "git@git.company.com:platform/mobile/alas.git"),
+            ] }
+        ))
+
+        let result = try await resolver.resolve("#42")
+
+        #expect(result.source.identity.providerID == .gitlab)
+        #expect(result.source.identity.stableID == "git.company.com/platform/mobile/alas#42")
+        #expect(result.repositoryLocator == .init(
+            provider: .gitlab,
+            host: "git.company.com",
+            repositorySlug: "platform/mobile/alas"
+        ))
+    }
+
+    @Test func shortReferenceDoesNotLetRecognizedUpstreamPreemptUnclassifiedOrigin() async throws {
+        let issueProviders = CodeHostIssueProviderRegistry([
+            FakeIssueProvider(kind: .github, isAuthenticated: false),
+            FakeIssueProvider(kind: .gitlab),
+        ])
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([
+                CodeHostMissionSourceProvider(
+                    kind: .github,
+                    providers: issueProviders
+                ),
+                CodeHostMissionSourceProvider(
+                    kind: .gitlab,
+                    providers: issueProviders
+                ),
+                ManualMissionSourceProvider(),
+            ]),
+            remotes: { _ in [
+                GitRemote(name: "origin", url: "git@git.company.com:platform/mobile/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ] }
+        ))
+
+        let result = try await resolver.resolve("#42")
+
+        #expect(result.source.identity.providerID == .gitlab)
+        #expect(result.source.identity.stableID == "git.company.com/platform/mobile/alas#42")
+        #expect(result.repositoryLocator == .init(
+            provider: .gitlab,
+            host: "git.company.com",
+            repositorySlug: "platform/mobile/alas"
+        ))
     }
 
     @Test func shortReferenceRequiresSelectedCodeHostProject() async {

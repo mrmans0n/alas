@@ -200,6 +200,48 @@ struct MissionIntegrationTests {
         #expect(loaded.mission.state == .readyToComplete)
     }
 
+    @Test("arbitrary link creates editable Mission and tracks leg review")
+    func arbitraryLinkCreatesEditableMissionAndTracksLegReview() async throws {
+        let harness = try MissionIntegrationHarness()
+        let source = MissionFixtures.manualSource(
+            url: "https://linear.app/acme/issue/ALAS-123/fix-login-timeout",
+            title: "Fix login timeout",
+            body: "Sessions expire during refresh."
+        )
+        let draft = MissionDraft(
+            source: source,
+            projectId: "project-1",
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "fix/parser-crash",
+            destinationPath: "/tmp/alas-mission",
+            agentId: "codex",
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            initialPrompt: "Fix login timeout."
+        )
+
+        let missionID = try await harness.create(draft: draft)
+        _ = await harness.waitUntilSettled(missionID)
+        await harness.controller.updateManualSource(
+            id: missionID,
+            title: "Fix login timeout safely",
+            body: "Preserve refresh tokens."
+        )
+        await harness.controller.observeReview(
+            worktreeId: "worktree-1",
+            baseRef: "origin/main",
+            snapshot: MissionIntegrationHarness.reviewSnapshot(state: .merged)
+        )
+
+        let aggregate = try #require(try await harness.persistence.aggregate(id: missionID))
+        #expect(aggregate.source.title == "Fix login timeout safely")
+        #expect(aggregate.source.body == "Preserve refresh tokens.")
+        #expect(aggregate.source.canonicalURL.absoluteString == "https://linear.app/acme/issue/ALAS-123/fix-login-timeout")
+        #expect(aggregate.legs.count == 1)
+        #expect(aggregate.primaryLeg?.reviewIdentity?.provider == .github)
+        #expect(aggregate.mission.state == .readyToComplete)
+    }
+
     @Test("parallel leg setup recovers independently and becomes ready after review and archive")
     func multiLegLifecycleRecoversAcrossRestart() async throws {
         let harness = try MissionIntegrationHarness()
@@ -454,7 +496,7 @@ private final class MissionControllerFake {
 @MainActor
 private final class MissionIntegrationHarness {
     let draft = MissionDraft(
-        issue: MissionFixtures.issue(),
+        source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
         projectId: "project-1",
         baseRef: "origin/main",
         baseRemoteName: "origin",
@@ -561,6 +603,10 @@ private final class MissionIntegrationHarness {
     }
 
     func create(allowDuplicate: Bool = false) async throws -> MissionID {
+        try await create(draft: draft, allowDuplicate: allowDuplicate)
+    }
+
+    func create(draft: MissionDraft, allowDuplicate: Bool = false) async throws -> MissionID {
         try await controller.create(draft, allowDuplicate: allowDuplicate)
     }
 

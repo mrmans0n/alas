@@ -105,9 +105,6 @@ struct MissionTabPresentation: Equatable {
         let recoverWorktree: Bool
         let completeMission: Bool
 
-        var openIssue: Bool { openSource }
-        var refresh: Bool { refreshSource }
-
         init(
             openAgent: Bool,
             openChanges: Bool,
@@ -129,29 +126,6 @@ struct MissionTabPresentation: Equatable {
             self.recoverWorktree = recoverWorktree
             self.completeMission = completeMission
         }
-
-        init(
-            openAgent: Bool,
-            openChanges: Bool,
-            openIssue: Bool,
-            refresh: Bool,
-            retryWorktree: Bool,
-            retryAgent: Bool,
-            recoverWorktree: Bool,
-            completeMission: Bool
-        ) {
-            self.init(
-                openAgent: openAgent,
-                openChanges: openChanges,
-                openSource: openIssue,
-                refreshSource: refresh,
-                editSourceContext: false,
-                retryWorktree: retryWorktree,
-                retryAgent: retryAgent,
-                recoverWorktree: recoverWorktree,
-                completeMission: completeMission
-            )
-        }
     }
 
     let sourceProviderName: String
@@ -163,13 +137,11 @@ struct MissionTabPresentation: Equatable {
     let repositoryName: String
     let issueNumberCopy: String
     let title: String
-    let issueCapturedAt: Date
     let stateLabel: String
     let stateTone: StateTone
     let checkpointCopy: String?
     let errorCopy: String?
     let staleSourceCopy: String?
-    let issueBody: String
     let labels: [String]
     let assignees: [String]
     let branchCopy: String
@@ -182,7 +154,6 @@ struct MissionTabPresentation: Equatable {
     let events: [MissionEvent]
     let actions: Actions
     let worktreeRecovery: WorktreeRecovery
-    let issueDestination: URL
     let agentDestination: String?
     let changesDestination: String?
     let reviewDestination: URL?
@@ -212,7 +183,6 @@ struct MissionTabPresentation: Equatable {
         repositoryName = source.repositoryLocator?.repositorySlug ?? ""
         issueNumberCopy = source.displayReference ?? ""
         title = mission.title
-        issueCapturedAt = sourceCapturedAt
         stateLabel = Self.stateLabel(mission.state)
         stateTone = Self.stateTone(mission.state)
         checkpointCopy = Self.checkpointCopy(mission)
@@ -220,7 +190,6 @@ struct MissionTabPresentation: Equatable {
         staleSourceCopy = source.refreshError.map {
             "Stored source snapshot may be stale: \($0)"
         }
-        issueBody = sourceBody
         labels = source.labels
         assignees = source.assignees
         branchCopy = worktree?.branch ?? leg?.branch ?? "Worktree unavailable"
@@ -281,7 +250,6 @@ struct MissionTabPresentation: Equatable {
             recoverWorktree: recovery != .none,
             completeMission: canComplete
         )
-        issueDestination = sourceDestination
         agentDestination = leg?.acpSessionId
         changesDestination = worktree?.id
         agentReplacementRequired = retryAgent

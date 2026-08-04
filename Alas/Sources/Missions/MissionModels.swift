@@ -455,32 +455,6 @@ struct MissionAggregate: Equatable, Sendable {
         self.events = events
     }
 
-    init(
-        mission: MissionRecord,
-        issue: MissionIssueSnapshot,
-        legs: [MissionLeg],
-        events: [MissionEvent]
-    ) {
-        self.init(
-            mission: mission,
-            source: MissionSourceSnapshot(issue: issue),
-            legs: legs,
-            events: events
-        )
-    }
-
-    // Temporary compatibility for code-host callers while they migrate to
-    // provider-neutral Mission sources. Remove with the Task 7 migration.
-    var issue: MissionIssueSnapshot {
-        get {
-            guard let issue = MissionIssueSnapshot(source: source) else {
-                preconditionFailure("Mission source is not a code-host issue")
-            }
-            return issue
-        }
-        set { source = MissionSourceSnapshot(issue: newValue) }
-    }
-
     var primaryLeg: MissionLeg? {
         legs.first { $0.id == mission.primaryLegID }
     }
@@ -496,15 +470,6 @@ struct MissionDraft: Equatable, Sendable {
     let agentId: String
     let initialPromptId: UUID
     let initialPrompt: String
-
-    // Temporary compatibility for code-host callers while they migrate to
-    // provider-neutral Mission sources. Remove with the Task 7 migration.
-    var issue: MissionIssueSnapshot {
-        guard let issue = MissionIssueSnapshot(source: source) else {
-            preconditionFailure("Mission source is not a code-host issue")
-        }
-        return issue
-    }
 
     init(
         source: MissionSourceSnapshot,
@@ -526,30 +491,6 @@ struct MissionDraft: Equatable, Sendable {
         self.agentId = agentId
         self.initialPromptId = initialPromptId
         self.initialPrompt = initialPrompt
-    }
-
-    init(
-        issue: MissionIssueSnapshot,
-        projectId: String,
-        baseRef: String,
-        baseRemoteName: String? = nil,
-        branch: String,
-        destinationPath: String,
-        agentId: String,
-        initialPromptId: UUID,
-        initialPrompt: String
-    ) {
-        self.init(
-            source: MissionSourceSnapshot(issue: issue),
-            projectId: projectId,
-            baseRef: baseRef,
-            baseRemoteName: baseRemoteName,
-            branch: branch,
-            destinationPath: destinationPath,
-            agentId: agentId,
-            initialPromptId: initialPromptId,
-            initialPrompt: initialPrompt
-        )
     }
 }
 

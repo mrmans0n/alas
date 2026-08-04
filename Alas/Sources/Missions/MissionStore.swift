@@ -151,17 +151,6 @@ final class MissionStore {
         return try aggregate(id: MissionID(rawValue: id))
     }
 
-    func activeMission(issueIdentity: MissionIssueIdentity) throws -> MissionAggregate? {
-        let providerID: MissionSourceProviderID = switch issueIdentity.provider {
-        case .github: .github
-        case .gitlab: .gitlab
-        }
-        return try activeMission(sourceIdentity: .init(
-            providerID: providerID,
-            stableID: "\(issueIdentity.host)/\(issueIdentity.repositorySlug)#\(issueIdentity.number)".lowercased()
-        ))
-    }
-
     func leg(missionID: MissionID, legID: MissionLegID) throws -> MissionLeg? {
         let rows = try db.query(
             "SELECT * FROM mission_legs WHERE id = ? AND mission_id = ?",
@@ -349,19 +338,6 @@ final class MissionStore {
         }
     }
 
-    @discardableResult
-    func replaceIssueSnapshot(
-        missionID: MissionID,
-        snapshot: MissionIssueSnapshot,
-        event: MissionEvent
-    ) throws -> [MissionID] {
-        try replaceSourceSnapshot(
-            missionID: missionID,
-            snapshot: MissionSourceSnapshot(issue: snapshot),
-            event: event
-        )
-    }
-
     private func hasActiveSourceIdentityCollision(
         missionID: MissionID,
         storedIdentity: MissionSourceIdentity,
@@ -474,18 +450,6 @@ final class MissionStore {
         }
     }
 
-    func updateIssueRefreshError(
-        missionID: MissionID,
-        refreshError: String,
-        event: MissionEvent
-    ) throws {
-        try updateSourceRefreshError(
-            missionID: missionID,
-            refreshError: refreshError,
-            event: event
-        )
-    }
-
     func updateManualSourceContent(
         missionID: MissionID,
         title: String,
@@ -498,8 +462,8 @@ final class MissionStore {
             let storedSource = try source(missionID: missionID)
             guard storedSource.isEditable else { throw Error.sourceNotEditable }
             let changed = try db.execChanges(
-                "UPDATE mission_sources SET title = ?, body = ? WHERE mission_id = ?",
-                bindings: [title, body, missionID.rawValue]
+                "UPDATE mission_sources SET title = ?, body = ?, captured_at = ? WHERE mission_id = ?",
+                bindings: [title, body, event.createdAt.timeIntervalSince1970, missionID.rawValue]
             )
             guard changed == 1 else { throw Error.malformedRecord }
             try db.exec("UPDATE missions SET title = ?, updated_at = ? WHERE id = ?", bindings: [

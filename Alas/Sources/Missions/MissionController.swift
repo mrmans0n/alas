@@ -221,7 +221,7 @@ final class MissionController {
                         leg.acpSessionId = environment.makeID()
                         leg.pendingInitialPrompt = Self.preparedRetryPrompt(
                             for: leg,
-                            issue: aggregate.issue
+                            source: aggregate.source
                         )
                         // Retry input is a prepared, persisted draft. Do not rebuild it from
                         // current issue state after a session has consumed it.
@@ -445,7 +445,7 @@ final class MissionController {
                 return .failed(Self.sanitized(error.localizedDescription))
             }
             guard sourceRefreshGenerations[id] == generation else { return .unavailable }
-            if refreshed.contentOrigin == .manual {
+            if loaded.source.contentOrigin == .manual || refreshed.contentOrigin == .manual {
                 loadError = nil
                 return .confirmationRequired(.init(
                     missionID: id,
@@ -505,10 +505,6 @@ final class MissionController {
             loadError = error.localizedDescription
             return false
         }
-    }
-
-    func refreshIssue(_ id: MissionID) async {
-        _ = await refreshSource(id)
     }
 
     @discardableResult
@@ -1042,7 +1038,7 @@ final class MissionController {
                         // prior prompt receipt belongs to the vanished session.
                         leg.pendingInitialPrompt = Self.preparedRetryPrompt(
                             for: leg,
-                            issue: aggregate.issue
+                            source: aggregate.source
                         )
                     }
                     leg.state = .needsAttention
@@ -1206,7 +1202,7 @@ final class MissionController {
 
     private static func preparedRetryPrompt(
         for leg: MissionLeg,
-        issue: MissionIssueSnapshot
+        source: MissionSourceSnapshot
     ) -> String? {
         let prepared = leg.preparedInitialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prepared.isEmpty { return leg.preparedInitialPrompt }
@@ -1214,7 +1210,7 @@ final class MissionController {
         // its prompt before v5 added immutable prepared prompts, reconstruct
         // the same issue-scoped input instead of starting recovery empty.
         guard leg.ordinal == 0 else { return nil }
-        return MissionPromptBuilder.build(snapshot: issue)
+        return MissionPromptBuilder.build(source: source)
     }
 
     private func replace(_ aggregate: MissionAggregate) {

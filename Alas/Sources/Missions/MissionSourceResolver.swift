@@ -21,25 +21,3 @@ struct MissionSourceResolver {
         )
     }
 }
-
-@MainActor
-struct MissionIssueResolver {
-    struct Environment {
-        let projects: () -> [ProjectConfig]
-        let selectedProjectId: () -> String?
-        let remotes: @Sendable (ProjectConfig) async throws -> [GitRemote]
-        let providers: CodeHostIssueProviderRegistry
-    }
-
-    let environment: Environment
-
-    func resolve(_ rawReference: String) async throws -> ResolvedMissionIssue {
-        let resolver = CodeHostIssueResolver(environment: .init(
-            projects: environment.projects,
-            selectedProjectId: environment.selectedProjectId,
-            remotes: environment.remotes,
-            providers: environment.providers
-        ))
-        return try await resolver.resolve(rawReference)
-    }
-}
