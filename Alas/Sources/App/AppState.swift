@@ -2140,15 +2140,7 @@ final class AppState {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
             projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
         } ?? false
-        let wasSelectedMissingMissionProject =
-            missingMissionRecoveryTarget?.projectID == projectId
-                || missingMissionTab.flatMap { tab in
-                    missions.aggregate(id: tab.missionID)?.legs.contains { leg in
-                        leg.projectId == projectId
-                            && leg.state == .needsAttention
-                            && leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
-                    }
-                } == true
+        let wasSelectedMissingMissionProject = missingMissionRecoveryTarget?.projectID == projectId
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {

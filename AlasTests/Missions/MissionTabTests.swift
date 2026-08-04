@@ -200,6 +200,35 @@ struct MissionTabTests {
         #expect(fixture.state.globalTabs.activeMissionTab() == missingSecondaryTab)
     }
 
+    @Test func removingAnotherMissingMissionProjectFromTheActiveSpaceKeepsCurrentRecovery() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            includeSecondaryLeg: true
+        )
+        let secondaryWorktree = try #require(fixture.secondaryWorktree)
+        await fixture.state.missions.load()
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        fixture.state.selectInitialWorktree(id: fixture.worktree.id)
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: fixture.worktree.id,
+            projectId: fixture.worktree.projectId
+        )
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [fixture.worktree.id])
+        let primaryMissingTab = try #require(fixture.state.missingMissionTab)
+        await fixture.state.missions.recordMissingWorktree(
+            fixture.aggregate.mission.id,
+            legID: fixture.aggregate.legs[1].id
+        )
+        fixture.state.spacesManager.addProject(secondaryWorktree.projectId, toSpace: "other-space")
+
+        fixture.state.toggleProject(projectId: secondaryWorktree.projectId, inSpace: "mission-space")
+
+        #expect(fixture.state.missingMissionTab == primaryMissingTab)
+        #expect(fixture.state.globalTabs.activeMissionTab() == primaryMissingTab)
+    }
+
     @Test func activatingAWorktreeTabClearsMissingMissionRecovery() async throws {
         let fixture = try MissionNavigationFixture(
             hidden: false,
