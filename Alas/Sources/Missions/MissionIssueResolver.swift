@@ -5,16 +5,18 @@ enum MissionIssueInput: Equatable, Sendable {
     case url(kind: CodeHostKind, host: String, repositorySlug: String, number: Int)
 
     static func parse(_ rawReference: String) throws -> Self {
-        let raw = rawReference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let shortValue = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
-        if let number = Int(shortValue), number > 0, !shortValue.contains("/") {
+        switch try MissionSourceReference.parse(rawReference) {
+        case .short(let number):
             return .short(number: number)
+        case .url(let url):
+            return try parseCodeHostURL(url)
         }
-        guard let components = URLComponents(string: raw),
-              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
-              let host = components.host?.lowercased(), !host.isEmpty
-        else {
-            throw CodeHostProviderError.malformedOutput("Enter an issue number or a supported issue URL.")
+    }
+
+    private static func parseCodeHostURL(_ url: URL) throws -> Self {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let host = components.host?.lowercased(), !host.isEmpty else {
+            throw CodeHostProviderError.malformedOutput("Enter a GitHub or GitLab issue URL.")
         }
         let parts = components.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         if parts.count == 4, parts[2] == "issues", let number = Int(parts[3]), number > 0 {
@@ -36,8 +38,7 @@ struct ResolvedMissionIssue: Equatable, Sendable {
     let selectedProjectId: String
 }
 
-@MainActor
-struct MissionIssueResolver {
+struct CodeHostIssueResolver {
     struct Environment {
         let projects: () -> [ProjectConfig]
         let selectedProjectId: () -> String?
@@ -292,7 +293,7 @@ struct MissionIssueResolver {
     }
 }
 
-private extension CodeHostRemoteDetector {
+extension CodeHostRemoteDetector {
     static func detectAllMatching(_ remotes: [GitRemote], kind: CodeHostKind) -> [CodeHostRemote] {
         remotes.compactMap { remote in
             detect(from: [remote], matching: kind)

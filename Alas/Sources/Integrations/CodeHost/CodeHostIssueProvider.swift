@@ -102,6 +102,15 @@ extension CodeHostRemote {
     }
 }
 
+extension CodeHostKind {
+    var missionSourceProviderID: MissionSourceProviderID {
+        switch self {
+        case .github: .github
+        case .gitlab: .gitlab
+        }
+    }
+}
+
 struct CodeHostIssueProviderRegistry: Sendable {
     private let providersByKind: [String: any CodeHostIssueProviding]
 
