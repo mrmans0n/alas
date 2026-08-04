@@ -511,6 +511,30 @@ final class MissionController {
         _ = await refreshSource(id)
     }
 
+    @discardableResult
+    func updateManualSource(id: MissionID, title: String, body: String) async -> Bool {
+        do {
+            guard let aggregate = try await persistence.aggregate(id: id) else { return false }
+            let event = makeEvent(
+                aggregate: aggregate,
+                kind: .sourceRefreshed,
+                message: "Mission source context updated."
+            )
+            try await persistence.updateManualSourceContent(
+                missionID: id,
+                title: title,
+                body: body,
+                event: event
+            )
+            try await publish(id: id)
+            loadError = nil
+            return true
+        } catch {
+            loadError = error.localizedDescription
+            return false
+        }
+    }
+
     func refreshLinkedReview(_ id: MissionID) async {
         do {
             guard let aggregate = try await persistence.aggregate(id: id) else { return }

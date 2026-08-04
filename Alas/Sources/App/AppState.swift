@@ -1004,11 +1004,12 @@ final class AppState {
         return ownedByALaterMission ? nil : candidate
     }
 
-    func refreshMission(_ id: MissionID) async {
-        guard missions.aggregate(id: id) != nil else { return }
+    @discardableResult
+    func refreshMission(_ id: MissionID) async -> MissionSourceRefreshResult {
+        guard missions.aggregate(id: id) != nil else { return .unavailable }
 
-        await missions.refreshIssue(id)
-        guard let aggregate = missions.aggregate(id: id) else { return }
+        let sourceResult = await missions.refreshSource(id)
+        guard let aggregate = missions.aggregate(id: id) else { return .unavailable }
 
         for leg in aggregate.legs {
             let candidate = missionWorktreeAtDestination(
@@ -1035,6 +1036,7 @@ final class AppState {
                 await missions.refreshReviewWithoutWorktree(id, legID: leg.id)
             }
         }
+        return sourceResult
     }
 
     private func resolvedMissionWorktree(for aggregate: MissionAggregate) -> Worktree? {

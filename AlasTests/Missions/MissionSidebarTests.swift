@@ -120,6 +120,16 @@ struct MissionSidebarTests {
         #expect(row.helpText.contains("1 working · 1 needs attention · 1 ready"))
     }
 
+    @Test func manualSourceRowDoesNotInventRepositoryOrIssueNumber() {
+        let row = MissionSidebarRow(aggregate: MissionFixtures.creatingMission(source: MissionFixtures.manualSource()))
+
+        #expect(row.providerName == "linear.app")
+        #expect(row.sourceReference == nil)
+        #expect(row.repositorySlug.isEmpty)
+        #expect(!row.helpText.contains("#"))
+        #expect(!row.helpText.localizedCaseInsensitiveContains("acme/alas"))
+    }
+
     @Test func completedRowStaysMutedWhenALegRetainsAttention() {
         let row = MissionSidebarRow(aggregate: Self.multiLegMission(missionState: .completed))
 

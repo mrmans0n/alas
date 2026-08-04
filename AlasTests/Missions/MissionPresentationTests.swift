@@ -217,6 +217,34 @@ struct MissionPresentationTests {
         #expect(presentation.diffCopy == "3 files · +86 −14")
     }
 
+    @Test func manualSourcePresentationUsesNeutralActions() {
+        var aggregate = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        aggregate.mission.state = .running
+        aggregate.mission.setupCheckpoint = .running
+        aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].worktreeLineageID = "device:inode"
+        aggregate.legs[0].pendingInitialPrompt = nil
+
+        let presentation = MissionTabPresentation(aggregate: aggregate, worktree: nil)
+
+        #expect(presentation.sourceProviderName == "linear.app")
+        #expect(presentation.sourceReference == nil)
+        #expect(presentation.sourceDestination == aggregate.source.canonicalURL)
+        #expect(presentation.sourceBody == aggregate.source.body)
+        #expect(presentation.actions.openSource)
+        #expect(presentation.actions.editSourceContext)
+        #expect(!presentation.actions.refreshSource)
+    }
+
+    @Test func providerSourcePresentationRefreshesButDoesNotEdit() {
+        let aggregate = Self.runningAggregate()
+        let presentation = MissionTabPresentation(aggregate: aggregate, worktree: Self.worktree)
+
+        #expect(presentation.actions.openSource)
+        #expect(presentation.actions.refreshSource)
+        #expect(!presentation.actions.editSourceContext)
+    }
+
     @Test func refreshFailureKeepsSnapshotAndShowsStaleWarning() {
         var aggregate = Self.runningAggregate()
         aggregate.issue.refreshError = "gh is not authenticated"
@@ -227,7 +255,7 @@ struct MissionPresentationTests {
             availableACPAgentIDs: ["codex"]
         )
 
-        #expect(presentation.staleSourceCopy == "Stored issue snapshot may be stale: gh is not authenticated")
+        #expect(presentation.staleSourceCopy == "Stored source snapshot may be stale: gh is not authenticated")
         #expect(presentation.issueBody == aggregate.issue.body)
         #expect(presentation.actions.refresh)
     }

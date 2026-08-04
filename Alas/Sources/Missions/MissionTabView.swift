@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+extension MissionSourceRefreshProposal: Identifiable {
+    var id: String {
+        "\(missionID.rawValue)-\(expectedIdentity.providerID.rawValue)-\(expectedIdentity.stableID)-\(expectedCapturedAt.timeIntervalSince1970)"
+    }
+}
+
 struct MissionDiffCounts: Equatable {
     let fileCount: Int
     let additions: Int
@@ -91,14 +97,68 @@ struct MissionTabPresentation: Equatable {
     struct Actions: Equatable {
         let openAgent: Bool
         let openChanges: Bool
-        let openIssue: Bool
-        let refresh: Bool
+        let openSource: Bool
+        let refreshSource: Bool
+        let editSourceContext: Bool
         let retryWorktree: Bool
         let retryAgent: Bool
         let recoverWorktree: Bool
         let completeMission: Bool
+
+        var openIssue: Bool { openSource }
+        var refresh: Bool { refreshSource }
+
+        init(
+            openAgent: Bool,
+            openChanges: Bool,
+            openSource: Bool,
+            refreshSource: Bool,
+            editSourceContext: Bool,
+            retryWorktree: Bool,
+            retryAgent: Bool,
+            recoverWorktree: Bool,
+            completeMission: Bool
+        ) {
+            self.openAgent = openAgent
+            self.openChanges = openChanges
+            self.openSource = openSource
+            self.refreshSource = refreshSource
+            self.editSourceContext = editSourceContext
+            self.retryWorktree = retryWorktree
+            self.retryAgent = retryAgent
+            self.recoverWorktree = recoverWorktree
+            self.completeMission = completeMission
+        }
+
+        init(
+            openAgent: Bool,
+            openChanges: Bool,
+            openIssue: Bool,
+            refresh: Bool,
+            retryWorktree: Bool,
+            retryAgent: Bool,
+            recoverWorktree: Bool,
+            completeMission: Bool
+        ) {
+            self.init(
+                openAgent: openAgent,
+                openChanges: openChanges,
+                openSource: openIssue,
+                refreshSource: refresh,
+                editSourceContext: false,
+                retryWorktree: retryWorktree,
+                retryAgent: retryAgent,
+                recoverWorktree: recoverWorktree,
+                completeMission: completeMission
+            )
+        }
     }
 
+    let sourceProviderName: String
+    let sourceReference: String?
+    let sourceBody: String
+    let sourceCapturedAt: Date
+    let sourceDestination: URL
     let providerName: String
     let repositoryName: String
     let issueNumberCopy: String
@@ -141,23 +201,28 @@ struct MissionTabPresentation: Equatable {
         availableACPAgentIDs: Set<String> = []
     ) {
         let mission = aggregate.mission
-        let issue = aggregate.issue
+        let source = aggregate.source
         let leg = aggregate.primaryLeg
-        providerName = issue.identity.provider.displayName
-        repositoryName = issue.identity.repositorySlug
-        issueNumberCopy = "#\(issue.identity.number)"
+        sourceProviderName = source.providerLabel
+        sourceReference = source.displayReference
+        sourceBody = source.body
+        sourceCapturedAt = source.capturedAt
+        sourceDestination = source.canonicalURL
+        providerName = sourceProviderName
+        repositoryName = source.repositoryLocator?.repositorySlug ?? ""
+        issueNumberCopy = source.displayReference ?? ""
         title = mission.title
-        issueCapturedAt = issue.capturedAt
+        issueCapturedAt = sourceCapturedAt
         stateLabel = Self.stateLabel(mission.state)
         stateTone = Self.stateTone(mission.state)
         checkpointCopy = Self.checkpointCopy(mission)
         errorCopy = mission.attentionReason
-        staleSourceCopy = issue.refreshError.map {
-            "Stored issue snapshot may be stale: \($0)"
+        staleSourceCopy = source.refreshError.map {
+            "Stored source snapshot may be stale: \($0)"
         }
-        issueBody = issue.body
-        labels = issue.labels
-        assignees = issue.assignees
+        issueBody = sourceBody
+        labels = source.labels
+        assignees = source.assignees
         branchCopy = worktree?.branch ?? leg?.branch ?? "Worktree unavailable"
         baseCopy = leg?.baseRef ?? ""
         destinationCopy = worktree?.path.path ?? leg?.destinationPath ?? ""
@@ -208,14 +273,15 @@ struct MissionTabPresentation: Equatable {
         actions = Actions(
             openAgent: openAgent,
             openChanges: hasUsableWorktree,
-            openIssue: true,
-            refresh: true,
+            openSource: true,
+            refreshSource: source.isRefreshable,
+            editSourceContext: source.isEditable,
             retryWorktree: retryWorktree,
             retryAgent: retryAgent,
             recoverWorktree: recovery != .none,
             completeMission: canComplete
         )
-        issueDestination = issue.canonicalURL
+        issueDestination = sourceDestination
         agentDestination = leg?.acpSessionId
         changesDestination = worktree?.id
         agentReplacementRequired = retryAgent
@@ -325,7 +391,7 @@ enum MissionTabContext {
 }
 
 enum MissionCompletionConfirmation {
-    private static let consequence = "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the source issue."
+    private static let consequence = "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the Mission source."
 
     static func message(
         for aggregate: MissionAggregate,
@@ -388,6 +454,8 @@ struct MissionTabView: View {
     @State private var agentPickerPresented = false
     @State private var agentPickerLegID: MissionLegID?
     @State private var addLegPresented = false
+    @State private var editSourcePresented = false
+    @State private var sourceRefreshProposal: MissionSourceRefreshProposal?
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -431,6 +499,36 @@ struct MissionTabView: View {
                 presented: $addLegPresented,
                 state: state,
                 missionID: tabState.missionID
+            )
+            .environment(\.theme, theme)
+        }
+        .sheet(isPresented: $editSourcePresented) {
+            if let aggregate = state.missions.aggregate(id: tabState.missionID) {
+                EditMissionSourceDialog(
+                    presented: $editSourcePresented,
+                    model: .init(source: aggregate.source) { title, body in
+                        await state.missions.updateManualSource(
+                            id: tabState.missionID,
+                            title: title,
+                            body: body
+                        )
+                    },
+                    sourceURL: aggregate.source.canonicalURL
+                )
+                .environment(\.theme, theme)
+            }
+        }
+        .sheet(item: $sourceRefreshProposal) { proposal in
+            MissionSourceRefreshConfirmationSheet(
+                proposal: proposal,
+                onCancel: { sourceRefreshProposal = nil },
+                onReplace: {
+                    Task {
+                        if await state.missions.confirmSourceRefresh(proposal) {
+                            sourceRefreshProposal = nil
+                        }
+                    }
+                }
             )
             .environment(\.theme, theme)
         }
@@ -514,7 +612,7 @@ struct MissionTabView: View {
                         agentName: legSession.map { agentName(for: $0.agentId) },
                         onOpenAgent: actions.openAgent,
                         onOpenChanges: actions.openChanges,
-                        onOpenIssue: { NSWorkspace.shared.open(presentation.issueDestination) },
+                        onOpenIssue: { NSWorkspace.shared.open(presentation.sourceDestination) },
                         onOpenReview: {
                             if let url = leg.reviewDestination {
                                 NSWorkspace.shared.open(url)
@@ -529,7 +627,11 @@ struct MissionTabView: View {
                     Button("Add Leg") { addLegPresented = true }
                         .buttonStyle(.borderedProminent)
                 }
-                MissionIssueContextSection(presentation: presentation, onRefresh: refresh)
+                MissionSourceContextSection(
+                    presentation: presentation,
+                    onRefresh: refresh,
+                    onEdit: { editSourcePresented = true }
+                )
                 MissionActivitySection(events: presentation.events)
                 MissionReadinessSection(
                     presentation: presentation,
@@ -553,7 +655,7 @@ struct MissionTabView: View {
 
     private var completionConfirmationMessage: String {
         guard let aggregate = state.missions.aggregate(id: tabState.missionID) else {
-            return "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the source issue."
+            return "This only marks the Mission completed in Alas. It does not stop agents, archive worktrees, merge code, or change the Mission source."
         }
         return MissionCompletionConfirmation.message(
             for: aggregate,
@@ -622,7 +724,12 @@ struct MissionTabView: View {
     }
 
     private func refresh() {
-        Task { await state.refreshMission(tabState.missionID) }
+        Task {
+            let result = await state.refreshMission(tabState.missionID)
+            if case .confirmationRequired(let proposal) = result {
+                sourceRefreshProposal = proposal
+            }
+        }
     }
 
     private func retryWorktree(legID: MissionLegID) {
@@ -700,7 +807,7 @@ private struct MissionHeaderSection: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("\(presentation.providerName.uppercased()) · \(presentation.repositoryName) \(presentation.issueNumberCopy)")
+                Text(Self.sourceSummary(presentation))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.color("fg-dim"))
                     .accessibilityIdentifier("mission-header-repository")
@@ -709,7 +816,7 @@ private struct MissionHeaderSection: View {
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(theme.color("fg"))
                     .textSelection(.enabled)
-                Text("Captured \(presentation.issueCapturedAt.formatted(date: .abbreviated, time: .shortened))")
+                Text("Captured \(presentation.sourceCapturedAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption)
                     .foregroundStyle(theme.color("fg-dim"))
                     .accessibilityIdentifier("mission-header-captured-at")
@@ -725,6 +832,16 @@ private struct MissionHeaderSection: View {
             MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private static func sourceSummary(_ presentation: MissionTabPresentation) -> String {
+        [
+            presentation.sourceProviderName.uppercased(),
+            presentation.repositoryName.isEmpty ? nil : presentation.repositoryName,
+            presentation.sourceReference,
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
     }
 }
 
@@ -832,7 +949,7 @@ private struct MissionLegSection: View {
                     Button("Open Changes", action: onOpenChanges)
                         .disabled(!presentation.actions.openChanges)
                 }
-                Button("Open Issue", action: onOpenIssue)
+                Button("Open Source", action: onOpenIssue)
                 if presentation.actions.retryWorktree {
                     Button("Retry Worktree", action: onRetryWorktree)
                 }
@@ -866,24 +983,29 @@ private struct MissionLiveAgentStatus: View {
     }
 }
 
-private struct MissionIssueContextSection: View {
+private struct MissionSourceContextSection: View {
     let presentation: MissionTabPresentation
     let onRefresh: () -> Void
+    let onEdit: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("ISSUE CONTEXT")
+                Text("MISSION SOURCE")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
                 Spacer()
-                Button("Refresh", action: onRefresh)
+                if presentation.actions.editSourceContext {
+                    Button("Edit source context", action: onEdit)
+                        .buttonStyle(.borderless)
+                }
+                Button("Refresh source", action: onRefresh)
                     .buttonStyle(.borderless)
-                    .disabled(!presentation.actions.refresh)
+                    .disabled(!presentation.actions.refreshSource)
             }
             ACPMarkdownText(
-                raw: presentation.issueBody,
+                raw: presentation.sourceBody,
                 typography: .init(fontFamily: "", fontSize: 12)
             )
             .foregroundStyle(theme.color("fg"))
@@ -911,6 +1033,48 @@ private struct MissionIssueContextSection: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
+    }
+}
+
+private struct MissionSourceRefreshConfirmationSheet: View {
+    let proposal: MissionSourceRefreshProposal
+    let onCancel: () -> Void
+    let onReplace: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Replace manual source context?")
+                .font(.headline)
+            Text("The refreshed provider content can replace the manually stored title and context.")
+                .font(.caption)
+                .foregroundStyle(theme.color("fg-dim"))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(proposal.snapshot.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .textSelection(.enabled)
+                ACPMarkdownText(
+                    raw: proposal.snapshot.body,
+                    typography: .init(fontFamily: "", fontSize: 12)
+                )
+                .textSelection(.enabled)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.color("bg-1"))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Replace", action: onReplace)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
     }
 }
 
