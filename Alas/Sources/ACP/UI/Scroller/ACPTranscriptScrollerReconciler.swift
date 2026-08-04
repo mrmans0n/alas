@@ -112,6 +112,14 @@ final class ACPTranscriptScrollerReconciler {
     /// a long-gone anchor resurface.
     private static let pendingAnchorApplyBudget = 3
 
+    /// How long after a user-driven scroll tick the tail re-pin stays
+    /// suppressed — see `repinsToTail(followsTail:wasFollowingTail:)`.
+    static let userScrollSuppressionWindow: TimeInterval = 0.25
+
+    /// `ProcessInfo.systemUptime` of the last user-driven scroll tick, or nil
+    /// if the user has never moved this viewport.
+    private var lastUserScrollUptime: TimeInterval?
+
     init(
         tiling: ACPTranscriptTilingController,
         pool: ACPTranscriptRowHostingPool,
@@ -306,6 +314,25 @@ final class ACPTranscriptScrollerReconciler {
     /// runs `apply()` unconditionally — slammed the viewport back to the
     /// bottom mid-gesture.
     ///
+    /// Position alone is NOT enough to decide this, and gating on it alone
+    /// was wrong: between `bottomTolerance` and `pauseTolerance` (37–160pt
+    /// off the bottom) the session still reports that it follows the tail, so
+    /// suppressing the pin there indefinitely leaves a state with neither
+    /// behavior — streaming content accumulates below the viewport while the
+    /// "go to newest" affordance stays hidden, because it keys off
+    /// `session.followsTranscriptTail` which nothing has paused. The
+    /// suppression is therefore scoped to an ACTIVE GESTURE: the viewport
+    /// must be off the tail AND the user must have moved it within
+    /// `userScrollSuppressionWindow`. Once the gesture ends, an update
+    /// re-pins exactly as it always did, so the inconsistent state cannot
+    /// outlive the gesture that caused it.
+    ///
+    /// "The user moved it" is `noteUserScroll()`, driven by the scroller's own
+    /// programmatic/non-programmatic split, not by `NSApp.currentEvent` —
+    /// under responsive scrolling that event is absent for ~97% of scroll
+    /// ticks (see `ACPTranscriptScroller.shouldStepHeadBack`), so a gesture
+    /// detector built on it would suppress almost nothing.
+    ///
     /// The state machine still converges from here: scrolling back within
     /// `bottomTolerance` re-arms the glue through the coordinator's
     /// `.userAtBottom` → `resumeTailFollow`, and travelling past
@@ -328,7 +355,33 @@ final class ACPTranscriptScrollerReconciler {
     private func repinsToTail(followsTail: Bool, wasFollowingTail: Bool) -> Bool {
         guard followsTail else { return false }
         if !wasFollowingTail { return true }
-        return scroller.distanceFromBottom <= ACPScrollDirectionClassifier.bottomTolerance
+        guard scroller.distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance else {
+            return true
+        }
+        return !isUserScrollInFlight()
+    }
+
+    /// Whether the user has moved the viewport recently enough that an
+    /// update landing now would be interrupting a gesture still in progress.
+    ///
+    /// Scroll ticks arrive every ~8–25ms within a gesture (including the
+    /// momentum tail and the elastic bounce at either end), so the window
+    /// only has to outlast the gaps between them, not the gesture itself.
+    /// It deliberately does not outlast the gesture by much: everything the
+    /// window suppresses is behavior the user gets back the moment they stop.
+    private func isUserScrollInFlight() -> Bool {
+        guard let lastUserScrollUptime else { return false }
+        return ProcessInfo.processInfo.systemUptime - lastUserScrollUptime
+            <= Self.userScrollSuppressionWindow
+    }
+
+    /// Records that the viewport was just moved by the user rather than by
+    /// this reconciler. Called by the coordinator's scroll handler for every
+    /// non-programmatic tick — the scroller's own
+    /// `programmaticAdjustmentDepth` is what tells the two apart, which is
+    /// reliable where the event stream is not.
+    func noteUserScroll() {
+        lastUserScrollUptime = ProcessInfo.processInfo.systemUptime
     }
 
     /// `repinsToTail` is the caller's already-made decision about whether this

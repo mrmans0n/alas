@@ -633,10 +633,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 return
             }
 
-            // The user has moved the viewport themselves, so a row that
-            // vanished from an earlier update is no longer worth restoring to
-            // if it comes back — see `PendingAnchorRestore`.
+            // This tick is the user moving the viewport, not us. Two things
+            // follow from that: a row that vanished from an earlier update is
+            // no longer worth restoring to if it comes back (see
+            // `PendingAnchorRestore`), and an update landing in the next
+            // moment must not re-pin the tail out from under the gesture (see
+            // `repinsToTail(followsTail:wasFollowingTail:)`).
             reconciler.invalidatePendingAnchorRestore()
+            reconciler.noteUserScroll()
 
             let event = NSApp.currentEvent
             let eventIsFresh = ACPUserScrollEvent.isFresh(

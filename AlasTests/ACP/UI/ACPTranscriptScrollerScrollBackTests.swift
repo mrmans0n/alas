@@ -69,6 +69,7 @@ struct ACPTranscriptScrollerScrollBackTests {
             let target = max(0, scroller.scrollY - step)
             scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: target))
             scroller.reflectScrolledClipView(scroller.contentView)
+            reconciler.noteUserScroll()
             reconciler.layoutMountedRows()
             if abs(scroller.scrollY - target) > 0.5 {
                 perturbations.append((index, target, scroller.scrollY))
@@ -201,6 +202,7 @@ struct ACPTranscriptScrollerScrollBackTests {
         let target = scroller.scrollY - 90
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: target))
         scroller.reflectScrolledClipView(scroller.contentView)
+        reconciler.noteUserScroll()
         reconciler.layoutMountedRows()
         #expect(abs(scroller.scrollY - target) < 0.5)
 
@@ -216,6 +218,38 @@ struct ACPTranscriptScrollerScrollBackTests {
         )
 
         #expect(abs(scroller.scrollY - target) < 0.5, "viewport was re-pinned to \(scroller.scrollY)")
+    }
+
+    /// The suppression must not outlive the gesture. Between
+    /// `bottomTolerance` and `pauseTolerance` the session still reports that
+    /// it follows the tail, so a viewport left permanently unpinned there
+    /// would get neither behavior: streaming content piling up below the
+    /// fold while the "go to newest" affordance stays hidden, because it keys
+    /// off `session.followsTranscriptTail` and nothing paused it.
+    @Test("once the gesture ends, an update re-pins to the tail again")
+    func rePinResumesAfterTheGestureEnds() async throws {
+        let (reconciler, scroller, _, nsWindow) = makeStackInWindow()
+        let specs = makeRows(120)
+        reconciler.apply(specs: specs, contentWidth: 800, followsTail: true)
+        nsWindow.layoutIfNeeded()
+
+        // Parked in the band where tail-follow is deliberately still on:
+        // past `bottomTolerance`, short of `pauseTolerance`.
+        let target = scroller.scrollY - 90
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: target))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        reconciler.noteUserScroll()
+        reconciler.layoutMountedRows()
+        #expect(abs(scroller.scrollY - target) < 0.5)
+
+        // The gesture ends. Generous grace over the window, matching this
+        // codebase's margin for time-based tests under CI scheduling load.
+        let grace = ACPTranscriptScrollerReconciler.userScrollSuppressionWindow + 0.4
+        try await Task.sleep(nanoseconds: UInt64(grace * 1_000_000_000))
+
+        reconciler.apply(specs: specs, contentWidth: 800, followsTail: true)
+
+        #expect(scroller.distanceFromBottom < 1)
     }
 
     /// The behavior `remeasureRow`'s re-pin exists for must survive the fix:
