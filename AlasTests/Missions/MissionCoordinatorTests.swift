@@ -208,6 +208,27 @@ struct MissionCoordinatorTests {
         #expect(aggregate.mission.state == .completed)
         #expect(aggregate.primaryLeg?.acpSessionId != nil)
         #expect(fake.startACPCalls == 0)
+        #expect(fake.reportedFailures.isEmpty)
+    }
+
+    @Test("completion before the final setup write is silent cancellation")
+    func completionBeforeFinalSetupWriteIsSilentCancellation() async throws {
+        let fake = MissionCoordinatorFake(completeAfterACPBeforeSetupPersistence: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        for _ in 0..<200 {
+            if try await fake.persistence.aggregate(id: missionID)?.mission.state == .completed {
+                break
+            }
+            await Task.yield()
+        }
+
+        let aggregate = try #require(try await fake.persistence.aggregate(id: missionID))
+        #expect(aggregate.mission.state == .completed)
+        #expect(fake.startACPCalls == 1)
+        #expect(fake.reportedFailures.isEmpty)
+        #expect(!aggregate.events.contains { $0.kind == .attentionRequired })
     }
 
     // Break caught: restart reconciliation awaits one creating leg to settle
@@ -1112,6 +1133,8 @@ private final class MissionCoordinatorFake {
     private let suspendWorktreePlanning: Bool
     private let suspendACPStartup: Bool
     private let completeWhenSessionReserved: Bool
+    private let completeAfterACPBeforeSetupPersistence: Bool
+    private var completedAfterACP = false
     private var startedLegs: [MissionLegID: MissionLeg] = [:]
     private var worktreeCreationContinuations: [
         MissionLegID: CheckedContinuation<Result<Worktree, WorktreeCreationFailure>, Never>
@@ -1134,7 +1157,8 @@ private final class MissionCoordinatorFake {
         suspendWorktreeCreation: Bool = false,
         suspendWorktreePlanning: Bool = false,
         suspendACPStartup: Bool = false,
-        completeWhenSessionReserved: Bool = false
+        completeWhenSessionReserved: Bool = false,
+        completeAfterACPBeforeSetupPersistence: Bool = false
     ) {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-coordinator-\(UUID().uuidString).sqlite")
@@ -1151,6 +1175,7 @@ private final class MissionCoordinatorFake {
         self.suspendWorktreePlanning = suspendWorktreePlanning
         self.suspendACPStartup = suspendACPStartup
         self.completeWhenSessionReserved = completeWhenSessionReserved
+        self.completeAfterACPBeforeSetupPersistence = completeAfterACPBeforeSetupPersistence
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
             worktreeAtDestination = worktree
         }
@@ -1162,7 +1187,25 @@ private final class MissionCoordinatorFake {
             now: { [weak self] in
                 guard let self else { return .distantPast }
                 self.clock += 1
-                return Date(timeIntervalSince1970: self.clock)
+                let now = Date(timeIntervalSince1970: self.clock)
+                if self.completeAfterACPBeforeSetupPersistence,
+                   self.startACPCalls > 0,
+                   !self.completedAfterACP,
+                   let aggregate = try! self.store.list(includeCompleted: false).first {
+                    self.completedAfterACP = true
+                    try! self.store.complete(
+                        id: aggregate.mission.id,
+                        at: now,
+                        event: MissionFixtures.event(
+                            id: "completed-before-final-setup-write",
+                            missionID: aggregate.mission.id,
+                            legID: aggregate.primaryLeg?.id,
+                            kind: .completed,
+                            createdAt: now.timeIntervalSince1970
+                        )
+                    )
+                }
+                return now
             },
             makeID: { [weak self] in
                 guard let self else { return UUID().uuidString }

@@ -382,6 +382,8 @@ final class MissionLegCoordinator {
             try await environment.persistence.updateLegSetup(missionID: missionID, leg: leg, event: event)
             await notify(id: missionID)
             return true
+        } catch MissionStore.Error.missionCompleted {
+            return false
         } catch {
             if let failureCheckpoint {
                 await persistFailure(
