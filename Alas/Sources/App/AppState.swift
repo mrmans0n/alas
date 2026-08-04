@@ -4138,6 +4138,37 @@ final class AppState {
         }
     }
 
+    func handleCloseCenterShortcut(worktreeId: String?) {
+        if let activeGlobalTabID = globalTabs.activeTabId {
+            globalTabs.close(tabId: activeGlobalTabID)
+            return
+        }
+        guard let worktreeId else { return }
+        handleCloseShortcut(worktreeId: worktreeId)
+    }
+
+    @discardableResult
+    func activateCenterTabNumber(_ number: Int, worktreeId: String?) -> TabID? {
+        guard number > 0 else { return nil }
+        let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
+        let composition = CenterTabComposition(
+            globalTabs: globalTabs.tabs,
+            worktreeTabs: worktreeTabs,
+            activeGlobalMissionTab: globalTabs.activeMissionTab(),
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+        )
+        let index = number - 1
+        guard composition.tabs.indices.contains(index) else { return nil }
+        let tabID = composition.tabs[index].id
+        if globalTabs.tabs.contains(where: { $0.id == tabID }) {
+            globalTabs.activate(tabId: tabID)
+        } else if let worktreeId {
+            globalTabs.clearActiveTab()
+            tabs.activate(worktreeId: worktreeId, tabId: tabID)
+        }
+        return tabID
+    }
+
     /// Walk down `path` collecting splits; return the innermost one whose
     /// axis matches `axis`. `path` is the list of split ids from root to (but
     /// not including) the focused leaf.

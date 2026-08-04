@@ -52,7 +52,15 @@ final class AddMissionLegModel {
     private var remoteNames: Set<String> = []
     private var localBranchNames: Set<String> = []
     private var loadedProjectID: String?
+    private var projectStates: [String: ProjectState] = [:]
     private var loadGeneration = 0
+
+    private struct ProjectState {
+        let inventory: BranchInventory
+        var base: String
+        var branch: String
+        var agentID: String
+    }
 
     @ObservationIgnored
     private let environment: Environment
@@ -108,9 +116,13 @@ final class AddMissionLegModel {
         guard candidateProjectIDs.contains(selectedProjectID) else {
             throw fail(.unavailableProject)
         }
-        guard loadedProjectID != selectedProjectID else {
-            projectId = selectedProjectID
-            return
+        if let loadedProjectID,
+           loadedProjectID == projectId,
+           var current = projectStates[loadedProjectID] {
+            current.base = base
+            current.branch = branch
+            current.agentID = agentId
+            projectStates[loadedProjectID] = current
         }
 
         loadGeneration += 1
@@ -118,6 +130,18 @@ final class AddMissionLegModel {
         projectId = selectedProjectID
         errorMessage = nil
         branchErrorMessage = nil
+        if let cached = projectStates[selectedProjectID] {
+            branches = cached.inventory.names
+            remoteNames = cached.inventory.remoteNames
+            localBranchNames = cached.inventory.localBranchNames
+            base = cached.base
+            branch = cached.branch
+            agentId = cached.agentID
+            loadedProjectID = selectedProjectID
+            isLoadingBranches = false
+            return
+        }
+
         branches = []
         remoteNames = []
         localBranchNames = []
@@ -147,6 +171,12 @@ final class AddMissionLegModel {
             )
             agentId = agentOptions.first?.id ?? ""
             loadedProjectID = selectedProjectID
+            projectStates[selectedProjectID] = ProjectState(
+                inventory: inventory,
+                base: base,
+                branch: branch,
+                agentID: agentId
+            )
         } catch {
             guard loadGeneration == generation, projectId == selectedProjectID else { return }
             let failure = PreparationError.branchLoadingFailed(error.localizedDescription)

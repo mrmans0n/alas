@@ -823,15 +823,12 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
-                if let wt = selectedWorktree() {
-                    state.handleCloseShortcut(worktreeId: wt.id)
-                }
+                state.handleCloseCenterShortcut(worktreeId: selectedWorktree()?.id)
             }
         let g = f
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
-                guard let number = notification.object as? Int,
-                      let wt = selectedWorktree() else { return }
-                state.tabs.activateTabNumber(number, worktreeId: wt.id)
+                guard let number = notification.object as? Int else { return }
+                state.activateCenterTabNumber(number, worktreeId: selectedWorktree()?.id)
             }
         let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in

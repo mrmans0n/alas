@@ -116,6 +116,38 @@ struct AddMissionLegModelTests {
         #expect(model.base == "upstream/mobile")
     }
 
+    @Test("switching back restores cached inventory and invalidates the stale load")
+    func switchingBackRestoresCachedInventory() async throws {
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        let gate = AddLegBranchLoadGate()
+        let model = AddMissionLegModel(environment: environment(branches: { projectID in
+            if projectID == "mobile" {
+                await gate.waitUntilReleased()
+                return .init(names: ["mobile/main"], remoteNames: ["mobile"], localBranchNames: ["main"])
+            }
+            return .init(names: ["upstream/server"], remoteNames: ["upstream"], localBranchNames: ["server"])
+        }))
+        let projects = [project(id: "server"), project(id: "mobile")]
+
+        try await model.load(aggregate: aggregate, projects: projects, selectedProjectID: "server")
+        model.base = "upstream/server"
+        model.branch = "mission/custom-server"
+        let stale = Task {
+            try await model.load(aggregate: aggregate, projects: projects, selectedProjectID: "mobile")
+        }
+        await gate.waitUntilStarted()
+
+        try await model.load(aggregate: aggregate, projects: projects, selectedProjectID: "server")
+        await gate.release()
+        try await stale.value
+
+        #expect(model.projectId == "server")
+        #expect(model.branches == ["upstream/server"])
+        #expect(model.base == "upstream/server")
+        #expect(model.branch == "mission/custom-server")
+    }
+
     private func environment(
         destinationAvailable: Bool = true,
         branches: ((String) async throws -> AddMissionLegModel.BranchInventory)? = nil
