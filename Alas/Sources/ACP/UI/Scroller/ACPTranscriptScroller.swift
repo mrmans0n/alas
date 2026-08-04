@@ -633,24 +633,30 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 return
             }
 
+            // The user has moved the viewport themselves, so a row that
+            // vanished from an earlier update is no longer worth restoring to
+            // if it comes back — see `PendingAnchorRestore`.
+            reconciler.invalidatePendingAnchorRestore()
+
             let event = NSApp.currentEvent
             let eventIsFresh = ACPUserScrollEvent.isFresh(
                 eventTimestamp: event?.timestamp,
                 now: ProcessInfo.processInfo.systemUptime
             )
             let currentEventType = eventIsFresh ? event?.type : nil
-            let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
-            // Mirrors `ACPMessageList.handleScrollGeometry`: a click on the
-            // scrollbar track arrives as a plain `.leftMouseDown`, which
-            // `isUserDriven` alone rejects (a bare click can't be told apart
-            // from clicking a transcript control by event type). Widen to
-            // `isHeadPaginationDriven`, which additionally accepts that
-            // click when it actually hit the scrollbar track AND the
-            // geometry genuinely moved upward — so a track click both
-            // pauses tail-follow and can step the head window back, the
-            // same as a trackpad gesture or scroller-knob drag would,
-            // without misclassifying clicks on transcript controls (which
-            // aren't scrollbar hits) as scrolling.
+            // Classifies whether to PAUSE tail-follow, and nothing else — the
+            // pagination decisions below are geometric (see
+            // `shouldStepHeadBack`). Mirrors
+            // `ACPMessageList.handleScrollGeometry`: a click on the scrollbar
+            // track arrives as a plain `.leftMouseDown`, which
+            // `ACPUserScrollEvent.isUserDriven` alone rejects (a bare click
+            // can't be told apart from clicking a transcript control by event
+            // type). Widen to `isHeadPaginationDriven`, which additionally
+            // accepts that click when it actually hit the scrollbar track AND
+            // the geometry genuinely moved upward, so a track click pauses
+            // tail-follow the same as a trackpad gesture or scroller-knob
+            // drag would — without misclassifying clicks on transcript
+            // controls (which aren't scrollbar hits) as scrolling.
             let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
                 currentEventType,
                 previousMinY: previousY,
@@ -690,7 +696,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let threshold = ACPTranscriptScroller.headStepThreshold(viewportHeight: viewportHeight)
             if ACPTranscriptScroller.shouldStepHeadBack(
                 visibleHead: host.transcript.visibleHead,
-                scrollY: newY, isUserDriven: isHeadPaginationDriven, threshold: threshold,
+                scrollY: newY, threshold: threshold,
                 hasPendingHeadStep: pendingHeadStep
             ) {
                 // `stepHeadBack` mutates `visibleHead` synchronously, but the
@@ -708,7 +714,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 visibleTail: host.transcript.visibleTailBound,
                 messageCount: host.transcript.messages.count,
                 distanceFromBottom: scroller.distanceFromBottom,
-                isUserDriven: isUserDriven, threshold: threshold,
+                threshold: threshold,
                 previousScrollY: previousY, newScrollY: newY
             ) {
                 host.transcript.stepTailForward(preserving: nil, boundHead: false)
@@ -837,11 +843,34 @@ extension ACPTranscriptScroller {
     /// `hasPendingHeadStep` is the caller's latch for "a step was already
     /// requested and its compensating update hasn't landed yet" — see the
     /// call site in `Coordinator.handleScroll`.
+    ///
+    /// Deliberately NOT gated on `ACPUserScrollEvent.isUserDriven`, unlike the
+    /// tail-follow pause decision next to it. `NSApp.currentEvent` is only the
+    /// scroll event while the bounds change is happening inside event
+    /// dispatch, and with `NSScrollView`'s responsive scrolling most of them
+    /// are not: measured against the live app, 1176 of 1209 scroll ticks
+    /// during ordinary trackpad paging (97%) classified as NOT user-driven.
+    /// Gating pagination on that flag meant reaching the top of the render
+    /// window and then waiting — a second or more — for a tick to coincide
+    /// with a recognizable fresh event before older messages loaded at all.
+    ///
+    /// The gate is right for PAUSING tail-follow, where a false positive
+    /// stops the follow mid-stream and is user-visible (see
+    /// `ACPUserScrollEvent`'s doc comment), and it stays there. It buys
+    /// nothing here: the worst a false positive can do is widen the render
+    /// window slightly early, which is the direction this wants to err in
+    /// anyway. What actually bounds the work is geometry — a step only fires
+    /// while the viewport is within `threshold` of the window's top, and each
+    /// step's compensation pushes the offset back down by the height it
+    /// grafted in, so the window stops growing as soon as there is
+    /// `threshold`-worth of loaded history above the viewport. The legacy
+    /// path paginated from a geometry sentinel coming into view
+    /// (`ACPMessageList.handleHeadFramePreference`) for the same reason.
     nonisolated static func shouldStepHeadBack(
-        visibleHead: Int, scrollY: CGFloat, isUserDriven: Bool, threshold: CGFloat,
+        visibleHead: Int, scrollY: CGFloat, threshold: CGFloat,
         hasPendingHeadStep: Bool = false
     ) -> Bool {
-        visibleHead > 0 && isUserDriven && scrollY < threshold && !hasPendingHeadStep
+        visibleHead > 0 && scrollY < threshold && !hasPendingHeadStep
     }
 
     /// Mirrors `ACPMessageList.shouldStepTailForwardFromBottomGeometry`: a
@@ -856,12 +885,20 @@ extension ACPTranscriptScroller {
     /// avoid. `previousScrollY` is `nil` only before the first reported
     /// scroll offset, in which case direction is unknown and paging is
     /// withheld.
+    ///
+    /// Like `shouldStepHeadBack`, this is not gated on
+    /// `ACPUserScrollEvent.isUserDriven` — see that method's doc comment for
+    /// why the flag is close to useless under responsive scrolling. The
+    /// downward-movement requirement below is the intent signal here, and it
+    /// is a geometric one: a viewport that is not moving down through the
+    /// document does not page in newer messages, whatever the event stream
+    /// happened to look like.
     nonisolated static func shouldStepTailForward(
         visibleTail: Int, messageCount: Int, distanceFromBottom: CGFloat,
-        isUserDriven: Bool, threshold: CGFloat,
+        threshold: CGFloat,
         previousScrollY: CGFloat?, newScrollY: CGFloat
     ) -> Bool {
-        guard visibleTail < messageCount, isUserDriven, distanceFromBottom < threshold,
+        guard visibleTail < messageCount, distanceFromBottom < threshold,
               let previousScrollY
         else { return false }
         return newScrollY > previousScrollY + ACPScrollDirectionClassifier.upwardEpsilon
