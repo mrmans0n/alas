@@ -827,7 +827,13 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
                 state.handleCloseCenterShortcut(worktreeId: selectedWorktree()?.id)
             }
-        let g = f
+        let fReopenClosedTab = f
+            .onReceive(NotificationCenter.default.publisher(for: .alasReopenClosedTab)) { _ in
+                Task { @MainActor in
+                    await state.reopenLastClosedTab()
+                }
+            }
+        let g = fReopenClosedTab
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
                 guard let number = notification.object as? Int else { return }
                 state.activateCenterTabNumber(number, worktreeId: selectedWorktree()?.id)
@@ -991,6 +997,7 @@ extension Notification.Name {
     static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
     static let alasOpenAgentLauncher = Notification.Name("AlasOpenAgentLauncher")
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
+    static let alasReopenClosedTab = Notification.Name("AlasReopenClosedTab")
     static let alasActivateTabByNumber = Notification.Name("AlasActivateTabByNumber")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")

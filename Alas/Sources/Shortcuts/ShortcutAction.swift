@@ -145,6 +145,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     static let reservedBindings: [ShortcutBinding] = [
         .init(key: "q", modifiers: [.command]),
         .init(key: "w", modifiers: [.command]),
+        .init(key: "t", modifiers: [.command, .shift]),
         .init(key: "s", modifiers: [.command]),
         .init(key: "s", modifiers: [.command, .shift]),
         .init(key: "s", modifiers: [.command, .option]),

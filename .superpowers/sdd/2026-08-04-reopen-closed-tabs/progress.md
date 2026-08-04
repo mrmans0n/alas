@@ -26,3 +26,9 @@
 - Status: completed
 - Implementation: reconstructs closed terminal pane trees with fresh sessions at each leaf's last working directory, preserves tab and split metadata, clears Run Script markers, and rolls back opened sessions when reconstruction fails.
 - Verification: passed (`ClosedTabAppStateTests`, `TabsManagerPaneTests`, `AppStateKeepSessionsAliveTests`, and `AgentTerminalLaunchTests` with fresh DerivedData)
+
+## Task 5 - Menu command, notification, and Ghostty reservation
+
+- Status: completed
+- Implementation: reserves the fixed Command-Shift-T binding, adds the disabled-state-aware Reopen Closed Tab Tab-menu command, and routes its notification through AppState without relying on the selected worktree.
+- Verification: passed; the focused suite at `/tmp/alas-reopen-tabs-task5-dd/Logs/Test/Test-Alas-2026.08.04_21-29-07-+0200.xcresult` reports 50 passed, 0 failed, and 0 skipped.

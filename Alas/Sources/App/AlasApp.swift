@@ -275,6 +275,11 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasCloseTab, object: nil)
             }
             .keyboardShortcut("w", modifiers: .command)
+            Button("Reopen Closed Tab") {
+                NotificationCenter.default.post(name: .alasReopenClosedTab, object: nil)
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(!state.canReopenClosedTab)
             Divider()
             Button("Select Tab 1") {
                 NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 1)

@@ -30,7 +30,7 @@ struct SurfaceViewShortcutTests {
         #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
-    @Test func modifiedCommandTIsNotReserved() throws {
+    @Test func commandShiftTIsReservedForReopenClosedTab() throws {
         let event = try keyEvent(
             characters: "T",
             ignoringModifiers: "t",
@@ -38,7 +38,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandDigitOneIsReservedForAppCommand() throws {
