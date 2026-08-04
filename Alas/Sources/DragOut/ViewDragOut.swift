@@ -37,11 +37,18 @@ private final class DragOutState: ObservableObject {
     var armed = false
     var began = false
     var resolveTask: Task<URL?, Never>?
+    var beginTask: Task<Void, Never>?
 
-    /// Called both when a drag begins — `onEnded` never fires once AppKit takes
-    /// over the mouse — and when the gesture ends without one.
+    /// Called when the gesture ends without a drag ever lifting (a plain
+    /// click, or a resolve that failed or lost the race with mouse-up).
+    /// Once a drag actually lifts, `onEnded` never fires — AppKit has taken
+    /// the mouse — so the success path resets state itself instead of
+    /// relying on this.
     func reset() {
+        resolveTask?.cancel()
         resolveTask = nil
+        beginTask?.cancel()
+        beginTask = nil
         armed = false
         began = false
     }
@@ -69,13 +76,14 @@ private struct DragOutModifier: ViewModifier {
                     else { return }
                     state.began = true
                     let state = state
-                    Task { @MainActor in
-                        defer { state.reset() }
-                        guard let url = await resolveTask.value,
+                    state.beginTask = Task { @MainActor in
+                        guard let url = await resolveTask.value, !Task.isCancelled,
                               let event = NSApp.currentEvent,
+                              event.type == .leftMouseDragged || event.type == .leftMouseDown,
                               let view = event.window?.contentView
-                        else { return }
+                        else { return }        // no reset: onEnded will clean up
                         DragOutSession.shared.begin(url: url, event: event, in: view)
+                        state.reset()          // only here — onEnded won't fire
                     }
                 }
                 .onEnded { _ in state.reset() }

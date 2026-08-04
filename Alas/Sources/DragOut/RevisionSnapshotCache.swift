@@ -25,6 +25,10 @@ actor RevisionSnapshotCache {
     nonisolated let sessionDirectory: URL
 
     private var snapshots: [String: URL] = [:]
+    /// `(ref, path)` keys already known to have no blob, so a repeated failed
+    /// lookup — e.g. dragging a deleted file's row — does not re-spawn `git
+    /// show` for every gesture callback while the drag is held.
+    private var missingSnapshots: Set<String> = []
     private var didSweep = false
 
     init(sessionID: String = UUID().uuidString) {
@@ -58,25 +62,40 @@ actor RevisionSnapshotCache {
     }
 
     /// Returns a local file holding the blob, or nil when the blob does not
-    /// exist at that revision or cannot be written.
+    /// exist at that revision, the worktree is remote, or the blob cannot be
+    /// written.
+    ///
+    /// The remote check belongs here rather than only in the caller: this
+    /// method routes through `Process.gitData`, which follows
+    /// `RemoteHostRegistry` for a remote worktree path and would otherwise
+    /// silently `ssh` out to fetch a blob.
     func snapshot(worktreePath: URL, ref: String, path: String) async -> URL? {
+        guard !worktreePath.isRemoteAlasPath else { return nil }
+
         sweepStaleSessionsIfNeeded()
 
         let key = "\(ref)\u{0}\(path)"
         if let cached = snapshots[key], FileManager.default.fileExists(atPath: cached.path) {
             return cached
         }
+        if missingSnapshots.contains(key) {
+            return nil
+        }
 
         let destination = snapshotURL(ref: ref, path: path)
         do {
             let result = try await Process.gitData(["show", "\(ref):\(path)"], cwd: worktreePath)
-            guard result.exitCode == 0 else { return nil }
+            guard result.exitCode == 0 else {
+                missingSnapshots.insert(key)
+                return nil
+            }
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
             try result.stdout.write(to: destination, options: .atomic)
         } catch {
+            missingSnapshots.insert(key)
             return nil
         }
 
@@ -87,6 +106,7 @@ actor RevisionSnapshotCache {
     func removeSessionDirectory() {
         try? FileManager.default.removeItem(at: sessionDirectory)
         snapshots.removeAll()
+        missingSnapshots.removeAll()
     }
 
     /// Removes session directories left behind by earlier runs. Done on first

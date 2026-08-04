@@ -67,6 +67,30 @@ struct RevisionSnapshotCacheTests {
         #expect(snapshot == nil)
     }
 
+    @Test func snapshotMemoizesAMissingBlobAndDoesNotReRunGitShow() async throws {
+        let repo = try await makeRepo(name: "missing-memo")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+
+        let cache = RevisionSnapshotCache(sessionID: UUID().uuidString)
+        let first = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "nope.txt")
+        #expect(first == nil)
+
+        // The blob now genuinely exists at the (new) HEAD. If the second
+        // lookup re-ran `git show` it would succeed; a repeat nil here can
+        // only come from the negative-memoization cache keyed on the ref
+        // string "HEAD", not from re-inspecting the repository.
+        let file = repo.appendingPathComponent("nope.txt")
+        try "now it exists".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "nope.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add nope.txt"], cwd: repo)
+
+        let second = await cache.snapshot(worktreePath: repo, ref: "HEAD", path: "nope.txt")
+        #expect(second == nil)
+
+        await cache.removeSessionDirectory()
+    }
+
     @Test func removeSessionDirectoryDeletesWrittenSnapshots() async throws {
         let repo = try await makeRepo(name: "cleanup")
         defer { try? FileManager.default.removeItem(at: repo) }

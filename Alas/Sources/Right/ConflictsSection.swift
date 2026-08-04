@@ -150,7 +150,6 @@ struct ConflictsSection: View {
     @ViewBuilder
     private func row(for file: ChangedFile) -> some View {
         rowContent(for: file)
-            .dragOut { dragPayload?(file) }
     }
 
     @ViewBuilder
@@ -188,6 +187,7 @@ struct ConflictsSection: View {
         .contextMenu {
             menuItems(for: file)
         }
+        .dragOut { dragPayload?(file) }
     }
 
     private func bothDeletedRow(_ file: ChangedFile) -> some View {
@@ -224,6 +224,7 @@ struct ConflictsSection: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .dragOut { dragPayload?(file) }
     }
 
     private func deleteSideRow(_ file: ChangedFile) -> some View {
@@ -241,6 +242,7 @@ struct ConflictsSection: View {
                     Spacer()
                 }
                 .contentShape(Rectangle())
+                .dragOut { dragPayload?(file) }
             }
             .buttonStyle(.plain)
             Button(isOursDeleted ? "Keep theirs" : "Keep ours") {
