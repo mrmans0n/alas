@@ -1049,14 +1049,25 @@ struct OrderState {
     pending: std::collections::BTreeMap<u64, std::time::Instant>,
     /// Arrived and waiting to run.
     ready: std::collections::BTreeSet<u64>,
+    /// How many times a waiter has gone back round the loop. Only read by
+    /// tests, where it is the difference between waiting and spinning.
+    wakeups: u64,
 }
 
 #[cfg(unix)]
 impl OrderState {
-    /// The earliest moment a pending reservation stops holding its place, if
-    /// any is outstanding. What a waiter has to wake for.
-    fn soonest_deadline(&self) -> Option<std::time::Instant> {
-        self.pending.values().min().copied()
+    /// When the queue could next move on its own, if it can.
+    ///
+    /// Only the reservation at the head has a deadline worth waking for:
+    /// nothing behind it can advance anything, and a head that has already
+    /// arrived is released by its turn dropping, which notifies. Taking the
+    /// earliest deadline anywhere instead meant one expired reservation
+    /// sitting behind a running request handed every waiter a deadline
+    /// already in the past — so they woke, took the mutex, found `serving`
+    /// unchanged, and did it again a millisecond later, for as long as the
+    /// request took.
+    fn head_deadline(&self) -> Option<std::time::Instant> {
+        self.pending.get(&self.serving).copied()
     }
 
     /// Steps `serving` past every place that no longer has a claim on it:
@@ -1150,13 +1161,14 @@ impl Reservation {
             // Wait only as long as the soonest one actually has left, or a
             // waiter arriving late in a grace period sleeps a whole fresh one
             // past it — turning a 5s bound into nearly 10s.
-            let wait = state
-                .soonest_deadline()
-                .map_or(RESERVATION_GRACE, |deadline| {
-                    deadline
-                        .saturating_duration_since(std::time::Instant::now())
-                        .max(Duration::from_millis(1))
-                });
+            // A head that has arrived is woken by its turn dropping, so the
+            // timeout is only a backstop against a missed notification.
+            let wait = state.head_deadline().map_or(RESERVATION_GRACE, |deadline| {
+                deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .max(Duration::from_millis(1))
+            });
+            state.wakeups += 1;
             let (guard, _) = order
                 .turn
                 .wait_timeout(state, wait)
@@ -2727,6 +2739,50 @@ mod tests {
 
         let observed = observed.lock().unwrap_or_else(|error| error.into_inner());
         assert_eq!(*observed, vec!["fresh", "stale"]);
+    }
+
+    /// A waiter behind a running request must sleep, not spin.
+    ///
+    /// Waking for the earliest deadline anywhere meant an expired reservation
+    /// sitting behind a running request handed every waiter a deadline already
+    /// in the past. They woke on the one-millisecond floor, took the mutex,
+    /// found `serving` unchanged and went round again — for as long as the
+    /// request ran, across as many threads as were waiting.
+    #[cfg(unix)]
+    #[test]
+    fn a_waiter_behind_a_running_request_does_not_spin() {
+        let order = Arc::new(RequestOrder::default());
+        let running = order.reserve().claim();
+        // Sits behind the running request and lapses while it works.
+        let _stalled = order.reserve();
+        let queued = order.reserve();
+
+        let waiter = std::thread::spawn(move || {
+            let _turn = queued.claim();
+        });
+
+        // Let the reservation behind the head expire.
+        std::thread::sleep(RESERVATION_GRACE + Duration::from_millis(200));
+        let before = {
+            let state = order.state.lock().expect("state");
+            state.wakeups
+        };
+        // A window in which nothing can legitimately move: the head is still
+        // running, so any wakeup here is wasted work.
+        std::thread::sleep(Duration::from_millis(600));
+        let after = {
+            let state = order.state.lock().expect("state");
+            state.wakeups
+        };
+
+        drop(running);
+        waiter.join().expect("waiter");
+
+        assert!(
+            after - before <= 2,
+            "waiter spun {} times while the head was running",
+            after - before
+        );
     }
 
     /// A waiter must wake when the place ahead of it actually expires, not a
