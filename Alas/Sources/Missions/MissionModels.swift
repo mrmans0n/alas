@@ -439,9 +439,47 @@ struct MissionEvent: Codable, Equatable, Sendable {
 
 struct MissionAggregate: Equatable, Sendable {
     var mission: MissionRecord
-    var issue: MissionIssueSnapshot
+    var source: MissionSourceSnapshot
     var legs: [MissionLeg]
     var events: [MissionEvent]
+
+    init(
+        mission: MissionRecord,
+        source: MissionSourceSnapshot,
+        legs: [MissionLeg],
+        events: [MissionEvent]
+    ) {
+        self.mission = mission
+        self.source = source
+        self.legs = legs
+        self.events = events
+    }
+
+    init(
+        mission: MissionRecord,
+        issue: MissionIssueSnapshot,
+        legs: [MissionLeg],
+        events: [MissionEvent]
+    ) {
+        self.init(
+            mission: mission,
+            source: MissionSourceSnapshot(issue: issue),
+            legs: legs,
+            events: events
+        )
+    }
+
+    // Temporary compatibility for code-host callers while they migrate to
+    // provider-neutral Mission sources. Remove with the Task 7 migration.
+    var issue: MissionIssueSnapshot {
+        get {
+            guard let issue = MissionIssueSnapshot(source: source) else {
+                preconditionFailure("Mission source is not a code-host issue")
+            }
+            return issue
+        }
+        set { source = MissionSourceSnapshot(issue: newValue) }
+    }
 
     var primaryLeg: MissionLeg? {
         legs.first { $0.id == mission.primaryLegID }
@@ -449,7 +487,7 @@ struct MissionAggregate: Equatable, Sendable {
 }
 
 struct MissionDraft: Equatable, Sendable {
-    let issue: MissionIssueSnapshot
+    let source: MissionSourceSnapshot
     let projectId: String
     let baseRef: String
     let baseRemoteName: String?
@@ -458,6 +496,37 @@ struct MissionDraft: Equatable, Sendable {
     let agentId: String
     let initialPromptId: UUID
     let initialPrompt: String
+
+    // Temporary compatibility for code-host callers while they migrate to
+    // provider-neutral Mission sources. Remove with the Task 7 migration.
+    var issue: MissionIssueSnapshot {
+        guard let issue = MissionIssueSnapshot(source: source) else {
+            preconditionFailure("Mission source is not a code-host issue")
+        }
+        return issue
+    }
+
+    init(
+        source: MissionSourceSnapshot,
+        projectId: String,
+        baseRef: String,
+        baseRemoteName: String? = nil,
+        branch: String,
+        destinationPath: String,
+        agentId: String,
+        initialPromptId: UUID,
+        initialPrompt: String
+    ) {
+        self.source = source
+        self.projectId = projectId
+        self.baseRef = baseRef
+        self.baseRemoteName = baseRemoteName
+        self.branch = branch
+        self.destinationPath = destinationPath
+        self.agentId = agentId
+        self.initialPromptId = initialPromptId
+        self.initialPrompt = initialPrompt
+    }
 
     init(
         issue: MissionIssueSnapshot,
@@ -470,15 +539,17 @@ struct MissionDraft: Equatable, Sendable {
         initialPromptId: UUID,
         initialPrompt: String
     ) {
-        self.issue = issue
-        self.projectId = projectId
-        self.baseRef = baseRef
-        self.baseRemoteName = baseRemoteName
-        self.branch = branch
-        self.destinationPath = destinationPath
-        self.agentId = agentId
-        self.initialPromptId = initialPromptId
-        self.initialPrompt = initialPrompt
+        self.init(
+            source: MissionSourceSnapshot(issue: issue),
+            projectId: projectId,
+            baseRef: baseRef,
+            baseRemoteName: baseRemoteName,
+            branch: branch,
+            destinationPath: destinationPath,
+            agentId: agentId,
+            initialPromptId: initialPromptId,
+            initialPrompt: initialPrompt
+        )
     }
 }
 

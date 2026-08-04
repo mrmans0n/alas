@@ -3,9 +3,9 @@ import Foundation
 
 enum MissionFixtures {
     static func manualSource(
-        url: String,
-        title: String,
-        body: String
+        url: String = "https://linear.app/acme/issue/ALA-42/fix-parser-crash",
+        title: String = "Fix parser crash",
+        body: String = "The parser crashes for malformed input."
     ) -> MissionSourceSnapshot {
         .init(
             identity: .init(providerID: .manual, stableID: url),
@@ -72,6 +72,36 @@ enum MissionFixtures {
                 completedAt: nil
             ),
             issue: issue,
+            legs: [leg(
+                id: legID,
+                missionID: missionID,
+                baseRef: baseRef,
+                baseRemoteName: baseRemoteName
+            )],
+            events: [event(id: "\(id)-event-1", missionID: missionID, legID: legID, kind: .created)]
+        )
+    }
+
+    static func creatingMission(
+        id: String = "mission-1",
+        source: MissionSourceSnapshot,
+        createdAt: TimeInterval = 100,
+        baseRef: String = "origin/main",
+        baseRemoteName: String? = "origin"
+    ) -> MissionAggregate {
+        let missionID = MissionID(rawValue: id)
+        let legID = MissionLegID(rawValue: "\(id)-leg-1")
+        return .init(
+            mission: .init(
+                id: missionID,
+                title: source.title,
+                state: .creating,
+                primaryLegID: legID,
+                createdAt: Date(timeIntervalSince1970: createdAt),
+                updatedAt: Date(timeIntervalSince1970: createdAt),
+                completedAt: nil
+            ),
+            source: source,
             legs: [leg(
                 id: legID,
                 missionID: missionID,

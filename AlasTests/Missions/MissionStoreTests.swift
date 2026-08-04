@@ -48,6 +48,147 @@ struct MissionStoreTests {
         #expect(try v1.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 1)
     }
 
+    @Test("v5 issue rows migrate to provider-neutral sources")
+    func migratesV5IssueRowsToProviderNeutralSources() throws {
+        let path = temporaryPath()
+        do { _ = try MissionStoreTestDatabase.v5(path: URL(fileURLWithPath: path)) }
+
+        let store = try MissionStore(path: path)
+        let aggregate = try #require(try store.aggregate(id: .init(rawValue: "mission-1")))
+        let tableNames = try store.db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).compactMap { $0["name"] as? String }
+        let missionColumns = try store.db.query("PRAGMA table_info(missions)")
+            .compactMap { $0["name"] as? String }
+
+        #expect(try store.currentSchemaVersion() == 6)
+        #expect(aggregate.source.identity == .init(
+            providerID: .github,
+            stableID: "github.com/acme/alas#42"
+        ))
+        #expect(aggregate.source.repositoryLocator?.repositorySlug == "acme/alas")
+        #expect(aggregate.source.displayReference == "#42")
+        #expect(!missionColumns.contains("source_kind"))
+        #expect(tableNames.contains("mission_sources"))
+        #expect(!tableNames.contains("mission_issue_sources"))
+    }
+
+    @Test("v5 source migration rolls back all schema and data changes")
+    func malformedV5SourceMigrationRollsBack() throws {
+        let path = temporaryPath()
+        let v5 = try MissionStoreTestDatabase.v5(
+            path: URL(fileURLWithPath: path),
+            provider: "unsupported"
+        )
+
+        #expect(throws: MissionStore.Error.malformedRecord) {
+            _ = try MissionStore(path: path)
+        }
+
+        let tableNames = try v5.query("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .compactMap { $0["name"] as? String }
+        #expect(try v5.query("SELECT version FROM schema_version").first?["version"] as? Int64 == 5)
+        #expect(try v5.query("SELECT provider FROM mission_issue_sources").first?["provider"] as? String == "unsupported")
+        #expect(tableNames.contains("missions"))
+        #expect(tableNames.contains("mission_issue_sources"))
+        #expect(!tableNames.contains("mission_sources"))
+        #expect(!tableNames.contains("missions_v5"))
+    }
+
+    @Test("manual sources round trip and reject an active duplicate")
+    func manualSourceRoundTripsAndRejectsAnActiveDuplicate() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let first = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        let second = MissionFixtures.creatingMission(id: "mission-2", source: first.source)
+
+        try store.insert(first)
+        #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
+            try store.insert(second)
+        }
+        #expect(try store.aggregate(id: first.mission.id)?.source == first.source)
+        #expect(try store.activeMission(sourceIdentity: first.source.identity)?.mission.id == first.mission.id)
+    }
+
+    @Test("provider-neutral refresh replaces content and preserves an unchanged identity")
+    func replacesSourceSnapshot() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        try store.insert(aggregate)
+        let refreshed = MissionFixtures.manualSource(
+            title: "Fix parser crash in YAML files",
+            body: "Updated provider-neutral context."
+        )
+
+        let migrated = try store.replaceSourceSnapshot(
+            missionID: aggregate.mission.id,
+            snapshot: refreshed,
+            event: MissionFixtures.event(
+                id: "refreshed",
+                missionID: aggregate.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 150
+            )
+        )
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(migrated == [aggregate.mission.id])
+        #expect(loaded.source == refreshed)
+        #expect(loaded.mission.title == refreshed.title)
+        #expect(loaded.events.last?.kind == .sourceRefreshed)
+    }
+
+    @Test("manual source edits preserve identity, URL, and capabilities")
+    func updatesManualSourceContent() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        try store.insert(aggregate)
+
+        try store.updateManualSourceContent(
+            missionID: aggregate.mission.id,
+            title: "Edited title",
+            body: "Edited body",
+            event: MissionFixtures.event(
+                id: "manual-edit",
+                missionID: aggregate.mission.id,
+                kind: .sourceRefreshed,
+                createdAt: 175
+            )
+        )
+
+        let loaded = try #require(try store.aggregate(id: aggregate.mission.id))
+        #expect(loaded.source.identity == aggregate.source.identity)
+        #expect(loaded.source.canonicalURL == aggregate.source.canonicalURL)
+        #expect(loaded.source.isEditable == aggregate.source.isEditable)
+        #expect(loaded.source.isRefreshable == aggregate.source.isRefreshable)
+        #expect(loaded.source.title == "Edited title")
+        #expect(loaded.source.body == "Edited body")
+        #expect(loaded.mission.title == "Edited title")
+        #expect(loaded.events.last?.kind == .sourceRefreshed)
+        #expect(loaded.events.last?.message == "Source context updated.")
+    }
+
+    @Test("manual source edits require an editable source")
+    func rejectsManualContentUpdateForProviderSource() throws {
+        let store = try MissionStore(path: temporaryPath())
+        var aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+
+        #expect(throws: MissionStore.Error.sourceNotEditable) {
+            try store.updateManualSourceContent(
+                missionID: aggregate.mission.id,
+                title: "Edited title",
+                body: "Edited body",
+                event: MissionFixtures.event(
+                    id: "manual-edit",
+                    missionID: aggregate.mission.id,
+                    kind: .sourceRefreshed,
+                    createdAt: 175
+                )
+            )
+        }
+        #expect(try store.aggregate(id: aggregate.mission.id)?.source == aggregate.source)
+    }
+
     @Test("v4 migrates legacy Mission attention onto its leg")
     func migratesLegacyAttentionToLeg() throws {
         let path = temporaryPath()
@@ -345,7 +486,7 @@ struct MissionStoreTests {
         let store = try MissionStore(path: temporaryPath())
         try store.insert(MissionFixtures.creatingMission(id: "mission-1"))
 
-        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try store.insert(MissionFixtures.creatingMission(id: "mission-2"))
         }
     }
@@ -373,7 +514,7 @@ struct MissionStoreTests {
             refreshError: issue.refreshError
         )
 
-        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try store.insert(MissionFixtures.creatingMission(id: "mission-2", issue: differentlyCasedIssue))
         }
     }
@@ -625,7 +766,7 @@ struct MissionStoreTests {
                 createdAt: 200
             )
         )
-        try store.updateIssueRefreshError(
+        try store.updateSourceRefreshError(
             missionID: aggregate.mission.id,
             refreshError: "Authentication is required for github.com.",
             event: MissionFixtures.event(
@@ -650,7 +791,7 @@ struct MissionStoreTests {
         try store.insert(aggregate)
         let changedIdentity = MissionFixtures.issue(number: 43, capturedAt: 150)
 
-        #expect(throws: (any Error).self) {
+        #expect(throws: MissionStore.Error.sourceIdentityChanged) {
             try store.replaceIssueSnapshot(
                 missionID: aggregate.mission.id,
                 snapshot: changedIdentity,
@@ -740,7 +881,7 @@ struct MissionStoreTests {
         try store.insert(legacy)
         try store.insert(canonical)
 
-        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try store.replaceIssueSnapshot(
                 missionID: legacy.mission.id,
                 snapshot: canonicalIssue,
@@ -856,7 +997,7 @@ struct MissionStoreTests {
         )
         try store.insert(activeCanonical)
 
-        #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try store.replaceIssueSnapshot(
                 missionID: completed.mission.id,
                 snapshot: canonicalIssue,
@@ -913,6 +1054,23 @@ struct MissionStoreTests {
 }
 
 private enum MissionStoreTestDatabase {
+    static func v5(path: URL, provider: String = "github") throws -> SQLiteDatabase {
+        do {
+            _ = try v3(
+                path: path,
+                missionState: "running",
+                checkpoint: "running",
+                attentionReason: nil
+            )
+        }
+        if provider != "github" {
+            let database = try SQLiteDatabase(path: path.path)
+            try database.exec("UPDATE mission_issue_sources SET provider = ?", bindings: [provider])
+        }
+        do { _ = try MissionStore(path: path.path, schemaTargetVersion: 5) }
+        return try SQLiteDatabase(path: path.path)
+    }
+
     static func v3(
         path: URL,
         missionState: String,
