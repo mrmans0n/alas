@@ -851,7 +851,7 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.events.last?.message == "Mission worktree became available again.")
     }
 
-    @Test func startupDoesNotRestoreAReplacementMissionWorktree() async throws {
+    @Test func startupDiscoversReviewPastAReplacementMissionWorktree() async throws {
         var missing = Self.runningAggregate()
         missing.markPrimaryLegNeedsAttention(
             checkpoint: .running,
@@ -873,11 +873,9 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .running)
-        #expect(aggregate.mission.setupCheckpoint == .running)
-        #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.events.last?.kind != .retryStarted)
-        #expect(discoveryCalls == 0)
+        #expect(discoveryCalls == 1)
     }
 
     @Test func reappearedWorktreeResumesPendingAgentSetup() async throws {
@@ -1721,13 +1719,14 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.mission.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
     }
 
-    @Test func startupDoesNotRefreshLinkedReviewFromAReplacementBranch() async throws {
+    @Test func startupRefreshesLinkedReviewPastAReplacementWorktree() async throws {
         var linked = Self.runningAggregate()
         linked.legs[0].reviewIdentity = Self.reviewIdentity
+        linked.legs[0].worktreeLineageID = "original-lineage"
         var linkedReviewCalls = 0
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            worktreeBranch: "unrelated-branch",
+            worktreeLineageID: "replacement-lineage",
             linkedReviewRequest: { identity, projectID, _ in
                 linkedReviewCalls += 1
                 guard identity == Self.reviewIdentity, projectID == "project-1" else { return nil }
@@ -1739,9 +1738,9 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.reconcileInterrupted()
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.mission.state == .running)
+        #expect(aggregate.mission.state == .readyToComplete)
         #expect(aggregate.primaryLeg?.reviewIdentity == Self.reviewIdentity)
-        #expect(linkedReviewCalls == 0)
+        #expect(linkedReviewCalls == 1)
     }
 
     @Test func startupDoesNotArchiveAReplacementWorktreeOnTheWrongBranch() async throws {

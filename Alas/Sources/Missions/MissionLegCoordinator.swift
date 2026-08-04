@@ -176,7 +176,9 @@ final class MissionLegCoordinator {
                     return false
                 }
             }
-            switch await environment.createWorktree(leg) {
+            let creationResult = await environment.createWorktree(leg)
+            guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
+            switch creationResult {
             case .success(let created):
                 worktree = created
             case .failure(let failure):
@@ -271,7 +273,9 @@ final class MissionLegCoordinator {
 
         guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
 
-        switch await environment.startACP(leg, worktree) {
+        let startupResult = await environment.startACP(leg, worktree)
+        guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
+        switch startupResult {
         case .success:
             leg.pendingInitialPrompt = nil
             leg.state = .running

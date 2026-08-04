@@ -714,16 +714,6 @@ final class MissionController {
     }
 
     private func refreshReviewWithoutWorktree(for aggregate: MissionAggregate, leg: MissionLeg) async {
-        if let currentWorktree = environment.worktreeAtDestination(
-            leg.projectId,
-            leg.destinationPath
-        ) {
-            guard currentWorktree.id == leg.worktreeId,
-                  currentWorktree.branch == leg.branch,
-                  let worktreeLineageID = leg.worktreeLineageID,
-                  currentWorktree.lineageID == worktreeLineageID
-            else { return }
-        }
         let currentTip = await branchTip(leg.projectId, leg.branch)
         var replacesLinkedReview = false
         if let identity = leg.reviewIdentity {

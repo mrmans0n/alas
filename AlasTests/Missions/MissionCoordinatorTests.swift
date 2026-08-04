@@ -121,11 +121,40 @@ struct MissionCoordinatorTests {
                 kind: .completed
             )
         )
+        let completed = try #require(try await fake.persistence.aggregate(id: missionID))
 
         await fake.resumeWorktreeCreation(for: leg.id)
         for _ in 0..<20 { await Task.yield() }
 
         #expect(fake.startACPCalls == 0)
+        #expect(try await fake.persistence.aggregate(id: missionID) == completed)
+    }
+
+    @Test("completion while ACP startup is suspended preserves completed history")
+    func completionWhileACPStartupIsSuspendedPreservesCompletedHistory() async throws {
+        let fake = MissionCoordinatorFake(suspendACPStartup: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForACPStarts(count: 1)
+
+        let beforeCompletion = try #require(try await fake.persistence.aggregate(id: missionID))
+        let legID = try #require(beforeCompletion.primaryLeg?.id)
+        try await fake.persistence.complete(
+            id: missionID,
+            at: .now,
+            event: MissionFixtures.event(
+                id: "completed-during-agent-start",
+                missionID: missionID,
+                legID: legID,
+                kind: .completed
+            )
+        )
+        let completed = try #require(try await fake.persistence.aggregate(id: missionID))
+
+        await fake.resumeACPStartup(for: legID)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(try await fake.persistence.aggregate(id: missionID) == completed)
     }
 
     // Break caught: completion can race after the ACP session reservation is
@@ -1048,10 +1077,17 @@ private final class MissionCoordinatorFake {
     private var idCounter = 0
     private var clock: TimeInterval = 1_000
     private let suspendWorktreeCreation: Bool
+    private let suspendACPStartup: Bool
     private let completeWhenSessionReserved: Bool
     private var startedLegs: [MissionLegID: MissionLeg] = [:]
     private var worktreeCreationContinuations: [
         MissionLegID: CheckedContinuation<Result<Worktree, WorktreeCreationFailure>, Never>
+    ] = [:]
+    private var acpStartupContinuations: [
+        MissionLegID: CheckedContinuation<
+            Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>,
+            Never
+        >
     ] = [:]
     var idValues: [String] = []
 
@@ -1060,6 +1096,7 @@ private final class MissionCoordinatorFake {
         worktreeResult: Result<Worktree, WorktreeCreationFailure>? = nil,
         agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil,
         suspendWorktreeCreation: Bool = false,
+        suspendACPStartup: Bool = false,
         completeWhenSessionReserved: Bool = false
     ) {
         let path = FileManager.default.temporaryDirectory
@@ -1074,6 +1111,7 @@ private final class MissionCoordinatorFake {
         self.worktreeResult = worktreeResult ?? .success(worktree)
         self.agentResult = agentResult
         self.suspendWorktreeCreation = suspendWorktreeCreation
+        self.suspendACPStartup = suspendACPStartup
         self.completeWhenSessionReserved = completeWhenSessionReserved
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
             worktreeAtDestination = worktree
@@ -1143,6 +1181,11 @@ private final class MissionCoordinatorFake {
                 if let prompt = leg.pendingInitialPrompt {
                     self.startedPromptIDs.append(leg.initialPromptId)
                     self.startedPrompts.append(prompt)
+                }
+                if self.suspendACPStartup {
+                    return await withCheckedContinuation { continuation in
+                        self.acpStartupContinuations[leg.id] = continuation
+                    }
                 }
                 if let startACPOverride = self.startACPOverride {
                     return await startACPOverride(leg, self.worktree)
@@ -1214,6 +1257,13 @@ private final class MissionCoordinatorFake {
         }
     }
 
+    func waitForACPStarts(count: Int) async {
+        for _ in 0..<200 {
+            if startACPCalls >= count { return }
+            await Task.yield()
+        }
+    }
+
     func clearStartedLegIDs() {
         startedLegIDs = []
     }
@@ -1223,6 +1273,11 @@ private final class MissionCoordinatorFake {
         let result = worktreeResult(for: legID)
         recordCreatedWorktree(result)
         continuation.resume(returning: result)
+    }
+
+    func resumeACPStartup(for legID: MissionLegID) async {
+        guard let continuation = acpStartupContinuations.removeValue(forKey: legID) else { return }
+        continuation.resume(returning: agentResult ?? .success("session-\(legID.rawValue)"))
     }
 
     func waitUntilLegsSettled(_ id: MissionID, count: Int) async -> MissionAggregate {
