@@ -370,12 +370,10 @@ extension AddMissionLegModel.Environment {
             configuredBase: { [weak state] _ in state?.config.worktrees.baseBranch ?? "main" },
             configuredBranchPrefix: { [weak state] _ in state?.config.worktrees.branchPrefix ?? "feature/" },
             reservedBranches: { [weak state] projectID in
-                state?.missions.aggregates.flatMap { aggregate -> [String] in
-                    guard aggregate.mission.state != .completed else { return [] }
-                    return aggregate.legs
-                        .filter { $0.projectId == projectID }
-                        .map(\.branch)
-                } ?? []
+                NewMissionDialogModel.Environment.activeMissionBranches(
+                    in: state?.missions.aggregates ?? [],
+                    projectID: projectID
+                )
             },
             enabledACPAgents: { [weak state] in state?.agentRegistry.enabled() ?? [] },
             destination: { [weak state] projectID, branch in
@@ -392,13 +390,10 @@ extension AddMissionLegModel.Environment {
             destinationAvailable: { [weak state] projectID, destination in
                 guard let state else { return false }
                 let candidate = destination.standardizedFileURL.path
-                let reserved = state.missions.aggregates.contains { aggregate in
-                    guard aggregate.mission.state != .completed else { return false }
-                    return aggregate.legs.contains { leg in
-                        guard leg.projectId == projectID else { return false }
-                        return URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path == candidate
-                    }
-                }
+                let reserved = NewMissionDialogModel.Environment.activeMissionDestinationPaths(
+                    in: state.missions.aggregates,
+                    projectID: projectID
+                ).contains(candidate)
                 return !FileManager.default.fileExists(atPath: candidate)
                     && !reserved
                     && !state.projectsManager.worktrees(projectId: projectID).contains {
