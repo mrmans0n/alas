@@ -643,6 +643,21 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 1)
     }
 
+    @Test func forcedRemoteRefreshReloadsUnchangedStack() async {
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        let state = RightPaneState(worktree: makeWorktree(), baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "r", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        await state.refreshGGStack(forceRemote: true)
+
+        #expect(runner.callCount == 2)
+    }
+
     @Test func unchangedStackKeyReconcilesUndoAgainstExternalLaterOperation() async throws {
         let wt = makeWorktree()
         try FileManager.default.createDirectory(
