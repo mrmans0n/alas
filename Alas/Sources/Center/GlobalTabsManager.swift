@@ -95,6 +95,19 @@ final class GlobalTabsManager {
         try? persist()
     }
 
+    @discardableResult
+    func restore(tab: GlobalTab, placement: ClosedTabPlacement) -> TabID {
+        if tabs.contains(where: { $0.id == tab.id }) {
+            activeTabId = tab.id
+        } else {
+            let index = placement.insertionIndex(in: tabs.map(\.id))
+            tabs.insert(tab, at: index)
+            activeTabId = tab.id
+        }
+        try? persist()
+        return tab.id
+    }
+
     func clearActiveTab() {
         guard activeTabId != nil else { return }
         activeTabId = nil
