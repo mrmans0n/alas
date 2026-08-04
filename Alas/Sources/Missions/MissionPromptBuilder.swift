@@ -2,14 +2,15 @@ import Foundation
 
 enum MissionBranchName {
     static func make(displayReference: String?, title: String, prefix: String) -> String {
-        let referenceComponent = displayReference.map(slug) ?? ""
+        let referenceComponent = displayReference.map(slug).flatMap { $0.isEmpty ? nil : $0 }
         let titleComponent = slug(title)
-        let components = [referenceComponent, titleComponent.isEmpty ? "issue" : titleComponent]
+        let components = [referenceComponent, titleComponent].compactMap { $0 }
         return "\(prefix)\(components.joined(separator: "-"))"
     }
 
     static func make(issueNumber: Int, title: String, prefix: String) -> String {
-        make(displayReference: "#\(issueNumber)", title: title, prefix: prefix)
+        let legacyTitle = slug(title).isEmpty ? "issue" : title
+        return make(displayReference: "#\(issueNumber)", title: legacyTitle, prefix: prefix)
     }
 
     private static func slug(_ value: String) -> String {

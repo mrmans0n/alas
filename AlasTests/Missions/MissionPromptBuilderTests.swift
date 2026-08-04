@@ -11,6 +11,22 @@ struct MissionPromptBuilderTests {
         ) == "nacho/fix-login-timeout")
     }
 
+    @Test func emptyDisplayReferenceUsesOnlyTitleSlug() {
+        #expect(MissionBranchName.make(
+            displayReference: "",
+            title: "Fix login timeout",
+            prefix: "nacho/"
+        ) == "nacho/fix-login-timeout")
+    }
+
+    @Test func emptyManualSourceTitleDoesNotUseIssueFallback() {
+        #expect(MissionBranchName.make(
+            displayReference: nil,
+            title: "---",
+            prefix: "nacho/"
+        ) == "nacho/")
+    }
+
     @Test func manualSourcePromptUsesWorkItemTerminology() {
         let source = MissionFixtures.manualSource(
             url: "https://jira.example.com/browse/ALAS-123?view=full",
