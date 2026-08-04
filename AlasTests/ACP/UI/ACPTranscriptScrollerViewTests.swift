@@ -83,4 +83,35 @@ struct ACPTranscriptScrollerViewTests {
         #expect(reports.contains { abs($0.y - 400) < 0.5 && $0.programmatic })
         #expect(!reports.contains { !$0.programmatic })
     }
+
+    /// `onContentWidthChange` is the hook `ACPTranscriptScroller.Coordinator`
+    /// uses to reconcile after a real width arrives from AppKit's own layout
+    /// pass, without any accompanying SwiftUI model update (P1 finding,
+    /// codex round 5). It must fire exactly once per genuine content-width
+    /// change — including the very first non-zero width the view receives —
+    /// and must NOT fire again for a layout pass at an unchanged width: a
+    /// reconcile per layout pass would be a performance regression.
+    @Test("onContentWidthChange fires once per genuine width change, not on a same-width layout pass")
+    func contentWidthChangeFiresOnlyOnRealChange() {
+        let s = ACPTranscriptScrollerView(frame: .zero)
+        var fireCount = 0
+        s.onContentWidthChange = { fireCount += 1 }
+
+        // No layout pass has happened yet: no width to report.
+        #expect(fireCount == 0)
+
+        // First real width: fires.
+        s.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        s.layoutSubtreeIfNeeded()
+        #expect(fireCount == 1)
+
+        // A no-op layout pass at the SAME width: does not re-fire.
+        s.layoutSubtreeIfNeeded()
+        #expect(fireCount == 1)
+
+        // A genuinely different width: fires again.
+        s.frame = NSRect(x: 0, y: 0, width: 700, height: 400)
+        s.layoutSubtreeIfNeeded()
+        #expect(fireCount == 2)
+    }
 }

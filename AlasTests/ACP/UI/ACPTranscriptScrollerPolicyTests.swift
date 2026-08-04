@@ -337,6 +337,84 @@ struct ACPTranscriptScrollerRestoreLatchTests {
         // if the latch had been consumed prematurely, this would still be 0.
         #expect(scroller.distanceFromBottom < 1)
     }
+
+    /// Regression test for the P1 finding (codex round 5): `attach()`'s
+    /// first `update(host:)` always runs against `frame: .zero`, where
+    /// `reconciler.apply` defers. Nothing besides a later SwiftUI-driven
+    /// `updateNSView` used to re-run `update(host:)`, so a real width
+    /// arriving purely through the scroller's own AppKit layout pass — with
+    /// no accompanying model mutation — left a fully hydrated transcript
+    /// empty. Unlike `restoreLatchWaitsForPositiveWidth` above, this test
+    /// deliberately does NOT call `coordinator.update(host:)` again after
+    /// the layout pass: the scroller's own layout must drive reconciliation
+    /// on its own.
+    @Test("a real width arriving only through the scroller's own layout pass reconciles, with no further update(host:) call")
+    func layoutAloneReconcilesAfterZeroWidthBootstrap() {
+        let host = makeHost() // default session: followsTranscriptTail == true
+        let messages = (0..<40).map { _ in
+            ACPMessage.systemNotice(id: UUID(), text: String(repeating: "line ", count: 20))
+        }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        // Mirrors `makeNSView`'s `ACPTranscriptScrollerView(frame: .zero)`.
+        let scroller = ACPTranscriptScrollerView(frame: .zero)
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+
+        // Width-0 bootstrap pass: `reconciler.apply` deferred. Nothing
+        // measured or mounted yet.
+        #expect(scroller.flippedDocumentView.frame.height == 0)
+        #expect(scroller.flippedDocumentView.subviews.isEmpty)
+
+        // The view receives its real size purely through AppKit's own
+        // layout pass — exactly what happens once SwiftUI actually places
+        // the representable — with NO further `update(host:)` call.
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        scroller.layoutSubtreeIfNeeded()
+
+        // The reconciler must have run against the real width on its own:
+        // the document is measured and rows are mounted.
+        #expect(scroller.flippedDocumentView.frame.height > 0)
+        #expect(!scroller.flippedDocumentView.subviews.isEmpty)
+    }
+
+    /// A layout pass at an UNCHANGED width must not re-run the reconciler —
+    /// only a genuine width change (or the deferred zero-width case above)
+    /// should. Verified indirectly: the document is only ever set to a
+    /// positive height once, from the single genuine width change: a
+    /// second no-op layout pass at the same width must not perturb it.
+    @Test("a layout pass at an unchanged width does not re-run the reconciler")
+    func layoutAtUnchangedWidthDoesNotReapply() {
+        let host = makeHost()
+        let messages = (0..<10).map { _ in ACPMessage.systemNotice(id: UUID(), text: "hello") }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let scroller = ACPTranscriptScrollerView(frame: .zero)
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        scroller.layoutSubtreeIfNeeded()
+        let heightAfterFirstLayout = scroller.flippedDocumentView.frame.height
+        #expect(heightAfterFirstLayout > 0)
+
+        // Scroll away from the bottom so a spurious re-apply (which
+        // re-pins to the bottom while `followsTranscriptTail` is true)
+        // would be observable.
+        scroller.setScrollY(0)
+        #expect(scroller.scrollY == 0)
+
+        // A second layout pass at the SAME width/frame must be a no-op:
+        // the document height is unchanged and the viewport was not
+        // re-pinned to the bottom.
+        scroller.layoutSubtreeIfNeeded()
+        #expect(scroller.flippedDocumentView.frame.height == heightAfterFirstLayout)
+        #expect(scroller.scrollY == 0)
+    }
 }
 
 @Suite("ACPTranscriptScroller policies")

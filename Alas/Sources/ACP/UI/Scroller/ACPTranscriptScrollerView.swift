@@ -17,6 +17,21 @@ final class ACPTranscriptScrollerView: NSScrollView {
     let flippedDocumentView = ACPTranscriptDocumentView()
     var onScroll: ((_ previousY: CGFloat?, _ newY: CGFloat, _ viewportHeight: CGFloat, _ contentHeight: CGFloat, _ isProgrammatic: Bool) -> Void)?
 
+    /// Fired from `layout()` whenever `contentView.bounds.width` differs
+    /// from the last width reported — including the very first non-zero
+    /// width the view ever receives. This is the sole notification path for
+    /// "the scroller got a real size with no accompanying SwiftUI model
+    /// change": `makeNSView` builds the view at `frame: .zero`, and the
+    /// Coordinator's first `update(host:)` therefore always runs against
+    /// width 0, which `ACPTranscriptScrollerReconciler.apply` deliberately
+    /// defers on. Without this hook, a fully hydrated but otherwise idle
+    /// transcript could stay empty until some unrelated SwiftUI update
+    /// happened to call `updateNSView` again — see
+    /// `ACPTranscriptScroller.Coordinator.reconcileForContentWidthChange`,
+    /// the sole subscriber.
+    var onContentWidthChange: (() -> Void)?
+    private var lastReportedContentWidth: CGFloat?
+
     private var lastReportedY: CGFloat?
     private var programmaticAdjustmentDepth = 0
     private var boundsObserver: NSObjectProtocol?
@@ -47,6 +62,30 @@ final class ACPTranscriptScrollerView: NSScrollView {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
+    }
+
+    /// Explicitly marks the view as needing a layout pass whenever its own
+    /// frame SIZE changes, rather than relying on AppKit to infer that from
+    /// a plain (non-Auto-Layout, manually-`.frame`-positioned) view tree.
+    /// This is what makes `layout()` below fire reliably both for real
+    /// AppKit-driven resizes (SwiftUI placing/resizing the representable,
+    /// a window/split-view resize) and for a test directly assigning
+    /// `.frame` and then calling `layoutSubtreeIfNeeded()`.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        // `super.layout()` runs AppKit's own scroll-view tiling first, so
+        // `contentView.bounds.width` already reflects any scroller-visibility
+        // change that layout may have made — reading it before `super.layout()`
+        // could observe a stale, pre-tile width.
+        let width = contentView.bounds.width
+        guard width != lastReportedContentWidth else { return }
+        lastReportedContentWidth = width
+        onContentWidthChange?()
     }
 
     var scrollY: CGFloat { contentView.bounds.origin.y }

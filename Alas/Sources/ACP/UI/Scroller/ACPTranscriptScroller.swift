@@ -114,6 +114,56 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     isProgrammatic: isProgrammatic
                 )
             }
+            scroller.onContentWidthChange = { [weak self] in
+                self?.reconcileForContentWidthChange()
+            }
+            update(host: host)
+        }
+
+        /// Re-runs `update(host:)` against the retained host when the
+        /// scroller's own AppKit layout pass reports a content-width change
+        /// with no accompanying SwiftUI model update — see
+        /// `ACPTranscriptScrollerView.onContentWidthChange`'s doc comment.
+        /// This closes the gap where `attach()`'s first `update(host:)`
+        /// always runs at `contentWidth == 0` (the scroller starts at
+        /// `frame: .zero`), which `reconciler.apply` defers on: without
+        /// this, a fully hydrated but otherwise idle transcript could stay
+        /// empty until some UNRELATED SwiftUI update happened to call
+        /// `updateNSView` again. The same gap could also leave row
+        /// measurements stale after a resize with no model update.
+        ///
+        /// Guarded by `reconciler.isApplyingSpecs`, which is true for the
+        /// ENTIRE duration of `apply()` — every mutation it makes (document
+        /// height, prepend/removal offset compensation, and the per-row
+        /// `addSubview`/`.frame` assignments `layoutMountedRows()` performs
+        /// while mounting rows) is covered, not just the scroller's own
+        /// programmatic scroll/height adjustments (`performProgrammatic`'s
+        /// narrower `programmaticAdjustmentDepth`, which only brackets
+        /// `setScrollY`/`setDocumentHeight`/`applyPrepend`). If any of
+        /// `apply()`'s mutations were to re-trigger AppKit's layout pass on
+        /// the scroll view itself, the reentrant call would land here
+        /// mid-`apply()`, before `orderedIds`/`specsById` finish being
+        /// rewritten — recursing into `update(host:)` at that point would
+        /// call `apply()` again against inconsistent reconciler state.
+        /// `isApplyingSpecs` is therefore the guard that matters here, not
+        /// the scroller's programmatic-adjustment counter (which doesn't
+        /// span the whole call and so wouldn't catch a layout storm
+        /// triggered by the row-mounting mutations specifically).
+        ///
+        /// In practice `ACPTranscriptScrollerView.setFrameSize` only marks
+        /// `needsLayout` when the SCROLL VIEW's own outer frame changes —
+        /// `apply()`'s mutations only ever touch the document view's frame
+        /// and its row subviews, several levels down, which does not bubble
+        /// `needsLayout` back up in this plain (non-Auto-Layout) view tree —
+        /// so this reentrant path is not expected to fire under normal
+        /// (overlay-scroller) conditions. The guard exists to make that
+        /// true by construction rather than by accident of AppKit's
+        /// internals, and covers even a legacy (non-overlay) scroller style
+        /// where showing/hiding the vertical scroller in response to a
+        /// document-height change could, in principle, force a width
+        /// recompute.
+        private func reconcileForContentWidthChange() {
+            guard let host, let reconciler, !reconciler.isApplyingSpecs else { return }
             update(host: host)
         }
 
