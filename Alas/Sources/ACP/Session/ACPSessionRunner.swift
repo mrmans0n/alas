@@ -298,6 +298,27 @@ final class ACPSessionRunner {
                             let target = try remoteServer.lexicallyResolveInsideWorktree(path: params.path)
                             let live = self.onLiveBufferRead?(target)
                             let full = try await remoteServer.read(path: params.path, liveBuffer: live)
+                            // Weaker than the local guard, and deliberately
+                            // so: the remote read fetches the whole file
+                            // regardless of range, so by the time its size is
+                            // known it has already crossed the network.
+                            // Sizing it first would add an `fs/stat` round
+                            // trip to every remote read to catch a rare one.
+                            // Refusing here still spares the JSON encode — a
+                            // second copy — and the undeliverable response
+                            // that would otherwise strand the adapter.
+                            if let refusal = Self.wholeFileReadRefusal(
+                                name: (target as NSString).lastPathComponent,
+                                bytes: full.utf8.count,
+                                line: params.line,
+                                limit: params.limit
+                            ) {
+                                self.connection.client.respondToFileRequest(
+                                    id: id,
+                                    result: .failure(.init(code: -32000, message: refusal, data: nil))
+                                )
+                                continue
+                            }
                             let body = try JSONEncoder().encode(ACPFsReadResult(content: Self.sliceLines(full, line: params.line, limit: params.limit)))
                             self.connection.client.respondToFileRequest(id: id, result: .success(body))
                             continue
@@ -936,13 +957,38 @@ final class ACPSessionRunner {
     /// Sendable outcome of an off-main agent `fs/read_text_file`. Kept minimal
     /// (only value types) so it can cross back to the main actor without an
     /// `@unchecked Sendable` escape hatch.
+    /// Whether a whole-file read should be refused, and what to tell the
+    /// adapter if so.
+    ///
+    /// Shared by the local and remote read paths so the two cannot drift into
+    /// different answers for the same request — they already differ in *when*
+    /// they can apply it, which is enough of a difference to keep in one
+    /// place.
+    ///
+    /// `bytes` being `nil` means the size could not be determined; that is not
+    /// grounds for refusing a read that would otherwise work.
+    nonisolated static func wholeFileReadRefusal(
+        name: String,
+        bytes: Int?,
+        line: Int?,
+        limit: Int?
+    ) -> String? {
+        // A ranged read returns a bounded slice however large the file is,
+        // which is exactly what the adapter is being pointed at below.
+        guard line == nil, limit == nil else { return nil }
+        guard let bytes, bytes > maxWholeFileReadBytes else { return nil }
+        return "\(name) is \(bytes) bytes, over the "
+            + "\(maxWholeFileReadBytes)-byte limit for reading a whole file. "
+            + "Request a range with the line and limit parameters."
+    }
+
     /// Largest file returned in full by `fs/read_text_file`.
     ///
     /// Sized by what a consumer can use rather than by what the machine can
     /// hold: this is already far past any model's context window, so a
     /// response beyond it is waste in both directions. Ranged reads are not
     /// subject to it.
-    static let maxWholeFileReadBytes = 64 * 1024 * 1024
+    nonisolated static let maxWholeFileReadBytes = 64 * 1024 * 1024
 
     enum FileReadOutcome: Sendable {
         case success(Data)
@@ -964,30 +1010,14 @@ final class ACPSessionRunner {
         limit: Int?
     ) async -> FileReadOutcome {
         do {
-            // Refuse a whole-file read that is too large to be worth
-            // returning, before anything is loaded.
-            //
-            // An unbounded `fs/read_text_file` is answered by building the
-            // file, a `String` copy of it and the encoded JSON all at once,
-            // and the result then has to cross the broker socket. Nothing
-            // downstream can use a response that size — it is orders of
-            // magnitude past any model's context — so the honest answer is to
-            // say so while the request can still be retried usefully, rather
-            // than spend the memory and fail late with a transport error.
-            //
-            // Only whole-file reads are refused. A ranged read returns a
-            // bounded slice however large the file is, which is what the
-            // adapter is being pointed at.
-            if line == nil, limit == nil {
-                let bytes = liveBuffer.map { $0.utf8.count }
-                    ?? (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-                if let bytes, bytes > Self.maxWholeFileReadBytes {
-                    return .failure(
-                        message: "\(target.lastPathComponent) is \(bytes) bytes, over the "
-                            + "\(Self.maxWholeFileReadBytes)-byte limit for reading a whole file. "
-                            + "Request a range with the line and limit parameters."
-                    )
-                }
+            if let refusal = Self.wholeFileReadRefusal(
+                name: target.lastPathComponent,
+                bytes: liveBuffer.map { $0.utf8.count }
+                    ?? (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                line: line,
+                limit: limit
+            ) {
+                return .failure(message: refusal)
             }
             let full: String
             if let liveBuffer {

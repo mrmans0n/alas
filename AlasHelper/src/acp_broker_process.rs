@@ -1053,6 +1053,12 @@ struct OrderState {
 
 #[cfg(unix)]
 impl OrderState {
+    /// The earliest moment a pending reservation stops holding its place, if
+    /// any is outstanding. What a waiter has to wake for.
+    fn soonest_deadline(&self) -> Option<std::time::Instant> {
+        self.pending.values().min().copied()
+    }
+
     /// Steps `serving` past every place that no longer has a claim on it:
     /// abandoned connections, and reservations whose grace has run out.
     fn advance(&mut self) {
@@ -1112,12 +1118,20 @@ impl Reservation {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        // Forfeiture is decided by the deadline, not by whether another
+        // thread has got round to advancing `serving` yet. Reading it off
+        // `serving` made the answer depend on scheduling: a request claiming
+        // just after its grace expired kept its place if nobody had woken to
+        // notice, and lost it if someone had.
+        let expired = state
+            .pending
+            .get(&self.ticket)
+            .is_none_or(|deadline| std::time::Instant::now() >= *deadline);
         state.pending.remove(&self.ticket);
-        // If the grace ran out while this was still arriving, the place has
-        // already been given to whoever was behind it. Rejoin at the back
-        // rather than wait for a turn that will never come round again —
-        // waiting on a forfeited ticket is a deadlock, not a delay.
-        let ticket = if state.serving > self.ticket {
+        // A place that has been given up cannot be waited for — it will not
+        // come round again, so waiting on it is a deadlock rather than a
+        // delay. Rejoin at the back instead.
+        let ticket = if expired || state.serving > self.ticket {
             let ticket = state.next;
             state.next += 1;
             ticket
@@ -1133,9 +1147,19 @@ impl Reservation {
             }
             // Timed, because the head may be a reservation that has to be
             // waited out rather than woken: nothing signals a grace expiring.
+            // Wait only as long as the soonest one actually has left, or a
+            // waiter arriving late in a grace period sleeps a whole fresh one
+            // past it — turning a 5s bound into nearly 10s.
+            let wait = state
+                .soonest_deadline()
+                .map_or(RESERVATION_GRACE, |deadline| {
+                    deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .max(Duration::from_millis(1))
+                });
             let (guard, _) = order
                 .turn
-                .wait_timeout(state, RESERVATION_GRACE)
+                .wait_timeout(state, wait)
                 .unwrap_or_else(|error| error.into_inner());
             state = guard;
         }
@@ -2651,6 +2675,83 @@ mod tests {
 
         let observed = observed.lock().unwrap_or_else(|error| error.into_inner());
         assert_eq!(*observed, vec!["first", "second"]);
+    }
+
+    /// Forfeiture must follow the deadline, not whichever thread happened to
+    /// run first. Deciding it from `serving` meant a request claiming just
+    /// after its grace expired kept its place when nobody had yet woken to
+    /// notice, and lost it when someone had — the same request, two answers,
+    /// depending on the scheduler.
+    #[cfg(unix)]
+    #[test]
+    fn forfeiture_follows_the_deadline_not_the_scheduler() {
+        let order = Arc::new(RequestOrder::default());
+        let stale = order.reserve();
+
+        // Let its grace lapse with nobody waiting, so nothing has advanced
+        // `serving` past it.
+        std::thread::sleep(RESERVATION_GRACE + Duration::from_millis(200));
+
+        // Reserved after the lapse, so this one still holds a live place.
+        let fresh = order.reserve();
+        {
+            let state = order.state.lock().expect("state");
+            assert_eq!(
+                state.serving, 0,
+                "nothing should have advanced the queue while no one was waiting"
+            );
+        }
+
+        // The stale one now arrives. Its place is gone by the clock, so it
+        // must go behind the request that was still holding a live place.
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let watcher = {
+            let observed = Arc::clone(&observed);
+            std::thread::spawn(move || {
+                let _turn = stale.claim();
+                observed
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push("stale");
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        {
+            let _turn = fresh.claim();
+            observed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push("fresh");
+        }
+        watcher.join().expect("stale worker");
+
+        let observed = observed.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(*observed, vec!["fresh", "stale"]);
+    }
+
+    /// A waiter must wake when the place ahead of it actually expires, not a
+    /// full grace later. Waiting a fresh interval each time turns a five
+    /// second bound into nearly ten for anything that arrives late in one.
+    #[cfg(unix)]
+    #[test]
+    fn a_waiter_wakes_when_the_place_ahead_expires_not_a_grace_later() {
+        let order = Arc::new(RequestOrder::default());
+        let abandoned = order.reserve();
+        let waiting = order.reserve();
+
+        // Arrive most of the way through the grace ahead of us.
+        std::thread::sleep(RESERVATION_GRACE.mul_f64(0.8));
+        let started = std::time::Instant::now();
+        {
+            let _turn = waiting.claim();
+        }
+        let waited = started.elapsed();
+        drop(abandoned);
+
+        assert!(
+            waited < RESERVATION_GRACE.mul_f64(0.6),
+            "waited past the deadline ahead of it: {waited:?}"
+        );
     }
 
     /// A request that arrives after its grace has run out must still be
