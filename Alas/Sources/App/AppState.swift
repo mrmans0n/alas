@@ -839,19 +839,17 @@ final class AppState {
 
     private func refreshRenamedMissionRepositories() async {
         for aggregate in missions.aggregates where aggregate.mission.state != .completed {
-            for leg in aggregate.legs {
-                guard let project = projectsManager.projects.first(where: { $0.id == leg.projectId }),
-                      let remotes = try? await GitService().remotes(
-                          worktreePath: URL(fileURLWithPath: project.path)
-                      ),
-                      Self.missionRepositoryNeedsCanonicalRefresh(
-                          identity: aggregate.issue.identity,
-                          remotes: remotes
-                      )
-                else { continue }
-                await missions.refreshIssue(aggregate.mission.id)
-                break
-            }
+            guard let leg = aggregate.primaryLeg,
+                  let project = projectsManager.projects.first(where: { $0.id == leg.projectId }),
+                  let remotes = try? await GitService().remotes(
+                      worktreePath: URL(fileURLWithPath: project.path)
+                  ),
+                  Self.missionRepositoryNeedsCanonicalRefresh(
+                      identity: aggregate.issue.identity,
+                      remotes: remotes
+                  )
+            else { continue }
+            await missions.refreshIssue(aggregate.mission.id)
         }
     }
 
@@ -1059,11 +1057,30 @@ final class AppState {
         guard let remotes = try? await GitService().remotes(worktreePath: worktree.path)
         else { return leg.baseRef }
         return Self.missionPaneBaseRef(
-            identity: aggregate.issue.identity,
             baseRef: leg.baseRef,
             persistedRemoteName: leg.baseRemoteName,
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: CodeHostProviderRegistry.live().supportedKinds
         )
+    }
+
+    static func missionPaneBaseRef(
+        baseRef: String,
+        persistedRemoteName: String?,
+        remotes: [GitRemote],
+        supportedKinds: Set<CodeHostKind>
+    ) -> String {
+        guard let persistedRemoteName, !persistedRemoteName.isEmpty else { return baseRef }
+        let branchName = MissionBaseReference.branchName(
+            baseRef,
+            persistedRemoteName: persistedRemoteName
+        )
+        guard let currentRemote = missionDiscoveryRemote(
+            baseRef: baseRef,
+            remotes: remotes,
+            supportedKinds: supportedKinds
+        ) else { return baseRef }
+        return "\(currentRemote.remoteName)/\(branchName)"
     }
 
     static func missionPaneBaseRef(

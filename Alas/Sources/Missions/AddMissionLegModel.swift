@@ -52,6 +52,7 @@ final class AddMissionLegModel {
     private var remoteNames: Set<String> = []
     private var localBranchNames: Set<String> = []
     private var loadedProjectID: String?
+    private var loadGeneration = 0
 
     @ObservationIgnored
     private let environment: Environment
@@ -112,6 +113,8 @@ final class AddMissionLegModel {
             return
         }
 
+        loadGeneration += 1
+        let generation = loadGeneration
         projectId = selectedProjectID
         errorMessage = nil
         branchErrorMessage = nil
@@ -119,9 +122,14 @@ final class AddMissionLegModel {
         remoteNames = []
         localBranchNames = []
         isLoadingBranches = true
-        defer { isLoadingBranches = false }
+        defer {
+            if loadGeneration == generation {
+                isLoadingBranches = false
+            }
+        }
         do {
             let inventory = try await environment.branches(selectedProjectID)
+            guard loadGeneration == generation, projectId == selectedProjectID else { return }
             branches = inventory.names
             remoteNames = inventory.remoteNames
             localBranchNames = inventory.localBranchNames
@@ -140,6 +148,7 @@ final class AddMissionLegModel {
             agentId = agentOptions.first?.id ?? ""
             loadedProjectID = selectedProjectID
         } catch {
+            guard loadGeneration == generation, projectId == selectedProjectID else { return }
             let failure = PreparationError.branchLoadingFailed(error.localizedDescription)
             branchErrorMessage = failure.errorDescription
             throw fail(failure)

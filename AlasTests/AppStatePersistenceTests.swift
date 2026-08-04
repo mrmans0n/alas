@@ -485,6 +485,17 @@ struct AppStatePersistenceTests {
         #expect(baseRef == "upstream/main")
     }
 
+    @Test func secondaryMissionPaneBaseUsesTheLegRepositoryRemote() {
+        let baseRef = AppState.missionPaneBaseRef(
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [GitRemote(name: "upstream", url: "git@gitlab.com:acme/sdk.git")],
+            supportedKinds: [.github, .gitlab]
+        )
+
+        #expect(baseRef == "upstream/main")
+    }
+
     @Test func missionPaneBaseRefPreservesAnUnqualifiedSlashBranch() {
         let identity = MissionIssueIdentity(
             provider: .github,

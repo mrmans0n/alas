@@ -89,9 +89,39 @@ struct AddMissionLegModelTests {
         #expect(unavailable.errorMessage != nil)
     }
 
-    private func environment(destinationAvailable: Bool = true) -> AddMissionLegModel.Environment {
+    @Test("a stale repository load cannot replace the latest selection")
+    func staleRepositoryLoadIsDiscarded() async throws {
+        var aggregate = MissionFixtures.creatingMission()
+        aggregate.mission.state = .running
+        let gate = AddLegBranchLoadGate()
+        let model = AddMissionLegModel(environment: environment(branches: { projectID in
+            if projectID == "server" {
+                await gate.waitUntilReleased()
+                return .init(names: ["origin/server"], remoteNames: ["origin"], localBranchNames: [])
+            }
+            return .init(names: ["upstream/mobile"], remoteNames: ["upstream"], localBranchNames: [])
+        }))
+        let projects = [project(id: "server"), project(id: "mobile")]
+
+        let stale = Task {
+            try await model.load(aggregate: aggregate, projects: projects, selectedProjectID: "server")
+        }
+        await gate.waitUntilStarted()
+        try await model.load(aggregate: aggregate, projects: projects, selectedProjectID: "mobile")
+        await gate.release()
+        try await stale.value
+
+        #expect(model.projectId == "mobile")
+        #expect(model.branches == ["upstream/mobile"])
+        #expect(model.base == "upstream/mobile")
+    }
+
+    private func environment(
+        destinationAvailable: Bool = true,
+        branches: ((String) async throws -> AddMissionLegModel.BranchInventory)? = nil
+    ) -> AddMissionLegModel.Environment {
         .init(
-            branches: { _ in
+            branches: branches ?? { _ in
                 AddMissionLegModel.BranchInventory(
                     names: ["upstream/trunk", "trunk"],
                     remoteNames: ["upstream"],
@@ -132,5 +162,31 @@ struct AddMissionLegModelTests {
             isEnabled: true,
             builtinLogoAssetName: nil
         )
+    }
+}
+
+private actor AddLegBranchLoadGate {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilReleased() async {
+        started = true
+        for waiter in startWaiters { waiter.resume() }
+        startWaiters.removeAll()
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        for waiter in releaseWaiters { waiter.resume() }
+        releaseWaiters.removeAll()
     }
 }
