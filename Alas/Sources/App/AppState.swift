@@ -1087,6 +1087,7 @@ final class AppState {
         )
         guard let currentRemote = missionDiscoveryRemote(
             baseRef: baseRef,
+            persistedRemoteName: persistedRemoteName,
             remotes: remotes,
             supportedKinds: supportedKinds
         ) else { return baseRef }
@@ -1311,6 +1312,7 @@ final class AppState {
 
     static func missionDiscoveryRemote(
         baseRef: String,
+        persistedRemoteName: String? = nil,
         remotes: [GitRemote],
         supportedKinds: Set<CodeHostKind>
     ) -> CodeHostRemote? {
@@ -1323,10 +1325,20 @@ final class AppState {
             supportedKinds: supportedKinds,
             preferredRemoteName: preferredRemoteName
         )
-        return candidates
+        let longestPrefixMatch = candidates
             .filter { baseRef.hasPrefix("\($0.remoteName)/") }
             .max { $0.remoteName.count < $1.remoteName.count }
-            ?? candidates.first
+        let configuredBaseRemote = persistedRemoteName?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        if let configuredBaseRemote,
+           !configuredBaseRemote.isEmpty,
+           baseRef.hasPrefix("\(configuredBaseRemote)/"),
+           !remotes.contains(where: { $0.name == configuredBaseRemote }) {
+            return longestPrefixMatch
+                ?? (candidates.count == 1 ? candidates.first : nil)
+        }
+        return longestPrefixMatch ?? candidates.first
     }
 
     static func missionDiscoveryBaseBranch(baseRef: String, remoteName: String) -> String {
@@ -2064,10 +2076,14 @@ final class AppState {
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
+        activateWorktreeTabPresentation()
+        tabs.activate(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    private func activateWorktreeTabPresentation() {
         globalTabs.clearActiveTab()
         missingMissionTab = nil
         missingMissionRecoveryTarget = nil
-        tabs.activate(worktreeId: worktreeId, tabId: tabId)
     }
 
     @discardableResult
@@ -3857,7 +3873,9 @@ final class AppState {
         // above that equals `leafId` (we passed it in). The injected
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
-        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
+        let tab = tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
+        activateWorktreeTabPresentation()
+        return tab
     }
 
     private func prepareRemoteAccelerationIfNeeded(for project: ProjectConfig) async {
@@ -6548,6 +6566,7 @@ final class AppState {
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
+        activateWorktreeTabPresentation()
     }
 
     func startACPSession(

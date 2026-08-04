@@ -198,6 +198,20 @@ struct AppStatePersistenceTests {
         #expect(remote == nil)
     }
 
+    @Test func missionPaneBaseRefDoesNotGuessStaleBaseAliasWhenMultipleRemotesExist() {
+        let baseRef = AppState.missionPaneBaseRef(
+            baseRef: "origin/main",
+            persistedRemoteName: "origin",
+            remotes: [
+                GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
+            ],
+            supportedKinds: [.github]
+        )
+
+        #expect(baseRef == "origin/main")
+    }
+
     @Test func missionDiscoveryRemoteUsesTheTargetProjectRepository() throws {
         let remote = try #require(AppState.missionDiscoveryRemote(
             baseRef: "origin/main",
@@ -300,6 +314,20 @@ struct AppStatePersistenceTests {
         #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
         #expect(fixture.state.globalTabs.activeMissionTab() == nil)
         #expect(fixture.state.globalTabs.tabs == [.mission(.fixture)])
+    }
+
+    @Test func openingWorktreeACPSessionClearsActiveGlobalMission() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        fixture.state.selectWorktree(id: fixture.otherWorktree.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        fixture.state.openNewACPSession(agentID: "test-agent")
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.otherWorktree.id) != nil)
     }
 
     @Test func selectingInitialWorktreePreservesRestoredGlobalMission() async throws {
