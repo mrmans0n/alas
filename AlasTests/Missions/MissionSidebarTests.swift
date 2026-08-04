@@ -101,7 +101,15 @@ struct MissionSidebarTests {
         let row = MissionSidebarRow(aggregate: Self.multiLegMission())
 
         #expect(row.status == .aggregate("1 working · 1 needs attention · 1 ready"))
+        #expect(row.tone == .attention)
         #expect(row.helpText.contains("1 working · 1 needs attention · 1 ready"))
+    }
+
+    @Test func completedRowStaysMutedWhenALegRetainsAttention() {
+        let row = MissionSidebarRow(aggregate: Self.multiLegMission(missionState: .completed))
+
+        #expect(row.status == .completed)
+        #expect(row.tone == .muted)
     }
 
     @Test func creatingMissionNavigatesBeforeAWorktreeIsKnown() {
@@ -206,7 +214,7 @@ struct MissionSidebarTests {
         }
     }
 
-    private static func multiLegMission() -> MissionAggregate {
+    private static func multiLegMission(missionState: MissionState = .running) -> MissionAggregate {
         let missionID = MissionID(rawValue: "mission-1")
         let appLegID = MissionLegID(rawValue: "mission-1-leg-app")
         let sdkLegID = MissionLegID(rawValue: "mission-1-leg-sdk")
@@ -222,11 +230,11 @@ struct MissionSidebarTests {
             mission: MissionRecord(
                 id: missionID,
                 title: "Fix parser crash",
-                state: .running,
+                state: missionState,
                 primaryLegID: appLegID,
                 createdAt: Date(timeIntervalSince1970: 100),
                 updatedAt: Date(timeIntervalSince1970: 120),
-                completedAt: nil
+                completedAt: missionState == .completed ? Date(timeIntervalSince1970: 120) : nil
             ),
             issue: MissionFixtures.issue(),
             legs: [

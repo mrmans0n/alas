@@ -65,6 +65,14 @@ struct MissionSidebarModel: Equatable {
 }
 
 struct MissionSidebarRow: Equatable, Identifiable {
+    enum Tone: Equatable {
+        case progress
+        case success
+        case attention
+        case ready
+        case muted
+    }
+
     enum Status: Equatable {
         case creating(String)
         case aggregate(String)
@@ -99,6 +107,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
     let repositorySlug: String
     let updatedAt: Date
     let status: Status
+    let tone: Tone
     let isNavigationEnabled: Bool
 
     init(aggregate: MissionAggregate, knownWorktreeIds _: Set<String> = []) {
@@ -110,6 +119,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
         repositorySlug = aggregate.issue.identity.repositorySlug
         updatedAt = aggregate.mission.updatedAt
         status = Self.status(for: aggregate)
+        tone = Self.tone(for: aggregate)
 
         isNavigationEnabled = true
     }
@@ -138,6 +148,27 @@ struct MissionSidebarRow: Equatable, Identifiable {
             .readyToComplete
         case .completed:
             .completed
+        }
+    }
+
+    private static func tone(for aggregate: MissionAggregate) -> Tone {
+        if aggregate.mission.state == .completed {
+            return .muted
+        }
+        if aggregate.legs.contains(where: { $0.state == .needsAttention }) {
+            return .attention
+        }
+        switch aggregate.mission.state {
+        case .creating:
+            return .progress
+        case .running:
+            return .success
+        case .needsAttention:
+            return .attention
+        case .readyToComplete:
+            return .ready
+        case .completed:
+            return .muted
         }
     }
 }
@@ -317,18 +348,16 @@ private struct MissionSidebarRowView: View {
     }
 
     private var statusColor: Color {
-        switch row.status {
-        case .creating:
+        switch row.tone {
+        case .progress:
             theme.color("accent")
-        case .aggregate:
+        case .success:
             theme.color("add")
-        case .running:
-            theme.color("add")
-        case .needsAttention:
+        case .attention:
             theme.color("warn")
-        case .readyToComplete:
+        case .ready:
             theme.color("warning")
-        case .completed:
+        case .muted:
             theme.color("fg-faint")
         }
     }
