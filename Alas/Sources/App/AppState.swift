@@ -2054,6 +2054,13 @@ final class AppState {
         }
     }
 
+    func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
+        globalTabs.clearActiveTab()
+        missingMissionTab = nil
+        missingMissionRecoveryTarget = nil
+        tabs.activate(worktreeId: worktreeId, tabId: tabId)
+    }
+
     @discardableResult
     func switchToSpace(id: String) -> Bool {
         let previousSpaceId = spacesManager.activeSpaceId
@@ -2133,7 +2140,15 @@ final class AppState {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
             projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
         } ?? false
-        let wasSelectedMissingMissionProject = missingMissionRecoveryTarget?.projectID == projectId
+        let wasSelectedMissingMissionProject =
+            missingMissionRecoveryTarget?.projectID == projectId
+                || missingMissionTab.flatMap { tab in
+                    missions.aggregate(id: tab.missionID)?.legs.contains { leg in
+                        leg.projectId == projectId
+                            && leg.state == .needsAttention
+                            && leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
+                    }
+                } == true
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
@@ -2143,7 +2158,11 @@ final class AppState {
             spacesManager.addProject(projectId, toSpace: spaceId)
             guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
         }
-        if removedFromActiveSpace, wasSelectedProject || wasSelectedMissingMissionProject {
+        if removedFromActiveSpace, wasSelectedMissingMissionProject {
+            missingMissionTab = nil
+            missingMissionRecoveryTarget = nil
+            selectWorktree(id: nil)
+        } else if removedFromActiveSpace, wasSelectedProject {
             let selection = resolvedSelectionForActiveSpace()
             selectWorktree(id: selection)
         }
@@ -4213,8 +4232,7 @@ final class AppState {
         if globalTabs.tabs.contains(where: { $0.id == tabID }) {
             globalTabs.activate(tabId: tabID)
         } else if let worktreeId {
-            globalTabs.clearActiveTab()
-            tabs.activate(worktreeId: worktreeId, tabId: tabID)
+            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabID)
         }
         return tabID
     }

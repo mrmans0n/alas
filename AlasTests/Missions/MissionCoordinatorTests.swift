@@ -596,6 +596,20 @@ struct MissionCoordinatorTests {
         #expect(try sessionStore.loadSession(id: replacementSessionID)?.agentId == "claude")
     }
 
+    @Test("agent replacement is ignored after Mission completion")
+    func agentReplacementIsIgnoredAfterCompletion() async throws {
+        let fake = MissionCoordinatorFake(agentResult: .failure(.init(message: "Install Codex")))
+        let controller = MissionController(environment: fake.environment)
+        let id = try await controller.create(Self.draft, allowDuplicate: false)
+        _ = await fake.waitUntilSettled(id)
+        await controller.complete(id)
+        let completed = try #require(try await fake.persistence.list(includeCompleted: true).first { $0.mission.id == id })
+
+        await controller.retry(id, agentId: "claude")
+
+        #expect(try await fake.persistence.list(includeCompleted: true).first { $0.mission.id == id } == completed)
+    }
+
     @Test("agent replacement is ignored outside the agent checkpoint")
     func agentReplacementIsIgnoredForWorktreeRetry() async throws {
         let fake = MissionCoordinatorFake(worktreeResult: .failure(.init(message: "Git failed")))

@@ -159,7 +159,9 @@ struct MissionTabTests {
         let secondaryWorktree = try #require(fixture.secondaryWorktree)
         await fixture.state.missions.load()
         #expect(fixture.state.switchToSpace(id: "mission-space"))
-        fixture.state.selectWorktree(id: secondaryWorktree.id)
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        fixture.state.selectInitialWorktree(id: secondaryWorktree.id)
+        fixture.state.spacesManager.addProject(secondaryWorktree.projectId, toSpace: "other-space")
         fixture.state.projectsManager.removeOptimisticWorktree(
             id: secondaryWorktree.id,
             projectId: secondaryWorktree.projectId
@@ -182,7 +184,9 @@ struct MissionTabTests {
         let secondaryWorktree = try #require(fixture.secondaryWorktree)
         await fixture.state.missions.load()
         #expect(fixture.state.switchToSpace(id: "mission-space"))
-        fixture.state.selectWorktree(id: secondaryWorktree.id)
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        fixture.state.selectInitialWorktree(id: secondaryWorktree.id)
+        fixture.state.spacesManager.addProject(fixture.worktree.projectId, toSpace: "other-space")
         fixture.state.projectsManager.removeOptimisticWorktree(
             id: secondaryWorktree.id,
             projectId: secondaryWorktree.projectId
@@ -194,6 +198,36 @@ struct MissionTabTests {
 
         #expect(fixture.state.missingMissionTab == missingSecondaryTab)
         #expect(fixture.state.globalTabs.activeMissionTab() == missingSecondaryTab)
+    }
+
+    @Test func activatingAWorktreeTabClearsMissingMissionRecovery() async throws {
+        let fixture = try MissionNavigationFixture(
+            hidden: false,
+            includeWorktree: true,
+            includeSecondaryLeg: true
+        )
+        let secondaryWorktree = try #require(fixture.secondaryWorktree)
+        await fixture.state.missions.load()
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        fixture.state.selectInitialWorktree(id: secondaryWorktree.id)
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: secondaryWorktree.id,
+            projectId: secondaryWorktree.projectId
+        )
+        await fixture.state.cleanupMissingWorktrees(beforeIds: [secondaryWorktree.id])
+        #expect(fixture.state.missingMissionTab?.missionID == fixture.aggregate.mission.id)
+        fixture.state.selectInitialWorktree(id: fixture.worktree.id)
+        let terminal = fixture.state.tabs.appendTerminal(
+            worktreeId: fixture.worktree.id,
+            title: "Terminal",
+            sessionId: "session-1"
+        )
+
+        #expect(fixture.state.activateCenterTabNumber(2, worktreeId: fixture.worktree.id) == terminal.id)
+
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+        #expect(fixture.state.missingMissionTab == nil)
     }
 
     @Test func openMissionPresentsRecoveryForAFailedOptimisticWorktree() async throws {

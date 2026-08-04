@@ -86,8 +86,7 @@ struct CenterPaneView: View {
                     if state.globalTabs.tabs.contains(where: { $0.id == id }) {
                         state.globalTabs.activate(tabId: id)
                     } else {
-                        state.globalTabs.clearActiveTab()
-                        state.tabs.activate(worktreeId: worktree.id, tabId: id)
+                        state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
                     }
                 },
                 onClose: { id in

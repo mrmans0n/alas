@@ -193,12 +193,15 @@ final class MissionController {
             guard let self else { return }
             do {
                 var recreateWorktree = false
+                guard let currentAggregate = try await persistence.aggregate(id: id),
+                      currentAggregate.mission.state != .completed
+                else { return }
                 if let agentId,
-                   var aggregate = try await persistence.aggregate(id: id),
-                   var leg = aggregate.legs.first(where: { $0.id == legID }),
+                   var leg = currentAggregate.legs.first(where: { $0.id == legID }),
                    leg.state == .needsAttention,
                    leg.setupCheckpoint == .startingAgent {
                     if leg.agentId != agentId {
+                        var aggregate = currentAggregate
                         leg.agentId = agentId
                         // ACP sessions retain their original agent identity. A replacement
                         // therefore needs a fresh, durable session ID instead of mutating
