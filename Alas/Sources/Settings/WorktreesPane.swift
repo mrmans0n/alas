@@ -28,7 +28,7 @@ struct WorktreesPane: View {
                         desc: "Sort order for the worktrees sidebar list. Manual reordering of a repo overrides this for that repo."
                     ) {
                         Picker("", selection: defaultOrderingBinding) {
-                            ForEach(AppConfig.WorktreeSortMode.allCases, id: \.self) { mode in
+                            ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
                                 Text(WorktreeSortPresentation.title(for: mode)).tag(mode)
                             }
                         }

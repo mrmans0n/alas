@@ -35,15 +35,18 @@ struct SidebarHeaderViewTests {
     @Test func sortMenuKeepsHeaderHeightAndAccessibilityLabel() throws {
         let controller = hostHeader()
         let fitted = controller.sizeThatFits(in: NSSize(width: 300, height: 100))
+        let sortControls = accessibilityElements(in: controller.view, matching: "Sort worktrees")
 
         #expect(abs(fitted.height - 42) < 0.5)
-        #expect(accessibilityLabel(in: controller.view, matching: "Sort worktrees") != nil)
+        #expect(sortControls.count == 1)
+        #expect(sortControls.first?.accessibilityRole() == .button)
+        #expect(sortControls.first?.accessibilityActionNames().contains(.press) == true)
     }
 
-    private func accessibilityLabel(in view: NSView, matching expected: String) -> String? {
-        if view.accessibilityLabel() == expected { return expected }
-        return view.subviews.lazy.compactMap {
-            accessibilityLabel(in: $0, matching: expected)
-        }.first
+    private func accessibilityElements(in view: NSView, matching expected: String) -> [NSView] {
+        let matches = view.accessibilityLabel() == expected ? [view] : []
+        return matches + view.subviews.flatMap {
+            accessibilityElements(in: $0, matching: expected)
+        }
     }
 }

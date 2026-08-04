@@ -2,6 +2,15 @@ import AppKit
 import SwiftUI
 
 enum WorktreeSortPresentation {
+    nonisolated static let modes: [AppConfig.WorktreeSortMode] = [
+        .lastUpdateDesc,
+        .lastUpdateAsc,
+        .creationDesc,
+        .creationAsc,
+        .branchAsc,
+        .manual,
+    ]
+
     nonisolated static func title(for mode: AppConfig.WorktreeSortMode) -> String {
         switch mode {
         case .lastUpdateDesc: "Last update time (most recent first)"
@@ -42,7 +51,7 @@ struct WorktreeSortMenu: View {
 
     var body: some View {
         Menu {
-            ForEach(AppConfig.WorktreeSortMode.allCases, id: \.self) { mode in
+            ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
                 Toggle(
                     WorktreeSortPresentation.title(for: mode),
                     isOn: Binding(
@@ -63,7 +72,6 @@ struct WorktreeSortMenu: View {
             .contentShape(Rectangle())
             .background(hovering ? theme.color("bg-3") : .clear)
             .clipShape(RoundedRectangle(cornerRadius: 5))
-            .accessibilityLabel("Sort worktrees")
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
@@ -77,20 +85,110 @@ struct WorktreeSortMenu: View {
             menuTracking = false
         }
         .animation(.easeOut(duration: 0.12), value: visible)
-        .background(WorktreeSortAccessibilityAnchor())
-        .accessibilityLabel("Sort worktrees")
+        .accessibilityHidden(true)
+        .background(
+            WorktreeSortAccessibilityButton(
+                selection: selection,
+                onSelect: onSelect,
+                onTrackingChanged: { menuTracking = $0 }
+            )
+        )
         .help("Sort worktrees")
     }
 }
 
-private struct WorktreeSortAccessibilityAnchor: NSViewRepresentable {
+private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
+    let selection: AppConfig.WorktreeSortMode
+    let onSelect: (AppConfig.WorktreeSortMode) -> Void
+    let onTrackingChanged: (Bool) -> Void
+
     func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        view.setAccessibilityElement(true)
-        view.setAccessibilityRole(.group)
-        view.setAccessibilityLabel("Sort worktrees")
-        return view
+        let button = PointerTransparentMenuButton(frame: .zero)
+        button.menu = context.coordinator.makeMenu()
+        button.setAccessibilityLabel("Sort worktrees")
+        button.setAccessibilityHelp("Sort worktrees")
+        return button
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onSelect = onSelect
+        context.coordinator.onTrackingChanged = onTrackingChanged
+        context.coordinator.updateSelection(selection)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelect: onSelect, onTrackingChanged: onTrackingChanged)
+    }
+
+    final class Coordinator: NSObject, NSMenuDelegate {
+        var onSelect: (AppConfig.WorktreeSortMode) -> Void
+        var onTrackingChanged: (Bool) -> Void
+        private weak var menu: NSMenu?
+
+        init(
+            onSelect: @escaping (AppConfig.WorktreeSortMode) -> Void,
+            onTrackingChanged: @escaping (Bool) -> Void
+        ) {
+            self.onSelect = onSelect
+            self.onTrackingChanged = onTrackingChanged
+        }
+
+        func makeMenu() -> NSMenu {
+            let menu = NSMenu()
+            menu.delegate = self
+            for mode in WorktreeSortPresentation.modes {
+                let item = NSMenuItem(
+                    title: WorktreeSortPresentation.title(for: mode),
+                    action: #selector(select(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = mode.rawValue
+                menu.addItem(item)
+            }
+            self.menu = menu
+            return menu
+        }
+
+        func updateSelection(_ selection: AppConfig.WorktreeSortMode) {
+            menu?.items.forEach { item in
+                item.state = item.representedObject as? String == selection.rawValue ? .on : .off
+            }
+        }
+
+        @objc private func select(_ sender: NSMenuItem) {
+            guard let rawValue = sender.representedObject as? String,
+                  let mode = AppConfig.WorktreeSortMode(rawValue: rawValue)
+            else { return }
+            onSelect(mode)
+        }
+
+        func menuWillOpen(_ menu: NSMenu) {
+            onTrackingChanged(true)
+        }
+
+        func menuDidClose(_ menu: NSMenu) {
+            onTrackingChanged(false)
+        }
+    }
+}
+
+private final class PointerTransparentMenuButton: NSButton {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func accessibilityRole() -> NSAccessibility.Role? {
+        .button
+    }
+
+    override func accessibilityActionNames() -> [NSAccessibility.Action] {
+        [.press]
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let menu else { return false }
+        menu.popUp(positioning: nil, at: .zero, in: self)
+        return true
+    }
 }

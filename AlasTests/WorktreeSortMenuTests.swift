@@ -16,6 +16,17 @@ struct WorktreeSortMenuTests {
         #expect(WorktreeSortPresentation.title(for: .manual) == "Manual")
     }
 
+    @Test func modesFollowTheSettingsPresentationOrder() {
+        #expect(WorktreeSortPresentation.modes == [
+            .lastUpdateDesc,
+            .lastUpdateAsc,
+            .creationDesc,
+            .creationAsc,
+            .branchAsc,
+            .manual,
+        ])
+    }
+
     @Test func visibilityIncludesHeaderHoverFocusAndMenuTracking() {
         #expect(!WorktreeSortMenu.isVisible(
             headerHovered: false, focused: false, menuTracking: false
