@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChangedRow: View {
     let file: ChangedFile
+    let fileContextTarget: FileContextMenuTarget
     var depth: Int = 0
     let onSelect: () -> Void
     var onStage: (() -> Void)? = nil
@@ -13,7 +14,6 @@ struct ChangedRow: View {
     var onOpenFile:       (() -> Void)? = nil
     var onCopyRelative:   (() -> Void)? = nil
     var onCopyFull:       (() -> Void)? = nil
-    var onRevealInFinder: (() -> Void)? = nil
     var onCopyDiff:       (() -> Void)? = nil
     var onViewAtHEAD:     (() -> Void)? = nil
     var onCompareWithHEAD: (() -> Void)? = nil
@@ -57,17 +57,17 @@ struct ChangedRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Open File") { onOpenFile?() }
-                .disabled(!openFileEnabled || onOpenFile == nil)
-            Button("View at HEAD") { onViewAtHEAD?() }
-                .disabled(!viewAtHEADEnabled || onViewAtHEAD == nil)
-            Button("Compare with HEAD") { onCompareWithHEAD?() }
-                .disabled(onCompareWithHEAD == nil)
-            Button("File History") { onFileHistory?() }
-                .disabled(onFileHistory == nil)
-            Button("Copy Relative Path") { onCopyRelative?() }
-            Button("Copy Full Path") { onCopyFull?() }
-            Button("Reveal in Finder") { onRevealInFinder?() }
+            FileContextMenuActions(
+                configuration: .workingTreeFile(target: fileContextTarget),
+                onOpenInAlas: onOpenFile,
+                openInAlasEnabled: openFileEnabled,
+                onViewAtHEAD: onViewAtHEAD,
+                viewAtHEADEnabled: viewAtHEADEnabled,
+                onCompareWithHEAD: onCompareWithHEAD,
+                onFileHistory: onFileHistory,
+                onCopyRelativePath: onCopyRelative,
+                onCopyFullPath: onCopyFull
+            )
             Divider()
             Button("Copy Diff") { onCopyDiff?() }
             Divider()
