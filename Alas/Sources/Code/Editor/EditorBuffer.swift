@@ -222,6 +222,10 @@ final class EditorBuffer {
     nonisolated(unsafe) static var loadGateForTesting: (@Sendable () async -> Void)?
     @ObservationIgnored
     nonisolated(unsafe) static var loadResultForTesting: (@Sendable (URL) async -> String?)?
+    /// Test hook that bypasses the real SSH read and containment checks.
+    /// The closure receives `(host, path)` and returns the read result.
+    @ObservationIgnored
+    nonisolated(unsafe) static var remoteReadResultForTesting: (@Sendable (String, String) async throws -> RemoteReadResult)?
     @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
     @ObservationIgnored
@@ -1935,8 +1939,12 @@ final class EditorBuffer {
             let result: RemoteReadResult
             do {
                 guard let self, self.remoteLoadGeneration == generation else { return }
-                try await self.verifyRemoteFileContained(host: host, path: path)
-                result = try await RemoteFileAccess.read(host: host, path: path)
+                if let hook = EditorBuffer.remoteReadResultForTesting {
+                    result = try await hook(host, path)
+                } else {
+                    try await self.verifyRemoteFileContained(host: host, path: path)
+                    result = try await RemoteFileAccess.read(host: host, path: path)
+                }
             } catch {
                 guard let self, self.remoteLoadGeneration == generation else { return }
                 if case .connectionFailed = error as? RemoteFileAccessError {
@@ -1990,6 +1998,7 @@ final class EditorBuffer {
                 self.withLoadEditTrackingSuppressed {
                     self.applyLoadedText(raw)
                 }
+                self.handleEdit(edit: nil)
                 self.originalMtime = mtime
                 self.markRemoteFileEditable()
                 self.loadKind = .loaded
