@@ -406,7 +406,11 @@ final class ACPTranscriptScrollerReconciler {
     /// Synthetic rows (the head pagination spinner, the composer spacer, the
     /// streaming caret, …) all use this id prefix — see
     /// `ACPTranscriptScroller.Coordinator.rowSpecs`.
-    private static let syntheticIdPrefix = "__"
+    /// Prefix marking rows that are not messages: the head pagination
+    /// spinner, queued prompts, the context-recovery row, the composer
+    /// spacer. Internal so the coordinator's anchor logic shares this one
+    /// definition rather than re-spelling the literal.
+    static let syntheticIdPrefix = "__"
 
     /// The viewport top to hand `ACPTranscriptTilingController.insert` when
     /// it decides whether an insertion needs offset compensation.
@@ -514,6 +518,13 @@ final class ACPTranscriptScrollerReconciler {
     func setFollowsTail(_ followsTail: Bool) {
         lastFollowsTail = followsTail
     }
+
+    /// The tail-follow state this reconciler is currently acting on. Read by
+    /// the coordinator's height-change path, which has to make the same
+    /// re-pin decision `remeasureRow` makes and must read it from the same
+    /// place rather than from the session (which the scroll handler has not
+    /// necessarily mirrored yet).
+    var followsTail: Bool { lastFollowsTail }
 
     func remeasureRow(id: String) {
         guard !isApplyingSpecs else { return }

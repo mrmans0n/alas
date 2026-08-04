@@ -200,6 +200,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// doc comment for the full argument).
         private func reconcileForViewportHeightChange() {
             guard let reconciler, !reconciler.isApplyingSpecs else { return }
+            // Re-tiling alone is not enough while following the tail. A
+            // height-only resize leaves `contentHeight` untouched but moves
+            // the maximum legal offset: shrinking the viewport pushes the
+            // bottom further down, so the unchanged `scrollY` stays legal
+            // while no longer sitting at the end. Without this the newest
+            // content drifts below the viewport, with tail-follow still
+            // reporting true, until some unrelated model update calls
+            // `apply()` and re-pins as a side effect. The legacy path's
+            // height-change handler scrolls to the tail for the same reason.
+            if reconciler.followsTail {
+                scroller?.scrollToBottom()
+            }
             reconciler.layoutMountedRows()
         }
 
@@ -212,7 +224,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // empty once a real width does arrive.
             guard let reconciler, let scroller else { return }
             let specs = Self.rowSpecs(host: host)
-            hasNonSyntheticRow = specs.contains { !$0.id.hasPrefix("__") }
+            hasNonSyntheticRow = specs.contains {
+                !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
+            }
             reconciler.apply(
                 specs: specs,
                 contentWidth: scroller.contentView.bounds.width,
@@ -729,9 +743,17 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private func rememberCurrentAnchor() {
             guard let host, let scroller else { return }
-            guard let anchorId = tiling.topVisibleRowId(viewportMinY: scroller.scrollY),
-                  !anchorId.hasPrefix("__")   // synthetic rows are not anchors
-            else { return }
+            // Scans past synthetic rows rather than discarding the update
+            // when one is on top. The sharp case is the first scroll away
+            // from the tail landing at the head of a paginated transcript:
+            // the pagination spinner is the top row, and recording nothing
+            // there pauses tail-follow with no anchor at all — which
+            // restoration later resolves as "go to the bottom", undoing the
+            // scroll that caused it.
+            guard let anchorId = tiling.firstNonSyntheticRowId(
+                atOrBelow: scroller.scrollY,
+                syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
+            ) else { return }
             // O(1) per tick: the row list is rebuilt only when the window
             // itself changes, and the id → index map is derived once per
             // rebuild. Same rows, same builder, same lookup the legacy list

@@ -582,6 +582,53 @@ struct ACPTranscriptScrollerViewportHeightReconciliationTests {
         #expect(scroller.contentHeight == documentHeightBefore)
         #expect(scroller.contentView.bounds.width == widthBefore)
     }
+
+    @Test("a height-only resize keeps a tail-following transcript pinned to the bottom")
+    func heightOnlyResizeRepinsWhileFollowingTail() {
+        // A height-only resize never changes `contentHeight`, but it does
+        // move the maximum legal offset: a shorter viewport pushes the
+        // bottom further down, leaving the unchanged `scrollY` legal yet no
+        // longer at the end. Re-tiling alone would let the newest content
+        // drift below the viewport while tail-follow still reports true.
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.followsTranscriptTail = true
+        let host = makeHost(session: session)
+        host.transcript.messages = (0..<300).map { _ in
+            ACPMessage.systemNotice(id: UUID(), text: String(repeating: "line ", count: 20))
+        }
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 1200))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        #expect(scroller.distanceFromBottom < 1, "fixture should start pinned to the tail")
+
+        // Shrink the viewport only. Width is untouched, so this drives the
+        // height path rather than the width-settle reset.
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        scroller.layoutSubtreeIfNeeded()
+
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
+    @Test("a height-only resize does not drag a browsing user back to the bottom")
+    func heightOnlyResizeDoesNotRepinWhileBrowsing() {
+        // The mirror of the above: re-pinning must be conditional on
+        // tail-follow, not on the resize itself.
+        let (host, scroller) = tallHost()   // followsTranscriptTail == false
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        scroller.setScrollY(max(0, (scroller.contentHeight - scroller.viewportHeight) / 2))
+        let scrollYBefore = scroller.scrollY
+
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        scroller.layoutSubtreeIfNeeded()
+
+        #expect(abs(scroller.scrollY - scrollYBefore) < 0.5)
+    }
 }
 
 @Suite("ACPTranscriptScroller policies")

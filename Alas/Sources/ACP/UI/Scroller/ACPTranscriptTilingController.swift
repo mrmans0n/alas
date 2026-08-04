@@ -185,6 +185,29 @@ final class ACPTranscriptTilingController {
         firstRowIndex(intersectingY: viewportMinY).map { rows[$0].id }
     }
 
+    /// Like `topVisibleRowId`, but walks forward over synthetic rows (the
+    /// head pagination spinner, queued prompts, the composer spacer) to the
+    /// first real message row at or below the viewport top.
+    ///
+    /// A remembered anchor names a message, so a synthetic id is not a usable
+    /// answer — but neither is giving up. Scrolling to the top of a paginated
+    /// transcript puts the pagination spinner at the viewport top, and simply
+    /// discarding that update leaves a paused session with no anchor at all,
+    /// which restoration then resolves as "go to the bottom". Returns nil
+    /// only when every remaining row is synthetic, i.e. the viewport top is
+    /// already inside the synthetic tail and there is no message below it to
+    /// name.
+    func firstNonSyntheticRowId(
+        atOrBelow viewportMinY: CGFloat, syntheticIdPrefix: String
+    ) -> String? {
+        guard var index = firstRowIndex(intersectingY: viewportMinY) else { return nil }
+        while index < rows.count, rows[index].id.hasPrefix(syntheticIdPrefix) {
+            index += 1
+        }
+        guard index < rows.count else { return nil }
+        return rows[index].id
+    }
+
     /// Indices of rows that should have live hosting views: everything
     /// intersecting the viewport extended by `overscan` on both sides. Rows
     /// outside this range keep their measured heights but have no mounted

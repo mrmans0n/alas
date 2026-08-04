@@ -22,6 +22,55 @@ struct ACPTranscriptTilingControllerTests {
         #expect(c.documentHeight == 270)           // 190 + 80
     }
 
+    @Test("firstNonSyntheticRowId walks past a synthetic row at the viewport top")
+    func firstNonSyntheticSkipsLeadingSynthetic() {
+        // The reported case: scrolled to the head of a paginated transcript,
+        // where the pagination spinner is the topmost row. Returning nil
+        // there means no anchor is remembered at all, and restoration later
+        // reads "no anchor" as "go to the bottom".
+        let c = controller()
+        c.replaceAll(rows: [("__top_pagination__", 40), ("m0", 100), ("m1", 100)])
+
+        #expect(c.topVisibleRowId(viewportMinY: 20) == "__top_pagination__")
+        #expect(
+            c.firstNonSyntheticRowId(atOrBelow: 20, syntheticIdPrefix: "__") == "m0"
+        )
+    }
+
+    @Test("firstNonSyntheticRowId returns the row itself when it is not synthetic")
+    func firstNonSyntheticKeepsRealRow() {
+        let c = controller()
+        c.replaceAll(rows: [("__top_pagination__", 40), ("m0", 100), ("m1", 100)])
+
+        // Deep enough to be inside "m1", which is a real row: no scanning.
+        #expect(
+            c.firstNonSyntheticRowId(atOrBelow: 200, syntheticIdPrefix: "__") == "m1"
+        )
+    }
+
+    @Test("firstNonSyntheticRowId returns nil when only synthetic rows remain below")
+    func firstNonSyntheticNilInSyntheticTail() {
+        // Viewport top inside the synthetic tail (queued prompts, composer
+        // spacer): there is no message below to name, so there is genuinely
+        // nothing to remember.
+        let c = controller()
+        c.replaceAll(rows: [("m0", 100), ("__queued__", 60), ("__composer_spacer__", 220)])
+
+        #expect(
+            c.firstNonSyntheticRowId(atOrBelow: 200, syntheticIdPrefix: "__") == nil
+        )
+    }
+
+    @Test("firstNonSyntheticRowId returns nil past the end of the document")
+    func firstNonSyntheticNilPastEnd() {
+        let c = controller()
+        c.replaceAll(rows: [("m0", 100)])
+
+        #expect(
+            c.firstNonSyntheticRowId(atOrBelow: 10_000, syntheticIdPrefix: "__") == nil
+        )
+    }
+
     @Test("empty controller has zero document height")
     func emptyHeight() {
         let c = controller()
