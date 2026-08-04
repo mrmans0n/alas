@@ -39,6 +39,8 @@ private struct MissingMissionRecoveryTarget: Equatable {
 @MainActor
 final class AppState {
     typealias MissionArchiveRecorder = @MainActor (String) async -> Void
+    typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
+    typealias TerminalTabReopenPlaceholder = @MainActor (ClosedTabEntry, String, Tab) async -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -49,6 +51,9 @@ final class AppState {
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
     let globalTabs: GlobalTabsManager
+    private(set) var closedTabHistory = ClosedTabHistory()
+    private(set) var isReopeningClosedTab = false
+    var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
@@ -86,6 +91,8 @@ final class AppState {
 
     @ObservationIgnored
     private let terminalSessionOpener: TerminalSessionOpener?
+    @ObservationIgnored
+    private let closeTabConfirmer: CloseTabConfirmer?
     @ObservationIgnored
     private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
     @ObservationIgnored
@@ -545,6 +552,8 @@ final class AppState {
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
     @ObservationIgnored
+    private let terminalTabReopenPlaceholder: TerminalTabReopenPlaceholder?
+    @ObservationIgnored
     private var scheduledSpacesSave: Task<Void, Never>?
 
     /// One FSEvents watcher per project, watching `<repo>/.git` to auto-refresh
@@ -561,6 +570,8 @@ final class AppState {
         missionPersistence: MissionPersistence = MissionPersistence(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
+        closeTabConfirmer: CloseTabConfirmer? = nil,
+        terminalTabReopenPlaceholder: TerminalTabReopenPlaceholder? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
@@ -578,6 +589,8 @@ final class AppState {
             AppState.showWarningAlert(title: title, message: message)
         }
         self.terminalSessionOpener = terminalSessionOpener
+        self.closeTabConfirmer = closeTabConfirmer
+        self.terminalTabReopenPlaceholder = terminalTabReopenPlaceholder
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
@@ -4231,7 +4244,7 @@ final class AppState {
 
     func handleCloseCenterShortcut(worktreeId: String?) {
         if let activeGlobalTabID = globalTabs.activeTabId {
-            closeGlobalTab(tabId: activeGlobalTabID)
+            requestCloseGlobalTab(tabID: activeGlobalTabID)
             return
         }
         guard let worktreeId else { return }
@@ -4248,6 +4261,15 @@ final class AppState {
             missingMissionTab = nil
             missingMissionRecoveryTarget = nil
         }
+    }
+
+    func requestCloseGlobalTab(tabID: TabID) {
+        guard let tab = globalTabs.tabs.first(where: { $0.id == tabID }) else { return }
+        closedTabHistory.record(ClosedTabEntry(
+            snapshot: .global(tab),
+            placement: .init(tabID: tabID, orderedIDs: globalTabs.tabs.map(\.id))
+        ))
+        closeGlobalTab(tabId: tabID)
     }
 
     @discardableResult
@@ -4790,10 +4812,17 @@ final class AppState {
            !confirmCloseTab(prompt) {
             return
         }
+        closedTabHistory.record(ClosedTabEntry(
+            snapshot: .worktree(worktreeID: worktreeId, tab: tab),
+            placement: .init(tabID: tabId, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
+        ))
         closeTab(worktreeId: worktreeId, tabId: tabId)
     }
 
     private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt) -> Bool {
+        if let closeTabConfirmer {
+            return closeTabConfirmer(prompt)
+        }
         let alert = NSAlert()
         alert.messageText = prompt.title
         alert.informativeText = prompt.message
@@ -4869,6 +4898,7 @@ final class AppState {
     func closeCenterTabs(worktreeId: String, tabIds: [TabID]) {
         let ids = Set(tabIds)
         guard !ids.isEmpty else { return }
+        closedTabHistory.record(contentsOf: closedTabEntries(worktreeID: worktreeId, tabIDs: tabIds))
         for id in stateGlobalTabIDs().intersection(ids) {
             closeGlobalTab(tabId: id)
         }
@@ -4887,10 +4917,72 @@ final class AppState {
         Set(globalTabs.tabs.map(\.id))
     }
 
+    private func closedTabEntries(worktreeID: String, tabIDs: [TabID]) -> [ClosedTabEntry] {
+        let global = globalTabs.tabs
+        let local = tabs.tabs(forWorktree: worktreeID)
+        return tabIDs.compactMap { tabID in
+            if let tab = global.first(where: { $0.id == tabID }) {
+                return ClosedTabEntry(
+                    snapshot: .global(tab),
+                    placement: .init(tabID: tabID, orderedIDs: global.map(\.id))
+                )
+            }
+            guard let tab = local.first(where: { $0.id == tabID }) else { return nil }
+            return ClosedTabEntry(
+                snapshot: .worktree(worktreeID: worktreeID, tab: tab),
+                placement: .init(tabID: tabID, orderedIDs: local.map(\.id))
+            )
+        }
+    }
+
+    func reopenLastClosedTab() async {
+        guard !isReopeningClosedTab else { return }
+        isReopeningClosedTab = true
+        defer { isReopeningClosedTab = false }
+
+        while let entry = closedTabHistory.last {
+            switch entry.snapshot {
+            case .global(let tab):
+                _ = globalTabs.restore(tab: tab, placement: entry.placement)
+                closedTabHistory.remove(id: entry.id)
+                return
+
+            case .worktree(let worktreeID, let tab):
+                guard worktree(withId: worktreeID) != nil else {
+                    closedTabHistory.remove(id: entry.id)
+                    continue
+                }
+                if case .terminal = tab {
+                    await reopenTerminalTab(entry: entry, worktreeID: worktreeID, tab: tab)
+                    return
+                }
+                selectWorktree(id: worktreeID)
+                _ = tabs.restore(tab: tab, worktreeID: worktreeID, placement: entry.placement)
+                activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+                closedTabHistory.remove(id: entry.id)
+                return
+            }
+        }
+    }
+
+    /// Terminal reconstruction belongs to the terminal-specific reopen task.
+    /// Keep the history entry so a later retry can reconstruct it transactionally.
+    private func reopenTerminalTab(entry: ClosedTabEntry, worktreeID: String, tab: Tab) async {
+        if let terminalTabReopenPlaceholder {
+            await terminalTabReopenPlaceholder(entry, worktreeID, tab)
+            return
+        }
+        fileActionErrorHandler(
+            "Reopen Tab Failed",
+            "Terminal tabs cannot be reopened until their terminal session is reconstructed."
+        )
+    }
+
     /// Tear down every tab/terminal/harness reference for a worktree id without
     /// touching git or persistence. Shared between Close-All, archive, and
     /// delete so the bookkeeping stays in one place.
     private func cleanupWorktreeState(worktreeId: String) {
+        closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)

@@ -241,7 +241,7 @@ struct RootView: View {
                         tabs: state.globalTabs.tabs,
                         activeId: tabState.id,
                         onActivate: { state.globalTabs.activate(tabId: $0) },
-                        onClose: { state.closeGlobalTab(tabId: $0) },
+                        onClose: { state.requestCloseGlobalTab(tabID: $0) },
                         onRevealSidebar: {
                             state.config.sidebarVisible = true
                             state.saveConfig()
