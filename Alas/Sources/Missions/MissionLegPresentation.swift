@@ -4,6 +4,7 @@ struct MissionLegPresentation: Equatable, Identifiable {
     let id: MissionLegID
     let ordinal: Int
     let projectID: String
+    let projectName: String
     let state: MissionLegState
     let stateLabel: String
     let stateTone: MissionTabPresentation.StateTone
@@ -24,6 +25,7 @@ struct MissionLegPresentation: Equatable, Identifiable {
     init(
         aggregate: MissionAggregate,
         leg: MissionLeg,
+        projectName: String? = nil,
         worktree: Worktree?,
         acpSummary: MissionACPSummary? = nil,
         diffCounts: MissionDiffCounts? = nil,
@@ -35,6 +37,7 @@ struct MissionLegPresentation: Equatable, Identifiable {
         id = leg.id
         ordinal = leg.ordinal
         projectID = leg.projectId
+        self.projectName = projectName ?? leg.projectId
         state = leg.state
         stateLabel = Self.stateLabel(leg.state)
         stateTone = Self.stateTone(leg.state)

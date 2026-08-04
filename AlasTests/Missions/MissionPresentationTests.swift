@@ -4,6 +4,21 @@ import Testing
 
 @MainActor
 struct MissionPresentationTests {
+    @Test func legPresentationUsesConfiguredProjectName() {
+        let aggregate = Self.runningAggregate()
+        let leg = aggregate.legs[0]
+
+        let presentation = MissionLegPresentation(
+            aggregate: aggregate,
+            leg: leg,
+            projectName: "Alas App",
+            worktree: Self.worktree
+        )
+
+        #expect(presentation.projectName == "Alas App")
+        #expect(presentation.projectID == leg.projectId)
+    }
+
     @Test func legCardActionsRouteAgentToOwningLeg() {
         let legID = MissionLegID(rawValue: "mission-1-leg-server")
         var openedLegID: MissionLegID?

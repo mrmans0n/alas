@@ -203,6 +203,7 @@ final class AddMissionLegModel {
                 preparedPrompt: MissionLegPromptBuilder.build(
                     issue: aggregate.issue,
                     existingLegs: aggregate.legs,
+                    existingProjectNames: Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) }),
                     projectName: project.name,
                     branch: normalizedBranch,
                     instructions: trimmedInstructions

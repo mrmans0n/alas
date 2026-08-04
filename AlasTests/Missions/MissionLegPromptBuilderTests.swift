@@ -7,7 +7,8 @@ struct MissionLegPromptBuilderTests {
     func buildsAddedLegPrompt() {
         let prompt = MissionLegPromptBuilder.build(
             issue: MissionFixtures.issue(),
-            existingLegs: [MissionFixtures.runningLeg(projectId: "alas", branch: "nacho/1842-app")],
+            existingLegs: [MissionFixtures.runningLeg(projectId: "project-uuid", branch: "nacho/1842-app")],
+            existingProjectNames: ["project-uuid": "Alas App"],
             projectName: "alas-sdk",
             branch: "nacho/1842-sdk",
             instructions: "Update the Swift client API."
@@ -15,7 +16,8 @@ struct MissionLegPromptBuilderTests {
 
         #expect(prompt.contains("## Issue context"))
         #expect(prompt.contains("**URL:** https://github.com/acme/alas/issues/42"))
-        #expect(prompt.contains("alas · nacho/1842-app · Running"))
+        #expect(prompt.contains("Alas App · nacho/1842-app · Running"))
+        #expect(!prompt.contains("project-uuid ·"))
         #expect(prompt.contains("Update the Swift client API."))
         #expect(prompt.contains("keep the change focused"))
         #expect(!prompt.contains("Transcript"))

@@ -129,7 +129,11 @@ final class GlobalTabsManager {
 
         worktreeTabs.loadAllPersisted()
 
+        let activeLegacyMission = worktreeTabs.activeMissionTab()
         merge(worktreeTabs.missionTabs())
+        if activeTabId == nil, let activeLegacyMission {
+            activeTabId = activeLegacyMission.id
+        }
         // Persist the imported states before their worktree copies are removed.
         // If the process stops here, the next load repeats safely from this file.
         try persist()

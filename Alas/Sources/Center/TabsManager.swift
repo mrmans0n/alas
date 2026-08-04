@@ -871,6 +871,18 @@ final class TabsManager {
         }
     }
 
+    func activeMissionTab() -> MissionTabState? {
+        for worktreeID in byWorktree.keys.sorted() {
+            guard let file = byWorktree[worktreeID],
+                  let activeTabID = file.activeTabId,
+                  let activeTab = file.tabs.first(where: { $0.id == activeTabID }),
+                  case .mission(let state) = activeTab
+            else { continue }
+            return state
+        }
+        return nil
+    }
+
     func extractMissionTabs() throws -> [MissionTabState] {
         var extracted: [MissionTabState] = []
 

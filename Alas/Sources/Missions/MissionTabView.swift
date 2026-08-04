@@ -421,6 +421,7 @@ struct MissionTabView: View {
             return MissionLegPresentation(
                 aggregate: aggregate,
                 leg: leg,
+                projectName: state.projects.first(where: { $0.id == leg.projectId })?.name,
                 worktree: legWorktree,
                 acpSummary: legSession.map {
                     MissionACPSummary(session: $0, agentName: agentName(for: $0.agentId))
@@ -701,7 +702,7 @@ private struct MissionLegSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .firstTextBaseline) {
-                Text(presentation.projectID)
+                Text(presentation.projectName)
                     .font(.headline)
                 Spacer()
                 MissionStateChip(label: presentation.stateLabel, tone: presentation.stateTone)

@@ -4,6 +4,7 @@ enum MissionLegPromptBuilder {
     static func build(
         issue: MissionIssueSnapshot,
         existingLegs: [MissionLeg],
+        existingProjectNames: [String: String] = [:],
         projectName: String,
         branch: String,
         instructions: String
@@ -39,7 +40,8 @@ enum MissionLegPromptBuilder {
             lines.append("- No existing Mission legs.")
         } else {
             lines.append(contentsOf: orderedLegs.map {
-                "- \($0.projectId) · \($0.branch) · \(displayName(for: $0.state))"
+                let name = existingProjectNames[$0.projectId] ?? $0.projectId
+                return "- \(name) · \($0.branch) · \(displayName(for: $0.state))"
             })
         }
 

@@ -115,6 +115,7 @@ struct GlobalTabsManagerTests {
 
         try harness.global.loadAndMigrate(worktreeTabs: harness.tabs)
 
+        #expect(harness.global.activeMissionTab() == .fixture)
         #expect(harness.tabs.tabs(forWorktree: "app") == [terminal])
         #expect(harness.tabs.activeTabId(forWorktree: "app") == terminal.id)
     }
