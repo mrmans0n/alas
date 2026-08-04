@@ -150,6 +150,56 @@ struct MissionIntegrationTests {
         #expect(aggregate.legs.first(where: { $0.id == .sdk })?.readinessEvidence == nil)
     }
 
+    @Test("manual source Mission links merged GitHub review from its leg")
+    func manualSourceMissionLinksMergedGitHubReviewFromItsLeg() async throws {
+        var aggregate = MissionFixtures.creatingMission(id: MissionID.fixture.rawValue, source: MissionFixtures.manualSource())
+        aggregate.mission.state = .running
+        aggregate.mission.setupCheckpoint = .running
+        let primaryLegID = aggregate.mission.primaryLegID
+        aggregate.legs[0] = MissionLeg(
+            id: primaryLegID,
+            missionID: .fixture,
+            ordinal: 0,
+            projectId: "app-project",
+            baseRef: "origin/main",
+            baseRemoteName: "origin",
+            branch: "app-fix",
+            destinationPath: "/tmp/app",
+            worktreeId: "app-worktree",
+            worktreeLineageID: "app-lineage",
+            agentId: "codex",
+            acpSessionId: nil,
+            initialPromptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            pendingInitialPrompt: "Prepared prompt",
+            reviewIdentity: nil,
+            state: .running,
+            setupCheckpoint: .running,
+            attentionReason: nil,
+            readinessEvidence: nil,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let fake = try MissionControllerFake(
+            existing: aggregate,
+            discoverReviewRequest: { _, branch, _, headSHA, _ in
+                let snapshot = MissionControllerFake.reviewSnapshot(branch: branch, number: 92, state: .merged)
+                guard snapshot.local.headSHA == headSHA else { return nil }
+                return snapshot.reviewRequest
+            }
+        )
+        await fake.controller.load()
+
+        await fake.controller.discoverMergedReview(
+            worktreeId: "app-worktree",
+            baseRef: "origin/main",
+            snapshot: MissionControllerFake.reviewSnapshot(branch: "app-fix", number: 92, state: .merged)
+        )
+
+        let loaded = try #require(try await fake.persistence.aggregate(id: .fixture))
+        #expect(loaded.primaryLeg?.reviewIdentity?.provider == .github)
+        #expect(loaded.mission.state == .readyToComplete)
+    }
+
     @Test("parallel leg setup recovers independently and becomes ready after review and archive")
     func multiLegLifecycleRecoversAcrossRestart() async throws {
         let harness = try MissionIntegrationHarness()
@@ -213,13 +263,13 @@ struct MissionIntegrationTests {
     func providerRefreshFailurePreservesPriorLegReadiness() async throws {
         let fake = try MissionControllerFake(
             existing: MissionFixtures.twoLegMission(),
-            issueRefresh: { _, _ in throw CodeHostProviderError.unauthenticated("github.com") }
+            sourceRefresh: { _, _ in throw CodeHostProviderError.unauthenticated("github.com") }
         )
         await fake.controller.load()
         await fake.controller.recordArchive(worktreeId: "app-worktree")
         let before = try #require(try await fake.persistence.aggregate(id: .fixture))
 
-        await fake.controller.refreshIssue(.fixture)
+        await fake.controller.refreshSource(.fixture)
         let after = try #require(try await fake.persistence.aggregate(id: .fixture))
 
         #expect(after.legs.first(where: { $0.id == .app })?.readinessEvidence == before.legs.first(where: { $0.id == .app })?.readinessEvidence)
@@ -248,7 +298,7 @@ struct MissionIntegrationTests {
     func duplicateCreationIsBlockedBeforeExternalArtifacts() async throws {
         let harness = try MissionIntegrationHarness(existingActive: true)
 
-        await #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        await #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try await harness.create()
         }
         #expect(try await harness.persistence.list(includeCompleted: false).count == 1)
@@ -285,9 +335,11 @@ private final class MissionControllerFake {
     init(
         existing: MissionAggregate,
         reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _, _ in true },
-        issueRefresh: @escaping MissionIssueRefresh = { _, _ in
+        sourceRefresh: @escaping MissionSourceRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("No refresh configured.")
-        }
+        },
+        branchOwner: @escaping MissionBranchOwner = { _, _, _ in "acme" },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil }
     ) throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mission-controller-fixture-\(UUID().uuidString).sqlite")
@@ -344,11 +396,13 @@ private final class MissionControllerFake {
                 startACP: { _, _ in .failure(.init(message: "Unexpected ACP startup.")) },
                 notifyChanged: { _ in }
             ),
-            issueRefresh: issueRefresh,
+            sourceRefresh: sourceRefresh,
             reviewRepositoryMatches: reviewRepositoryMatches,
             branchTip: { _, _ in "abc123" },
+            branchOwner: branchOwner,
             projectExists: { _ in true },
-            worktreeArchived: { projectID, _ in projectID == "app-project" }
+            worktreeArchived: { projectID, _ in projectID == "app-project" },
+            discoverReviewRequest: discoverReviewRequest
         )
     }
 
@@ -626,9 +680,10 @@ private final class MissionIntegrationHarness {
                     recorder.notifications.append(aggregate)
                 }
             ),
-            issueRefresh: { identity, projectID in
-                try await recorder.refreshIssue(identity: identity, projectID: projectID)
+            sourceRefresh: { source, projectID in
+                try await recorder.refreshSource(source, projectID: projectID)
             },
+            reviewRepositoryMatches: { _, _, _, _ in true },
             branchTip: { _, _ in "abc123" },
             projectExists: { $0 == "project-1" || $0 == "sdk-project" },
             worktreeArchived: { projectID, destinationPath in
@@ -786,10 +841,10 @@ private final class MissionIntegrationRecorder {
         return .success(sessionID)
     }
 
-    func refreshIssue(
-        identity _: MissionIssueIdentity,
+    func refreshSource(
+        _ source: MissionSourceSnapshot,
         projectID _: String
-    ) async throws -> MissionIssueSnapshot {
+    ) async throws -> MissionSourceSnapshot {
         throw CodeHostProviderError.malformedOutput("No issue refresh configured.")
     }
 }

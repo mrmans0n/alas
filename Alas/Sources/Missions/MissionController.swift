@@ -1,10 +1,10 @@
 import Foundation
 import Observation
 
-typealias MissionIssueRefresh = @MainActor (
-    _ identity: MissionIssueIdentity,
+typealias MissionSourceRefresh = @MainActor (
+    _ source: MissionSourceSnapshot,
     _ projectId: String
-) async throws -> MissionIssueSnapshot
+) async throws -> MissionSourceSnapshot
 
 typealias MissionStartupReviewSnapshot = @MainActor (
     _ worktree: Worktree,
@@ -13,7 +13,6 @@ typealias MissionStartupReviewSnapshot = @MainActor (
 
 typealias MissionReviewDiscovery = @MainActor (
     _ projectID: String,
-    _ issueIdentity: MissionIssueIdentity,
     _ branch: String,
     _ baseRef: String,
     _ headSHA: String,
@@ -41,7 +40,6 @@ typealias MissionBranchTip = @MainActor (
 typealias MissionBranchOwner = @MainActor (
     _ projectID: String,
     _ branch: String,
-    _ issueIdentity: MissionIssueIdentity,
     _ baseRef: String
 ) async -> String?
 
@@ -49,6 +47,20 @@ typealias MissionLegacyBaseRemoteResolver = @MainActor (
     _ projectID: String,
     _ baseRef: String
 ) async -> String?
+
+enum MissionSourceRefreshResult: Equatable, Sendable {
+    case applied
+    case confirmationRequired(MissionSourceRefreshProposal)
+    case unavailable
+    case failed(String)
+}
+
+struct MissionSourceRefreshProposal: Equatable, Sendable {
+    let missionID: MissionID
+    let expectedIdentity: MissionSourceIdentity
+    let expectedCapturedAt: Date
+    let snapshot: MissionSourceSnapshot
+}
 
 @Observable
 @MainActor
@@ -61,7 +73,7 @@ final class MissionController {
     @ObservationIgnored
     private let environment: MissionCoordinator.Environment
     @ObservationIgnored
-    private let issueRefresh: MissionIssueRefresh
+    private let sourceRefresh: MissionSourceRefresh
     @ObservationIgnored
     private let linkedReviewRequest: MissionLinkedReviewRequest
     @ObservationIgnored
@@ -89,7 +101,7 @@ final class MissionController {
     @ObservationIgnored
     private var lifecycleWaiters: [MissionID: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
-    private var issueRefreshGenerations: [MissionID: Int] = [:]
+    private var sourceRefreshGenerations: [MissionID: Int] = [:]
     @ObservationIgnored
     private lazy var coordinator = MissionCoordinator(environment: .init(
         persistence: environment.persistence,
@@ -114,24 +126,24 @@ final class MissionController {
 
     init(
         environment: MissionCoordinator.Environment,
-        issueRefresh: @escaping MissionIssueRefresh = { _, _ in
-            throw CodeHostProviderError.malformedOutput("Issue refresh is unavailable.")
+        sourceRefresh: @escaping MissionSourceRefresh = { _, _ in
+            throw CodeHostProviderError.malformedOutput("Source refresh is unavailable.")
         },
         reviewRepositoryMatches: @escaping MissionProjectReviewRepositoryMatcher = { _, _, _, _ in false },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in nil },
-        branchOwner: @escaping MissionBranchOwner = { _, _, _, _ in nil },
+        branchOwner: @escaping MissionBranchOwner = { _, _, _ in nil },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeDiscoverySucceeded: @escaping @MainActor (String) -> Bool = { _ in true },
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
         openMission: @escaping @MainActor (MissionID) -> Void = { _ in }
     ) {
         persistence = environment.persistence
         self.environment = environment
-        self.issueRefresh = issueRefresh
+        self.sourceRefresh = sourceRefresh
         self.reviewRepositoryMatches = reviewRepositoryMatches
         self.linkedReviewRequest = linkedReviewRequest
         self.branchTip = branchTip
@@ -270,8 +282,7 @@ final class MissionController {
                            refreshed.state == .closed
                            || !Self.review(
                                refreshed,
-                               matches: leg,
-                               issueIdentity: aggregate.issue.identity
+                               matches: leg
                            )
                            || !matchesCurrentHead {
                             request = visible
@@ -293,8 +304,7 @@ final class MissionController {
                 let identity = Self.reviewIdentity(for: request)
                 guard await reviewMatchesTarget(
                     request,
-                    leg: leg,
-                    issueIdentity: aggregate.issue.identity
+                    leg: leg
                 ) else { continue }
                 guard request.state != .merged
                     || (!snapshot.local.headSHA.isEmpty && request.headSHA == snapshot.local.headSHA)
@@ -336,7 +346,6 @@ final class MissionController {
                 let replacesLinkedReview = leg.reviewIdentity != nil
                 guard let request = await discoverMergedReview(
                     for: leg,
-                    issueIdentity: aggregate.issue.identity,
                     snapshot: snapshot
                 ) else { continue }
                 await applyReview(
@@ -418,28 +427,39 @@ final class MissionController {
         }
     }
 
-    func refreshIssue(_ id: MissionID) async {
-        issueRefreshGenerations[id, default: 0] &+= 1
-        let generation = issueRefreshGenerations[id, default: 0]
+    @discardableResult
+    func refreshSource(_ id: MissionID) async -> MissionSourceRefreshResult {
+        sourceRefreshGenerations[id, default: 0] &+= 1
+        let generation = sourceRefreshGenerations[id, default: 0]
         do {
             guard let loaded = try await persistence.aggregate(id: id),
                   let leg = loaded.primaryLeg
-            else { return }
-            let refreshed: MissionIssueSnapshot
+            else { return .unavailable }
+            guard loaded.source.isRefreshable else { return .unavailable }
+            let refreshed: MissionSourceSnapshot
             do {
-                refreshed = try await issueRefresh(loaded.issue.identity, leg.projectId)
+                refreshed = try await sourceRefresh(loaded.source, leg.projectId)
             } catch {
-                guard issueRefreshGenerations[id] == generation else { return }
+                guard sourceRefreshGenerations[id] == generation else { return .unavailable }
                 await persistRefreshFailure(error, aggregate: loaded)
-                return
+                return .failed(Self.sanitized(error.localizedDescription))
             }
-            guard issueRefreshGenerations[id] == generation else { return }
+            guard sourceRefreshGenerations[id] == generation else { return .unavailable }
+            if refreshed.contentOrigin == .manual {
+                loadError = nil
+                return .confirmationRequired(.init(
+                    missionID: id,
+                    expectedIdentity: loaded.source.identity,
+                    expectedCapturedAt: loaded.source.capturedAt,
+                    snapshot: refreshed
+                ))
+            }
             let event = makeEvent(
                 aggregate: loaded,
                 kind: .sourceRefreshed,
-                message: "Issue #\(refreshed.identity.number) refreshed."
+                message: Self.sourceRefreshedMessage(refreshed)
             )
-            let updatedMissionIDs = try await persistence.replaceIssueSnapshot(
+            let updatedMissionIDs = try await persistence.replaceSourceSnapshot(
                 missionID: id,
                 snapshot: refreshed,
                 event: event
@@ -448,10 +468,47 @@ final class MissionController {
                 try await publish(id: updatedMissionID)
             }
             loadError = nil
+            return .applied
         } catch {
-            guard issueRefreshGenerations[id] == generation else { return }
+            guard sourceRefreshGenerations[id] == generation else { return .unavailable }
             loadError = error.localizedDescription
+            return .failed(error.localizedDescription)
         }
+    }
+
+    @discardableResult
+    func confirmSourceRefresh(_ proposal: MissionSourceRefreshProposal) async -> Bool {
+        do {
+            guard let loaded = try await persistence.aggregate(id: proposal.missionID),
+                  loaded.source.identity == proposal.expectedIdentity,
+                  loaded.source.capturedAt == proposal.expectedCapturedAt
+            else {
+                loadError = "The Mission source changed before refresh confirmation."
+                return false
+            }
+            let event = makeEvent(
+                aggregate: loaded,
+                kind: .sourceRefreshed,
+                message: Self.sourceRefreshedMessage(proposal.snapshot)
+            )
+            let updatedMissionIDs = try await persistence.replaceSourceSnapshot(
+                missionID: proposal.missionID,
+                snapshot: proposal.snapshot,
+                event: event
+            )
+            for updatedMissionID in updatedMissionIDs {
+                try await publish(id: updatedMissionID)
+            }
+            loadError = nil
+            return true
+        } catch {
+            loadError = error.localizedDescription
+            return false
+        }
+    }
+
+    func refreshIssue(_ id: MissionID) async {
+        _ = await refreshSource(id)
     }
 
     func refreshLinkedReview(_ id: MissionID) async {
@@ -473,8 +530,7 @@ final class MissionController {
                   let request = await linkedReviewRequest(identity, leg.projectId, Self.baseBranch(for: leg)),
                   await reviewMatchesTarget(
                       request,
-                      leg: leg,
-                      issueIdentity: aggregate.issue.identity
+                      leg: leg
                   )
             else { return }
             if request.state == .merged {
@@ -667,14 +723,12 @@ final class MissionController {
 
     private func discoverMergedReview(
         for leg: MissionLeg,
-        issueIdentity: MissionIssueIdentity,
         snapshot: ReviewLoopSnapshot
     ) async -> ReviewRequest? {
         guard snapshot.local.branchName == leg.branch else { return nil }
         let resolvedOwner = await branchOwner(
             leg.projectId,
             leg.branch,
-            issueIdentity,
             leg.baseRef
         )
         let headOwner = if let resolvedOwner, !resolvedOwner.isEmpty {
@@ -686,7 +740,6 @@ final class MissionController {
               !headOwner.isEmpty,
               let request = await discoverMergedReview(
                   for: leg,
-                  issueIdentity: issueIdentity,
                   headSHA: snapshot.local.headSHA,
                   headOwner: headOwner
               )
@@ -696,14 +749,12 @@ final class MissionController {
 
     private func discoverMergedReview(
         for leg: MissionLeg,
-        issueIdentity: MissionIssueIdentity,
         headSHA: String,
         headOwner: String?
     ) async -> ReviewRequest? {
         guard !headSHA.isEmpty,
               let request = await discoverReviewRequest(
                   leg.projectId,
-                  issueIdentity,
                   leg.branch,
                   leg.baseRef,
                   headSHA,
@@ -712,7 +763,7 @@ final class MissionController {
               request.headRefName == leg.branch,
               request.headSHA == headSHA,
               request.state == .merged,
-              await reviewMatchesTarget(request, leg: leg, issueIdentity: issueIdentity)
+              await reviewMatchesTarget(request, leg: leg)
         else { return nil }
         return request
     }
@@ -732,8 +783,7 @@ final class MissionController {
                 if linked.state != .closed,
                    await reviewMatchesTarget(
                        linked,
-                       leg: leg,
-                       issueIdentity: aggregate.issue.identity
+                       leg: leg
                    ), matchesCurrentTip {
                     if linked.state == .merged {
                         guard let currentTip,
@@ -756,13 +806,11 @@ final class MissionController {
               let headOwner = await branchOwner(
                   leg.projectId,
                   leg.branch,
-                  aggregate.issue.identity,
                   leg.baseRef
               ),
               !headOwner.isEmpty,
               let request = await discoverMergedReview(
                   for: leg,
-                  issueIdentity: aggregate.issue.identity,
                   headSHA: currentTip,
                   headOwner: headOwner
               )
@@ -862,8 +910,7 @@ final class MissionController {
                 guard request.headSHA == currentTip else { return false }
                 return await self.reviewMatchesTarget(
                     request,
-                    leg: leg,
-                    issueIdentity: aggregate.issue.identity
+                    leg: leg
                 )
             }
         )
@@ -1020,10 +1067,10 @@ final class MissionController {
         let event = makeEvent(
             aggregate: aggregate,
             kind: .sourceRefreshed,
-            message: "Issue refresh failed: \(message)"
+            message: "Source refresh failed: \(message)"
         )
         do {
-            try await persistence.updateIssueRefreshError(
+            try await persistence.updateSourceRefreshError(
                 missionID: aggregate.mission.id,
                 refreshError: message,
                 event: event
@@ -1033,6 +1080,13 @@ final class MissionController {
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    private static func sourceRefreshedMessage(_ source: MissionSourceSnapshot) -> String {
+        if let displayReference = source.displayReference, !displayReference.isEmpty {
+            return "Source \(displayReference) refreshed."
+        }
+        return "Source refreshed."
     }
 
     private func publish(id: MissionID) async throws {
@@ -1106,27 +1160,11 @@ final class MissionController {
             && request.baseRefName == expectedBase
     }
 
-    private static func review(
-        _ request: ReviewRequest,
-        matches leg: MissionLeg,
-        issueIdentity: MissionIssueIdentity
-    ) -> Bool {
-        review(request, matches: leg)
-            && request.provider == issueIdentity.provider
-            && request.remote.host.caseInsensitiveCompare(issueIdentity.host) == .orderedSame
-            && request.remote.repositorySlug.caseInsensitiveCompare(issueIdentity.repositorySlug) == .orderedSame
-    }
-
     private func reviewMatchesTarget(
         _ request: ReviewRequest,
-        leg: MissionLeg,
-        issueIdentity: MissionIssueIdentity
+        leg: MissionLeg
     ) async -> Bool {
         guard Self.review(request, matches: leg) else { return false }
-        if leg.ordinal == 0,
-           Self.review(request, matches: leg, issueIdentity: issueIdentity) {
-            return true
-        }
         return await reviewRepositoryMatches(
             leg.projectId,
             leg.baseRef,

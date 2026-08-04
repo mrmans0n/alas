@@ -775,11 +775,11 @@ final class AppState {
                     missingMissionTab?.title = aggregate.mission.title
                 }
             }
-        ), issueRefresh: { [weak self] identity, projectID in
+        ), sourceRefresh: { [weak self] source, projectID in
             guard let self else {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
-            return try await self.refreshMissionIssue(identity: identity, projectID: projectID)
+            return try await self.refreshMissionSource(source, projectID: projectID)
         }, reviewRepositoryMatches: { [weak self] projectID, baseRef, baseRemoteName, request in
             guard let self,
                   let project = self.projectsManager.projects.first(where: { $0.id == projectID }),
@@ -807,11 +807,10 @@ final class AppState {
                 return await missionBranchTipOverride(projectID, branch)
             }
             return await self.missionBranchTip(projectID: projectID, branch: branch)
-        }, branchOwner: { [weak self] projectID, branch, issueIdentity, baseRef in
+        }, branchOwner: { [weak self] projectID, branch, baseRef in
             await self?.missionBranchOwner(
                 projectID: projectID,
                 branch: branch,
-                issueIdentity: issueIdentity,
                 baseRef: baseRef
             )
         }, projectExists: { [weak self] projectID in
@@ -850,10 +849,9 @@ final class AppState {
                 baseBranch: paneBaseRef,
                 comparisonMode: self.config.changes.comparisonMode
             )
-        }, discoverReviewRequest: { [weak self] projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
+        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA, headOwner in
             await self?.discoverMissionReview(
                 projectID: projectID,
-                issueIdentity: issueIdentity,
                 branch: branch,
                 baseRef: baseRef,
                 headSHA: headSHA,
@@ -1168,6 +1166,27 @@ final class AppState {
         )
     }
 
+    private func refreshMissionSource(
+        _ source: MissionSourceSnapshot,
+        projectID: String
+    ) async throws -> MissionSourceSnapshot {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectID }) else {
+            throw CodeHostProviderError.malformedOutput("The Mission project is no longer available.")
+        }
+        let issueProviders = CodeHostIssueProviderRegistry.live()
+        let registry = MissionSourceProviderRegistry([
+            CodeHostMissionSourceProvider(kind: .github, providers: issueProviders),
+            CodeHostMissionSourceProvider(kind: .gitlab, providers: issueProviders),
+            ManualMissionSourceProvider(),
+        ])
+        guard let provider = registry.provider(for: source.identity.providerID) else {
+            throw CodeHostProviderError.malformedOutput("Mission source refresh is unavailable.")
+        }
+        return try await provider.refresh(source, project: project) { project in
+            try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
+        }
+    }
+
     private func refreshMissionIssue(
         identity: MissionIssueIdentity,
         projectID: String
@@ -1303,7 +1322,6 @@ final class AppState {
 
     private func discoverMissionReview(
         projectID: String,
-        issueIdentity _: MissionIssueIdentity,
         branch: String,
         baseRef: String,
         headSHA: String,
@@ -1433,7 +1451,6 @@ final class AppState {
     private func missionBranchOwner(
         projectID: String,
         branch: String,
-        issueIdentity: MissionIssueIdentity,
         baseRef: String
     ) async -> String? {
         guard let project = projectsManager.projects.first(where: { $0.id == projectID })
@@ -1471,7 +1488,6 @@ final class AppState {
             branchRemoteName: branchRemoteName
         )
         return Self.missionBranchOwner(
-            identity: issueIdentity,
             baseRef: baseRef,
             branchRemoteName: branchRemoteName,
             pushRemoteName: pushRemoteName,
@@ -1491,12 +1507,11 @@ final class AppState {
     }
 
     static func missionBranchOwner(
-        identity: MissionIssueIdentity,
         baseRef: String,
         branchRemoteName: String,
         pushRemoteName: String = "",
         remotes: [GitRemote],
-        supportedKinds: Set<CodeHostKind>? = nil
+        supportedKinds: Set<CodeHostKind>
     ) -> String? {
         let effectiveRemoteName = effectiveMissionPushRemote(
             branchPushRemoteName: pushRemoteName,
@@ -1514,32 +1529,18 @@ final class AppState {
             branchRemotes = namedBranchRemotes.filter { $0.direction == .push }
                 + namedBranchRemotes.filter { $0.direction == .fetch }
         }
-        let branchRemote: CodeHostRemote? = if let supportedKinds {
-            branchRemotes.lazy.compactMap { remote in
-                CodeHostRemoteDetector.detectAll(
-                    from: [GitRemote(name: remote.name, url: remote.url)],
-                    supportedKinds: supportedKinds
-                ).first
-            }.first
-        } else {
-            branchRemotes.lazy.compactMap { remote in
-                CodeHostRemoteDetector.detect(
-                    from: [GitRemote(name: remote.name, url: remote.url)],
-                    matching: identity.provider
-                )
-            }.first { candidate in
-                candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
-            }
-        }
-        if let branchRemote { return branchRemote.owner }
-        if let supportedKinds {
-            return missionDiscoveryRemote(
-                baseRef: baseRef,
-                remotes: remotes,
+        let branchRemote = branchRemotes.lazy.compactMap { remote in
+            CodeHostRemoteDetector.detectAll(
+                from: [GitRemote(name: remote.name, url: remote.url)],
                 supportedKinds: supportedKinds
-            )?.owner
-        }
-        return missionReviewRemote(identity: identity, baseRef: baseRef, remotes: remotes)?.owner
+            ).first
+        }.first
+        if let branchRemote { return branchRemote.owner }
+        return missionDiscoveryRemote(
+            baseRef: baseRef,
+            remotes: remotes,
+            supportedKinds: supportedKinds
+        )?.owner
     }
 
     func reconcileDeletedMissionWorktree(_ worktreeID: String) async {

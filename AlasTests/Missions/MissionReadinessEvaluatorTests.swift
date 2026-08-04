@@ -726,7 +726,7 @@ struct MissionReadinessEvaluatorTests {
             capturedAt: closed.capturedAt,
             refreshError: nil
         )
-        let fake = try MissionLifecycleFake(issueRefresh: { _, _ in closed })
+        let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in MissionSourceSnapshot(issue: closed) })
         await fake.controller.load()
 
         await fake.controller.refreshIssue(Self.missionID)
@@ -735,6 +735,34 @@ struct MissionReadinessEvaluatorTests {
         #expect(aggregate.issue == closed)
         #expect(aggregate.mission.state == .running)
         #expect(fake.notifications.last?.issue.title == "Fresh issue title")
+    }
+
+    @Test func providerRefreshWithManualContentRequiresConfirmation() async throws {
+        let fake = try MissionLifecycleFake(sourceRefresh: { source, _ in
+            try ManualMissionSourceProvider.snapshot(
+                for: source.canonicalURL,
+                identity: source.identity,
+                repositoryLocator: source.repositoryLocator,
+                displayReference: source.displayReference,
+                isRefreshable: true
+            )
+        })
+        await fake.controller.load()
+        let before = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        let result = await fake.controller.refreshSource(Self.missionID)
+        let after = try #require(try await fake.persistence.aggregate(id: Self.missionID))
+
+        guard case .confirmationRequired(let proposal) = result else {
+            Issue.record("Expected confirmationRequired, got \(result).")
+            return
+        }
+        #expect(proposal.missionID == Self.missionID)
+        #expect(proposal.expectedIdentity == before.source.identity)
+        #expect(proposal.expectedCapturedAt == before.source.capturedAt)
+        #expect(proposal.snapshot.contentOrigin == .manual)
+        #expect(after.source == before.source)
+        #expect(after.events == before.events)
     }
 
     @Test func repositoryRenamePublishesEveryMigratedDuplicateMission() async throws {
@@ -770,7 +798,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: first,
             additionalAggregates: [second],
-            issueRefresh: { _, _ in renamed }
+            sourceRefresh: { _, _ in MissionSourceSnapshot(issue: renamed) }
         )
         await fake.controller.load()
 
@@ -783,7 +811,7 @@ struct MissionReadinessEvaluatorTests {
 
     @Test func providerRefreshFailureRetainsSnapshotAndPersistsError() async throws {
         let failure = CodeHostProviderError.unauthenticated("github.com")
-        let fake = try MissionLifecycleFake(issueRefresh: { _, _ in throw failure })
+        let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in throw failure })
         await fake.controller.load()
         let before = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
@@ -812,8 +840,8 @@ struct MissionReadinessEvaluatorTests {
             title: "Newer issue title",
             capturedAt: 500
         ))
-        let fake = try MissionLifecycleFake(issueRefresh: { _, _ in
-            try await race.refresh()
+        let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in
+            MissionSourceSnapshot(issue: try await race.refresh())
         })
         await fake.controller.load()
 
@@ -863,7 +891,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: missing,
             worktreeLineageID: "replacement-lineage",
-            discoverReviewRequest: { _, _, _, _, _, _ in
+            discoverReviewRequest: { _, _, _, _, _ in
                 discoveryCalls += 1
                 return replacementReview
             }
@@ -964,16 +992,15 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { _, _ in currentSnapshot },
-            discoverReviewRequest: { projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
+            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
-                #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
             },
-            branchOwner: { _, _, _, _ in "acme-fork" }
+            branchOwner: { _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -989,11 +1016,11 @@ struct MissionReadinessEvaluatorTests {
         let trackingSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme")
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _, _ in trackingSnapshot },
-            discoverReviewRequest: { _, _, _, _, _, headOwner in
+            discoverReviewRequest: { _, _, _, _, headOwner in
                 #expect(headOwner == "acme-fork")
                 return request
             },
-            branchOwner: { _, _, _, _ in "acme-fork" }
+            branchOwner: { _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -1010,7 +1037,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             reviewSnapshot: { _, _ in nil },
             startupReviewSnapshot: { _, _ in openSnapshot },
-            discoverReviewRequest: { _, _, _, _, _, _ in merged }
+            discoverReviewRequest: { _, _, _, _, _ in merged }
         )
         await fake.controller.load()
 
@@ -1029,7 +1056,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? closed : nil
             }
@@ -1047,9 +1074,8 @@ struct MissionReadinessEvaluatorTests {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
             worktreeAvailable: false,
-            discoverReviewRequest: { projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
+            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
-                #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
@@ -1079,7 +1105,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _, _ in merged },
+            discoverReviewRequest: { _, _, _, _, _ in merged },
             linkedReviewRequest: { _, _, _ in open },
             branchTip: { _, _ in "abc123" }
         )
@@ -1096,13 +1122,13 @@ struct MissionReadinessEvaluatorTests {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, headSHA, headOwner in
+            discoverReviewRequest: { _, _, _, headSHA, headOwner in
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
             },
             branchTip: { _, _ in "abc123" },
-            branchOwner: { _, _, _, _ in "acme-fork" }
+            branchOwner: { _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -1121,7 +1147,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _, _ in merged },
+            discoverReviewRequest: { _, _, _, _, _ in merged },
             linkedReviewRequest: { _, _, _ in open },
             branchTip: { _, _ in "abc123" }
         )
@@ -1137,12 +1163,12 @@ struct MissionReadinessEvaluatorTests {
     @Test func worktreeRemovalRefreshDiscoversMergedReviewBeforeBranchDeletion() async throws {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, headOwner in
+            discoverReviewRequest: { _, _, _, _, headOwner in
                 #expect(headOwner == "acme-fork")
                 return request
             },
             branchTip: { _, _ in "abc123" },
-            branchOwner: { _, _, _, _ in "acme-fork" }
+            branchOwner: { _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -1161,7 +1187,7 @@ struct MissionReadinessEvaluatorTests {
         let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _, _ in merged },
+            discoverReviewRequest: { _, _, _, _, _ in merged },
             linkedReviewRequest: { _, _, _ in open },
             branchTip: { _, _ in "abc123" }
         )
@@ -1177,7 +1203,7 @@ struct MissionReadinessEvaluatorTests {
 
     @Test func worktreeRemovalRefreshRetainsBranchWhenReviewDiscoveryIsInconclusive() async throws {
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, _ in nil },
+            discoverReviewRequest: { _, _, _, _, _ in nil },
             branchTip: { _, _ in "abc123" }
         )
         await fake.controller.load()
@@ -1197,7 +1223,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? closed : nil
             },
@@ -1219,7 +1245,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { _, _, _ in nil },
             branchTip: { _, _ in "abc123" }
         )
@@ -1263,7 +1289,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? retargeted : nil
             },
@@ -1286,7 +1312,7 @@ struct MissionReadinessEvaluatorTests {
         let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? retargeted : nil
             }
@@ -1311,7 +1337,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: running,
             worktreeLineageID: "replacement-lineage",
-            discoverReviewRequest: { _, _, _, _, _, _ in replacementReview }
+            discoverReviewRequest: { _, _, _, _, _ in replacementReview }
         )
         await fake.controller.load()
 
@@ -1332,7 +1358,7 @@ struct MissionReadinessEvaluatorTests {
         let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { _, _, _ in nil }
         )
         await fake.controller.load()
@@ -1351,14 +1377,13 @@ struct MissionReadinessEvaluatorTests {
     @Test func liveRefreshResolvesMissingHeadOwnerBeforeDiscovery() async throws {
         let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, headOwner in
+            discoverReviewRequest: { _, _, _, _, headOwner in
                 #expect(headOwner == "enterprise-fork")
                 return merged
             },
-            branchOwner: { projectID, branch, identity, baseRef in
+            branchOwner: { projectID, branch, baseRef in
                 #expect(projectID == "project-1")
                 #expect(branch == "fix/parser-crash")
-                #expect(identity == MissionFixtures.issue().identity)
                 #expect(baseRef == "origin/main")
                 return "enterprise-fork"
             }
@@ -1380,11 +1405,11 @@ struct MissionReadinessEvaluatorTests {
         var discoveryCalls = 0
         let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, _ in
+            discoverReviewRequest: { _, _, _, _, _ in
                 discoveryCalls += 1
                 return merged
             },
-            branchOwner: { _, _, _, _ in nil }
+            branchOwner: { _, _, _ in nil }
         )
         await fake.controller.load()
 
@@ -1404,7 +1429,7 @@ struct MissionReadinessEvaluatorTests {
         let openSnapshot = Self.reviewSnapshot(state: .open)
         let merged = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, _ in merged }
+            discoverReviewRequest: { _, _, _, _, _ in merged }
         )
         await fake.controller.load()
 
@@ -1432,7 +1457,7 @@ struct MissionReadinessEvaluatorTests {
         let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { _, _, _ in retargeted }
         )
         await fake.controller.load()
@@ -1456,7 +1481,7 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: linked,
             worktreeAvailable: false,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? stale : nil
             },
@@ -1483,7 +1508,7 @@ struct MissionReadinessEvaluatorTests {
         let replacement = try #require(Self.reviewSnapshot(state: .merged, number: 92).reviewRequest)
         let fake = try MissionLifecycleFake(
             aggregate: linked,
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement },
+            discoverReviewRequest: { _, _, _, _, _ in replacement },
             linkedReviewRequest: { identity, _, _ in
                 identity == Self.reviewIdentity ? stale : nil
             }
@@ -1504,7 +1529,7 @@ struct MissionReadinessEvaluatorTests {
     @Test func snapshotRefreshDiscoversAMergedReviewThatIsNoLongerOpen() async throws {
         let replacement = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { _, _, _, _, _, _ in replacement }
+            discoverReviewRequest: { _, _, _, _, _ in replacement }
         )
         await fake.controller.load()
 
@@ -1523,16 +1548,15 @@ struct MissionReadinessEvaluatorTests {
         let request = try #require(Self.reviewSnapshot(state: .merged).reviewRequest)
         let currentSnapshot = Self.reviewSnapshotWithoutRequest(headOwner: "acme-fork")
         let fake = try MissionLifecycleFake(
-            discoverReviewRequest: { projectID, issueIdentity, branch, baseRef, headSHA, headOwner in
+            discoverReviewRequest: { projectID, branch, baseRef, headSHA, headOwner in
                 #expect(projectID == "project-1")
-                #expect(issueIdentity == MissionFixtures.issue().identity)
                 #expect(branch == "fix/parser-crash")
                 #expect(baseRef == "origin/main")
                 #expect(headSHA == "abc123")
                 #expect(headOwner == "acme-fork")
                 return request
             },
-            branchOwner: { _, _, _, _ in "acme-fork" }
+            branchOwner: { _, _, _ in "acme-fork" }
         )
         await fake.controller.load()
 
@@ -1554,7 +1578,7 @@ struct MissionReadinessEvaluatorTests {
         ).reviewRequest)
         let fake = try MissionLifecycleFake(
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _, _, _ in historical }
+            discoverReviewRequest: { _, _, _, _, _ in historical }
         )
         await fake.controller.load()
 
@@ -1569,7 +1593,7 @@ struct MissionReadinessEvaluatorTests {
         let closed = try #require(Self.reviewSnapshot(state: .closed).reviewRequest)
         let fake = try MissionLifecycleFake(
             startupReviewSnapshot: { _, _ in Self.reviewSnapshotWithoutRequest() },
-            discoverReviewRequest: { _, _, _, _, _, _ in closed }
+            discoverReviewRequest: { _, _, _, _, _ in closed }
         )
         await fake.controller.load()
 
@@ -1991,7 +2015,7 @@ private final class MissionLifecycleFake {
         worktreeAvailable: Bool = true,
         worktreeBranch: String = "fix/parser-crash",
         worktreeLineageID: String? = "lineage-1",
-        issueRefresh: @escaping MissionIssueRefresh = { _, _ in
+        sourceRefresh: @escaping MissionSourceRefresh = { _, _ in
             throw CodeHostProviderError.malformedOutput("No issue refresh configured.")
         },
         projectExists: @escaping @MainActor (String) -> Bool = { _ in true },
@@ -1999,12 +2023,10 @@ private final class MissionLifecycleFake {
         worktreeArchived: @escaping @MainActor (String, String) -> Bool = { _, _ in false },
         reviewSnapshot: @escaping @MainActor (String, String) -> ReviewLoopSnapshot? = { _, _ in nil },
         startupReviewSnapshot: @escaping MissionStartupReviewSnapshot = { _, _ in nil },
-        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _, _ in nil },
+        discoverReviewRequest: @escaping MissionReviewDiscovery = { _, _, _, _, _ in nil },
         linkedReviewRequest: @escaping MissionLinkedReviewRequest = { _, _, _ in nil },
         branchTip: @escaping MissionBranchTip = { _, _ in "abc123" },
-        branchOwner: @escaping MissionBranchOwner = { _, _, identity, _ in
-            identity.repositorySlug.split(separator: "/").dropLast().joined(separator: "/")
-        },
+        branchOwner: @escaping MissionBranchOwner = { _, _, _ in "acme" },
         createWorktree: ((MissionLeg) async -> Result<Worktree, WorktreeCreationFailure>)? = nil
     ) throws {
         let path = FileManager.default.temporaryDirectory
@@ -2067,9 +2089,14 @@ private final class MissionLifecycleFake {
                 },
                 notifyChanged: { recorder.notifications.append($0) }
             ),
-            issueRefresh: { identity, projectID in
-                recorder.issueRefreshCalls.append(.init(identity: identity, projectID: projectID))
-                return try await issueRefresh(identity, projectID)
+            sourceRefresh: { source, projectID in
+                if let issue = MissionIssueSnapshot(source: source) {
+                    recorder.issueRefreshCalls.append(.init(identity: issue.identity, projectID: projectID))
+                }
+                return try await sourceRefresh(source, projectID)
+            },
+            reviewRepositoryMatches: { _, _, _, request in
+                request.remote.repositorySlug.lowercased() == "acme/alas"
             },
             linkedReviewRequest: linkedReviewRequest,
             branchTip: branchTip,

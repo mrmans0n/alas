@@ -5,6 +5,13 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AppStatePersistenceTests {
+    private static let githubIssueIdentity = MissionIssueIdentity(
+        provider: .github,
+        host: "github.com",
+        repositorySlug: "acme/alas",
+        number: 42
+    )
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
@@ -186,14 +193,8 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemotePrefersTheLongestMatchingAlias() throws {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remote = try #require(AppState.missionReviewRemote(
-            identity: identity,
+            identity: Self.githubIssueIdentity,
             baseRef: "team/origin/main",
             remotes: [
                 GitRemote(name: "team", url: "git@github.com:acme/alas.git"),
@@ -226,15 +227,8 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemoteRepairsStaleConfiguredBaseAlias() throws {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
-
         let remote = try #require(AppState.missionReviewRemote(
-            identity: identity,
+            identity: Self.githubIssueIdentity,
             baseRef: "origin/main",
             persistedRemoteName: "origin",
             remotes: [GitRemote(name: "upstream", url: "git@github.com:acme/alas.git")]
@@ -244,15 +238,8 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemoteDoesNotGuessStaleBaseAliasWhenMultipleRemotesExist() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
-
         let remote = AppState.missionReviewRemote(
-            identity: identity,
+            identity: Self.githubIssueIdentity,
             baseRef: "origin/main",
             persistedRemoteName: "origin",
             remotes: [
@@ -304,14 +291,8 @@ struct AppStatePersistenceTests {
             from: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")],
             matching: .github
         ))
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
 
-        let query = AppState.missionIssueQueryRemote(identity: identity, candidates: [current])
+        let query = AppState.missionIssueQueryRemote(identity: Self.githubIssueIdentity, candidates: [current])
 
         #expect(query.repositorySlug == "acme/alas")
         #expect(query.host == "github.com")
@@ -337,23 +318,16 @@ struct AppStatePersistenceTests {
     }
 
     @Test func startupCanonicalRefreshIsLimitedToSameHostSlugChanges() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
-
         #expect(AppState.missionRepositoryNeedsCanonicalRefresh(
-            identity: identity,
+            identity: Self.githubIssueIdentity,
             remotes: [GitRemote(name: "origin", url: "git@github.com:acquired/renamed-alas.git")]
         ))
         #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
-            identity: identity,
+            identity: Self.githubIssueIdentity,
             remotes: [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
         ))
         #expect(!AppState.missionRepositoryNeedsCanonicalRefresh(
-            identity: identity,
+            identity: Self.githubIssueIdentity,
             remotes: [GitRemote(name: "origin", url: "git@gitlab.com:acquired/renamed-alas.git")]
         ))
     }
@@ -545,45 +519,33 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemote() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [
             GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
             GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
         ]
 
         let owner = AppState.missionBranchOwner(
-            identity: identity,
             baseRef: "origin/main",
             branchRemoteName: "fork",
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: [.github]
         )
 
         #expect(owner == "nacho")
     }
 
     @Test func missionBranchOwnerPrefersTheConfiguredPushRemote() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [
             GitRemote(name: "upstream", url: "git@github.com:acme/alas.git"),
             GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
         ]
 
         let owner = AppState.missionBranchOwner(
-            identity: identity,
             baseRef: "upstream/main",
             branchRemoteName: "upstream",
             pushRemoteName: "fork",
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: [.github]
         )
 
         #expect(owner == "nacho")
@@ -608,101 +570,70 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionBranchOwnerAcceptsRenamedForkTrackingRemote() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [
             GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
             GitRemote(name: "fork", url: "git@github.com:nacho/renamed-alas.git"),
         ]
 
         let owner = AppState.missionBranchOwner(
-            identity: identity,
             baseRef: "origin/main",
             branchRemoteName: "fork",
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: [.github]
         )
 
         #expect(owner == "nacho")
     }
 
     @Test func missionBranchOwnerPrefersTheBranchTrackingRemotePushURL() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [
             GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
             GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
         ]
 
         let owner = AppState.missionBranchOwner(
-            identity: identity,
             baseRef: "origin/main",
             branchRemoteName: "origin",
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: [.github]
         )
 
         #expect(owner == "nacho")
     }
 
     @Test func missionBranchOwnerPrefersOriginPushURLWithoutTrackingRemote() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [
             GitRemote(name: "origin", url: "git@github.com:acme/alas.git"),
             GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
         ]
 
         let owner = AppState.missionBranchOwner(
-            identity: identity,
             baseRef: "origin/main",
             branchRemoteName: "",
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: [.github]
         )
 
         #expect(owner == "nacho")
     }
 
     @Test func missionBranchOwnerFallsBackToTheBaseRemote() {
-        let identity = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [GitRemote(name: "origin", url: "git@github.com:acme/alas.git")]
 
         let owner = AppState.missionBranchOwner(
-            identity: identity,
             baseRef: "origin/main",
             branchRemoteName: "",
-            remotes: remotes
+            remotes: remotes,
+            supportedKinds: [.github]
         )
 
         #expect(owner == "acme")
     }
 
     @Test func missionBranchOwnerUsesTheTargetProjectsProvider() {
-        let sharedIssue = MissionIssueIdentity(
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "acme/alas",
-            number: 42
-        )
         let remotes = [GitRemote(name: "origin", url: "git@gitlab.com:acme/sdk.git")]
 
         let owner = AppState.missionBranchOwner(
-            identity: sharedIssue,
             baseRef: "origin/main",
             branchRemoteName: "origin",
             remotes: remotes,
