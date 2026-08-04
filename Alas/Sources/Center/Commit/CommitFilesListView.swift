@@ -6,6 +6,7 @@ struct CommitFilesListView: View {
     @Binding var selectedPath: String?
     let onDropFile: ((CommitChangedFile) -> Void)?
     let dropFileEnabled: (CommitChangedFile) -> Bool
+    let dragPayload: ((CommitChangedFile) -> DragOutPayload?)?
 
     @Environment(\.theme) private var theme
 
@@ -13,12 +14,14 @@ struct CommitFilesListView: View {
         files: [CommitChangedFile],
         selectedPath: Binding<String?>,
         onDropFile: ((CommitChangedFile) -> Void)? = nil,
-        dropFileEnabled: @escaping (CommitChangedFile) -> Bool = { _ in false }
+        dropFileEnabled: @escaping (CommitChangedFile) -> Bool = { _ in false },
+        dragPayload: ((CommitChangedFile) -> DragOutPayload?)? = nil
     ) {
         self.files = files
         self._selectedPath = selectedPath
         self.onDropFile = onDropFile
         self.dropFileEnabled = dropFileEnabled
+        self.dragPayload = dragPayload
     }
 
     var body: some View {
@@ -73,6 +76,7 @@ struct CommitFilesListView: View {
                     .disabled(!dropFileEnabled(file))
             }
         }
+        .dragOut { dragPayload?(file) }
     }
 
     private func statusColor(_ status: String) -> Color {

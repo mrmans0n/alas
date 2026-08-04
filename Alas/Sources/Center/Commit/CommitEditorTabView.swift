@@ -136,7 +136,14 @@ struct CommitEditorTabView: View {
                     files: details.files,
                     selectedPath: $selectedPath,
                     onDropFile: { pendingDropFile = PendingCommitFileDrop(sha: tabState.currentSha, file: $0) },
-                    dropFileEnabled: canDropFile
+                    dropFileEnabled: canDropFile,
+                    dragPayload: { file in
+                        .commitFile(
+                            worktreePath: worktreePath,
+                            sha: tabState.currentSha,
+                            file: file
+                        )
+                    }
                 )
                     .frame(width: leftWidth)
                 DragHandle(

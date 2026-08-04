@@ -306,7 +306,10 @@ struct ChangesTabView: View {
                 },
                 onApply: { rps.applyStash($0) },
                 onPop: { rps.popStash($0) },
-                onDrop: { rps.requestDropStash($0) }
+                onDrop: { rps.requestDropStash($0) },
+                dragPayload: { stash, file in
+                    .stashFile(worktreePath: rps.worktree.path, stash: stash, file: file)
+                }
             )
             Divider().opacity(0.4)
             CommitsSectionView(
