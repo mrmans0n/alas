@@ -288,6 +288,84 @@ struct ACPTranscriptScrollerSyntheticTokenTests {
     }
 }
 
+/// Regression coverage for the P2 finding (codex round 6, Finding 2): the
+/// fork divider's `build` closure derives its displayed title by CALLING
+/// `host.agentDisplayName(fork.sourceAgentID)` — a value computed from the
+/// host, not present anywhere in the token itself (which only folded
+/// `fork`, theme, and contentMaxWidth). A live rename of the source agent's
+/// display name therefore left an already-mounted divider showing the OLD
+/// name, because the token still compared equal and the pool never called
+/// `build()` again.
+@MainActor
+@Suite("ACPTranscriptScroller fork divider equality token")
+struct ACPTranscriptScrollerForkDividerTokenTests {
+    private func hostWithFork(agentDisplayName: @escaping (String) -> String) -> ACPTranscriptScroller {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "target", sourceSessionID: "source", sourceAgentID: "agentA",
+            sourceBoundarySequence: 0, inheritedMessageCount: 1,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = ACPTranscriptScroller(
+            session: session,
+            transcript: session.transcript,
+            contentMaxWidth: 800,
+            typography: .default,
+            trustedImageRoot: nil,
+            onOpenDiff: { _ in },
+            onLoadFullToolCallContent: { _ in nil },
+            forkTargets: [],
+            onFork: { _, _ in },
+            rememberedScrollAnchor: { nil },
+            onRememberScrollAnchor: { _, _, _ in },
+            onOpenTranscriptLink: { _ in true },
+            policy: nil,
+            scopeKey: "scope",
+            onUserInputResponse: { _, _ in },
+            onOpenElicitationURL: { _ in true },
+            onDismissElicitationURLWait: { _ in },
+            onQueueEdit: { _ in },
+            onQueueForceSend: { _ in },
+            onQueueRemove: { _ in },
+            onQueueRetry: { _ in },
+            onQueueReorder: { _, _ in },
+            onQueueClearAll: {},
+            onRetryContextRecovery: {},
+            onOpenForkSource: { _ in },
+            agentDisplayName: agentDisplayName
+        )
+        host.transcript.messages = [.systemNotice(id: UUID(), text: "hello")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        return host
+    }
+
+    private func forkDividerToken(host: ACPTranscriptScroller) -> ACPRowEqualityToken? {
+        ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "__fork_divider__" }?.equalityToken
+    }
+
+    @Test("token changes when the resolved agent display name changes, everything else identical")
+    func tokenChangesOnResolvedDisplayName() throws {
+        let hostA = hostWithFork(agentDisplayName: { _ in "Claude" })
+        let hostB = hostWithFork(agentDisplayName: { _ in "Claude (renamed)" })
+
+        let tokenA = try #require(forkDividerToken(host: hostA))
+        let tokenB = try #require(forkDividerToken(host: hostB))
+        #expect(!tokenA.isEqual(to: tokenB))
+    }
+
+    @Test("token is unchanged when nothing relevant changed, including the resolved display name")
+    func tokenStableWhenNothingChanged() throws {
+        let hostA = hostWithFork(agentDisplayName: { _ in "Claude" })
+        let hostB = hostWithFork(agentDisplayName: { _ in "Claude" })
+
+        let tokenA = try #require(forkDividerToken(host: hostA))
+        let tokenB = try #require(forkDividerToken(host: hostB))
+        #expect(tokenA.isEqual(to: tokenB))
+    }
+}
+
 @MainActor
 @Suite("ACPTranscriptScroller restore latch")
 struct ACPTranscriptScrollerRestoreLatchTests {
@@ -414,6 +492,95 @@ struct ACPTranscriptScrollerRestoreLatchTests {
         scroller.layoutSubtreeIfNeeded()
         #expect(scroller.flippedDocumentView.frame.height == heightAfterFirstLayout)
         #expect(scroller.scrollY == 0)
+    }
+}
+
+/// Regression coverage for the P2 finding (codex round 6, Finding 1):
+/// `ACPTranscriptScrollerView.layout()` used to notify the Coordinator only
+/// when `contentView.bounds.width` changed, so a HEIGHT-only resize (window
+/// dragged taller/shorter, width unchanged) never re-ran anything — not
+/// `onContentWidthChange` (width didn't change) and not `onScroll`
+/// (`reportScroll` only fires when the clip view's y-origin moves, which a
+/// pure height change does not do). The mount band
+/// (`ACPTranscriptScrollerReconciler.performLayoutPass`) is derived from
+/// `scroller.viewportHeight`, so nothing recomputed it: growing the window
+/// revealed space no newly-mounted row filled.
+@MainActor
+@Suite("ACPTranscriptScroller viewport height reconciliation")
+struct ACPTranscriptScrollerViewportHeightReconciliationTests {
+    /// Enough real message rows, positioned deep enough into the document,
+    /// that the mount band (viewport ± 1200pt overscan) neither covers the
+    /// whole document nor runs out of rows below the viewport when the
+    /// height grows — so a change in mounted count is a genuine signal, not
+    /// an artifact of hitting either end.
+    private func tallHost() -> (host: ACPTranscriptScroller, scroller: ACPTranscriptScrollerView) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.followsTranscriptTail = false
+        let host = makeHost(session: session)
+        host.transcript.messages = (0..<300).map { _ in
+            ACPMessage.systemNotice(id: UUID(), text: String(repeating: "line ", count: 20))
+        }
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        return (host, scroller)
+    }
+
+    @Test("a height-only resize mounts more rows for a taller viewport, and fewer for a shorter one, with no accompanying model update")
+    func heightOnlyResizeUpdatesMountedRowCount() {
+        let (host, scroller) = tallHost()
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        // Scrolled to the middle of a document tall enough that growing or
+        // shrinking the viewport extends/shrinks the mount band without
+        // hitting either edge of the document.
+        let midY = max(0, (scroller.contentHeight - scroller.viewportHeight) / 2)
+        scroller.setScrollY(midY)
+        #expect(scroller.contentHeight > 10_000, "test fixture is not tall enough")
+
+        let mountedAtSmallHeight = scroller.flippedDocumentView.subviews.count
+        #expect(mountedAtSmallHeight > 0)
+
+        // Height-only resize: width is unchanged. Deliberately does NOT call
+        // `coordinator.update(host:)` — the scroller's own layout pass must
+        // drive this on its own, exactly like the existing width case.
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 1600)
+        scroller.layoutSubtreeIfNeeded()
+        let mountedAtLargeHeight = scroller.flippedDocumentView.subviews.count
+        #expect(mountedAtLargeHeight > mountedAtSmallHeight)
+
+        // Shrinking back down releases rows again.
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        scroller.layoutSubtreeIfNeeded()
+        let mountedAfterShrink = scroller.flippedDocumentView.subviews.count
+        #expect(mountedAfterShrink < mountedAtLargeHeight)
+    }
+
+    @Test("a height-only resize does not change any row's measured height or the document height")
+    func heightOnlyResizeDoesNotRemeasure() {
+        let (host, scroller) = tallHost()
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        scroller.setScrollY(max(0, (scroller.contentHeight - scroller.viewportHeight) / 2))
+
+        let documentHeightBefore = scroller.contentHeight
+        let widthBefore = scroller.contentView.bounds.width
+
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 1600)
+        scroller.layoutSubtreeIfNeeded()
+
+        // No row reflows on a height-only change: the document's total
+        // height (the sum of every row's height) and the pinned content
+        // width are exactly unchanged — a full re-measure at an unchanged
+        // width would coincidentally reproduce the same numbers, but a
+        // remeasure is never even attempted; see the reconciler-level
+        // build-count proof in `ACPTranscriptScrollerReconcilerApplyTests`.
+        #expect(scroller.contentHeight == documentHeightBefore)
+        #expect(scroller.contentView.bounds.width == widthBefore)
     }
 }
 

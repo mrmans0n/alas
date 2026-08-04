@@ -296,6 +296,72 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(mounted == Set(band.map { tiling.rowId(at: $0) }))
     }
 
+    /// Regression coverage for the P2 finding (codex round 6, Finding 1):
+    /// `layoutMountedRows()` is what `ACPTranscriptScroller.Coordinator`'s
+    /// height-only reconcile hook calls directly — deliberately NOT a full
+    /// `apply()` — because a viewport-height change never invalidates a
+    /// row's measured content. This proves that contract at the reconciler
+    /// level: growing/shrinking the viewport and re-running
+    /// `layoutMountedRows()` alone changes which rows are mounted without
+    /// re-building (and therefore re-measuring) any row that was already
+    /// mounted before the height change.
+    @Test("layoutMountedRows alone mounts/unmounts rows for a changed viewport height without rebuilding already-mounted rows")
+    func layoutMountedRowsRespondsToHeightChangeWithoutRebuildingMountedRows() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let counter = RowBuildCounter()
+        reconciler.apply(
+            specs: (0..<200).map { countingSpec("r\($0)", counter: counter) },
+            contentWidth: 600, followsTail: false
+        )
+        scroller.setScrollY(10_000)
+        reconciler.layoutMountedRows()
+
+        let mountedBefore = reconciler.mountedRowIdsForTesting
+        #expect(!mountedBefore.isEmpty)
+        #expect(mountedBefore.count < 200)
+        // Snapshot each mounted row's build count as the baseline — NOT
+        // asserted to be 1: the initial `apply()`'s own `measure()` call
+        // builds every one of the 200 specs once (heights are needed for
+        // every row's tiled position, not just mounted ones), and rows
+        // outside the band at that point are immediately released again by
+        // `apply()`'s own trailing `layoutMountedRows()`, deleting their
+        // pool entries — so a row that only entered the mount band via the
+        // `setScrollY`/`layoutMountedRows()` above has already been built
+        // twice by this point (once by `measure()`, once remounting after
+        // eviction). What this test isolates is the height-only step below:
+        // it must not add a THIRD build for any row already mounted here.
+        let countsBefore = Dictionary(uniqueKeysWithValues: mountedBefore.map { ($0, counter.count($0)) })
+
+        // Grow the viewport (height-only, matching what a window resize
+        // reports through `onViewportHeightChange`) and re-run just the
+        // relayout pass — not `apply()`.
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 1600)
+        reconciler.layoutMountedRows()
+
+        let mountedAfterGrow = reconciler.mountedRowIdsForTesting
+        #expect(mountedAfterGrow.count > mountedBefore.count)
+        // Growing only extends the band's far edge (`mountBand`'s `highY`),
+        // so every previously-mounted row is still mounted.
+        #expect(mountedAfterGrow.isSuperset(of: mountedBefore))
+        // Rows that were ALREADY mounted are not rebuilt — the "no
+        // re-measure" guarantee: their build count is exactly what it was
+        // right before the height-only change.
+        for id in mountedBefore { #expect(counter.count(id) == countsBefore[id]) }
+
+        // Shrink back down: releases newly-out-of-band rows again, without
+        // touching anything that remains mounted.
+        let countsAfterGrow = Dictionary(uniqueKeysWithValues: mountedAfterGrow.map { ($0, counter.count($0)) })
+        scroller.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        reconciler.layoutMountedRows()
+        let mountedAfterShrink = reconciler.mountedRowIdsForTesting
+        #expect(mountedAfterShrink.count < mountedAfterGrow.count)
+        for id in mountedAfterShrink { #expect(counter.count(id) == countsAfterGrow[id]) }
+
+        // Document geometry itself never changed — only which rows are
+        // mounted did.
+        #expect(tiling.rowCount == 200)
+    }
+
     @Test("a row marked keepsMountedOffscreen stays mounted far outside the band; an ordinary row at the same position does not")
     func keepsMountedOffscreenSurvivesOutsideBand() {
         // Regression test for the P2 finding (codex round 4): scrolling a

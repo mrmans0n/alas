@@ -114,4 +114,52 @@ struct ACPTranscriptScrollerViewTests {
         s.layoutSubtreeIfNeeded()
         #expect(fireCount == 2)
     }
+
+    /// `onViewportHeightChange` is the hook `ACPTranscriptScroller
+    /// .Coordinator` uses to re-run just the mount/relayout pass when the
+    /// viewport's HEIGHT changes with no accompanying width change (P2
+    /// finding, codex round 6) — see `ACPTranscriptScrollerView
+    /// .onViewportHeightChange`'s doc comment. It must fire exactly once per
+    /// genuine height-only change, must NOT fire again on a same-size layout
+    /// pass, and must NOT fire when width changes too (that combined case is
+    /// fully covered by `onContentWidthChange`'s own reconcile).
+    @Test("onViewportHeightChange fires only on a height-only change, never together with a width change")
+    func viewportHeightChangeFiresOnlyOnHeightOnlyChange() {
+        let s = ACPTranscriptScrollerView(frame: .zero)
+        var widthFireCount = 0
+        var heightFireCount = 0
+        s.onContentWidthChange = { widthFireCount += 1 }
+        s.onViewportHeightChange = { heightFireCount += 1 }
+
+        // First real size: bootstraps through the width hook only, matching
+        // existing behavior — no height-only signal on the very first layout.
+        s.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        s.layoutSubtreeIfNeeded()
+        #expect(widthFireCount == 1)
+        #expect(heightFireCount == 0)
+
+        // Height-only change: fires the height hook, not the width hook.
+        s.frame = NSRect(x: 0, y: 0, width: 600, height: 900)
+        s.layoutSubtreeIfNeeded()
+        #expect(widthFireCount == 1)
+        #expect(heightFireCount == 1)
+
+        // A no-op layout pass at the same size: neither re-fires.
+        s.layoutSubtreeIfNeeded()
+        #expect(widthFireCount == 1)
+        #expect(heightFireCount == 1)
+
+        // Width AND height changing together: only the width hook fires.
+        s.frame = NSRect(x: 0, y: 0, width: 700, height: 500)
+        s.layoutSubtreeIfNeeded()
+        #expect(widthFireCount == 2)
+        #expect(heightFireCount == 1)
+
+        // Width-only change (height unchanged from the previous pass): only
+        // the width hook fires, exactly like `contentWidthChangeFiresOnlyOnRealChange`.
+        s.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        s.layoutSubtreeIfNeeded()
+        #expect(widthFireCount == 3)
+        #expect(heightFireCount == 1)
+    }
 }

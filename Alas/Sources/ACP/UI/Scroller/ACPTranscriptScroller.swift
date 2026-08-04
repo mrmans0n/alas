@@ -117,6 +117,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             scroller.onContentWidthChange = { [weak self] in
                 self?.reconcileForContentWidthChange()
             }
+            scroller.onViewportHeightChange = { [weak self] in
+                self?.reconcileForViewportHeightChange()
+            }
             update(host: host)
         }
 
@@ -165,6 +168,39 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private func reconcileForContentWidthChange() {
             guard let host, let reconciler, !reconciler.isApplyingSpecs else { return }
             update(host: host)
+        }
+
+        /// Re-runs the reconciler's mount/relayout pass — NOT a full
+        /// `update(host:)` — when the scroller's own AppKit layout pass
+        /// reports a viewport-HEIGHT change with no accompanying width
+        /// change; see `ACPTranscriptScrollerView.onViewportHeightChange`'s
+        /// doc comment for why the scroller only fires this hook on a
+        /// height-only change.
+        ///
+        /// This is deliberately the cheap response, unlike
+        /// `reconcileForContentWidthChange`: the mount band
+        /// (`ACPTranscriptScrollerReconciler.performLayoutPass`) is derived
+        /// from `scroller.viewportHeight`, so growing or shrinking the
+        /// window without a width change reveals or hides mountable rows
+        /// that nothing else would recompute — but a height change never
+        /// invalidates any row's MEASURED content (nothing reflows
+        /// vertically because the viewport got taller or shorter). Routing
+        /// this through `update(host:)`/`reconciler.apply` instead would
+        /// rebuild the whole row-spec list and re-run the (cheap but O(n))
+        /// unchanged-token diff on every vertical resize tick — exactly the
+        /// per-tick cost the width-settle debounce exists to keep off of
+        /// live resizes, just for the wrong dimension.
+        ///
+        /// Guarded by `reconciler.isApplyingSpecs` for the same reason
+        /// `reconcileForContentWidthChange` is: it spans the ENTIRE
+        /// `apply()` call, including the row-mounting mutations
+        /// `layoutMountedRows()` itself performs, whereas the scroller's own
+        /// `programmaticAdjustmentDepth` only brackets its narrower
+        /// scroll/height primitives (see `reconcileForContentWidthChange`'s
+        /// doc comment for the full argument).
+        private func reconcileForViewportHeightChange() {
+            guard let reconciler, !reconciler.isApplyingSpecs else { return }
+            reconciler.layoutMountedRows()
         }
 
         func update(host: ACPTranscriptScroller) {
@@ -337,6 +373,23 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // see its doc comment.
         }
 
+        /// Beyond `fork` (and theme/contentMaxWidth folded by
+        /// `token(_:host:)`), the fork divider's build closure also derives
+        /// `sourceAgentName` by CALLING `host.agentDisplayName(fork
+        /// .sourceAgentID)` — a resolved `String`, not the closure itself,
+        /// baked into the built view at construction time. Unlike a direct
+        /// host property (`contentMaxWidth`, `typography`), this value isn't
+        /// anywhere in `fork` or `host`'s stored properties for `token(_:
+        /// host:)` to pick up automatically: a live rename of the source
+        /// agent's display name — with the `fork` record and every other
+        /// input unchanged — must still be folded in explicitly, or the
+        /// pool's token comparison stays equal and an already-mounted
+        /// divider keeps showing the stale name forever.
+        private struct ForkDividerTokenInputs: Equatable {
+            let fork: ACPSessionForkRecord
+            let sourceAgentDisplayName: String
+        }
+
         /// Verbatim port of the fork divider inserted right after the fork
         /// boundary row in the legacy VStack (ACPMessageList.swift:179-191).
         static func forkDividerSpec(
@@ -345,7 +398,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         ) -> ACPTranscriptRowSpec {
             ACPTranscriptRowSpec(
                 id: "__fork_divider__",
-                equalityToken: token(fork, host: host),
+                equalityToken: token(
+                    ForkDividerTokenInputs(
+                        fork: fork,
+                        sourceAgentDisplayName: host.agentDisplayName(fork.sourceAgentID)
+                    ),
+                    host: host
+                ),
                 build: {
                     wrapRow(host: host) {
                         Group {

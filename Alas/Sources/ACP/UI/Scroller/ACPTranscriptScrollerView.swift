@@ -32,6 +32,33 @@ final class ACPTranscriptScrollerView: NSScrollView {
     var onContentWidthChange: (() -> Void)?
     private var lastReportedContentWidth: CGFloat?
 
+    /// Fired from `layout()` whenever `contentView.bounds.height` differs
+    /// from the last height reported, PROVIDED the width did NOT also
+    /// change on this same pass (a combined width+height change is already
+    /// fully covered by `onContentWidthChange`'s reconcile, which ends in
+    /// its own mount/relayout pass — see `reconcileForContentWidthChange`).
+    ///
+    /// This closes a distinct gap from the width one above: `boundsDidChange`
+    /// (see `reportScroll` below) only reports when the clip view's
+    /// y-ORIGIN moves, and `layout()` used to only notify on a width change
+    /// — so a HEIGHT-only resize (the window dragged taller/shorter with no
+    /// width change) reported through neither path. That matters because
+    /// the reconciler's mount band
+    /// (`ACPTranscriptScrollerReconciler.performLayoutPass`) is derived from
+    /// `viewportHeight`: growing the window revealed space no newly-mounted
+    /// row filled, and shrinking it left rows mounted that should have been
+    /// released.
+    ///
+    /// Unlike a width change, a height change never invalidates a row's
+    /// MEASURED content — nothing about a row reflows because the viewport
+    /// got taller or shorter, only which rows fall inside the band changes.
+    /// The coordinator's subscriber (`reconcileForViewportHeightChange`)
+    /// responds with the cheap operation for that — a mount/relayout pass —
+    /// not the full `update(host:)`/`apply()` re-measure the width path
+    /// uses; see that method's doc comment.
+    var onViewportHeightChange: (() -> Void)?
+    private var lastReportedViewportHeight: CGFloat?
+
     private var lastReportedY: CGFloat?
     private var programmaticAdjustmentDepth = 0
     private var boundsObserver: NSObjectProtocol?
@@ -79,13 +106,25 @@ final class ACPTranscriptScrollerView: NSScrollView {
     override func layout() {
         super.layout()
         // `super.layout()` runs AppKit's own scroll-view tiling first, so
-        // `contentView.bounds.width` already reflects any scroller-visibility
+        // `contentView.bounds` already reflects any scroller-visibility
         // change that layout may have made — reading it before `super.layout()`
-        // could observe a stale, pre-tile width.
+        // could observe stale, pre-tile values.
         let width = contentView.bounds.width
-        guard width != lastReportedContentWidth else { return }
+        let height = contentView.bounds.height
+        let widthChanged = width != lastReportedContentWidth
+        let heightChanged = height != lastReportedViewportHeight
+        guard widthChanged || heightChanged else { return }
         lastReportedContentWidth = width
-        onContentWidthChange?()
+        lastReportedViewportHeight = height
+        if widthChanged {
+            // Subsumes the height-only response: `onContentWidthChange`'s
+            // subscriber ends its own reconcile with a full mount/relayout
+            // pass, so firing `onViewportHeightChange` too on a combined
+            // width+height change would just be a redundant extra pass.
+            onContentWidthChange?()
+        } else {
+            onViewportHeightChange?()
+        }
     }
 
     var scrollY: CGFloat { contentView.bounds.origin.y }
