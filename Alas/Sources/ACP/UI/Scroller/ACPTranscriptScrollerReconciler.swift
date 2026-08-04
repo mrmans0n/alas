@@ -30,6 +30,13 @@ final class ACPTranscriptScrollerReconciler {
     private var orderedIds: [String] = []
     private var contentWidth: CGFloat = 0
 
+    /// Ids of specs whose `keepsMountedOffscreen` flag is set — recomputed
+    /// alongside `specsById` on every `apply()`. Kept as its own small set
+    /// (rather than filtering `specsById.values` on every layout pass, which
+    /// runs on every scroll tick) so the per-pass cost of the exemption stays
+    /// O(kept rows), not O(window). See `ACPTranscriptRowSpec.keepsMountedOffscreen`.
+    private var keepMountedOffscreenIds: Set<String> = []
+
     /// The full spec list and tail-follow flag from the most recent
     /// `apply()` call, kept so the deferred width-settle reset (which can
     /// fire well after the `apply()` call that scheduled it returned) always
@@ -191,6 +198,7 @@ final class ACPTranscriptScrollerReconciler {
 
         orderedIds = newIds
         specsById = newSpecs
+        keepMountedOffscreenIds = Set(specs.lazy.filter(\.keepsMountedOffscreen).map(\.id))
         lastAppliedSpecs = specs
         lastFollowsTail = followsTail
         if followsTail {
@@ -569,9 +577,21 @@ final class ACPTranscriptScrollerReconciler {
             viewportHeight: scroller.viewportHeight,
             overscan: Self.overscan
         )
+        // Rows in the band, PLUS any row exempted from unmounting regardless
+        // of distance from the viewport (an in-progress form prompt, say).
+        // The exemption only widens which rows get mounted/kept — `band`
+        // itself, which governs ordinary rows and the memory bound, is
+        // untouched. Kept rows are placed at their real tiled coordinates
+        // like any other mounted row (they just happen to sit outside the
+        // visible rect), not at some arbitrary position.
+        var indices = Array(band)
+        for id in keepMountedOffscreenIds {
+            guard let index = tiling.index(ofId: id), !band.contains(index) else { continue }
+            indices.append(index)
+        }
         var keep = Set<String>()
-        keep.reserveCapacity(band.count)
-        for index in band {
+        keep.reserveCapacity(indices.count)
+        for index in indices {
             let layout = tiling.rowLayout(at: index)
             guard let spec = specsById[layout.id] else { continue }
             keep.insert(layout.id)

@@ -110,6 +110,51 @@ struct ACPTranscriptScrollerRowSpecsTests {
 
         #expect(ids == expected)
     }
+
+    /// Regression test for the P2 finding (codex round 4): `ACPUserInputPrompt`
+    /// holds live `@State`/`@FocusState` form data that a fresh
+    /// `NSHostingView` would silently discard, so its spec must opt out of
+    /// the reconciler's ordinary "unmount when off-band" policy. Ordinary
+    /// synthetic rows (the streaming caret, a queued bubble — neither holds
+    /// state whose loss is user-visible) and message rows must NOT opt in,
+    /// or the exemption would stop being small and bounded.
+    @Test("only the pending user-input row opts into staying mounted off-band")
+    func onlyPendingUserInputKeepsMountedOffscreen() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.queue = [QueuedPrompt(blocks: [.text("queued")], status: .pending)]
+        let host = makeHost(session: session)
+        let messages = (0..<2).map { _ in message() }
+        host.transcript.messages = messages
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        host.transcript.streamingState = .streaming
+        host.transcript.pendingUserInputs = [
+            ACPUserInputRequest(
+                id: UUID(),
+                source: .cursor(
+                    id: .string("q1"),
+                    params: ACPQuestionRequestParams(toolCallId: "t1", title: "Pick one", questions: [])
+                ),
+                title: "Pick one",
+                message: "Pick one",
+                fields: [],
+                mode: .form
+            ),
+        ]
+
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        let byId = Dictionary(uniqueKeysWithValues: specs.map { ($0.id, $0) })
+
+        let pendingInputId = specs.map(\.id).first { $0.hasPrefix("__pending_user_input_") }
+        #expect(pendingInputId != nil)
+        #expect(byId[pendingInputId!]?.keepsMountedOffscreen == true)
+
+        // Every other row — message rows and the other synthetic rows —
+        // stays with the default (unmount when off-band).
+        for id in specs.map(\.id) where id != pendingInputId {
+            #expect(byId[id]?.keepsMountedOffscreen == false, "\(id) unexpectedly opted into keepsMountedOffscreen")
+        }
+    }
 }
 
 /// Regression coverage for the review's fix-round-2 finding: the queued-

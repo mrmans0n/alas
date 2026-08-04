@@ -351,7 +351,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 onOpenURL: host.onOpenElicitationURL
                             )
                         }
-                    }
+                    },
+                    // `ACPUserInputPrompt` holds live `@State`/`@FocusState`
+                    // form data (see `ACPTranscriptRowSpec.keepsMountedOffscreen`).
+                    // Scrolling this prompt out of the mount band must not
+                    // destroy its hosting view — that would silently discard
+                    // whatever the user has already typed.
+                    keepsMountedOffscreen: true
                 ))
             }
 

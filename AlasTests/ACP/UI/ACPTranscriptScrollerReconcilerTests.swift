@@ -125,11 +125,14 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         return (reconciler, scroller, tiling)
     }
 
-    private func spec(_ id: String, token: Int = 0, height: CGFloat = 100) -> ACPTranscriptRowSpec {
+    private func spec(
+        _ id: String, token: Int = 0, height: CGFloat = 100, keepsMountedOffscreen: Bool = false
+    ) -> ACPTranscriptRowSpec {
         ACPTranscriptRowSpec(
             id: id,
             equalityToken: ACPRowEqualityToken(token),
-            build: { AnyView(Color.clear.frame(height: height)) }
+            build: { AnyView(Color.clear.frame(height: height)) },
+            keepsMountedOffscreen: keepsMountedOffscreen
         )
     }
 
@@ -291,6 +294,93 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
             overscan: ACPTranscriptScrollerReconciler.overscan
         )
         #expect(mounted == Set(band.map { tiling.rowId(at: $0) }))
+    }
+
+    @Test("a row marked keepsMountedOffscreen stays mounted far outside the band; an ordinary row at the same position does not")
+    func keepsMountedOffscreenSurvivesOutsideBand() {
+        // Regression test for the P2 finding (codex round 4): scrolling a
+        // pending `ACPUserInputPrompt` more than the overscan distance away
+        // used to release its hosting view and, with it, the form data the
+        // user had already entered. A spec opted into `keepsMountedOffscreen`
+        // must stay in the pool's mounted set regardless of the viewport,
+        // while an ordinary row right next to it is released exactly as
+        // before.
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        var specs = (0..<200).map { spec("r\($0)") }
+        specs[0] = spec("kept", keepsMountedOffscreen: true)
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(10_000)
+        reconciler.layoutMountedRows()
+
+        let mounted = reconciler.mountedRowIdsForTesting
+        let band = tiling.mountBand(
+            viewportMinY: 10_000, viewportHeight: 400,
+            overscan: ACPTranscriptScrollerReconciler.overscan
+        )
+        let ordinaryBandIds = Set(band.map { tiling.rowId(at: $0) })
+
+        // "kept" sits at row 0, far outside the band computed at scrollY
+        // 10,000 — proving the exemption, not the ordinary band, is what
+        // keeps it mounted.
+        #expect(!band.contains(tiling.index(ofId: "kept")!))
+        #expect(mounted.contains("kept"))
+        // The exemption is additive, not a widening of the band itself: the
+        // mounted set is exactly the band plus the one exempted row, and the
+        // kept row is positioned at its real tiled coordinates.
+        #expect(mounted == ordinaryBandIds.union(["kept"]))
+        // Row 0's real tiled position, unmoved by the exemption — a kept row
+        // is placed like any other mounted row, not at an arbitrary spot,
+        // and its live hosting view's frame reflects exactly that position.
+        let keptLayout = tiling.row(withId: "kept")!
+        #expect(keptLayout.minY == 24)
+        let keptView = pool.mountedView(id: "kept")
+        #expect(keptView?.frame.minY == keptLayout.minY)
+        #expect(keptView?.frame.height == keptLayout.height)
+        #expect(keptView?.superview === scroller.flippedDocumentView)
+
+        // An ordinary row at a nearby out-of-band position ("r1", right next
+        // to "kept") is released exactly as before.
+        #expect(!mounted.contains("r1"))
+    }
+
+    @Test("keepsMountedOffscreen survives a width-settled reset, which also unmounts ordinary off-band rows")
+    func keepsMountedOffscreenSurvivesWidthSettledReset() async throws {
+        // The other route to the same data loss: `.reset` (here, the
+        // width-settle reset a window resize schedules) re-measures via
+        // `performReset` and then runs the ordinary `layoutMountedRows()`
+        // pass — the SAME `pool.releaseAll(except: keep)` call site the
+        // scroll-driven case goes through, not a separate unconditional
+        // `pool.releaseAll()`. Because the fix lives in `performLayoutPass`
+        // itself, both routes are covered by the same `keep` union.
+        let (reconciler, scroller, tiling) = makeStack()
+        var specs = (0..<200).map { spec("r\($0)") }
+        specs[0] = spec("kept", keepsMountedOffscreen: true)
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(10_000)
+        reconciler.layoutMountedRows()
+        #expect(reconciler.mountedRowIdsForTesting.contains("kept"))
+
+        // A resize while browsing: same ids, narrower width. The coalesced
+        // path applies immediately (bounded interim work); the full
+        // re-measure-everything reset lands after the debounce settles.
+        reconciler.apply(specs: specs, contentWidth: 300, followsTail: false)
+
+        let graceNanoseconds = UInt64(
+            (ACPTranscriptScrollerReconciler.widthChangeSettleInterval + 0.4) * 1_000_000_000
+        )
+        try await Task.sleep(nanoseconds: graceNanoseconds)
+
+        // The settle reset ran (proves this isn't vacuous) and released the
+        // ordinary off-band rows exactly as before, but "kept" is still
+        // mounted at its real (re-tiled) position.
+        let mounted = reconciler.mountedRowIdsForTesting
+        #expect(!mounted.contains("r1"))
+        #expect(mounted.contains("kept"))
+        let band = tiling.mountBand(
+            viewportMinY: scroller.scrollY, viewportHeight: scroller.viewportHeight,
+            overscan: ACPTranscriptScrollerReconciler.overscan
+        )
+        #expect(!band.contains(tiling.index(ofId: "kept")!))
     }
 
     @Test("apply with a non-positive width is deferred rather than collapsing the document")
