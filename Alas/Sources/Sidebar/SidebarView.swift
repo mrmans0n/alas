@@ -24,6 +24,8 @@ struct SidebarView: View {
             )
             VStack(spacing: 0) {
                 SidebarHeaderView(
+                    worktreeSortMode: state.config.worktrees.defaultOrdering,
+                    onSetWorktreeSortMode: { state.setDefaultWorktreeOrdering($0) },
                     onSettings: onSettings,
                     onAddProject: onAddProject,
                     onSearch: {
