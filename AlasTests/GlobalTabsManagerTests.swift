@@ -120,6 +120,41 @@ struct GlobalTabsManagerTests {
         #expect(harness.tabs.activeTabId(forWorktree: "app") == terminal.id)
     }
 
+    @Test("migration preserves an active ordinary worktree tab")
+    func migrationPreservesActiveOrdinaryWorktreeTab() throws {
+        let first = Tab.terminal(.init(id: "terminal-1", title: "First", sessionId: "session-1"))
+        let second = Tab.terminal(.init(id: "terminal-2", title: "Second", sessionId: "session-2"))
+        let harness = try GlobalTabsHarness(
+            worktreeTabs: ["app": [.mission(.fixture), first, second]],
+            activeTabIDs: ["app": first.id]
+        )
+
+        try harness.global.loadAndMigrate(worktreeTabs: harness.tabs)
+
+        #expect(harness.tabs.tabs(forWorktree: "app") == [first, second])
+        #expect(harness.tabs.activeTabId(forWorktree: "app") == first.id)
+    }
+
+    @Test("migration activates the Mission from the selected worktree")
+    func migrationPrefersSelectedWorktreeMission() throws {
+        let appMission = MissionTabState(
+            missionID: MissionID(rawValue: "mission-app"),
+            title: "App Mission"
+        )
+        let sdkMission = MissionTabState(
+            missionID: MissionID(rawValue: "mission-sdk"),
+            title: "SDK Mission"
+        )
+        let harness = try GlobalTabsHarness(
+            worktreeTabs: ["app": [.mission(appMission)], "sdk": [.mission(sdkMission)]],
+            activeTabIDs: ["app": appMission.id, "sdk": sdkMission.id]
+        )
+
+        try harness.global.loadAndMigrate(worktreeTabs: harness.tabs, selectedWorktreeID: "sdk")
+
+        #expect(harness.global.activeMissionTab() == sdkMission)
+    }
+
     @Test("migration imports Mission tabs from unavailable worktrees before completing")
     func migrationImportsOrphanedWorktreeTabs() throws {
         let harness = try GlobalTabsHarness(

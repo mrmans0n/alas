@@ -1796,7 +1796,8 @@ final class AppState {
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
         do {
-            try globalTabs.loadAndMigrate(worktreeTabs: tabs)
+            let migrationWorktreeID = selectedWorktreeId ?? resolvedSelectionForActiveSpaceForStartup()
+            try globalTabs.loadAndMigrate(worktreeTabs: tabs, selectedWorktreeID: migrationWorktreeID)
         } catch {
             persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
         }

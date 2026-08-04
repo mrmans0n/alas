@@ -871,8 +871,14 @@ final class TabsManager {
         }
     }
 
-    func activeMissionTab() -> MissionTabState? {
-        for worktreeID in byWorktree.keys.sorted() {
+    func activeMissionTab(preferredWorktreeID: String? = nil) -> MissionTabState? {
+        var worktreeIDs = byWorktree.keys.sorted()
+        if let preferredWorktreeID,
+           let index = worktreeIDs.firstIndex(of: preferredWorktreeID) {
+            worktreeIDs.remove(at: index)
+            worktreeIDs.insert(preferredWorktreeID, at: 0)
+        }
+        for worktreeID in worktreeIDs {
             guard let file = byWorktree[worktreeID],
                   let activeTabID = file.activeTabId,
                   let activeTab = file.tabs.first(where: { $0.id == activeTabID }),
@@ -899,8 +905,11 @@ final class TabsManager {
                 return state
             })
 
-            let activeMissionIndex = file.activeTabId.flatMap { activeID in
-                file.tabs.firstIndex(where: { $0.id == activeID })
+            let activeMissionIndex = file.activeTabId.flatMap { activeID -> Int? in
+                guard let index = file.tabs.firstIndex(where: { $0.id == activeID }),
+                      case .mission = file.tabs[index]
+                else { return nil }
+                return index
             }
             file.tabs.removeAll { tab in
                 if case .mission = tab { return true }
