@@ -28,6 +28,57 @@ struct WorktreeServiceTests {
         #expect(trees.first?.branch == "main")
     }
 
+    @Test func listUsesEachHeadCommitTimeWhenRefsArePacked() async throws {
+        let repo = try await makeRepo()
+        let root = repo.deletingLastPathComponent()
+        let one = root.appendingPathComponent("\(repo.lastPathComponent)-packed-one")
+        let two = root.appendingPathComponent("\(repo.lastPathComponent)-packed-two")
+        defer {
+            try? FileManager.default.removeItem(at: one)
+            try? FileManager.default.removeItem(at: two)
+            try? FileManager.default.removeItem(at: repo)
+        }
+
+        _ = try await Process.git(["branch", "packed-one"], cwd: repo)
+        _ = try await Process.git(["branch", "packed-two"], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", one.path, "packed-one"], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", two.path, "packed-two"], cwd: repo)
+
+        let oneEpoch: TimeInterval = 1_738_411_200
+        let twoEpoch: TimeInterval = 1_740_830_400
+
+        var oneEnv = Process.gitEnv()
+        oneEnv["GIT_AUTHOR_DATE"] = "2025-02-01T12:00:00Z"
+        oneEnv["GIT_COMMITTER_DATE"] = "2025-02-01T12:00:00Z"
+        let oneCommit = try await Process.run(
+            "/usr/bin/env",
+            args: ["git", "commit", "-q", "--allow-empty", "-m", "one"],
+            cwd: one,
+            env: oneEnv
+        )
+        try #require(oneCommit.exitCode == 0)
+
+        var twoEnv = Process.gitEnv()
+        twoEnv["GIT_AUTHOR_DATE"] = "2025-03-01T12:00:00Z"
+        twoEnv["GIT_COMMITTER_DATE"] = "2025-03-01T12:00:00Z"
+        let twoCommit = try await Process.run(
+            "/usr/bin/env",
+            args: ["git", "commit", "-q", "--allow-empty", "-m", "two"],
+            cwd: two,
+            env: twoEnv
+        )
+        try #require(twoCommit.exitCode == 0)
+
+        let packed = try await Process.git(["pack-refs", "--all", "--prune"], cwd: repo)
+        try #require(packed.exitCode == 0)
+
+        let trees = try await WorktreeService().list(repoPath: repo, projectId: "p")
+        let byBranch = Dictionary(uniqueKeysWithValues: trees.map { ($0.branch, $0) })
+
+        #expect(byBranch["packed-one"]?.lastActivity == Date(timeIntervalSince1970: oneEpoch))
+        #expect(byBranch["packed-two"]?.lastActivity == Date(timeIntervalSince1970: twoEpoch))
+    }
+
     @Test func addCreatesWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

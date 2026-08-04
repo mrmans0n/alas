@@ -49,6 +49,8 @@ struct WorktreeService {
         )
         if let host {
             trees = await Self.fillingRemoteMetadata(trees, host: host)
+        } else {
+            trees = await Self.fillingHeadCommitTimes(trees)
         }
         return trees
     }
@@ -186,6 +188,30 @@ struct WorktreeService {
             + "if [ ! -s \"$f\" ]; then "
             + "(umask 077; set -C; printf '%s\\n' \"$c\" > \"$f\") 2>/dev/null || true; fi; "
             + "head -n 1 \"$f\""
+    }
+
+    private static func fillingHeadCommitTimes(_ trees: [Worktree]) async -> [Worktree] {
+        await withTaskGroup(of: (Int, Date?).self) { group in
+            for (index, tree) in trees.enumerated() {
+                group.addTask {
+                    let invocation = GitInvocation.build(
+                        gitArgs: ["log", "-1", "--format=%ct", "HEAD"],
+                        cwd: tree.path,
+                        host: nil
+                    )
+                    let result = try? await Process.run(
+                        invocation.executable,
+                        args: invocation.args,
+                        cwd: invocation.cwd,
+                        env: invocation.env
+                    )
+                    return (index, result.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil })
+                }
+            }
+            var trees = trees
+            for await (index, date) in group where date != nil { trees[index].lastActivity = date! }
+            return trees
+        }
     }
 
     private static func fillingRemoteMetadata(_ trees: [Worktree], host: String) async -> [Worktree] {
