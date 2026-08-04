@@ -168,6 +168,20 @@ struct GlobalTabsManagerTests {
         #expect(harness.tabs.tabs(forWorktree: "orphaned-sdk").isEmpty)
     }
 
+    @Test("migration recursively imports tabs persisted for absolute worktree IDs")
+    func migrationImportsNestedAbsoluteWorktreeTabs() throws {
+        let worktreeID = "/Users/example/project.json/worktree"
+        let harness = try GlobalTabsHarness(
+            worktreeTabs: [worktreeID: [.mission(.fixture)]],
+            worktreeIds: []
+        )
+
+        try harness.global.loadAndMigrate(worktreeTabs: harness.tabs)
+
+        #expect(harness.global.tabs == [.mission(.fixture)])
+        #expect(harness.tabs.tabs(forWorktree: worktreeID).isEmpty)
+    }
+
     @Test("migration resumes safely after global tabs were written before completion")
     func migrationResumesAfterPartialWrite() throws {
         let harness = try GlobalTabsHarness(

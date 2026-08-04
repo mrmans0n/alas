@@ -157,6 +157,38 @@ struct MissionCoordinatorTests {
         #expect(try await fake.persistence.aggregate(id: missionID) == completed)
     }
 
+    @Test(
+        "completion while worktree planning is suspended preserves completed history",
+        arguments: [false, true]
+    )
+    func completionWhileWorktreePlanningIsSuspendedPreservesCompletedHistory(
+        planningFails: Bool
+    ) async throws {
+        let fake = MissionCoordinatorFake(suspendWorktreePlanning: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        await fake.waitForWorktreePlanningStarts(count: 1)
+
+        let beforeCompletion = try #require(try await fake.persistence.aggregate(id: missionID))
+        let legID = try #require(beforeCompletion.primaryLeg?.id)
+        try await fake.persistence.complete(
+            id: missionID,
+            at: .now,
+            event: MissionFixtures.event(
+                id: "completed-during-worktree-planning-\(planningFails)",
+                missionID: missionID,
+                legID: legID,
+                kind: .completed
+            )
+        )
+        let completed = try #require(try await fake.persistence.aggregate(id: missionID))
+
+        await fake.resumeWorktreePlanning(for: legID, failure: planningFails)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(try await fake.persistence.aggregate(id: missionID) == completed)
+    }
+
     // Break caught: completion can race after the ACP session reservation is
     // durable but before the coordinator starts the next external operation.
     @Test("completion after session reservation prevents ACP startup")
@@ -1077,11 +1109,15 @@ private final class MissionCoordinatorFake {
     private var idCounter = 0
     private var clock: TimeInterval = 1_000
     private let suspendWorktreeCreation: Bool
+    private let suspendWorktreePlanning: Bool
     private let suspendACPStartup: Bool
     private let completeWhenSessionReserved: Bool
     private var startedLegs: [MissionLegID: MissionLeg] = [:]
     private var worktreeCreationContinuations: [
         MissionLegID: CheckedContinuation<Result<Worktree, WorktreeCreationFailure>, Never>
+    ] = [:]
+    private var worktreePlanningContinuations: [
+        MissionLegID: CheckedContinuation<Result<String, WorktreeCreationFailure>, Never>
     ] = [:]
     private var acpStartupContinuations: [
         MissionLegID: CheckedContinuation<
@@ -1096,6 +1132,7 @@ private final class MissionCoordinatorFake {
         worktreeResult: Result<Worktree, WorktreeCreationFailure>? = nil,
         agentResult: Result<ACPSession.ID, MissionCoordinator.MissionOperationFailure>? = nil,
         suspendWorktreeCreation: Bool = false,
+        suspendWorktreePlanning: Bool = false,
         suspendACPStartup: Bool = false,
         completeWhenSessionReserved: Bool = false
     ) {
@@ -1111,6 +1148,7 @@ private final class MissionCoordinatorFake {
         self.worktreeResult = worktreeResult ?? .success(worktree)
         self.agentResult = agentResult
         self.suspendWorktreeCreation = suspendWorktreeCreation
+        self.suspendWorktreePlanning = suspendWorktreePlanning
         self.suspendACPStartup = suspendACPStartup
         self.completeWhenSessionReserved = completeWhenSessionReserved
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
@@ -1136,6 +1174,11 @@ private final class MissionCoordinatorFake {
             },
             plannedWorktreeID: { [weak self] leg in
                 guard let self else { return .failure(.init(message: "Fake released")) }
+                if self.suspendWorktreePlanning {
+                    return await withCheckedContinuation { continuation in
+                        self.worktreePlanningContinuations[leg.id] = continuation
+                    }
+                }
                 return .success(self.worktree(for: leg).id)
             },
             worktreeAtDestination: { [weak self] projectID, path in
@@ -1257,6 +1300,13 @@ private final class MissionCoordinatorFake {
         }
     }
 
+    func waitForWorktreePlanningStarts(count: Int) async {
+        for _ in 0..<200 {
+            if worktreePlanningContinuations.count >= count { return }
+            await Task.yield()
+        }
+    }
+
     func waitForACPStarts(count: Int) async {
         for _ in 0..<200 {
             if startACPCalls >= count { return }
@@ -1273,6 +1323,15 @@ private final class MissionCoordinatorFake {
         let result = worktreeResult(for: legID)
         recordCreatedWorktree(result)
         continuation.resume(returning: result)
+    }
+
+    func resumeWorktreePlanning(for legID: MissionLegID, failure: Bool) async {
+        guard let continuation = worktreePlanningContinuations.removeValue(forKey: legID) else { return }
+        if failure {
+            continuation.resume(returning: .failure(.init(message: "Planning failed.")))
+        } else {
+            continuation.resume(returning: .success(worktree.id))
+        }
     }
 
     func resumeACPStartup(for legID: MissionLegID) async {

@@ -154,7 +154,9 @@ final class MissionLegCoordinator {
             worktree = existing
         } else {
             if leg.worktreeId == nil {
-                switch await environment.plannedWorktreeID(leg) {
+                let planningResult = await environment.plannedWorktreeID(leg)
+                guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
+                switch planningResult {
                 case .success(let worktreeID):
                     leg.worktreeId = worktreeID
                     leg.updatedAt = environment.now()

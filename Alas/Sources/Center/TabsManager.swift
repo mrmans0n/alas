@@ -164,13 +164,18 @@ final class TabsManager {
     /// currently discoverable. Legacy Mission tabs must be migrated before an
     /// orphaned worktree can otherwise make them unreachable.
     func loadAllPersisted() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: tabsDirectory,
-            includingPropertiesForKeys: nil
+        guard let relativeFiles = try? FileManager.default.subpathsOfDirectory(
+            atPath: tabsDirectory.path
         ) else { return }
-        let worktreeIDs = files
-            .filter { $0.pathExtension == "json" }
-            .map { $0.deletingPathExtension().lastPathComponent }
+        let worktreeIDs = relativeFiles.compactMap { relativeFile -> String? in
+            guard relativeFile.hasSuffix(".json") else { return nil }
+            let file = tabsDirectory.appendingPathComponent(relativeFile)
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { return nil }
+            let relativePath = String(relativeFile.dropLast(".json".count))
+            guard !relativePath.isEmpty else { return nil }
+            return relativePath.contains("/") ? "/\(relativePath)" : relativePath
+        }
         loadAll(worktreeIds: worktreeIDs)
     }
 
