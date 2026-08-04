@@ -40,7 +40,6 @@ private struct MissingMissionRecoveryTarget: Equatable {
 final class AppState {
     typealias MissionArchiveRecorder = @MainActor (String) async -> Void
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
-    typealias TerminalTabReopenPlaceholder = @MainActor (ClosedTabEntry, String, Tab) async -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -552,7 +551,6 @@ final class AppState {
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
     @ObservationIgnored
-    private let terminalTabReopenPlaceholder: TerminalTabReopenPlaceholder?
     @ObservationIgnored
     private var scheduledSpacesSave: Task<Void, Never>?
 
@@ -571,7 +569,6 @@ final class AppState {
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         closeTabConfirmer: CloseTabConfirmer? = nil,
-        terminalTabReopenPlaceholder: TerminalTabReopenPlaceholder? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
@@ -590,7 +587,6 @@ final class AppState {
         }
         self.terminalSessionOpener = terminalSessionOpener
         self.closeTabConfirmer = closeTabConfirmer
-        self.terminalTabReopenPlaceholder = terminalTabReopenPlaceholder
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
@@ -3842,6 +3838,42 @@ final class AppState {
         )
     }
 
+    private func openTerminalSessionForReopen(
+        worktree: Worktree,
+        project: ProjectConfig,
+        forcedCwd: URL?
+    ) throws -> OpenedTerminalSession {
+        let opened: OpenedTerminalSession
+        if let terminalSessionOpener {
+            opened = try terminalSessionOpener(
+                worktree,
+                project,
+                config.terminal,
+                themeStore.current,
+                forcedCwd,
+                nil,
+                true,
+                [:],
+                []
+            )
+        } else {
+            let leafID = UUID().uuidString
+            let session = try terminal.openSession(
+                worktree: worktree,
+                project: project,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: forcedCwd,
+                leafId: leafID
+            )
+            opened = .init(id: session.id, foregroundPid: { [weak session] in
+                session?.surface.foregroundPid
+            })
+        }
+        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        return opened
+    }
+
     @discardableResult
     func openTerminalTab(
         for worktree: Worktree,
@@ -4965,17 +4997,56 @@ final class AppState {
         }
     }
 
-    /// Terminal reconstruction belongs to the terminal-specific reopen task.
-    /// Keep the history entry so a later retry can reconstruct it transactionally.
     private func reopenTerminalTab(entry: ClosedTabEntry, worktreeID: String, tab: Tab) async {
-        if let terminalTabReopenPlaceholder {
-            await terminalTabReopenPlaceholder(entry, worktreeID, tab)
+        guard case .terminal(let oldState) = tab,
+              let worktree = worktree(withId: worktreeID),
+              let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            showFileActionError(
+                title: "Reopen Tab Failed",
+                message: "Could not find the terminal tab's worktree or project."
+            )
             return
         }
-        fileActionErrorHandler(
-            "Reopen Tab Failed",
-            "Terminal tabs cannot be reopened until their terminal session is reconstructed."
-        )
+
+        await prepareRemoteAccelerationIfNeeded(for: project)
+
+        var openedIDs: [String] = []
+        do {
+            var replacements: [String: PaneLeaf] = [:]
+            var focusedLeafID = oldState.focusedLeafId
+            for oldLeaf in oldState.root.leaves() {
+                let opened = try openTerminalSessionForReopen(
+                    worktree: worktree,
+                    project: project,
+                    forcedCwd: oldLeaf.lastCwd.map(URL.init(fileURLWithPath:))
+                )
+                openedIDs.append(opened.id)
+                replacements[oldLeaf.id] = PaneLeaf(
+                    id: opened.id,
+                    sessionId: opened.id,
+                    lastCwd: oldLeaf.lastCwd
+                )
+                if oldLeaf.id == oldState.focusedLeafId {
+                    focusedLeafID = opened.id
+                }
+            }
+
+            let reopened = TerminalTabState(
+                id: oldState.id,
+                title: oldState.title,
+                root: oldState.root.replacingLeaves(using: replacements),
+                focusedLeafId: focusedLeafID
+            )
+            _ = tabs.restore(tab: .terminal(reopened), worktreeID: worktreeID, placement: entry.placement)
+            selectWorktree(id: worktreeID)
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: reopened.id)
+            closedTabHistory.remove(id: entry.id)
+        } catch {
+            for id in openedIDs {
+                closeTerminalSession(id: id, worktreeId: worktreeID, projectPath: project.path)
+            }
+            showFileActionError(title: "Reopen Tab Failed", message: error.localizedDescription)
+        }
     }
 
     /// Tear down every tab/terminal/harness reference for a worktree id without

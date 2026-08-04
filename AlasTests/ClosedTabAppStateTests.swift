@@ -5,6 +5,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ClosedTabAppStateTests {
+    private enum ReopenTestError: Error {
+        case sessionOpenFailed
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
@@ -152,37 +156,108 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.closedTabHistory.entries.map(\.snapshot.tabID) == [global.id, local.id])
     }
 
-    @Test func overlappingTerminalReopenDoesNotStartSecondAttempt() async {
-        var attempts = 0
-        var placeholderContinuation: CheckedContinuation<Void, Never>?
+    @Test func reopeningTerminalRebuildsLayoutWithFreshSessions() async {
+        var openedCwds: [String?] = []
+        var openedIDs = ["fresh-1", "fresh-2"]
         let state = AppState(
             store: MemoryStore(),
-            terminalTabReopenPlaceholder: { _, _, _ in
-                attempts += 1
-                await withCheckedContinuation { continuation in
-                    placeholderContinuation = continuation
-                }
+            terminalSessionOpener: { _, _, _, _, forcedCwd, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
+                openedCwds.append(forcedCwd?.path)
+                #expect(startupScriptSuffix == nil)
+                #expect(includeUserStartupScript)
+                #expect(environmentOverrides.isEmpty)
+                #expect(environmentRemovals.isEmpty)
+                return .init(id: openedIDs.removeFirst(), foregroundPid: { nil })
             }
         )
         let fixture = makeFixture(state: state)
-        let tab = fixture.state.tabs.appendTerminal(worktreeId: fixture.first.id, title: "Terminal", sessionId: "session")
-        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
-
-        let reopenTask = Task { await fixture.state.reopenLastClosedTab() }
-        while placeholderContinuation == nil {
-            await Task.yield()
-        }
-        #expect(fixture.state.isReopeningClosedTab)
+        let original = TerminalTabState(
+            id: "reopen-terminal",
+            title: "Terminal",
+            root: .split(PaneSplit(
+                id: "split-id",
+                axis: .vertical,
+                fraction: 0.37,
+                children: [
+                    .leaf(PaneLeaf(id: "old-1", sessionId: "old-1", lastCwd: "/tmp/first")),
+                    .leaf(PaneLeaf(id: "old-2", sessionId: "old-2", lastCwd: "/tmp/second"))
+                ]
+            )),
+            focusedLeafId: "old-2",
+            runScriptKey: "worktree:run.sh",
+            runScriptLeafId: "old-2"
+        )
+        _ = fixture.state.tabs.restore(
+            tab: .terminal(original),
+            worktreeID: fixture.first.id,
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: original.id)
 
         await fixture.state.reopenLastClosedTab()
-        #expect(attempts == 1)
 
-        placeholderContinuation?.resume()
-        await reopenTask.value
+        #expect(openedCwds == ["/tmp/first", "/tmp/second"])
+        guard case .terminal(let reopened) = fixture.state.tabs.activeTab(forWorktree: fixture.first.id) else {
+            Issue.record("Expected reopened terminal")
+            return
+        }
+        #expect(reopened.id == original.id)
+        #expect(reopened.root.leaves().map(\.id) == ["fresh-1", "fresh-2"])
+        #expect(reopened.root.leaves().map(\.lastCwd) == ["/tmp/first", "/tmp/second"])
+        #expect(reopened.focusedLeafId == "fresh-2")
+        #expect(reopened.runScriptKey == nil)
+        #expect(reopened.runScriptLeafId == nil)
+        guard case .split(let split) = reopened.root else {
+            Issue.record("Expected split terminal layout")
+            return
+        }
+        #expect(split.id == "split-id")
+        #expect(split.axis == .vertical)
+        #expect(split.fraction == 0.37)
+        #expect(split.children.map { $0.firstLeaf().id } == ["fresh-1", "fresh-2"])
+    }
 
-        #expect(attempts == 1)
+    @Test func failedTerminalReopenRollsBackOpenedSessionsAndRetainsHistory() async {
+        var openAttempts = 0
+        var errorTitle: String?
+        let state = AppState(
+            store: MemoryStore(),
+            fileActionErrorHandler: { title, _ in errorTitle = title },
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openAttempts += 1
+                if openAttempts == 2 { throw ReopenTestError.sessionOpenFailed }
+                return .init(id: "fresh-1", foregroundPid: { nil })
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let original = TerminalTabState(
+            id: "reopen-terminal-failure",
+            title: "Terminal",
+            root: .split(PaneSplit(
+                id: "split-id",
+                axis: .vertical,
+                fraction: 0.5,
+                children: [
+                    .leaf(PaneLeaf(id: "old-1", sessionId: "old-1", lastCwd: "/tmp/first")),
+                    .leaf(PaneLeaf(id: "old-2", sessionId: "old-2", lastCwd: "/tmp/second"))
+                ]
+            )),
+            focusedLeafId: "old-1"
+        )
+        _ = fixture.state.tabs.restore(
+            tab: .terminal(original),
+            worktreeID: fixture.first.id,
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: original.id)
+
+        await fixture.state.reopenLastClosedTab()
+
+        #expect(errorTitle == "Reopen Tab Failed")
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
         #expect(fixture.state.canReopenClosedTab)
-        #expect(fixture.state.closedTabHistory.entries.map(\.snapshot.tabID) == [tab.id])
+        #expect(fixture.state.closedTabHistory.last?.snapshot.tabID == original.id)
+        #expect(!fixture.state.harness.detector.isRegistered(sessionId: "fresh-1"))
     }
 
     @Test func reopenDiscardsStaleWorktreeEntryAndRestoresNextEntry() async {

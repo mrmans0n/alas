@@ -19,6 +19,10 @@ final class HarnessDetector {
         queue.async { self.providers.removeValue(forKey: sessionId) }
     }
 
+    func isRegistered(sessionId: String) -> Bool {
+        queue.sync { providers[sessionId] != nil }
+    }
+
     func start() {
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 0.5, repeating: 1.0)
