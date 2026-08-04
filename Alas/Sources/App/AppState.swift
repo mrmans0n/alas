@@ -2817,7 +2817,7 @@ final class AppState {
             projectPath: URL(fileURLWithPath: project.path)
         )
         return MissionDraft(
-            issue: draft.issue,
+            source: draft.source,
             projectId: draft.projectId,
             baseRef: draft.baseRef,
             baseRemoteName: draft.baseRemoteName,

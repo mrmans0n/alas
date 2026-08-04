@@ -48,7 +48,7 @@ struct NewMissionDialogTests {
         #expect(model.base == "origin/main")
         #expect(model.branch == "feature/1842-fix-offline-sync-conflicts")
         #expect(model.agentId == "codex")
-        #expect(model.prompt.contains("## Issue context"))
+        #expect(model.prompt.contains("## Work item context"))
         #expect(model.prompt.contains("https://github.com/mrmans0n/alas/issues/1842"))
     }
 
@@ -123,6 +123,76 @@ struct NewMissionDialogTests {
         #expect(fake.createdDrafts.isEmpty)
     }
 
+    @Test("arbitrary link requires title and uses explicit selected repository")
+    func arbitraryLinkRequiresTitleAndUsesExplicitSelectedRepository() async throws {
+        let manual = MissionFixtures.manualSource(
+            url: "https://jira.example.com/browse/ALAS-123",
+            title: "",
+            body: ""
+        )
+        let fake = NewMissionDialogFake(
+            candidateProjectIds: ["project-a", "project-b"],
+            configuredBases: ["project-b": "main"],
+            configuredPrefixes: ["project-b": "nacho/"],
+            branchesByProject: ["project-b": ["main"]],
+            resolvedSource: ResolvedMissionSource(
+                source: manual,
+                repositoryLocator: nil,
+                candidateProjectIDs: ["project-a", "project-b"],
+                selectedProjectID: "project-b"
+            )
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "https://jira.example.com/browse/ALAS-123"
+
+        await model.resolve()
+        #expect(model.phase == .confirmation)
+        #expect(model.projectId == "project-b")
+        #expect(model.validationMessage == "Enter a work-item title.")
+
+        model.sourceTitle = "Fix login timeout"
+        model.sourceBody = "Sessions expire during refresh."
+        #expect(model.branch == "nacho/fix-login-timeout")
+        #expect(await model.create(allowDuplicate: false) == MissionID(rawValue: "new-mission"))
+        let draft = try #require(fake.createdDrafts.first)
+        #expect(draft.source.title == "Fix login timeout")
+        #expect(draft.source.body == "Sessions expire during refresh.")
+        #expect(draft.projectId == "project-b")
+    }
+
+    @Test("provider failure waits for explicit manual continuation")
+    func providerFailureWaitsForExplicitManualContinuation() async {
+        let fallbackSource = MissionFixtures.manualSource(
+            url: "https://github.com/mrmans0n/alas/issues/1842",
+            title: "",
+            body: ""
+        )
+        let fallback = ResolvedMissionSource(
+            source: fallbackSource,
+            repositoryLocator: .init(provider: .github, host: "github.com", repositorySlug: "mrmans0n/alas"),
+            candidateProjectIDs: ["alas"],
+            selectedProjectID: "alas"
+        )
+        let fake = NewMissionDialogFake(
+            resolutionFailure: MissionSourceResolutionFailure(
+                fallback: fallback,
+                message: "Authentication is required for github.com."
+            )
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = "https://github.com/mrmans0n/alas/issues/1842"
+
+        await model.resolve()
+        #expect(model.phase == .entry)
+        #expect(model.pendingManualFallback != nil)
+        #expect(model.errorMessage == "Authentication is required for github.com.")
+
+        await model.continueManually()
+        #expect(model.phase == .confirmation)
+        #expect(model.sourceTitle.isEmpty)
+        #expect(model.projectId == "alas")
+    }
+
     @Test("a manually entered active Mission branch blocks creation")
     func reservedManualBranchBlocksCreation() async {
         let fake = NewMissionDialogFake(
@@ -192,7 +262,7 @@ struct NewMissionDialogTests {
 
         await model.selectProject("unrelated")
         #expect(model.projectId == "alas-clone")
-        #expect(model.errorMessage == "Choose a repository matched to this issue.")
+        #expect(model.errorMessage == "Choose a primary repository.")
     }
 
     @Test("project changes refresh only untouched base and branch drafts")
@@ -212,7 +282,7 @@ struct NewMissionDialogTests {
         await model.resolve()
 
         actions.branch.wrappedValue = "nacho/keep-this-branch"
-        model.prompt = "Keep this independently edited prompt."
+        actions.prompt.wrappedValue = "Keep this independently edited prompt."
         await model.selectProject("alas-clone")
 
         #expect(model.base == "trunk")
@@ -520,14 +590,17 @@ struct NewMissionDialogTests {
         await model.resolve()
         actions.base.wrappedValue = "  upstream/main  "
         actions.branch.wrappedValue = "  feature/1842-custom  "
-        model.prompt = "Custom prompt"
+        actions.prompt.wrappedValue = "Custom prompt"
 
         let result = await model.create(allowDuplicate: false)
         let draft = try #require(fake.createdDrafts.first)
 
         #expect(result == MissionID(rawValue: "new-mission"))
         #expect(fake.missionWasDurableBeforeCreateReturned)
-        #expect(draft.issue.identity.number == 1842)
+        #expect(draft.source.identity == .init(
+            providerID: .github,
+            stableID: "github.com/mrmans0n/alas#1842"
+        ))
         #expect(draft.projectId == "alas")
         #expect(draft.baseRef == "upstream/main")
         #expect(draft.baseRemoteName == "upstream")
@@ -612,7 +685,8 @@ private final class NewMissionDialogFake {
         }
     }
 
-    let resolvedIssue: ResolvedMissionIssue
+    let resolvedSource: ResolvedMissionSource
+    let resolutionFailure: MissionSourceResolutionFailure?
     let configuredBases: [String: String]
     let configuredPrefixes: [String: String]
     let branchesByProject: [String: [String]]
@@ -651,6 +725,8 @@ private final class NewMissionDialogFake {
         agents: [AgentDefinition] = [NewMissionDialogTests.agent(id: "codex")],
         duplicateMissionID: MissionID? = nil,
         createError: (any Error)? = nil,
+        resolvedSource: ResolvedMissionSource? = nil,
+        resolutionFailure: MissionSourceResolutionFailure? = nil,
         destination: @escaping (String, String) -> URL = { projectID, branch in
             URL(fileURLWithPath: "/tmp/worktrees/\(projectID)/\(branch.replacingOccurrences(of: "/", with: "-"))")
         },
@@ -672,6 +748,7 @@ private final class NewMissionDialogFake {
         self.destination = destination
         self.occupiedDestinationPaths = occupiedDestinationPaths
         self.reservedBranchesByProject = reservedBranchesByProject
+        self.resolutionFailure = resolutionFailure
         let snapshot = MissionIssueSnapshot(
             identity: .init(
                 provider: .github,
@@ -689,30 +766,28 @@ private final class NewMissionDialogFake {
             capturedAt: Date(timeIntervalSince1970: 101),
             refreshError: nil
         )
-        self.resolvedIssue = ResolvedMissionIssue(
-            snapshot: snapshot,
-            remote: .init(
-                kind: .github,
+        self.resolvedSource = resolvedSource ?? ResolvedMissionSource(
+            source: MissionSourceSnapshot(issue: snapshot),
+            repositoryLocator: .init(
+                provider: .github,
                 host: "github.com",
-                owner: "mrmans0n",
-                repository: "alas",
-                remoteName: "origin",
-                webURL: URL(string: "https://github.com/mrmans0n/alas")!
+                repositorySlug: "mrmans0n/alas"
             ),
-            candidateProjectIds: candidateProjectIds,
-            selectedProjectId: candidateProjectIds[0]
+            candidateProjectIDs: candidateProjectIds,
+            selectedProjectID: candidateProjectIds[0]
         )
     }
 
     var environment: NewMissionDialogModel.Environment {
         .init(
-            resolveIssue: { [self] _ in
+            resolveSource: { [self] _ in
                 if suspendResolution {
                     await withCheckedContinuation { continuation in
                         resolutionContinuation = continuation
                     }
                 }
-                return resolvedIssue
+                if let resolutionFailure { throw resolutionFailure }
+                return resolvedSource
             },
             branches: { [self] projectID in
                 if suspendBranches {

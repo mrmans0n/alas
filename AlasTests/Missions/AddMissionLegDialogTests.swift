@@ -125,7 +125,7 @@ struct AddMissionLegDialogTests {
         host.view.layoutSubtreeIfNeeded()
 
         #expect(subview(
-            withAccessibilityIdentifier: "add-mission-leg-shared-issue-body",
+            withAccessibilityIdentifier: "add-mission-leg-shared-source-body",
             in: host.view
         ) != nil)
         for leg in fixture.aggregate.legs {

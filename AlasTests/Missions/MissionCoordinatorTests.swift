@@ -1026,7 +1026,7 @@ struct MissionCoordinatorTests {
         let firstID = try await coordinator.create(Self.draft)
         _ = await fake.waitUntilSettled(firstID)
 
-        await #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        await #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try await coordinator.create(Self.draft)
         }
         let duplicateID = try await coordinator.create(Self.draft, allowDuplicate: true)

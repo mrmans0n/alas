@@ -163,8 +163,8 @@ final class AddMissionLegModel {
             )
             branch = availableBranch(
                 seededBy: MissionBranchName.make(
-                    issueNumber: aggregate.issue.identity.number,
-                    title: aggregate.issue.title,
+                    displayReference: aggregate.source.displayReference,
+                    title: aggregate.source.title,
                     prefix: environment.configuredBranchPrefix(selectedProjectID)
                 ),
                 occupied: inventory.names + environment.reservedBranches(selectedProjectID)
@@ -231,7 +231,7 @@ final class AddMissionLegModel {
                 agentId: agentId,
                 initialPromptId: UUID(),
                 preparedPrompt: MissionLegPromptBuilder.build(
-                    issue: aggregate.issue,
+                    source: aggregate.source,
                     existingLegs: aggregate.legs,
                     existingProjectNames: Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) }),
                     projectName: project.name,
