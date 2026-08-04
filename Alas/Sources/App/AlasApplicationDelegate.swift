@@ -24,4 +24,8 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         return .terminateLater
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Task { await RevisionSnapshotCache.shared.removeSessionDirectory() }
+    }
 }
