@@ -9,6 +9,7 @@ final class MissionStore {
         case issueIdentityChanged
         case malformedRecord
         case missionNotFound
+        case missionCompleted
         case invalidEvent
         case invalidLegCollection
         case duplicateLegProject
@@ -231,6 +232,7 @@ final class MissionStore {
         if let event { try validate(event: event, for: missionID, legID: leg.id) }
         try immediateTransaction {
             let aggregate = try requireAggregate(missionID)
+            guard aggregate.mission.state != .completed else { throw Error.missionCompleted }
             try updateLegRecord(leg)
             let updatedAt = event?.createdAt ?? leg.updatedAt
             try updateMissionState(

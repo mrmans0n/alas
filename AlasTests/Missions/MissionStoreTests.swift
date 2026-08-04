@@ -471,6 +471,40 @@ struct MissionStoreTests {
         #expect(loaded.events.last?.id == "attention")
     }
 
+    @Test("leg setup writes cannot mutate completed Mission history")
+    func rejectsLegSetupWritesAfterCompletion() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission()
+        try store.insert(aggregate)
+        try store.complete(
+            id: aggregate.mission.id,
+            at: Date(timeIntervalSince1970: 120),
+            event: MissionFixtures.event(id: "completed", kind: .completed, createdAt: 120)
+        )
+        let completed = try #require(try store.aggregate(id: aggregate.mission.id))
+        var leg = try #require(completed.primaryLeg)
+        leg.state = .needsAttention
+        leg.setupCheckpoint = .startingAgent
+        leg.attentionReason = "Late setup failure."
+        leg.updatedAt = Date(timeIntervalSince1970: 130)
+
+        #expect(throws: MissionStore.Error.missionCompleted) {
+            try store.updateLegSetup(
+                missionID: aggregate.mission.id,
+                leg: leg,
+                event: MissionFixtures.event(
+                    id: "late-attention",
+                    missionID: aggregate.mission.id,
+                    legID: leg.id,
+                    kind: .attentionRequired,
+                    createdAt: 130
+                )
+            )
+        }
+
+        #expect(try store.aggregate(id: aggregate.mission.id) == completed)
+    }
+
     @Test("leg events advance mission activity time")
     func legEventsAdvanceMissionActivityTime() throws {
         let store = try MissionStore(path: temporaryPath())
