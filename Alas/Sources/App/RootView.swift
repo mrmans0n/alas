@@ -81,7 +81,9 @@ struct RootView: View {
                 state.reloadTabs()
                 await state.reconcileMissionsForStartup()
                 if state.selectedWorktreeId == nil {
-                    state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
+                    state.selectInitialWorktree(
+                        id: state.resolvedSelectionForActiveSpaceForStartup()
+                    )
                 }
                 state.startAllProjectGitWatchers()
                 state.rescanAgents()

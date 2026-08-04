@@ -2021,10 +2021,22 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
-        globalTabs.clearActiveTab()
-        if id != missingMissionRecoveryTarget?.worktreeID {
-            missingMissionTab = nil
-            missingMissionRecoveryTarget = nil
+        selectWorktree(id: id, preservingGlobalMission: false)
+    }
+
+    /// Records the initial background worktree without replacing a restored
+    /// global Mission selection or its missing-worktree recovery presentation.
+    func selectInitialWorktree(id: String?) {
+        selectWorktree(id: id, preservingGlobalMission: true)
+    }
+
+    private func selectWorktree(id: String?, preservingGlobalMission: Bool) {
+        if !preservingGlobalMission {
+            globalTabs.clearActiveTab()
+            if id != missingMissionRecoveryTarget?.worktreeID {
+                missingMissionTab = nil
+                missingMissionRecoveryTarget = nil
+            }
         }
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id

@@ -281,6 +281,17 @@ struct AppStatePersistenceTests {
         #expect(fixture.state.globalTabs.tabs == [.mission(.fixture)])
     }
 
+    @Test func selectingInitialWorktreePreservesRestoredGlobalMission() async throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+
+        fixture.state.selectInitialWorktree(id: fixture.otherWorktree.id)
+
+        #expect(fixture.state.selectedWorktreeId == fixture.otherWorktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+    }
+
     @Test func centerShortcutsRouteThroughGlobalMissionOwnership() throws {
         let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
         let terminal = fixture.state.tabs.appendTerminal(
