@@ -1813,7 +1813,10 @@ final class AppState {
                 missingMissionTab = selectedMissingMission.tab
                 missingMissionRecoveryTarget = selectedMissingMission.target
             } else {
-                selectWorktree(id: resolvedSelectionForActiveSpace())
+                selectWorktree(
+                    id: resolvedSelectionForActiveSpace(),
+                    preservingGlobalMission: globalTabs.activeMissionTab() != nil
+                )
             }
         }
     }

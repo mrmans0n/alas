@@ -694,6 +694,39 @@ struct MissionTabTests {
         #expect(fixture.state.missingMissionTab == missingPrimaryTab)
     }
 
+    @Test func removingUnrelatedSelectedWorktreePreservesActiveGlobalMission() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
+        await fixture.state.missions.load()
+        let unrelated = Worktree(
+            id: "unrelated-worktree",
+            projectId: fixture.worktree.projectId,
+            name: "scratch",
+            branch: "scratch",
+            path: URL(fileURLWithPath: "/tmp/alas-scratch"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 150),
+            lineageID: "device:scratch"
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(unrelated)
+        fixture.state.selectWorktree(id: unrelated.id)
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+        let beforeIds: Set<String> = [fixture.worktree.id, unrelated.id]
+
+        fixture.state.projectsManager.removeOptimisticWorktree(
+            id: unrelated.id,
+            projectId: unrelated.projectId
+        )
+        await fixture.state.cleanupMissingWorktrees(beforeIds: beforeIds)
+
+        #expect(fixture.state.selectedWorktreeId == fixture.worktree.id)
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
+        #expect(fixture.state.missingMissionTab == nil)
+    }
+
     @Test func startupMissingMissionCreatesActionableRecoveryTab() async throws {
         let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
         #expect(fixture.state.switchToSpace(id: "mission-space"))
