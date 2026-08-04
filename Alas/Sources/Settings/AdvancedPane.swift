@@ -6,6 +6,11 @@ struct AdvancedPane: View {
     @State private var pendingAction: CleanupAction?
     @State private var cleanupMessage: String?
     @State private var isCleaningStaleProjects = false
+    /// Mirrors `ACPTranscriptScrollerFlag.isEnabled` in observable state.
+    /// Reading the flag straight from a `Binding` getter renders the toggle
+    /// correctly once but never invalidates this view, so the switch could
+    /// keep drawing its old position after the override had already changed.
+    @State private var appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
 
     var body: some View {
         ScrollView {
@@ -21,8 +26,11 @@ struct AdvancedPane: View {
                         desc: "Replaces the transcript's scrolling implementation with an AppKit-backed scroller, keeping pagination through long chat history jump-free. Toggling this re-creates the transcript view, so the scroll position in any open chats is lost."
                     ) {
                         AlasToggle(on: Binding(
-                            get: { ACPTranscriptScrollerFlag.isEnabled },
-                            set: { ACPTranscriptScrollerFlag.setOverride($0) }
+                            get: { appKitScrollerEnabled },
+                            set: {
+                                appKitScrollerEnabled = $0
+                                ACPTranscriptScrollerFlag.setOverride($0)
+                            }
                         ))
                     }
                 }
@@ -72,6 +80,13 @@ struct AdvancedPane: View {
             }
         } message: { action in
             Text(action.message(projectCount: state.projects.count))
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: ACPTranscriptScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            // Keeps the switch honest when the override changes from outside
+            // this pane — a `defaults write`, or another window's copy of it.
+            appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
         }
     }
 

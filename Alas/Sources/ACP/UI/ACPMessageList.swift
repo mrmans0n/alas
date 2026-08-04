@@ -163,7 +163,20 @@ struct ACPMessageList: View {
         .onReceive(
             NotificationCenter.default.publisher(for: ACPTranscriptScrollerFlag.overrideDidChangeNotification)
         ) { _ in
-            scrollerFlagState = ACPTranscriptScrollerFlag.isEnabled
+            let flagEnabled = ACPTranscriptScrollerFlag.isEnabled
+            guard flagEnabled != scrollerFlagState else { return }
+            // `.id(scrollerFlagState)` rebuilds the transcript subtree, but
+            // this view's own `@State` sits OUTSIDE that subtree and
+            // survives the identity change. Reset the scroll bookkeeping
+            // and per-row caches explicitly so the incoming implementation
+            // starts clean instead of inheriting the outgoing one's
+            // restore state and cached geometry.
+            scrollBook.reset()
+            scrollViewRef = ACPWeakScrollViewRef()
+            latestTopVisibleAnchor = ACPMutableScrollAnchor()
+            modernRowFrameCache = ACPRowFrameCache()
+            visibleRowsCache = ACPVisibleRowsCache()
+            scrollerFlagState = flagEnabled
         }
         .background(
             LinearGradient(
@@ -1784,7 +1797,10 @@ enum ACPContentShrinkBookmarkResetState {
 /// on every write — which is exactly the transaction-feedback edge behind
 /// the transcript live-lock. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md.
 @MainActor
-private final class ACPTranscriptScrollBookkeeping {
+/// Internal rather than file-private so a test can drive `reset()` directly:
+/// the flag-flip path that needs it lives in a SwiftUI `onReceive` closure,
+/// which is not reachable from a unit test.
+final class ACPTranscriptScrollBookkeeping {
     var isRestoringTail = false
     var restoredRememberedAnchor: String?
     var latestRememberedScrollAnchorIndex: Int?
@@ -1810,6 +1826,38 @@ private final class ACPTranscriptScrollBookkeeping {
     /// estimate flip.
     var lastContentGrowthTailRestoreSourceHeight: CGFloat?
     var lastContentGrowthTailRestoreHeight: CGFloat?
+
+    /// Returns every field to its initial value, cancelling any scheduled
+    /// work first so a task queued against the outgoing scroll view cannot
+    /// land on the incoming one.
+    ///
+    /// Needed when the transcript switches between the legacy and AppKit
+    /// scrollers. That switch rebuilds the transcript subtree via
+    /// `.id(scrollerFlagState)`, but this object is `@State` on
+    /// `ACPMessageList` itself — outside the subtree the id replaces — so it
+    /// survives. `restoredRememberedAnchor` surviving is the sharp edge: the
+    /// rebuilt scroll view would see the current anchor as already restored,
+    /// skip `restoreRememberedAnchorIfNeeded`, and leave a paused chat at
+    /// the new scroll view's default position.
+    func reset() {
+        pendingTailScrollTask?.cancel()
+        pendingContentShrinkResetTask?.cancel()
+        isRestoringTail = false
+        restoredRememberedAnchor = nil
+        latestRememberedScrollAnchorIndex = nil
+        lastHeadStepAt = .distantPast
+        lastTailStepAt = .distantPast
+        pendingTailScrollTask = nil
+        pendingTailScrollGeneration = 0
+        pendingContentGrowthTailRestore = nil
+        pendingContentShrinkResetTask = nil
+        pendingContentShrinkResetGeneration = 0
+        contentShrinkBookmarkResetState = .none
+        scrollGeometryGeneration = 0
+        lastScrollProbe = nil
+        lastContentGrowthTailRestoreSourceHeight = nil
+        lastContentGrowthTailRestoreHeight = nil
+    }
 }
 
 /// Non-observed cache for the modern per-row geometry callbacks. SwiftUI's
@@ -1993,7 +2041,10 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
 /// Version-agnostic so `ACPTranscriptScrollTracking` doesn't require blanket
 /// macOS 15 availability — the `ScrollGeometry` reference is confined to the
 /// `#available` branch above.
-private struct ACPScrollProbe: Equatable {
+/// Internal rather than file-private only because it appears in
+/// `ACPTranscriptScrollBookkeeping`'s stored properties, and that type is
+/// internal so its `reset()` can be unit-tested.
+struct ACPScrollProbe: Equatable {
     var generation: UInt64
     var minY: CGFloat
     var viewportHeight: CGFloat
