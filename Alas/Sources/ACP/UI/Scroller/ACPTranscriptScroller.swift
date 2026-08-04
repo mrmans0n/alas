@@ -743,15 +743,17 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private func rememberCurrentAnchor() {
             guard let host, let scroller else { return }
-            // Scans past synthetic rows rather than discarding the update
-            // when one is on top. The sharp case is the first scroll away
-            // from the tail landing at the head of a paginated transcript:
-            // the pagination spinner is the top row, and recording nothing
-            // there pauses tail-follow with no anchor at all — which
-            // restoration later resolves as "go to the bottom", undoing the
-            // scroll that caused it.
-            guard let anchorId = tiling.firstNonSyntheticRowId(
-                atOrBelow: scroller.scrollY,
+            // Finds the nearest real message rather than discarding the
+            // update when a synthetic row is on top. Both directions matter:
+            // scrolling to the head of a paginated transcript puts the
+            // pagination spinner on top, and stopping inside the synthetic
+            // tail (queued prompts, composer spacer) has nothing but
+            // synthetic rows below. Recording nothing in either case pauses
+            // tail-follow with no anchor at all, and restoration reads a
+            // missing anchor as "go to the bottom" — undoing the very scroll
+            // that caused it.
+            guard let anchorId = tiling.nearestNonSyntheticRowId(
+                to: scroller.scrollY,
                 syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
             ) else { return }
             // O(1) per tick: the row list is rebuilt only when the window

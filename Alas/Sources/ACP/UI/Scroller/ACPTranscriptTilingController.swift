@@ -208,6 +208,40 @@ final class ACPTranscriptTilingController {
         return rows[index].id
     }
 
+    /// The nearest real message row to `viewportMinY`, searching downward
+    /// first and then upward.
+    ///
+    /// The upward half covers the viewport sitting inside the synthetic tail
+    /// — queued prompts, the context-recovery row, the composer spacer —
+    /// where the downward scan runs off the end. The persisted anchor format
+    /// is an id plus a transcript index with no intra-row offset, so there
+    /// is no way to record "300pt into the tail"; the last message above is
+    /// the closest expressible position. Restoring lands at the top of that
+    /// message rather than the user's exact depth into the tail, which is
+    /// approximate — but the alternative is recording nothing, and a missing
+    /// anchor is read downstream as "go to the bottom", discarding the
+    /// user's position outright.
+    ///
+    /// Returns nil only for a document with no message rows at all, where
+    /// there is genuinely nothing to name.
+    func nearestNonSyntheticRowId(
+        to viewportMinY: CGFloat, syntheticIdPrefix: String
+    ) -> String? {
+        if let below = firstNonSyntheticRowId(
+            atOrBelow: viewportMinY, syntheticIdPrefix: syntheticIdPrefix
+        ) {
+            return below
+        }
+        guard !rows.isEmpty else { return nil }
+        let start = firstRowIndex(intersectingY: viewportMinY) ?? rows.count
+        var index = min(start, rows.count) - 1
+        while index >= 0 {
+            if !rows[index].id.hasPrefix(syntheticIdPrefix) { return rows[index].id }
+            index -= 1
+        }
+        return nil
+    }
+
     /// Indices of rows that should have live hosting views: everything
     /// intersecting the viewport extended by `overscan` on both sides. Rows
     /// outside this range keep their measured heights but have no mounted

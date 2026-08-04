@@ -71,6 +71,56 @@ struct ACPTranscriptTilingControllerTests {
         )
     }
 
+    @Test("nearestNonSyntheticRowId falls back upward when only synthetic rows remain below")
+    func nearestNonSyntheticFallsBackUpward() {
+        // Viewport stopped inside the synthetic tail. The forward scan has
+        // nothing to find, and recording no anchor at all is read downstream
+        // as "go to the bottom" — so the last real message above is the
+        // closest position the persisted anchor format can express.
+        let c = controller()
+        c.replaceAll(rows: [("m0", 100), ("m1", 100), ("__queued__", 60), ("__composer_spacer__", 220)])
+
+        #expect(
+            c.firstNonSyntheticRowId(atOrBelow: 300, syntheticIdPrefix: "__") == nil
+        )
+        #expect(
+            c.nearestNonSyntheticRowId(to: 300, syntheticIdPrefix: "__") == "m1"
+        )
+    }
+
+    @Test("nearestNonSyntheticRowId still prefers the row below when there is one")
+    func nearestNonSyntheticPrefersBelow() {
+        let c = controller()
+        c.replaceAll(rows: [("m0", 100), ("__queued__", 60), ("m1", 100)])
+
+        // Sitting on the queued bubble: "m1" is below and "m0" above, and
+        // the downward answer must win so the anchor never drifts backward
+        // while a real row is still in view.
+        #expect(
+            c.nearestNonSyntheticRowId(to: 130, syntheticIdPrefix: "__") == "m1"
+        )
+    }
+
+    @Test("nearestNonSyntheticRowId past the end of the document returns the last message")
+    func nearestNonSyntheticPastEnd() {
+        let c = controller()
+        c.replaceAll(rows: [("m0", 100), ("__composer_spacer__", 220)])
+
+        #expect(
+            c.nearestNonSyntheticRowId(to: 10_000, syntheticIdPrefix: "__") == "m0"
+        )
+    }
+
+    @Test("nearestNonSyntheticRowId returns nil when the document has no message rows")
+    func nearestNonSyntheticAllSynthetic() {
+        let c = controller()
+        c.replaceAll(rows: [("__top_pagination__", 40), ("__composer_spacer__", 220)])
+
+        #expect(
+            c.nearestNonSyntheticRowId(to: 0, syntheticIdPrefix: "__") == nil
+        )
+    }
+
     @Test("empty controller has zero document height")
     func emptyHeight() {
         let c = controller()
