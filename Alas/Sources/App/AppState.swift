@@ -5032,6 +5032,11 @@ final class AppState {
                 }
                 if case .acpSession(let state) = tab {
                     await awaitPendingACPDetach(worktreeId: worktreeID, sessionId: state.sessionId)
+                    guard closedTabHistory.last?.id == entry.id else { continue }
+                    guard worktree(withId: worktreeID) != nil else {
+                        closedTabHistory.remove(id: entry.id)
+                        continue
+                    }
                 }
                 selectWorktree(id: worktreeID)
                 _ = tabs.restore(tab: tab, worktreeID: worktreeID, placement: entry.placement)

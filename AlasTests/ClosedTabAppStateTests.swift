@@ -209,6 +209,39 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.canReopenClosedTab)
     }
 
+    @Test func reopeningACPSessionDoesNotRestoreAfterWorktreeCleanupDuringDetach() async {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: "removed-worktree-chat", title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        let reopenTask = Task { @MainActor in
+            await fixture.state.reopenLastClosedTab()
+        }
+        await Task.yield()
+
+        fixture.state.archiveWorktree(fixture.first)
+
+        await gate.release()
+        await reopenTask.value
+
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
+        #expect(fixture.state.selectedWorktreeId != fixture.first.id)
+        #expect(!fixture.state.canReopenClosedTab)
+    }
+
     @Test func canceledTerminalCloseDoesNotRecordHistory() {
         let project = ProjectConfig(
             id: "closed-tabs-confirmation-project",
