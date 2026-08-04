@@ -3,8 +3,10 @@ import SwiftUI
 struct FilesTabView: View {
     let nodes: [FileTreeNode]
     let fileTreeGeneration: Int
+    let worktreePath: URL
     @Binding var openPaths: Set<String>
     let onSelectFile: (FileTreeNode) -> Void
+    let onFileHistory: (FileTreeNode) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
     let showIgnored: Bool
@@ -149,6 +151,7 @@ struct FilesTabView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .contextMenu { contextMenu(for: terminal) }
                     if open && canExpand {
                         switch terminal.childrenState {
                         case .loading, .loaded:
@@ -200,8 +203,24 @@ struct FilesTabView: View {
                     .id(node.id)
                 }
                 .buttonStyle(.plain)
+                .contextMenu { contextMenu(for: node) }
             )
         }
+    }
+
+    @ViewBuilder private func contextMenu(for node: FileTreeNode) -> some View {
+        let target = FileContextMenuTarget.resolve(
+            kind: node.kind,
+            worktreePath: worktreePath,
+            relativePath: node.path
+        )
+        FileContextMenuActions(
+            configuration: .filesTab(target: target),
+            onOpenInAlas: node.kind == .file ? { onSelectFile(node) } : nil,
+            onFileHistory: node.kind == .file ? { onFileHistory(node) } : nil,
+            onCopyRelativePath: { Clipboard.copy(node.path) },
+            onCopyFullPath: { Clipboard.copy(worktreePath.appendingPathComponent(node.path).path) }
+        )
     }
 
     private func loadTaskID(for node: FileTreeNode, open: Bool) -> String {

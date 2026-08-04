@@ -76,11 +76,15 @@ struct RightPaneView: View {
                             FilesTabView(
                                 nodes: rps.fileTree,
                                 fileTreeGeneration: rps.fileTreeGeneration,
+                                worktreePath: worktree.path,
                                 openPaths: Binding(
                                     get: { rps.openPaths },
                                     set: { rps.openPaths = $0 }
                                 ),
                                 onSelectFile: onSelectTreeFile,
+                                onFileHistory: { node in
+                                    state.openFileHistory(relativePath: node.path, worktreeId: worktree.id)
+                                },
                                 shouldAutoLoadChildren: { path, childrenState in
                                     rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
                                 },

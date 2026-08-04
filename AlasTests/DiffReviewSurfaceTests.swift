@@ -21,6 +21,8 @@ struct DiffReviewSurfaceTests {
             defer: false
         )
         window.contentViewController = controller
+        controller.view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 480, height: 240)
+        controller.view.layoutSubtreeIfNeeded()
         defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
 
         await drainSwiftUI(controller.view)
@@ -497,6 +499,8 @@ struct DiffReviewSurfaceTests {
             defer: false
         )
         window.contentViewController = controller
+        controller.view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 900, height: 520)
+        controller.view.layoutSubtreeIfNeeded()
         defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
 
         await drainSwiftUI(controller.view)
@@ -4157,6 +4161,7 @@ struct DiffReviewSurfaceTests {
     private func drainSwiftUI(_ view: NSView) async {
         for _ in 0..<6 {
             view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.001))
             await Task.yield()
         }
     }

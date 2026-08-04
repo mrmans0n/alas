@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 
 struct ChangesTabView: View {
     @Bindable var rps: RightPaneState
@@ -231,6 +230,13 @@ struct ChangesTabView: View {
                 changes: nonConflictChanges,
                 expanded: $rps.workingTreeExpanded,
                 onSelect: onSelect,
+                fileContextTarget: { file in
+                    FileContextMenuTarget.resolve(
+                        kind: .file,
+                        worktreePath: rps.worktree.path,
+                        relativePath: file.path
+                    )
+                },
                 onStageAll: { rps.stageAll($0) },
                 onUnstageAll: { rps.unstageAll($0) },
                 onIgnore: { path, isDir, dest in
@@ -247,10 +253,6 @@ struct ChangesTabView: View {
                 onCopyFull: { file in
                     let absolute = rps.worktree.path.appendingPathComponent(file.path).path
                     Clipboard.copy(absolute)
-                },
-                onRevealInFinder: rps.worktree.path.isRemoteAlasPath ? nil : { file in
-                    let url = rps.worktree.path.appendingPathComponent(file.path)
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
                 },
                 onCopyDiff: { file in
                     rps.copyDiff(for: file.path, renameFrom: file.renameFrom)

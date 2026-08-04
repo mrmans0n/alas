@@ -4,6 +4,7 @@ struct WorkingTreeSectionView: View {
     let changes: [ChangedFile]
     @Binding var expanded: Bool
     let onSelect: (ChangedFile) -> Void
+    let fileContextTarget: (ChangedFile) -> FileContextMenuTarget
     var onStageAll: (([ChangedFile]) -> Void)? = nil
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
     var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
@@ -12,7 +13,6 @@ struct WorkingTreeSectionView: View {
     var onOpenFile:        ((ChangedFile) -> Void)? = nil
     var onCopyRelative:    ((ChangedFile) -> Void)? = nil
     var onCopyFull:        ((ChangedFile) -> Void)? = nil
-    var onRevealInFinder:  ((ChangedFile) -> Void)? = nil
     var onCopyDiff:        ((ChangedFile) -> Void)? = nil
     var onViewAtHEAD:      ((ChangedFile) -> Void)? = nil
     var onCompareWithHEAD: ((ChangedFile) -> Void)? = nil
@@ -233,6 +233,7 @@ struct WorkingTreeSectionView: View {
             return AnyView(
                 ChangedRow(
                     file: file,
+                    fileContextTarget: fileContextTarget(file),
                     depth: depth,
                     onSelect: { onSelect(file) },
                     onStage: primaryStageAction(for: group),
@@ -244,7 +245,6 @@ struct WorkingTreeSectionView: View {
                     onOpenFile: onOpenFile.map { fn in { fn(file) } },
                     onCopyRelative: onCopyRelative.map { fn in { fn(file) } },
                     onCopyFull: onCopyFull.map { fn in { fn(file) } },
-                    onRevealInFinder: onRevealInFinder.map { fn in { fn(file) } },
                     onCopyDiff: onCopyDiff.map { fn in { fn(file) } },
                     onViewAtHEAD: onViewAtHEAD.map { fn in { fn(headPathEntry) } },
                     onCompareWithHEAD: onCompareWithHEAD.map { fn in { fn(headPathEntry) } },
