@@ -2452,6 +2452,77 @@ struct ACPSessionRunnerTests {
         #expect(decoded.content == "two\nthree")
     }
 
+    @Test("serveRead refuses an unbounded range that would return the whole file")
+    func serveReadRefusesRangeThatDoesNotBound() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("huge.txt")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(ACPSessionRunner.maxWholeFileReadBytes) + 1)
+        try handle.close()
+
+        // `sliceLines` runs to end of file unless `limit` is present and
+        // positive, so each of these asks for the whole file while looking
+        // like a range. Exempting them was a limit anyone could step around.
+        for (line, limit) in [(1, nil as Int?), (nil, 0), (2, -1)] {
+            let outcome = await ACPSessionRunner.serveRead(
+                target: file, liveBuffer: nil, line: line, limit: limit
+            )
+            guard case .failure = outcome else {
+                Issue.record("line: \(String(describing: line)), limit: \(String(describing: limit)) should be refused")
+                return
+            }
+        }
+    }
+
+    @Test("serveRead refuses a whole-file read past the limit and names the way out")
+    func serveReadRefusesOversizedWholeFileRead() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("huge.txt")
+        // Sparse, so this costs no disk and nothing is ever read: the point is
+        // that the refusal happens on the reported size alone.
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(ACPSessionRunner.maxWholeFileReadBytes) + 1)
+        try handle.close()
+
+        let outcome = await ACPSessionRunner.serveRead(
+            target: file, liveBuffer: nil, line: nil, limit: nil
+        )
+        guard case .failure(let message) = outcome else {
+            Issue.record("expected an oversized whole-file read to be refused")
+            return
+        }
+        // The adapter has to be able to act on this, not merely see it fail.
+        #expect(message.contains("line"))
+        #expect(message.contains("limit"))
+    }
+
+    @Test("serveRead still serves a ranged read of a file past the whole-file limit")
+    func serveReadAllowsRangedReadOfLargeFile() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("ranged.txt")
+        try "alpha\nbeta\ngamma".write(to: file, atomically: true, encoding: .utf8)
+
+        // The limit must not leak into ranged reads, which return a bounded
+        // slice however large the file is.
+        let outcome = await ACPSessionRunner.serveRead(
+            target: file, liveBuffer: nil, line: 2, limit: 1
+        )
+        guard case .success(let body) = outcome else {
+            Issue.record("expected a ranged read to succeed")
+            return
+        }
+        let decoded = try JSONDecoder().decode(ACPFsReadResult.self, from: body)
+        #expect(decoded.content == "beta")
+    }
+
     @Test("serveRead prefers the live buffer snapshot over disk")
     func serveReadPrefersLiveBuffer() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
