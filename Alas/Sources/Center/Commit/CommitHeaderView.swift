@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CommitHeaderView: View {
+    static let maxExpandedHeight: CGFloat = 180
+
     let details: CommitDetails
     @Binding var expanded: Bool
 
@@ -11,7 +13,12 @@ struct CommitHeaderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             compactRow
-            if expanded { expandedBlock }
+            if expanded {
+                ScrollView(.vertical) {
+                    expandedBlock
+                }
+                .frame(maxHeight: Self.maxExpandedHeight)
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(theme.color("bg-2"))
