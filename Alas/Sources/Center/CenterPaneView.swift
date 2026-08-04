@@ -91,7 +91,7 @@ struct CenterPaneView: View {
                 },
                 onClose: { id in
                     if state.globalTabs.tabs.contains(where: { $0.id == id }) {
-                        state.closeGlobalTab(tabId: id)
+                        state.requestCloseGlobalTab(tabID: id)
                     } else {
                         state.requestCloseTab(worktreeId: worktree.id, tabId: id)
                     }

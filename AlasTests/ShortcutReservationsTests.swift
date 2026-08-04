@@ -21,8 +21,13 @@ struct ShortcutReservationsTests {
 
     @Test func defaultsIncludeStandardsAndTabSwitchers() {
         let reserved = ShortcutReservations.defaultReserved
-        // ⌘W (Close Tab) and ⌘1..⌘9 stay reserved regardless of rebinds.
+        // ⌘W (Close Tab), ⌘⇧T (Reopen Closed Tab), and ⌘1..⌘9 stay reserved
+        // regardless of rebinds.
+        let reopen = ShortcutBinding(key: "t", modifiers: [.command, .shift])
         #expect(reserved.contains(ShortcutBinding(key: "w", modifiers: [.command])))
+        #expect(ShortcutAction.reservedBindings.contains(reopen))
+        #expect(reserved.contains(reopen))
+        #expect(ShortcutReservations.snapshot(from: .defaults).contains(reopen))
         #expect(reserved.contains(ShortcutBinding(key: "1", modifiers: [.command])))
         #expect(reserved.contains(ShortcutBinding(key: "9", modifiers: [.command])))
     }

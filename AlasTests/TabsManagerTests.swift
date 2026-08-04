@@ -4,6 +4,48 @@ import Foundation
 
 @MainActor
 struct TabsManagerTests {
+    @Test func restoreInsertsAtAnchoredPositionAndActivates() {
+        let worktreeID = "tabs-manager-restore-position"
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let first = manager.appendTerminal(worktreeId: worktreeID, title: "a", sessionId: "a")
+        let restored = Tab.terminal(.init(id: "b", title: "b", sessionId: "b"))
+        let third = manager.appendTerminal(worktreeId: worktreeID, title: "c", sessionId: "c")
+
+        let id = manager.restore(
+            tab: restored,
+            worktreeID: worktreeID,
+            placement: .init(previousID: first.id, nextID: third.id, ordinal: 1)
+        )
+
+        #expect(id == restored.id)
+        #expect(manager.tabs(forWorktree: worktreeID).map(\.id) == [first.id, restored.id, third.id])
+        #expect(manager.activeTabId(forWorktree: worktreeID) == restored.id)
+    }
+
+    @Test func restoreFocusesExistingStableIDWithoutChangingOrder() {
+        let worktreeID = "tabs-manager-restore-existing"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeID)) }
+        let manager = TabsManager()
+        let first = manager.appendTerminal(worktreeId: worktreeID, title: "a", sessionId: "a")
+        let existing = manager.appendTerminal(worktreeId: worktreeID, title: "b", sessionId: "b")
+        let originalIDs = manager.tabs(forWorktree: worktreeID).map(\.id)
+
+        let id = manager.restore(
+            tab: existing,
+            worktreeID: worktreeID,
+            placement: .init(previousID: nil, nextID: first.id, ordinal: 0)
+        )
+
+        #expect(id == existing.id)
+        #expect(manager.tabs(forWorktree: worktreeID).map(\.id) == originalIDs)
+        #expect(manager.activeTabId(forWorktree: worktreeID) == existing.id)
+
+        let reloaded = TabsManager()
+        reloaded.loadAll(worktreeIds: [worktreeID])
+        #expect(reloaded.tabs(forWorktree: worktreeID).map(\.id) == originalIDs)
+        #expect(reloaded.activeTabId(forWorktree: worktreeID) == existing.id)
+    }
+
     @Test func newTerminalAppendsAndActivates() {
         let worktreeId = "tabs-manager-new-terminal"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -850,6 +892,11 @@ struct TabsManagerTests {
         #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")?.id == target.id)
         #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "ffffffffffffffffffffffffffffffffffffffff")?.id == descendant.id)
     }
+}
+
+private struct RestoreMemoryStore: PersistenceStoreProtocol {
+    func write<T: Encodable>(_: T, to _: URL) throws {}
+    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
 }
 
 // MARK: - Pane tree mutations

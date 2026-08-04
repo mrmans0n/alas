@@ -32,6 +32,11 @@ struct ShortcutRecorderValidationTests {
         #expect(ShortcutRecorder.validate(b) == .reserved)
     }
 
+    @Test func rejectsReservedReopenClosedTabShortcut() {
+        let binding = ShortcutBinding(key: "t", modifiers: [.command, .shift])
+        #expect(ShortcutRecorder.validate(binding) == .reserved)
+    }
+
     @Test func acceptsCommandLetter() {
         let b = ShortcutBinding(key: "j", modifiers: [.command])
         #expect(ShortcutRecorder.validate(b) == .ok)

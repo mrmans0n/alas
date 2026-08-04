@@ -5,6 +5,55 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct GlobalTabsManagerTests {
+    @Test("restore inserts a Mission at its anchored position and activates it")
+    func restoreInsertsAtAnchoredPositionAndActivates() throws {
+        let harness = try GlobalTabsHarness()
+        let first = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-1"), title: "First Mission"
+        )
+        let restored = GlobalTab.mission(.init(
+            missionID: MissionID(rawValue: "mission-2"), title: "Restored Mission"
+        ))
+        let third = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-3"), title: "Third Mission"
+        )
+
+        let id = harness.global.restore(
+            tab: restored,
+            placement: .init(previousID: first.id, nextID: third.id, ordinal: 1)
+        )
+
+        #expect(id == restored.id)
+        #expect(harness.global.tabs.map(\.id) == [first.id, restored.id, third.id])
+        #expect(harness.global.activeTabId == restored.id)
+    }
+
+    @Test("restore focuses an existing stable Mission ID without duplication")
+    func restoreFocusesExistingStableIDWithoutDuplication() throws {
+        let harness = try GlobalTabsHarness()
+        let first = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-1"), title: "First Mission"
+        )
+        let existing = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-2"), title: "Existing Mission"
+        )
+        let originalIDs = harness.global.tabs.map(\.id)
+
+        let id = harness.global.restore(
+            tab: existing,
+            placement: .init(previousID: nil, nextID: first.id, ordinal: 0)
+        )
+
+        #expect(id == existing.id)
+        #expect(harness.global.tabs.map(\.id) == originalIDs)
+        #expect(harness.global.activeTabId == existing.id)
+
+        let reloaded = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try reloaded.loadAndMigrate(worktreeTabs: harness.tabs)
+        #expect(reloaded.tabs.map(\.id) == originalIDs)
+        #expect(reloaded.activeTabId == existing.id)
+    }
+
     @Test("global Mission tabs round trip with their stable Mission ID")
     func roundTripsGlobalMissionTabs() throws {
         let harness = try GlobalTabsHarness()

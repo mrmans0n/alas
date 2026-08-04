@@ -1366,6 +1366,21 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    @discardableResult
+    func restore(tab: Tab, worktreeID: String, placement: ClosedTabPlacement) -> TabID {
+        var file = byWorktree[worktreeID] ?? TabsFile(tabs: [], activeTabId: nil)
+        if file.tabs.contains(where: { $0.id == tab.id }) {
+            file.activeTabId = tab.id
+        } else {
+            let index = placement.insertionIndex(in: file.tabs.map(\.id))
+            file.tabs.insert(tab, at: index)
+            file.activeTabId = tab.id
+        }
+        byWorktree[worktreeID] = file
+        persist(worktreeID)
+        return tab.id
+    }
+
     /// Capture a draft commit tab's state into `file.stashedDraft` before
     /// removal. Non-empty drafts stash so they survive close/reopen. Empty
     /// drafts CLEAR the stash so a user who opens an old stashed draft,
