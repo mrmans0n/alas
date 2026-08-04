@@ -40,6 +40,7 @@ private struct MissingMissionRecoveryTarget: Equatable {
 final class AppState {
     typealias MissionArchiveRecorder = @MainActor (String) async -> Void
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
+    typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -92,6 +93,16 @@ final class AppState {
     private let terminalSessionOpener: TerminalSessionOpener?
     @ObservationIgnored
     private let closeTabConfirmer: CloseTabConfirmer?
+    @ObservationIgnored
+    private let acpDetachRunner: ACPDetachRunner?
+
+    private struct PendingACPDetach {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
+    @ObservationIgnored
+    private var pendingACPDetachTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
     @ObservationIgnored
     private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
     @ObservationIgnored
@@ -570,6 +581,7 @@ final class AppState {
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         closeTabConfirmer: CloseTabConfirmer? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil,
+        acpDetachRunner: ACPDetachRunner? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
         missionBranchTipOverride: MissionBranchTip? = nil,
@@ -587,6 +599,7 @@ final class AppState {
         }
         self.terminalSessionOpener = terminalSessionOpener
         self.closeTabConfirmer = closeTabConfirmer
+        self.acpDetachRunner = acpDetachRunner
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
@@ -4914,8 +4927,24 @@ final class AppState {
         if let runner = manager.runners[sessionId] {
             runner.stop()
         }
-        Task { @MainActor in
-            await manager.detach(sessionId: sessionId)
+        let pending = PendingACPDetach(id: UUID(), task: Task { @MainActor in
+            if let acpDetachRunner {
+                await acpDetachRunner(manager, sessionId)
+            } else {
+                await manager.detach(sessionId: sessionId)
+            }
+        })
+        pendingACPDetachTasks[worktreeId, default: [:]][sessionId] = pending
+    }
+
+    private func awaitPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID) async {
+        guard let pending = pendingACPDetachTasks[worktreeId]?[sessionId] else { return }
+        await pending.task.value
+        if pendingACPDetachTasks[worktreeId]?[sessionId]?.id == pending.id {
+            pendingACPDetachTasks[worktreeId]?.removeValue(forKey: sessionId)
+            if pendingACPDetachTasks[worktreeId]?.isEmpty == true {
+                pendingACPDetachTasks.removeValue(forKey: worktreeId)
+            }
         }
     }
 
@@ -4987,6 +5016,9 @@ final class AppState {
                 if case .terminal = tab {
                     await reopenTerminalTab(entry: entry, worktreeID: worktreeID, tab: tab)
                     return
+                }
+                if case .acpSession(let state) = tab {
+                    await awaitPendingACPDetach(worktreeId: worktreeID, sessionId: state.sessionId)
                 }
                 selectWorktree(id: worktreeID)
                 _ = tabs.restore(tab: tab, worktreeID: worktreeID, placement: entry.placement)

@@ -9,6 +9,36 @@ struct ClosedTabAppStateTests {
         case sessionOpenFailed
     }
 
+    private actor AsyncGate {
+        private var entered = false
+        private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+        func enterAndWait() async {
+            entered = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+            await withCheckedContinuation { continuation in
+                releaseContinuation = continuation
+            }
+        }
+
+        func waitUntilEntered() async {
+            if entered { return }
+            await withCheckedContinuation { continuation in
+                entryWaiters.append(continuation)
+            }
+        }
+
+        func release() {
+            releaseContinuation?.resume()
+            releaseContinuation = nil
+        }
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
@@ -110,6 +140,43 @@ struct ClosedTabAppStateTests {
 
         #expect(fixture.state.globalTabs.tabs.map(\.id) == [tab.id])
         #expect(fixture.state.globalTabs.activeTabId == tab.id)
+        #expect(!fixture.state.canReopenClosedTab)
+    }
+
+    @Test func reopenACPSessionWaitsForCloseDetachBeforeRestoring() async {
+        let gate = AsyncGate()
+        var detachCalls = 0
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in
+                detachCalls += 1
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: "closed-acp", title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        let reopenTask = Task { @MainActor in
+            await fixture.state.reopenLastClosedTab()
+        }
+        await Task.yield()
+
+        #expect(detachCalls == 1)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
+        #expect(!fixture.state.canReopenClosedTab)
+
+        await gate.release()
+        await reopenTask.value
+
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).map(\.id) == [tab.id])
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.first.id) == tab.id)
         #expect(!fixture.state.canReopenClosedTab)
     }
 
