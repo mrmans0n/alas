@@ -5,6 +5,11 @@ final class MissionStore {
         // Temporary source compatibility while callers migrate to the explicit
         // multi-leg validation errors below.
         case exactlyOneLeg
+        case duplicateActiveSourceIdentity
+        case sourceIdentityChanged
+        case sourceNotEditable
+        case sourceNotRefreshable
+        // Temporary compatibility while issue-only callers migrate.
         case duplicateActiveIssueIdentity
         case issueIdentityChanged
         case malformedRecord
@@ -16,7 +21,7 @@ final class MissionStore {
         case invalidEventLeg
     }
 
-    static let targetSchemaVersion = 5
+    static let targetSchemaVersion = 6
 
     let path: String
     let db: SQLiteDatabase
@@ -54,27 +59,24 @@ final class MissionStore {
         guard aggregate.legs.count == 1 else { throw Error.invalidLegCollection }
         try immediateTransaction {
             if !allowDuplicate {
-                let identity = aggregate.issue.identity
+                let identity = aggregate.source.identity
                 let duplicate = try db.query("""
                 SELECT missions.id
                 FROM missions
-                JOIN mission_issue_sources ON mission_issue_sources.mission_id = missions.id
-                WHERE provider = ? AND host = ? COLLATE NOCASE
-                  AND repository_slug = ? COLLATE NOCASE AND issue_number = ?
+                JOIN mission_sources ON mission_sources.mission_id = missions.id
+                WHERE provider_id = ? AND stable_id = ?
                   AND state != ?
                 LIMIT 1
                 """, bindings: [
-                    identity.provider.rawValue,
-                    identity.host,
-                    identity.repositorySlug,
-                    identity.number,
+                    identity.providerID.rawValue,
+                    identity.stableID,
                     MissionState.completed.rawValue,
                 ])
-                if !duplicate.isEmpty { throw Error.duplicateActiveIssueIdentity }
+                if !duplicate.isEmpty { throw Error.duplicateActiveSourceIdentity }
             }
 
             try insertMission(aggregate.mission, initialLeg: aggregate.legs[0])
-            try insertIssue(aggregate.issue, missionID: aggregate.mission.id)
+            try insertSource(aggregate.source, missionID: aggregate.mission.id)
             try insertLeg(aggregate.legs[0])
             for event in aggregate.events { try insertEvent(event) }
         }
@@ -84,11 +86,11 @@ final class MissionStore {
         let rows = try db.query("SELECT * FROM missions WHERE id = ?", bindings: [id.rawValue])
         guard let missionRow = rows.first else { return nil }
         var mission = try decodeMission(missionRow)
-        let issueRows = try db.query(
-            "SELECT * FROM mission_issue_sources WHERE mission_id = ?",
+        let sourceRows = try db.query(
+            "SELECT * FROM mission_sources WHERE mission_id = ?",
             bindings: [id.rawValue]
         )
-        guard let issueRow = issueRows.first else { throw Error.malformedRecord }
+        guard let sourceRow = sourceRows.first else { throw Error.malformedRecord }
         let legs = try db.query(
             "SELECT * FROM mission_legs WHERE mission_id = ? ORDER BY ordinal ASC, id ASC",
             bindings: [id.rawValue]
@@ -99,7 +101,7 @@ final class MissionStore {
         ).map(decodeEvent)
         var aggregate = MissionAggregate(
             mission: mission,
-            issue: try decodeIssue(issueRow),
+            source: try decodeSource(sourceRow),
             legs: legs,
             events: events
         )
@@ -131,21 +133,18 @@ final class MissionStore {
         return try ids.compactMap { try aggregate(id: MissionID(rawValue: $0)) }
     }
 
-    func activeMission(issueIdentity: MissionIssueIdentity) throws -> MissionAggregate? {
+    func activeMission(sourceIdentity: MissionSourceIdentity) throws -> MissionAggregate? {
         let rows = try db.query("""
         SELECT missions.id
         FROM missions
-        JOIN mission_issue_sources ON mission_issue_sources.mission_id = missions.id
-        WHERE provider = ? AND host = ? COLLATE NOCASE
-          AND repository_slug = ? COLLATE NOCASE AND issue_number = ?
+        JOIN mission_sources ON mission_sources.mission_id = missions.id
+        WHERE provider_id = ? AND stable_id = ?
           AND state != ?
         ORDER BY updated_at DESC, missions.id ASC
         LIMIT 1
         """, bindings: [
-            issueIdentity.provider.rawValue,
-            issueIdentity.host,
-            issueIdentity.repositorySlug,
-            issueIdentity.number,
+            sourceIdentity.providerID.rawValue,
+            sourceIdentity.stableID,
             MissionState.completed.rawValue,
         ])
         guard let id = rows.first?["id"] as? String else { return nil }
@@ -272,55 +271,61 @@ final class MissionStore {
     }
 
     @discardableResult
-    func replaceIssueSnapshot(
+    func replaceSourceSnapshot(
         missionID: MissionID,
-        snapshot: MissionIssueSnapshot,
+        snapshot: MissionSourceSnapshot,
         event: MissionEvent
     ) throws -> [MissionID] {
         try validate(event: event, for: missionID)
         return try immediateTransaction {
             try requireMission(missionID)
-            let storedIdentity = try issueIdentity(missionID: missionID)
-            guard Self.sameIssueSource(storedIdentity, snapshot.identity) else {
-                throw Error.issueIdentityChanged
+            let storedSource = try source(missionID: missionID)
+            guard storedSource.identity.providerID != .manual else {
+                throw Error.sourceNotRefreshable
             }
-            let repositoryRenamed = storedIdentity.repositorySlug.caseInsensitiveCompare(
-                snapshot.identity.repositorySlug
-            ) != .orderedSame
-            if repositoryRenamed,
-               try hasActiveIssueIdentityCollision(
+            guard Self.hasCoherentCodeHostIdentity(snapshot) else {
+                throw Error.sourceIdentityChanged
+            }
+            let identityChanged = storedSource.identity != snapshot.identity
+            if identityChanged,
+               !Self.isAllowedCodeHostRedirect(from: storedSource, to: snapshot) {
+                throw Error.sourceIdentityChanged
+            }
+            if identityChanged,
+               try hasActiveSourceIdentityCollision(
                    missionID: missionID,
-                   storedIdentity: storedIdentity,
+                   storedIdentity: storedSource.identity,
                    replacementIdentity: snapshot.identity
                ) {
-                throw Error.duplicateActiveIssueIdentity
+                throw Error.duplicateActiveSourceIdentity
             }
             let migratedDuplicateIDs: [MissionID]
-            if repositoryRenamed {
-                migratedDuplicateIDs = try migrateActiveDuplicateIssueIdentities(
+            if identityChanged {
+                migratedDuplicateIDs = try migrateActiveDuplicateSourceIdentities(
                     excluding: missionID,
-                    from: storedIdentity,
+                    from: storedSource,
                     to: snapshot
                 )
             } else {
                 migratedDuplicateIDs = []
             }
-            let snapshot = repositoryRenamed
-                ? snapshot
-                : Self.snapshot(snapshot, preserving: storedIdentity)
             let changed = try db.execChanges("""
-            UPDATE mission_issue_sources
-            SET provider = ?, host = ?, repository_slug = ?, issue_number = ?,
-                canonical_url = ?, title = ?, body = ?, provider_state = ?, labels = ?,
-                assignees = ?, provider_updated_at = ?, captured_at = ?, refresh_error = ?
+            UPDATE mission_sources
+            SET provider_id = ?, stable_id = ?, canonical_url = ?, provider_label = ?,
+                display_reference = ?, repository_locator = ?, title = ?, body = ?,
+                provider_state = ?, labels = ?, assignees = ?, provider_updated_at = ?,
+                captured_at = ?, refresh_error = ?, content_origin = ?, is_editable = ?,
+                is_refreshable = ?
             WHERE mission_id = ?
-            """, bindings: issueBindings(snapshot) + [missionID.rawValue])
+            """, bindings: sourceBindings(snapshot) + [missionID.rawValue])
             guard changed == 1 else { throw Error.malformedRecord }
-            if repositoryRenamed {
+            if identityChanged,
+               let oldLocator = storedSource.repositoryLocator,
+               let newLocator = snapshot.repositoryLocator {
                 try migrateReviewIdentities(
                     missionID: missionID,
-                    from: storedIdentity,
-                    to: snapshot.identity
+                    from: oldLocator,
+                    to: newLocator
                 )
             }
             try db.exec("UPDATE missions SET title = ?, updated_at = ? WHERE id = ?", bindings: [
@@ -333,10 +338,10 @@ final class MissionStore {
         }
     }
 
-    private func hasActiveIssueIdentityCollision(
+    private func hasActiveSourceIdentityCollision(
         missionID: MissionID,
-        storedIdentity: MissionIssueIdentity,
-        replacementIdentity: MissionIssueIdentity
+        storedIdentity: MissionSourceIdentity,
+        replacementIdentity: MissionSourceIdentity
     ) throws -> Bool {
         let rows = try db.query("""
         SELECT 1
@@ -349,19 +354,17 @@ final class MissionStore {
             OR EXISTS (
               SELECT 1
               FROM missions AS cohort
-              JOIN mission_issue_sources AS issue ON issue.mission_id = cohort.id
+              JOIN mission_sources AS source ON source.mission_id = cohort.id
               WHERE cohort.id != ? AND cohort.state != ?
-                AND issue.provider = ? AND issue.host = ? COLLATE NOCASE
-                AND issue.repository_slug = ? COLLATE NOCASE AND issue.issue_number = ?
+                AND source.provider_id = ? AND source.stable_id = ?
             )
           )
           AND EXISTS (
             SELECT 1
             FROM missions AS duplicate
-            JOIN mission_issue_sources AS issue ON issue.mission_id = duplicate.id
+            JOIN mission_sources AS source ON source.mission_id = duplicate.id
             WHERE duplicate.id != ? AND duplicate.state != ?
-              AND issue.provider = ? AND issue.host = ? COLLATE NOCASE
-              AND issue.repository_slug = ? COLLATE NOCASE AND issue.issue_number = ?
+              AND source.provider_id = ? AND source.stable_id = ?
           )
         LIMIT 1
         """, bindings: [
@@ -369,66 +372,64 @@ final class MissionStore {
             MissionState.completed.rawValue,
             missionID.rawValue,
             MissionState.completed.rawValue,
-            storedIdentity.provider.rawValue,
-            storedIdentity.host,
-            storedIdentity.repositorySlug,
-            storedIdentity.number,
+            storedIdentity.providerID.rawValue,
+            storedIdentity.stableID,
             missionID.rawValue,
             MissionState.completed.rawValue,
-            replacementIdentity.provider.rawValue,
-            replacementIdentity.host,
-            replacementIdentity.repositorySlug,
-            replacementIdentity.number,
+            replacementIdentity.providerID.rawValue,
+            replacementIdentity.stableID,
         ])
         return !rows.isEmpty
     }
 
-    private func migrateActiveDuplicateIssueIdentities(
+    private func migrateActiveDuplicateSourceIdentities(
         excluding missionID: MissionID,
-        from storedIdentity: MissionIssueIdentity,
-        to snapshot: MissionIssueSnapshot
+        from storedSource: MissionSourceSnapshot,
+        to snapshot: MissionSourceSnapshot
     ) throws -> [MissionID] {
         let duplicateIDs = try db.query("""
         SELECT missions.id
         FROM missions
-        JOIN mission_issue_sources AS issue ON issue.mission_id = missions.id
+        JOIN mission_sources AS source ON source.mission_id = missions.id
         WHERE missions.id != ? AND missions.state != ?
-          AND issue.provider = ? AND issue.host = ? COLLATE NOCASE
-          AND issue.repository_slug = ? COLLATE NOCASE AND issue.issue_number = ?
+          AND source.provider_id = ? AND source.stable_id = ?
         """, bindings: [
             missionID.rawValue,
             MissionState.completed.rawValue,
-            storedIdentity.provider.rawValue,
-            storedIdentity.host,
-            storedIdentity.repositorySlug,
-            storedIdentity.number,
+            storedSource.identity.providerID.rawValue,
+            storedSource.identity.stableID,
         ]).compactMap { $0["id"] as? String }
 
         for duplicateID in duplicateIDs {
             let duplicateMissionID = MissionID(rawValue: duplicateID)
             let changed = try db.execChanges("""
-            UPDATE mission_issue_sources
-            SET provider = ?, host = ?, repository_slug = ?, issue_number = ?, canonical_url = ?
+            UPDATE mission_sources
+            SET provider_id = ?, stable_id = ?, canonical_url = ?, provider_label = ?,
+                display_reference = ?, repository_locator = ?
             WHERE mission_id = ?
             """, bindings: [
-                snapshot.identity.provider.rawValue,
-                snapshot.identity.host,
-                snapshot.identity.repositorySlug,
-                snapshot.identity.number,
+                snapshot.identity.providerID.rawValue,
+                snapshot.identity.stableID,
                 snapshot.canonicalURL.absoluteString,
+                snapshot.providerLabel,
+                snapshot.displayReference,
+                try snapshot.repositoryLocator.map(encoder.encode),
                 duplicateID,
             ])
             guard changed == 1 else { throw Error.malformedRecord }
-            try migrateReviewIdentities(
-                missionID: duplicateMissionID,
-                from: storedIdentity,
-                to: snapshot.identity
-            )
+            if let oldLocator = storedSource.repositoryLocator,
+               let newLocator = snapshot.repositoryLocator {
+                try migrateReviewIdentities(
+                    missionID: duplicateMissionID,
+                    from: oldLocator,
+                    to: newLocator
+                )
+            }
         }
         return duplicateIDs.map { MissionID(rawValue: $0) }
     }
 
-    func updateIssueRefreshError(
+    func updateSourceRefreshError(
         missionID: MissionID,
         refreshError: String,
         event: MissionEvent
@@ -437,7 +438,7 @@ final class MissionStore {
         try immediateTransaction {
             try requireMission(missionID)
             let changed = try db.execChanges(
-                "UPDATE mission_issue_sources SET refresh_error = ? WHERE mission_id = ?",
+                "UPDATE mission_sources SET refresh_error = ? WHERE mission_id = ?",
                 bindings: [refreshError, missionID.rawValue]
             )
             guard changed == 1 else { throw Error.malformedRecord }
@@ -446,6 +447,38 @@ final class MissionStore {
                 missionID.rawValue,
             ])
             try insertEvent(event)
+        }
+    }
+
+    func updateManualSourceContent(
+        missionID: MissionID,
+        title: String,
+        body: String,
+        event: MissionEvent
+    ) throws {
+        try validate(event: event, for: missionID)
+        guard event.kind == .sourceRefreshed else { throw Error.invalidEvent }
+        try immediateTransaction {
+            let storedSource = try source(missionID: missionID)
+            guard storedSource.isEditable else { throw Error.sourceNotEditable }
+            let changed = try db.execChanges(
+                "UPDATE mission_sources SET title = ?, body = ?, captured_at = ? WHERE mission_id = ?",
+                bindings: [title, body, event.createdAt.timeIntervalSince1970, missionID.rawValue]
+            )
+            guard changed == 1 else { throw Error.malformedRecord }
+            try db.exec("UPDATE missions SET title = ?, updated_at = ? WHERE id = ?", bindings: [
+                title,
+                event.createdAt.timeIntervalSince1970,
+                missionID.rawValue,
+            ])
+            try insertEvent(.init(
+                id: event.id,
+                missionID: event.missionID,
+                legID: event.legID,
+                kind: .sourceRefreshed,
+                message: "Source context updated.",
+                createdAt: event.createdAt
+            ))
         }
     }
 
@@ -526,6 +559,10 @@ final class MissionStore {
         }
         if current < 5, schemaTargetVersion >= 5 {
             try migrate(to: 5, migrateToV5)
+            current = 5
+        }
+        if current < 6, schemaTargetVersion >= 6 {
+            try migrate(to: 6, migrateToV6)
         }
     }
 
@@ -679,6 +716,213 @@ final class MissionStore {
         }
     }
 
+    private func migrateToV6() throws {
+        let tableNames = try db.query("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .compactMap { $0["name"] as? String }
+        let requiredV5Tables = Set([
+            "missions",
+            "mission_issue_sources",
+            "mission_legs",
+            "mission_events",
+        ])
+        let existingTables = Set(tableNames)
+        guard existingTables.contains("missions") else {
+            guard existingTables == Set(["schema_version", "mission_legs"]) else {
+                throw Error.malformedRecord
+            }
+            return
+        }
+        guard requiredV5Tables.isSubset(of: existingTables) else {
+            throw Error.malformedRecord
+        }
+
+        try db.exec("ALTER TABLE missions RENAME TO missions_v5")
+        try db.exec("ALTER TABLE mission_legs RENAME TO mission_legs_v5")
+        try db.exec("ALTER TABLE mission_events RENAME TO mission_events_v5")
+
+        try db.exec("DROP INDEX IF EXISTS missions_state_updated_idx")
+        try db.exec("DROP INDEX IF EXISTS mission_legs_project_idx")
+        try db.exec("DROP INDEX IF EXISTS mission_legs_worktree_idx")
+        try db.exec("DROP INDEX IF EXISTS mission_events_mission_created_idx")
+
+        try db.exec("""
+        CREATE TABLE missions (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          state TEXT NOT NULL,
+          setup_checkpoint TEXT NOT NULL,
+          primary_leg_id TEXT NOT NULL,
+          attention_reason TEXT,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          completed_at REAL
+        )
+        """)
+        try db.exec("""
+        CREATE TABLE mission_legs (
+          id TEXT PRIMARY KEY,
+          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          project_id TEXT NOT NULL,
+          base_ref TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          destination_path TEXT NOT NULL,
+          worktree_id TEXT,
+          agent_id TEXT NOT NULL,
+          acp_session_id TEXT,
+          initial_prompt_id TEXT NOT NULL,
+          pending_initial_prompt TEXT,
+          review_identity BLOB,
+          base_remote_name TEXT,
+          worktree_lineage_id TEXT,
+          state TEXT NOT NULL DEFAULT 'creating',
+          setup_checkpoint TEXT NOT NULL DEFAULT 'creatingWorktree',
+          attention_reason TEXT,
+          readiness_evidence BLOB,
+          created_at REAL NOT NULL DEFAULT 0,
+          updated_at REAL NOT NULL DEFAULT 0,
+          prepared_initial_prompt TEXT NOT NULL DEFAULT '',
+          UNIQUE(mission_id, ordinal)
+        )
+        """)
+        try db.exec("""
+        CREATE TABLE mission_events (
+          id TEXT PRIMARY KEY,
+          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          leg_id TEXT,
+          kind TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at REAL NOT NULL
+        )
+        """)
+        try db.exec("""
+        CREATE TABLE mission_sources (
+          mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
+          provider_id TEXT NOT NULL,
+          stable_id TEXT NOT NULL,
+          canonical_url TEXT NOT NULL,
+          provider_label TEXT NOT NULL,
+          display_reference TEXT,
+          repository_locator BLOB,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          provider_state TEXT NOT NULL,
+          labels BLOB NOT NULL,
+          assignees BLOB NOT NULL,
+          provider_updated_at REAL,
+          captured_at REAL NOT NULL,
+          refresh_error TEXT,
+          content_origin TEXT NOT NULL,
+          is_editable INTEGER NOT NULL,
+          is_refreshable INTEGER NOT NULL
+        )
+        """)
+
+        try db.exec("""
+        INSERT INTO missions (
+          id, title, state, setup_checkpoint, primary_leg_id,
+          attention_reason, created_at, updated_at, completed_at
+        )
+        SELECT id, title, state, setup_checkpoint, primary_leg_id,
+               attention_reason, created_at, updated_at, completed_at
+        FROM missions_v5
+        """)
+        try db.exec("""
+        INSERT INTO mission_legs (
+          id, mission_id, ordinal, project_id, base_ref, branch, destination_path,
+          worktree_id, agent_id, acp_session_id, initial_prompt_id,
+          pending_initial_prompt, review_identity, base_remote_name, worktree_lineage_id,
+          state, setup_checkpoint, attention_reason, readiness_evidence, created_at,
+          updated_at, prepared_initial_prompt
+        )
+        SELECT id, mission_id, ordinal, project_id, base_ref, branch, destination_path,
+               worktree_id, agent_id, acp_session_id, initial_prompt_id,
+               pending_initial_prompt, review_identity, base_remote_name, worktree_lineage_id,
+               state, setup_checkpoint, attention_reason, readiness_evidence, created_at,
+               updated_at, prepared_initial_prompt
+        FROM mission_legs_v5
+        """)
+        try db.exec("""
+        INSERT INTO mission_events (id, mission_id, leg_id, kind, message, created_at)
+        SELECT id, mission_id, leg_id, kind, message, created_at
+        FROM mission_events_v5
+        """)
+
+        let legacySources = try db.query("SELECT * FROM mission_issue_sources ORDER BY mission_id")
+        for row in legacySources {
+            guard let missionID = row["mission_id"] as? String else { throw Error.malformedRecord }
+            try insertSource(
+                MissionSourceSnapshot(issue: try decodeIssue(row)),
+                missionID: MissionID(rawValue: missionID)
+            )
+        }
+
+        try validateV6MigrationCounts()
+
+        try db.exec("DROP TABLE mission_issue_sources")
+        try db.exec("DROP TABLE mission_events_v5")
+        try db.exec("DROP TABLE mission_legs_v5")
+        try db.exec("DROP TABLE missions_v5")
+
+        try db.exec("CREATE INDEX mission_sources_identity_idx ON mission_sources(provider_id, stable_id)")
+        try db.exec("CREATE INDEX missions_state_updated_idx ON missions(state, updated_at)")
+        try db.exec("CREATE INDEX mission_legs_project_idx ON mission_legs(project_id)")
+        try db.exec("CREATE INDEX mission_legs_worktree_idx ON mission_legs(worktree_id)")
+        try db.exec("CREATE INDEX mission_events_mission_created_idx ON mission_events(mission_id, created_at)")
+    }
+
+    private func validateV6MigrationCounts() throws {
+        let comparisons = [
+            ("missions", "missions_v5"),
+            ("mission_legs", "mission_legs_v5"),
+            ("mission_events", "mission_events_v5"),
+            ("mission_sources", "missions_v5"),
+        ]
+        for (newTable, oldTable) in comparisons {
+            let newCount = try rowCount(newTable)
+            let oldCount = try rowCount(oldTable)
+            guard newCount == oldCount else { throw Error.malformedRecord }
+        }
+        let orphanCount = try db.query("""
+        SELECT (
+          (SELECT COUNT(*) FROM mission_sources AS source
+           LEFT JOIN missions ON missions.id = source.mission_id WHERE missions.id IS NULL)
+          +
+          (SELECT COUNT(*) FROM mission_legs AS leg
+           LEFT JOIN missions ON missions.id = leg.mission_id WHERE missions.id IS NULL)
+          +
+          (SELECT COUNT(*) FROM mission_events AS event
+           LEFT JOIN missions ON missions.id = event.mission_id WHERE missions.id IS NULL)
+        ) AS count
+        """).first?["count"] as? Int64
+        guard orphanCount == 0 else { throw Error.malformedRecord }
+        let missingPrimaryLegs = try db.query("""
+        SELECT COUNT(*) AS count
+        FROM missions
+        LEFT JOIN mission_legs AS leg
+          ON leg.id = missions.primary_leg_id AND leg.mission_id = missions.id
+        WHERE leg.id IS NULL
+        """).first?["count"] as? Int64
+        let invalidEventLegs = try db.query("""
+        SELECT COUNT(*) AS count
+        FROM mission_events AS event
+        LEFT JOIN mission_legs AS leg
+          ON leg.id = event.leg_id AND leg.mission_id = event.mission_id
+        WHERE event.leg_id IS NOT NULL AND leg.id IS NULL
+        """).first?["count"] as? Int64
+        guard missingPrimaryLegs == 0,
+              invalidEventLegs == 0,
+              try db.query("PRAGMA foreign_key_check").isEmpty
+        else { throw Error.malformedRecord }
+    }
+
+    private func rowCount(_ table: String) throws -> Int64 {
+        guard let count = try db.query("SELECT COUNT(*) AS count FROM \(table)").first?["count"] as? Int64 else {
+            throw Error.malformedRecord
+        }
+        return count
+    }
+
     private func immediateTransaction<T>(_ work: () throws -> T) throws -> T {
         try db.exec("BEGIN IMMEDIATE")
         do {
@@ -807,39 +1051,57 @@ final class MissionStore {
         }
     }
 
-    private func issueIdentity(missionID: MissionID) throws -> MissionIssueIdentity {
-        let rows = try db.query("""
-        SELECT provider, host, repository_slug, issue_number
-        FROM mission_issue_sources
-        WHERE mission_id = ?
-        """, bindings: [missionID.rawValue])
-        guard let row = rows.first,
-              let providerRaw = row["provider"] as? String,
-              let provider = CodeHostKind(rawValue: providerRaw),
-              let host = row["host"] as? String,
-              let repositorySlug = row["repository_slug"] as? String,
-              let number = row["issue_number"] as? Int64
-        else { throw Error.malformedRecord }
-        return .init(provider: provider, host: host, repositorySlug: repositorySlug, number: Int(number))
+    private func source(missionID: MissionID) throws -> MissionSourceSnapshot {
+        let rows = try db.query(
+            "SELECT * FROM mission_sources WHERE mission_id = ?",
+            bindings: [missionID.rawValue]
+        )
+        guard let row = rows.first else { throw Error.malformedRecord }
+        return try decodeSource(row)
     }
 
-    private static func sameIssue(_ lhs: MissionIssueIdentity, _ rhs: MissionIssueIdentity) -> Bool {
-        lhs.provider == rhs.provider
-            && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
-            && lhs.repositorySlug.caseInsensitiveCompare(rhs.repositorySlug) == .orderedSame
-            && lhs.number == rhs.number
+    private static func isAllowedCodeHostRedirect(
+        from stored: MissionSourceSnapshot,
+        to replacement: MissionSourceSnapshot
+    ) -> Bool {
+        guard hasCoherentCodeHostIdentity(replacement),
+              stored.identity.providerID == replacement.identity.providerID,
+              stored.identity.providerID == .github || stored.identity.providerID == .gitlab,
+              let oldLocator = stored.repositoryLocator,
+              let newLocator = replacement.repositoryLocator,
+              oldLocator.provider == newLocator.provider,
+              oldLocator.host.caseInsensitiveCompare(newLocator.host) == .orderedSame,
+              oldLocator.repositorySlug.caseInsensitiveCompare(newLocator.repositorySlug) != .orderedSame,
+              stored.displayReference == replacement.displayReference
+        else { return false }
+        return true
     }
 
-    private static func sameIssueSource(_ lhs: MissionIssueIdentity, _ rhs: MissionIssueIdentity) -> Bool {
-        lhs.provider == rhs.provider
-            && lhs.host.caseInsensitiveCompare(rhs.host) == .orderedSame
-            && lhs.number == rhs.number
+    private static func hasCoherentCodeHostIdentity(_ source: MissionSourceSnapshot) -> Bool {
+        let expectedProvider: CodeHostKind
+        switch source.identity.providerID {
+        case .github:
+            expectedProvider = .github
+        case .gitlab:
+            expectedProvider = .gitlab
+        default:
+            return true
+        }
+        guard let locator = source.repositoryLocator,
+              locator.provider == expectedProvider,
+              let displayReference = source.displayReference,
+              displayReference.first == "#",
+              let number = Int(displayReference.dropFirst()),
+              number > 0
+        else { return false }
+        let expectedStableID = "\(locator.host)/\(locator.repositorySlug)#\(number)".lowercased()
+        return source.identity.stableID.lowercased() == expectedStableID
     }
 
     private func migrateReviewIdentities(
         missionID: MissionID,
-        from oldIdentity: MissionIssueIdentity,
-        to newIdentity: MissionIssueIdentity
+        from oldIdentity: MissionRepositoryLocator,
+        to newIdentity: MissionRepositoryLocator
     ) throws {
         let rows = try db.query(
             "SELECT id, review_identity FROM mission_legs WHERE mission_id = ?",
@@ -867,24 +1129,6 @@ final class MissionStore {
         }
     }
 
-    private static func snapshot(
-        _ snapshot: MissionIssueSnapshot,
-        preserving identity: MissionIssueIdentity
-    ) -> MissionIssueSnapshot {
-        MissionIssueSnapshot(
-            identity: identity,
-            canonicalURL: snapshot.canonicalURL,
-            title: snapshot.title,
-            body: snapshot.body,
-            state: snapshot.state,
-            labels: snapshot.labels,
-            assignees: snapshot.assignees,
-            providerUpdatedAt: snapshot.providerUpdatedAt,
-            capturedAt: snapshot.capturedAt,
-            refreshError: snapshot.refreshError
-        )
-    }
-
     private func insertMission(_ mission: MissionRecord, initialLeg: MissionLeg) throws {
         let usesLegacyMissionSetup = initialLeg.state == .creating && mission.state != .creating
         let state = usesLegacyMissionSetup ? mission.state : Self.globalMissionState(for: [initialLeg])
@@ -892,9 +1136,9 @@ final class MissionStore {
         let attentionReason = usesLegacyMissionSetup ? mission.attentionReason : initialLeg.attentionReason
         try db.exec("""
         INSERT INTO missions (
-            id, title, source_kind, state, setup_checkpoint, primary_leg_id,
+            id, title, state, setup_checkpoint, primary_leg_id,
             attention_reason, created_at, updated_at, completed_at
-        ) VALUES (?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, bindings: [
             mission.id.rawValue,
             mission.title,
@@ -908,31 +1152,36 @@ final class MissionStore {
         ])
     }
 
-    private func insertIssue(_ issue: MissionIssueSnapshot, missionID: MissionID) throws {
+    private func insertSource(_ source: MissionSourceSnapshot, missionID: MissionID) throws {
         try db.exec("""
-        INSERT INTO mission_issue_sources (
-            mission_id, provider, host, repository_slug, issue_number, canonical_url,
-            title, body, provider_state, labels, assignees, provider_updated_at,
-            captured_at, refresh_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, bindings: [missionID.rawValue] + issueBindings(issue))
+        INSERT INTO mission_sources (
+            mission_id, provider_id, stable_id, canonical_url, provider_label,
+            display_reference, repository_locator, title, body, provider_state,
+            labels, assignees, provider_updated_at, captured_at, refresh_error,
+            content_origin, is_editable, is_refreshable
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, bindings: [missionID.rawValue] + sourceBindings(source))
     }
 
-    private func issueBindings(_ issue: MissionIssueSnapshot) throws -> [Any?] {
+    private func sourceBindings(_ source: MissionSourceSnapshot) throws -> [Any?] {
         [
-            issue.identity.provider.rawValue,
-            issue.identity.host,
-            issue.identity.repositorySlug,
-            issue.identity.number,
-            issue.canonicalURL.absoluteString,
-            issue.title,
-            issue.body,
-            issue.state.rawValue,
-            try encoder.encode(issue.labels),
-            try encoder.encode(issue.assignees),
-            issue.providerUpdatedAt?.timeIntervalSince1970,
-            issue.capturedAt.timeIntervalSince1970,
-            issue.refreshError,
+            source.identity.providerID.rawValue,
+            source.identity.stableID,
+            source.canonicalURL.absoluteString,
+            source.providerLabel,
+            source.displayReference,
+            try source.repositoryLocator.map(encoder.encode),
+            source.title,
+            source.body,
+            source.state.rawValue,
+            try encoder.encode(source.labels),
+            try encoder.encode(source.assignees),
+            source.providerUpdatedAt?.timeIntervalSince1970,
+            source.capturedAt.timeIntervalSince1970,
+            source.refreshError,
+            source.contentOrigin.rawValue,
+            source.isEditable ? 1 : 0,
+            source.isRefreshable ? 1 : 0,
         ]
     }
 
@@ -1018,7 +1267,7 @@ final class MissionStore {
               let checkpoint = MissionSetupCheckpoint(rawValue: checkpointRaw),
               let primaryLegID = row["primary_leg_id"] as? String,
               let createdAt = date(from: row["created_at"]),
-              let updatedAt = date(from: row["updated_at"])
+              let updatedAt = date(from: row["updated_at"] as Any?)
         else { throw Error.malformedRecord }
         return .init(
             id: MissionID(rawValue: id),
@@ -1030,6 +1279,56 @@ final class MissionStore {
             createdAt: createdAt,
             updatedAt: updatedAt,
             completedAt: date(from: row["completed_at"])
+        )
+    }
+
+    private func decodeSource(_ row: [String: Any?]) throws -> MissionSourceSnapshot {
+        guard let providerID = row["provider_id"] as? String,
+              let stableID = row["stable_id"] as? String,
+              let canonicalURLRaw = row["canonical_url"] as? String,
+              let canonicalURL = URL(string: canonicalURLRaw),
+              let providerLabel = row["provider_label"] as? String,
+              let stateRaw = row["provider_state"] as? String,
+              let state = MissionSourceState(rawValue: stateRaw),
+              let labelsData = row["labels"] as? Data,
+              let labels = try? decoder.decode([String].self, from: labelsData),
+              let assigneesData = row["assignees"] as? Data,
+              let assignees = try? decoder.decode([String].self, from: assigneesData),
+              let capturedAt = date(from: row["captured_at"]),
+              let contentOriginRaw = row["content_origin"] as? String,
+              let contentOrigin = MissionSourceContentOrigin(rawValue: contentOriginRaw),
+              let isEditable = row["is_editable"] as? Int64,
+              let isRefreshable = row["is_refreshable"] as? Int64
+        else { throw Error.malformedRecord }
+        let repositoryLocator: MissionRepositoryLocator?
+        if let data = row["repository_locator"] as? Data {
+            guard let decoded = try? decoder.decode(MissionRepositoryLocator.self, from: data) else {
+                throw Error.malformedRecord
+            }
+            repositoryLocator = decoded
+        } else {
+            repositoryLocator = nil
+        }
+        return .init(
+            identity: .init(
+                providerID: MissionSourceProviderID(rawValue: providerID),
+                stableID: stableID
+            ),
+            canonicalURL: canonicalURL,
+            providerLabel: providerLabel,
+            displayReference: row["display_reference"] as? String,
+            repositoryLocator: repositoryLocator,
+            title: row["title"] as? String ?? "",
+            body: row["body"] as? String ?? "",
+            state: state,
+            labels: labels,
+            assignees: assignees,
+            providerUpdatedAt: date(from: row["provider_updated_at"]),
+            capturedAt: capturedAt,
+            refreshError: row["refresh_error"] as? String,
+            contentOrigin: contentOrigin,
+            isEditable: isEditable != 0,
+            isRefreshable: isRefreshable != 0
         )
     }
 
@@ -1126,7 +1425,7 @@ final class MissionStore {
               let kindRaw = row["kind"] as? String,
               let kind = MissionEventKind(rawValue: kindRaw),
               let message = row["message"] as? String,
-              let createdAt = date(from: row["created_at"])
+              let createdAt = date(from: row["created_at"] as Any?)
         else { throw Error.malformedRecord }
         return .init(
             id: id,

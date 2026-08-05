@@ -32,7 +32,9 @@ actor MissionPersistence {
     }
     func list(includeCompleted: Bool) throws -> [MissionAggregate] { try openedStore().list(includeCompleted: includeCompleted) }
     func list(states: Set<MissionState>) throws -> [MissionAggregate] { try openedStore().list(states: states) }
-    func activeMission(issueIdentity: MissionIssueIdentity) throws -> MissionAggregate? { try openedStore().activeMission(issueIdentity: issueIdentity) }
+    func activeMission(sourceIdentity: MissionSourceIdentity) throws -> MissionAggregate? {
+        try openedStore().activeMission(sourceIdentity: sourceIdentity)
+    }
 
     func updateSetup(
         id: MissionID,
@@ -81,22 +83,36 @@ actor MissionPersistence {
     }
 
     @discardableResult
-    func replaceIssueSnapshot(
+    func replaceSourceSnapshot(
         missionID: MissionID,
-        snapshot: MissionIssueSnapshot,
+        snapshot: MissionSourceSnapshot,
         event: MissionEvent
     ) throws -> [MissionID] {
-        try openedStore().replaceIssueSnapshot(missionID: missionID, snapshot: snapshot, event: event)
+        try openedStore().replaceSourceSnapshot(missionID: missionID, snapshot: snapshot, event: event)
     }
 
-    func updateIssueRefreshError(
+    func updateSourceRefreshError(
         missionID: MissionID,
         refreshError: String,
         event: MissionEvent
     ) throws {
-        try openedStore().updateIssueRefreshError(
+        try openedStore().updateSourceRefreshError(
             missionID: missionID,
             refreshError: refreshError,
+            event: event
+        )
+    }
+
+    func updateManualSourceContent(
+        missionID: MissionID,
+        title: String,
+        body: String,
+        event: MissionEvent
+    ) throws {
+        try openedStore().updateManualSourceContent(
+            missionID: missionID,
+            title: title,
+            body: body,
             event: event
         )
     }

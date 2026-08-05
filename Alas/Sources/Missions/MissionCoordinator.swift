@@ -87,7 +87,7 @@ final class MissionCoordinator {
         let aggregate = MissionAggregate(
             mission: MissionRecord(
                 id: missionID,
-                title: draft.issue.title,
+                title: draft.source.title,
                 state: .creating,
                 setupCheckpoint: .creatingWorktree,
                 primaryLegID: legID,
@@ -96,13 +96,13 @@ final class MissionCoordinator {
                 updatedAt: now,
                 completedAt: nil
             ),
-            issue: draft.issue,
+            source: draft.source,
             legs: [initialLeg],
             events: [event(
                 missionID: missionID,
                 legID: legID,
                 kind: .created,
-                message: "Mission created from issue #\(draft.issue.identity.number).",
+                message: "Mission created from work item.",
                 at: now
             )]
         )

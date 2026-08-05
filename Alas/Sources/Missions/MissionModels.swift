@@ -140,6 +140,175 @@ struct MissionIssueSnapshot: Codable, Equatable, Sendable {
     let providerUpdatedAt: Date?
     let capturedAt: Date
     var refreshError: String?
+
+    init(
+        identity: MissionIssueIdentity,
+        canonicalURL: URL,
+        title: String,
+        body: String,
+        state: MissionIssueState,
+        labels: [String],
+        assignees: [String],
+        providerUpdatedAt: Date?,
+        capturedAt: Date,
+        refreshError: String?
+    ) {
+        self.identity = identity
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.body = body
+        self.state = state
+        self.labels = labels
+        self.assignees = assignees
+        self.providerUpdatedAt = providerUpdatedAt
+        self.capturedAt = capturedAt
+        self.refreshError = refreshError
+    }
+
+    init?(source: MissionSourceSnapshot) {
+        guard let repositoryLocator = source.repositoryLocator,
+              let displayReference = source.displayReference,
+              displayReference.first == "#",
+              let number = Int(displayReference.dropFirst())
+        else {
+            return nil
+        }
+
+        self.init(
+            identity: .init(
+                provider: repositoryLocator.provider,
+                host: repositoryLocator.host,
+                repositorySlug: repositoryLocator.repositorySlug,
+                number: number
+            ),
+            canonicalURL: source.canonicalURL,
+            title: source.title,
+            body: source.body,
+            state: .init(rawValue: source.state.rawValue) ?? .unknown,
+            labels: source.labels,
+            assignees: source.assignees,
+            providerUpdatedAt: source.providerUpdatedAt,
+            capturedAt: source.capturedAt,
+            refreshError: source.refreshError
+        )
+    }
+}
+
+struct MissionSourceProviderID: RawRepresentable, Codable, Hashable, Sendable {
+    let rawValue: String
+
+    static let github = Self(rawValue: "github")
+    static let gitlab = Self(rawValue: "gitlab")
+    static let manual = Self(rawValue: "manual")
+}
+
+struct MissionSourceIdentity: Codable, Hashable, Sendable {
+    let providerID: MissionSourceProviderID
+    let stableID: String
+}
+
+enum MissionSourceContentOrigin: String, Codable, Equatable, Sendable {
+    case provider
+    case manual
+}
+
+enum MissionSourceState: String, Codable, Equatable, Sendable {
+    case open
+    case closed
+    case unknown
+}
+
+struct MissionRepositoryLocator: Codable, Equatable, Sendable {
+    let provider: CodeHostKind
+    let host: String
+    let repositorySlug: String
+}
+
+struct MissionSourceSnapshot: Codable, Equatable, Sendable {
+    let identity: MissionSourceIdentity
+    let canonicalURL: URL
+    let providerLabel: String
+    let displayReference: String?
+    let repositoryLocator: MissionRepositoryLocator?
+    let title: String
+    let body: String
+    let state: MissionSourceState
+    let labels: [String]
+    let assignees: [String]
+    let providerUpdatedAt: Date?
+    let capturedAt: Date
+    var refreshError: String?
+    let contentOrigin: MissionSourceContentOrigin
+    let isEditable: Bool
+    let isRefreshable: Bool
+
+    init(
+        identity: MissionSourceIdentity,
+        canonicalURL: URL,
+        providerLabel: String,
+        displayReference: String?,
+        repositoryLocator: MissionRepositoryLocator?,
+        title: String,
+        body: String,
+        state: MissionSourceState,
+        labels: [String],
+        assignees: [String],
+        providerUpdatedAt: Date?,
+        capturedAt: Date,
+        refreshError: String?,
+        contentOrigin: MissionSourceContentOrigin,
+        isEditable: Bool,
+        isRefreshable: Bool
+    ) {
+        self.identity = identity
+        self.canonicalURL = canonicalURL
+        self.providerLabel = providerLabel
+        self.displayReference = displayReference
+        self.repositoryLocator = repositoryLocator
+        self.title = title
+        self.body = body
+        self.state = state
+        self.labels = labels
+        self.assignees = assignees
+        self.providerUpdatedAt = providerUpdatedAt
+        self.capturedAt = capturedAt
+        self.refreshError = refreshError
+        self.contentOrigin = contentOrigin
+        self.isEditable = isEditable
+        self.isRefreshable = isRefreshable
+    }
+
+    init(issue: MissionIssueSnapshot) {
+        let providerID: MissionSourceProviderID = switch issue.identity.provider {
+        case .github: .github
+        case .gitlab: .gitlab
+        }
+        self.init(
+            identity: .init(
+                providerID: providerID,
+                stableID: "\(issue.identity.host)/\(issue.identity.repositorySlug)#\(issue.identity.number)".lowercased()
+            ),
+            canonicalURL: issue.canonicalURL,
+            providerLabel: issue.identity.provider.displayName,
+            displayReference: "#\(issue.identity.number)",
+            repositoryLocator: .init(
+                provider: issue.identity.provider,
+                host: issue.identity.host,
+                repositorySlug: issue.identity.repositorySlug
+            ),
+            title: issue.title,
+            body: issue.body,
+            state: .init(rawValue: issue.state.rawValue) ?? .unknown,
+            labels: issue.labels,
+            assignees: issue.assignees,
+            providerUpdatedAt: issue.providerUpdatedAt,
+            capturedAt: issue.capturedAt,
+            refreshError: issue.refreshError,
+            contentOrigin: .provider,
+            isEditable: false,
+            isRefreshable: true
+        )
+    }
 }
 
 struct MissionReviewIdentity: Codable, Equatable, Sendable {
@@ -270,9 +439,21 @@ struct MissionEvent: Codable, Equatable, Sendable {
 
 struct MissionAggregate: Equatable, Sendable {
     var mission: MissionRecord
-    var issue: MissionIssueSnapshot
+    var source: MissionSourceSnapshot
     var legs: [MissionLeg]
     var events: [MissionEvent]
+
+    init(
+        mission: MissionRecord,
+        source: MissionSourceSnapshot,
+        legs: [MissionLeg],
+        events: [MissionEvent]
+    ) {
+        self.mission = mission
+        self.source = source
+        self.legs = legs
+        self.events = events
+    }
 
     var primaryLeg: MissionLeg? {
         legs.first { $0.id == mission.primaryLegID }
@@ -280,7 +461,7 @@ struct MissionAggregate: Equatable, Sendable {
 }
 
 struct MissionDraft: Equatable, Sendable {
-    let issue: MissionIssueSnapshot
+    let source: MissionSourceSnapshot
     let projectId: String
     let baseRef: String
     let baseRemoteName: String?
@@ -291,7 +472,7 @@ struct MissionDraft: Equatable, Sendable {
     let initialPrompt: String
 
     init(
-        issue: MissionIssueSnapshot,
+        source: MissionSourceSnapshot,
         projectId: String,
         baseRef: String,
         baseRemoteName: String? = nil,
@@ -301,7 +482,7 @@ struct MissionDraft: Equatable, Sendable {
         initialPromptId: UUID,
         initialPrompt: String
     ) {
-        self.issue = issue
+        self.source = source
         self.projectId = projectId
         self.baseRef = baseRef
         self.baseRemoteName = baseRemoteName

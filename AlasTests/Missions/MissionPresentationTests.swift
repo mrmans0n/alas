@@ -168,7 +168,7 @@ struct MissionPresentationTests {
         #expect(!presentation.actions.retryAgent)
         #expect(!presentation.actions.openAgent)
         #expect(!presentation.actions.openChanges)
-        #expect(presentation.actions.openIssue)
+        #expect(presentation.actions.openSource)
         #expect(presentation.actions.completeMission)
     }
 
@@ -191,7 +191,7 @@ struct MissionPresentationTests {
         #expect(!presentation.actions.openAgent)
         #expect(presentation.actions.openChanges)
         #expect(presentation.agentReplacementRequired)
-        #expect(presentation.issueDestination == aggregate.issue.canonicalURL)
+        #expect(presentation.sourceDestination == aggregate.source.canonicalURL)
         #expect(presentation.agentDestination == "session-1")
         #expect(presentation.changesDestination == "worktree-1")
     }
@@ -209,17 +209,45 @@ struct MissionPresentationTests {
         #expect(presentation.stateLabel == "Running")
         #expect(presentation.actions.openAgent)
         #expect(presentation.actions.openChanges)
-        #expect(presentation.actions.openIssue)
-        #expect(presentation.actions.refresh)
+        #expect(presentation.actions.openSource)
+        #expect(presentation.actions.refreshSource)
         #expect(!presentation.actions.retryAgent)
         #expect(presentation.actions.completeMission)
         #expect(presentation.agentCopy == "Codex · Working")
         #expect(presentation.diffCopy == "3 files · +86 −14")
     }
 
+    @Test func manualSourcePresentationUsesNeutralActions() {
+        var aggregate = MissionFixtures.creatingMission(source: MissionFixtures.manualSource())
+        aggregate.mission.state = .running
+        aggregate.mission.setupCheckpoint = .running
+        aggregate.legs[0].worktreeId = "worktree-1"
+        aggregate.legs[0].worktreeLineageID = "device:inode"
+        aggregate.legs[0].pendingInitialPrompt = nil
+
+        let presentation = MissionTabPresentation(aggregate: aggregate, worktree: nil)
+
+        #expect(presentation.sourceProviderName == "linear.app")
+        #expect(presentation.sourceReference == nil)
+        #expect(presentation.sourceDestination == aggregate.source.canonicalURL)
+        #expect(presentation.sourceBody == aggregate.source.body)
+        #expect(presentation.actions.openSource)
+        #expect(presentation.actions.editSourceContext)
+        #expect(!presentation.actions.refreshSource)
+    }
+
+    @Test func providerSourcePresentationRefreshesButDoesNotEdit() {
+        let aggregate = Self.runningAggregate()
+        let presentation = MissionTabPresentation(aggregate: aggregate, worktree: Self.worktree)
+
+        #expect(presentation.actions.openSource)
+        #expect(presentation.actions.refreshSource)
+        #expect(!presentation.actions.editSourceContext)
+    }
+
     @Test func refreshFailureKeepsSnapshotAndShowsStaleWarning() {
         var aggregate = Self.runningAggregate()
-        aggregate.issue.refreshError = "gh is not authenticated"
+        aggregate.source.refreshError = "gh is not authenticated"
 
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
@@ -227,9 +255,9 @@ struct MissionPresentationTests {
             availableACPAgentIDs: ["codex"]
         )
 
-        #expect(presentation.staleSourceCopy == "Stored issue snapshot may be stale: gh is not authenticated")
-        #expect(presentation.issueBody == aggregate.issue.body)
-        #expect(presentation.actions.refresh)
+        #expect(presentation.staleSourceCopy == "Stored source snapshot may be stale: gh is not authenticated")
+        #expect(presentation.sourceBody == aggregate.source.body)
+        #expect(presentation.actions.refreshSource)
     }
 
     @Test func linkedReviewUsesProviderLabelAndRemoteState() {
@@ -446,9 +474,10 @@ struct MissionPresentationTests {
         #expect(!presentation.actions.recoverWorktree)
     }
 
-    @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() {
+    @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() throws {
         var aggregate = Self.runningAggregate()
-        aggregate.issue = .init(
+        let issue = try #require(MissionIssueSnapshot(source: aggregate.source))
+        let storedIssue = MissionIssueSnapshot(
             identity: .init(
                 provider: .github,
                 host: "github.example.com",
@@ -456,15 +485,16 @@ struct MissionPresentationTests {
                 number: 42
             ),
             canonicalURL: URL(string: "https://github.example.com/stored/mission-repo/issues/42")!,
-            title: aggregate.issue.title,
-            body: aggregate.issue.body,
-            state: aggregate.issue.state,
-            labels: aggregate.issue.labels,
-            assignees: aggregate.issue.assignees,
-            providerUpdatedAt: aggregate.issue.providerUpdatedAt,
+            title: aggregate.source.title,
+            body: aggregate.source.body,
+            state: issue.state,
+            labels: aggregate.source.labels,
+            assignees: aggregate.source.assignees,
+            providerUpdatedAt: aggregate.source.providerUpdatedAt,
             capturedAt: Date(timeIntervalSince1970: 123),
-            refreshError: aggregate.issue.refreshError
+            refreshError: aggregate.source.refreshError
         )
+        aggregate.source = MissionSourceSnapshot(issue: storedIssue)
 
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
@@ -474,7 +504,7 @@ struct MissionPresentationTests {
         )
 
         #expect(presentation.repositoryName == "stored/mission-repo")
-        #expect(presentation.issueCapturedAt == Date(timeIntervalSince1970: 123))
+        #expect(presentation.sourceCapturedAt == Date(timeIntervalSince1970: 123))
         #expect(presentation.baseCopy == "origin/main")
         #expect(presentation.destinationCopy == "/tmp/alas-mission")
     }
@@ -515,7 +545,7 @@ struct MissionPresentationTests {
                 updatedAt: Date(timeIntervalSince1970: 120),
                 completedAt: nil
             ),
-            issue: MissionFixtures.issue(),
+            source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
             legs: [
                 Self.leg(
                     id: appLegID,

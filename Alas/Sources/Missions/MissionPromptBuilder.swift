@@ -1,8 +1,20 @@
 import Foundation
 
 enum MissionBranchName {
+    static func make(displayReference: String?, title: String, prefix: String) -> String {
+        let referenceComponent = displayReference.map(slug).flatMap { $0.isEmpty ? nil : $0 }
+        let titleComponent = slug(title)
+        let components = [referenceComponent, titleComponent].compactMap { $0 }
+        return "\(prefix)\(components.joined(separator: "-"))"
+    }
+
     static func make(issueNumber: Int, title: String, prefix: String) -> String {
-        let folded = title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current).lowercased()
+        let legacyTitle = slug(title).isEmpty ? "issue" : title
+        return make(displayReference: "#\(issueNumber)", title: legacyTitle, prefix: prefix)
+    }
+
+    private static func slug(_ value: String) -> String {
+        let folded = value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current).lowercased()
         var slug = ""
         var needsHyphen = false
         for scalar in folded.unicodeScalars {
@@ -14,31 +26,50 @@ enum MissionBranchName {
                 needsHyphen = !slug.isEmpty
             }
         }
-        let titleComponent = String(slug.prefix(48)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return "\(prefix)\(issueNumber)-\(titleComponent.isEmpty ? "issue" : titleComponent)"
+        return String(slug.prefix(48)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 }
 
 enum MissionPromptBuilder {
-    static func build(snapshot: MissionIssueSnapshot) -> String {
+    static func build(source: MissionSourceSnapshot) -> String {
         var lines = [
-            "Implement \(snapshot.identity.provider.displayName) issue #\(snapshot.identity.number).",
-            "Inspect the attached issue context, keep the change focused, add regression coverage, and verify the result.",
+            openingLine(for: source),
+            "Inspect the attached work item context, keep the change focused, add regression coverage, and verify the result.",
             "",
-            "## Issue context",
-            "**Provider:** \(snapshot.identity.provider.displayName)",
-            "**Repository:** \(snapshot.identity.repositorySlug)",
-            "**Number:** #\(snapshot.identity.number)",
-            "**URL:** \(snapshot.canonicalURL.absoluteString)",
-            "**Title:** \(snapshot.title)",
+            "## Work item context",
+            "**Source:** \(source.providerLabel)",
         ]
-        if !snapshot.labels.isEmpty { lines.append("**Labels:** \(snapshot.labels.joined(separator: ", "))") }
-        if !snapshot.assignees.isEmpty { lines.append("**Assignees:** \(snapshot.assignees.joined(separator: ", "))") }
-        if !snapshot.body.isEmpty {
+        if let repositoryLocator = source.repositoryLocator {
+            lines.append("**Repository:** \(repositoryLocator.repositorySlug)")
+        }
+        if let displayReference = source.displayReference, !displayReference.isEmpty {
+            lines.append("**Reference:** \(displayReference)")
+        }
+        lines += [
+            "**URL:** \(source.canonicalURL.absoluteString)",
+            "**Title:** \(source.title)",
+        ]
+        if !source.labels.isEmpty { lines.append("**Labels:** \(source.labels.joined(separator: ", "))") }
+        if !source.assignees.isEmpty { lines.append("**Assignees:** \(source.assignees.joined(separator: ", "))") }
+        if !source.body.isEmpty {
             lines.append("")
             lines.append("**Body:**")
-            lines.append(snapshot.body)
+            lines.append(source.body)
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func build(snapshot: MissionIssueSnapshot) -> String {
+        build(source: .init(issue: snapshot))
+    }
+
+    static func openingLine(for source: MissionSourceSnapshot) -> String {
+        guard source.contentOrigin == .provider,
+              let displayReference = source.displayReference,
+              !displayReference.isEmpty
+        else {
+            return "Implement the linked work item."
+        }
+        return "Implement \(source.providerLabel) work item \(displayReference)."
     }
 }

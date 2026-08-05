@@ -2,6 +2,31 @@ import Foundation
 @testable import Alas
 
 enum MissionFixtures {
+    static func manualSource(
+        url: String = "https://linear.app/acme/issue/ALA-42/fix-parser-crash",
+        title: String = "Fix parser crash",
+        body: String = "The parser crashes for malformed input."
+    ) -> MissionSourceSnapshot {
+        .init(
+            identity: .init(providerID: .manual, stableID: url),
+            canonicalURL: URL(string: url)!,
+            providerLabel: URL(string: url)!.host!,
+            displayReference: nil,
+            repositoryLocator: nil,
+            title: title,
+            body: body,
+            state: .unknown,
+            labels: [],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: Date(timeIntervalSince1970: 100),
+            refreshError: nil,
+            contentOrigin: .manual,
+            isEditable: true,
+            isRefreshable: false
+        )
+    }
+
     static func issue(
         number: Int = 42,
         title: String = "Fix parser crash",
@@ -46,7 +71,37 @@ enum MissionFixtures {
                 updatedAt: Date(timeIntervalSince1970: createdAt),
                 completedAt: nil
             ),
-            issue: issue,
+            source: MissionSourceSnapshot(issue: issue),
+            legs: [leg(
+                id: legID,
+                missionID: missionID,
+                baseRef: baseRef,
+                baseRemoteName: baseRemoteName
+            )],
+            events: [event(id: "\(id)-event-1", missionID: missionID, legID: legID, kind: .created)]
+        )
+    }
+
+    static func creatingMission(
+        id: String = "mission-1",
+        source: MissionSourceSnapshot,
+        createdAt: TimeInterval = 100,
+        baseRef: String = "origin/main",
+        baseRemoteName: String? = "origin"
+    ) -> MissionAggregate {
+        let missionID = MissionID(rawValue: id)
+        let legID = MissionLegID(rawValue: "\(id)-leg-1")
+        return .init(
+            mission: .init(
+                id: missionID,
+                title: source.title,
+                state: .creating,
+                primaryLegID: legID,
+                createdAt: Date(timeIntervalSince1970: createdAt),
+                updatedAt: Date(timeIntervalSince1970: createdAt),
+                completedAt: nil
+            ),
+            source: source,
             legs: [leg(
                 id: legID,
                 missionID: missionID,
@@ -149,7 +204,7 @@ extension MissionFixtures {
                 updatedAt: createdAt,
                 completedAt: nil
             ),
-            issue: issue(),
+            source: MissionSourceSnapshot(issue: issue()),
             legs: [app, sdk],
             events: []
         )

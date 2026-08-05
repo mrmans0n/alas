@@ -5,16 +5,18 @@ enum MissionIssueInput: Equatable, Sendable {
     case url(kind: CodeHostKind, host: String, repositorySlug: String, number: Int)
 
     static func parse(_ rawReference: String) throws -> Self {
-        let raw = rawReference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let shortValue = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
-        if let number = Int(shortValue), number > 0, !shortValue.contains("/") {
+        switch try MissionSourceReference.parse(rawReference) {
+        case .short(let number):
             return .short(number: number)
+        case .url(let url):
+            return try parseCodeHostURL(url)
         }
-        guard let components = URLComponents(string: raw),
-              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
-              let host = components.host?.lowercased(), !host.isEmpty
-        else {
-            throw CodeHostProviderError.malformedOutput("Enter an issue number or a supported issue URL.")
+    }
+
+    private static func parseCodeHostURL(_ url: URL) throws -> Self {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let host = components.host?.lowercased(), !host.isEmpty else {
+            throw CodeHostProviderError.malformedOutput("Enter a GitHub or GitLab issue URL.")
         }
         let parts = components.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         if parts.count == 4, parts[2] == "issues", let number = Int(parts[3]), number > 0 {
@@ -29,15 +31,14 @@ enum MissionIssueInput: Equatable, Sendable {
     }
 }
 
-struct ResolvedMissionIssue: Equatable, Sendable {
+struct ResolvedCodeHostIssue: Equatable, Sendable {
     let snapshot: MissionIssueSnapshot
     let remote: CodeHostRemote
     let candidateProjectIds: [String]
     let selectedProjectId: String
 }
 
-@MainActor
-struct MissionIssueResolver {
+struct CodeHostIssueResolver {
     struct Environment {
         let projects: () -> [ProjectConfig]
         let selectedProjectId: () -> String?
@@ -47,7 +48,7 @@ struct MissionIssueResolver {
 
     let environment: Environment
 
-    func resolve(_ rawReference: String) async throws -> ResolvedMissionIssue {
+    func resolve(_ rawReference: String) async throws -> ResolvedCodeHostIssue {
         switch try MissionIssueInput.parse(rawReference) {
         case .short(let number):
             guard let selectedID = environment.selectedProjectId(),
@@ -168,7 +169,7 @@ struct MissionIssueResolver {
         }
     }
 
-    private func resolve(number: Int, remote: CodeHostRemote, candidates: [String], selectedProjectId: String, cwd: String) async throws -> ResolvedMissionIssue {
+    private func resolve(number: Int, remote: CodeHostRemote, candidates: [String], selectedProjectId: String, cwd: String) async throws -> ResolvedCodeHostIssue {
         guard let provider = environment.providers.provider(for: remote.kind) else {
             throw CodeHostProviderError.unsupportedProvider(remote.kind)
         }
@@ -176,14 +177,14 @@ struct MissionIssueResolver {
         guard await provider.isAvailable(cwd: url) else { throw CodeHostProviderError.cliMissing(provider.executable) }
         guard await provider.isAuthenticated(remote: remote, cwd: url) else { throw CodeHostProviderError.unauthenticated(remote.host) }
         let snapshot = try await provider.issue(remote: remote, number: number, cwd: url)
-        return ResolvedMissionIssue(snapshot: snapshot, remote: remote, candidateProjectIds: candidates, selectedProjectId: selectedProjectId)
+        return ResolvedCodeHostIssue(snapshot: snapshot, remote: remote, candidateProjectIds: candidates, selectedProjectId: selectedProjectId)
     }
 
     private func resolve(
         number: Int,
         matches: [(project: ProjectConfig, remote: CodeHostRemote)],
         preferredProjectID: String?
-    ) async throws -> ResolvedMissionIssue {
+    ) async throws -> ResolvedCodeHostIssue {
         let preferred = matches.first { $0.project.id == preferredProjectID }
         let orderedMatches = preferred.map { preferred in
             [preferred] + matches.filter { $0.project.id != preferred.project.id }
@@ -211,11 +212,11 @@ struct MissionIssueResolver {
     }
 
     private static func canonicalResult(
-        _ probed: ResolvedMissionIssue,
+        _ probed: ResolvedCodeHostIssue,
         number: Int,
         projectRemotes: [(project: ProjectConfig, remotes: [CodeHostRemote])],
         preferredProjectID: String
-    ) throws -> ResolvedMissionIssue {
+    ) throws -> ResolvedCodeHostIssue {
         let canonicalMatches = projectRemotes.flatMap { candidate in
             candidate.remotes.compactMap { remote -> (project: ProjectConfig, remote: CodeHostRemote)? in
                 guard matches(
@@ -240,7 +241,7 @@ struct MissionIssueResolver {
         for match in canonicalMatches where !candidateProjectIDs.contains(match.project.id) {
             candidateProjectIDs.append(match.project.id)
         }
-        return ResolvedMissionIssue(
+        return ResolvedCodeHostIssue(
             snapshot: probed.snapshot,
             remote: selectedMatch.remote,
             candidateProjectIds: candidateProjectIDs,
@@ -292,7 +293,7 @@ struct MissionIssueResolver {
     }
 }
 
-private extension CodeHostRemoteDetector {
+extension CodeHostRemoteDetector {
     static func detectAllMatching(_ remotes: [GitRemote], kind: CodeHostKind) -> [CodeHostRemote] {
         remotes.compactMap { remote in
             detect(from: [remote], matching: kind)

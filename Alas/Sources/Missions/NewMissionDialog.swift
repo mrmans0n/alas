@@ -26,19 +26,31 @@ final class NewMissionDialogModel {
         case duplicate(existing: MissionID)
 
         var errorDescription: String? {
-            "An active Mission already exists for this issue."
+            "An active Mission already exists for this source."
         }
     }
 
     var reference = "" {
         didSet {
-            guard reference != oldValue, phase == .resolving else { return }
-            invalidateResolution()
+            guard reference != oldValue else { return }
+            if phase == .resolving {
+                invalidateResolution()
+            } else if phase == .entry {
+                pendingManualFallback = nil
+                errorMessage = nil
+            }
         }
     }
 
     var phase: Phase = .entry
-    var resolved: ResolvedMissionIssue?
+    var resolved: ResolvedMissionSource?
+    var pendingManualFallback: ResolvedMissionSource?
+    var sourceTitle = "" {
+        didSet { refreshManualSourceDraft(updateBranch: true) }
+    }
+    var sourceBody = "" {
+        didSet { refreshManualSourceDraft(updateBranch: false) }
+    }
     var projectId = ""
     private(set) var base = ""
     private(set) var branch = ""
@@ -54,7 +66,7 @@ final class NewMissionDialogModel {
     private var localBranchNames: Set<String> = []
 
     struct Environment {
-        let resolveIssue: (String) async throws -> ResolvedMissionIssue
+        let resolveSource: (String) async throws -> ResolvedMissionSource
         let branches: (String) async throws -> BranchInventory
         let configuredBase: (String) -> String
         let configuredBranchPrefix: (String) -> String
@@ -77,6 +89,8 @@ final class NewMissionDialogModel {
     @ObservationIgnored
     private var branchIsUserOwned = false
     @ObservationIgnored
+    private var promptIsUserOwned = false
+    @ObservationIgnored
     private var duplicateBranch: String?
 
     init(environment: Environment) {
@@ -88,9 +102,14 @@ final class NewMissionDialogModel {
     }
 
     var validationMessage: String? {
-        guard resolved != nil else { return "Resolve an issue before creating a Mission." }
+        guard let resolved else { return "Resolve a work item before creating a Mission." }
+        if resolved.source.contentOrigin == .manual {
+            guard !sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return "Enter a work-item title."
+            }
+        }
         guard candidateProjectIds.contains(projectId) else {
-            return "Choose a repository matched to this issue."
+            return "Choose a primary repository."
         }
         guard !isLoadingBranches else {
             return "Wait for repository branches to finish loading."
@@ -129,7 +148,7 @@ final class NewMissionDialogModel {
         guard phase == .entry else { return }
         let input = reference.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else {
-            errorMessage = "Enter an issue number or URL."
+            errorMessage = "Enter a work-item link."
             return
         }
 
@@ -141,12 +160,19 @@ final class NewMissionDialogModel {
         existingMissionID = nil
         duplicateBranch = nil
         resolved = nil
+        pendingManualFallback = nil
         candidateProjectIds = []
         projectId = ""
 
-        let resolution: ResolvedMissionIssue
+        let resolution: ResolvedMissionSource
         do {
-            resolution = try await environment.resolveIssue(input)
+            resolution = try await environment.resolveSource(input)
+        } catch let failure as MissionSourceResolutionFailure {
+            guard acceptsResolution(generation: generation, input: input) else { return }
+            pendingManualFallback = failure.fallback
+            phase = .entry
+            errorMessage = failure.localizedDescription
+            return
         } catch {
             guard acceptsResolution(generation: generation, input: input) else { return }
             phase = .entry
@@ -154,9 +180,30 @@ final class NewMissionDialogModel {
             return
         }
         guard acceptsResolution(generation: generation, input: input) else { return }
-        guard resolution.candidateProjectIds.contains(resolution.selectedProjectId) else {
+        await adoptResolution(resolution, generation: generation, input: input)
+    }
+
+    func continueManually() async {
+        guard phase == .entry, let fallback = pendingManualFallback else { return }
+        resolutionGeneration &+= 1
+        let generation = resolutionGeneration
+        phase = .resolving
+        errorMessage = nil
+        pendingManualFallback = nil
+        await adoptResolution(fallback, generation: generation, input: nil)
+    }
+
+    private func adoptResolution(
+        _ resolution: ResolvedMissionSource,
+        generation: Int,
+        input: String?
+    ) async {
+        let selectedProjectID = preferredProjectID(for: resolution)
+        guard let selectedProjectID,
+              resolution.candidateProjectIDs.contains(selectedProjectID)
+        else {
             phase = .entry
-            errorMessage = "The resolved issue did not match an available repository."
+            errorMessage = "Choose a primary repository."
             return
         }
 
@@ -164,17 +211,22 @@ final class NewMissionDialogModel {
         let branchInventory: BranchInventory
         let branchLoadError: String?
         do {
-            branchInventory = try await environment.branches(resolution.selectedProjectId)
+            branchInventory = try await environment.branches(selectedProjectID)
             branchLoadError = nil
         } catch {
             branchInventory = BranchInventory(names: [], remoteNames: [], localBranchNames: [])
             branchLoadError = error.localizedDescription
         }
-        guard acceptsResolution(generation: generation, input: input) else { return }
+        if let input {
+            guard acceptsResolution(generation: generation, input: input) else { return }
+        } else {
+            guard resolutionGeneration == generation, phase == .resolving else { return }
+        }
 
         resolved = resolution
-        candidateProjectIds = resolution.candidateProjectIds
-        projectId = resolution.selectedProjectId
+        pendingManualFallback = nil
+        candidateProjectIds = resolution.candidateProjectIDs
+        projectId = selectedProjectID
         branches = branchInventory.names
         remoteNames = branchInventory.remoteNames
         localBranchNames = branchInventory.localBranchNames
@@ -188,12 +240,15 @@ final class NewMissionDialogModel {
         )
         baseIsUserOwned = false
         branch = availableBranch(
-            seededBy: generatedBranch(projectID: projectId, issue: resolution.snapshot),
+            seededBy: generatedBranch(projectID: projectId, source: resolution.source),
             occupied: branchInventory.names + environment.reservedBranches(projectId),
             projectID: projectId
         )
         branchIsUserOwned = false
-        prompt = MissionPromptBuilder.build(snapshot: resolution.snapshot)
+        sourceTitle = resolution.source.contentOrigin == .manual ? "" : resolution.source.title
+        sourceBody = resolution.source.contentOrigin == .manual ? "" : resolution.source.body
+        prompt = MissionPromptBuilder.build(source: resolution.source)
+        promptIsUserOwned = false
         agentId = agentOptions.first?.id ?? ""
         phase = .confirmation
     }
@@ -203,9 +258,9 @@ final class NewMissionDialogModel {
     }
 
     func selectProject(_ candidateID: String) async {
-        guard phase == .confirmation, let issue = resolved?.snapshot else { return }
+        guard phase == .confirmation, let source = resolved?.source else { return }
         guard candidateProjectIds.contains(candidateID) else {
-            errorMessage = "Choose a repository matched to this issue."
+            errorMessage = "Choose a primary repository."
             return
         }
         guard candidateID != projectId else {
@@ -225,7 +280,7 @@ final class NewMissionDialogModel {
         let nextSeededBase = environment.configuredBase(candidateID)
         if updatesBase { base = nextSeededBase }
 
-        let nextSeededBranch = generatedBranch(projectID: candidateID, issue: issue)
+        let nextSeededBranch = generatedBranch(projectID: candidateID, source: source)
         if updatesBranch { branch = nextSeededBranch }
 
         branches = []
@@ -262,8 +317,8 @@ final class NewMissionDialogModel {
     }
 
     func create(allowDuplicate: Bool) async -> MissionID? {
-        guard let issue = resolved?.snapshot else {
-            errorMessage = "Resolve an issue before creating a Mission."
+        guard let source = resolvedSourceForCreation() else {
+            errorMessage = "Resolve a work item before creating a Mission."
             return nil
         }
         let normalizedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -284,7 +339,7 @@ final class NewMissionDialogModel {
             errorMessage = nil
             existingMissionID = nil
             let draft = MissionDraft(
-                issue: issue,
+                source: source,
                 projectId: projectId,
                 baseRef: normalizedBase,
                 baseRemoteName: baseRemoteName ?? "",
@@ -375,6 +430,9 @@ final class NewMissionDialogModel {
         projectGeneration &+= 1
         phase = .entry
         resolved = nil
+        pendingManualFallback = nil
+        sourceTitle = ""
+        sourceBody = ""
         candidateProjectIds = []
         projectId = ""
         base = ""
@@ -390,14 +448,82 @@ final class NewMissionDialogModel {
         existingMissionID = nil
         baseIsUserOwned = false
         branchIsUserOwned = false
+        promptIsUserOwned = false
         duplicateBranch = nil
     }
 
-    private func generatedBranch(projectID: String, issue: MissionIssueSnapshot) -> String {
+    private func generatedBranch(projectID: String, source: MissionSourceSnapshot) -> String {
         MissionBranchName.make(
-            issueNumber: issue.identity.number,
-            title: issue.title,
+            displayReference: source.displayReference,
+            title: source.title,
             prefix: environment.configuredBranchPrefix(projectID)
+        )
+    }
+
+    fileprivate func updatePromptFromUser(_ value: String) {
+        prompt = value
+        promptIsUserOwned = true
+    }
+
+    private func preferredProjectID(for resolution: ResolvedMissionSource) -> String? {
+        if let selected = resolution.selectedProjectID,
+           resolution.candidateProjectIDs.contains(selected) {
+            return selected
+        }
+        return resolution.candidateProjectIDs.first
+    }
+
+    private func resolvedSourceForCreation() -> MissionSourceSnapshot? {
+        guard let source = resolved?.source else { return nil }
+        guard source.contentOrigin == .manual else { return source }
+        let title = sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return nil }
+        return manualSource(from: source, title: title, body: sourceBody.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func refreshManualSourceDraft(updateBranch: Bool) {
+        guard phase == .confirmation,
+              var resolution = resolved,
+              resolution.source.contentOrigin == .manual
+        else { return }
+        let title = sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextSource = manualSource(from: resolution.source, title: title, body: sourceBody)
+        resolution.source = nextSource
+        resolved = resolution
+        if updateBranch, !branchIsUserOwned, !title.isEmpty {
+            branch = availableBranch(
+                seededBy: generatedBranch(projectID: projectId, source: nextSource),
+                occupied: branches + environment.reservedBranches(projectId),
+                projectID: projectId
+            )
+        }
+        if !promptIsUserOwned, !title.isEmpty {
+            prompt = MissionPromptBuilder.build(source: nextSource)
+        }
+    }
+
+    private func manualSource(
+        from source: MissionSourceSnapshot,
+        title: String,
+        body: String
+    ) -> MissionSourceSnapshot {
+        MissionSourceSnapshot(
+            identity: source.identity,
+            canonicalURL: source.canonicalURL,
+            providerLabel: source.providerLabel,
+            displayReference: source.displayReference,
+            repositoryLocator: source.repositoryLocator,
+            title: title,
+            body: body,
+            state: source.state,
+            labels: source.labels,
+            assignees: source.assignees,
+            providerUpdatedAt: source.providerUpdatedAt,
+            capturedAt: source.capturedAt,
+            refreshError: source.refreshError,
+            contentOrigin: source.contentOrigin,
+            isEditable: source.isEditable,
+            isRefreshable: source.isRefreshable
         )
     }
 
@@ -450,6 +576,13 @@ struct NewMissionDialogActions {
         )
     }
 
+    var prompt: Binding<String> {
+        Binding(
+            get: { model.prompt },
+            set: { model.updatePromptFromUser($0) }
+        )
+    }
+
     @discardableResult
     func create(allowDuplicate: Bool) async -> MissionID? {
         guard let missionID = await model.create(allowDuplicate: allowDuplicate) else {
@@ -490,12 +623,12 @@ struct NewMissionDialog: View {
     private var entrySheet: some View {
         DialogContainer(
             title: "New Mission",
-            subtitle: "Start from a GitHub or GitLab issue.",
+            subtitle: "Start from any work-item link.",
             content: {
-                DialogField(label: "Issue") {
+                DialogField(label: "Work item link") {
                     AlasField(
                         text: $model.reference,
-                        placeholder: "Issue URL or #123",
+                        placeholder: "Work-item URL or #123",
                         focusOnAppear: true,
                         onSubmit: continueFromEntry
                     )
@@ -513,6 +646,13 @@ struct NewMissionDialog: View {
                 }
                 if let errorMessage = model.errorMessage {
                     inlineError(errorMessage)
+                }
+                if model.pendingManualFallback != nil {
+                    Button("Continue Manually") {
+                        Task { await model.continueManually() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.phase != .entry)
                 }
             },
             cancelTitle: "Cancel",
@@ -532,8 +672,28 @@ struct NewMissionDialog: View {
             subtitle: "Review the worktree and ACP session draft before creating it.",
             width: Self.confirmationWidth,
             content: {
-                if let issue = model.resolved?.snapshot {
-                    NewMissionIssueCard(issue: issue)
+                if let source = model.resolved?.source {
+                    NewMissionSourceCard(source: source)
+                    if source.contentOrigin == .manual {
+                        DialogField(label: "Work-item title") {
+                            AlasField(text: $model.sourceTitle)
+                                .disabled(model.phase == .creating)
+                        }
+                        DialogField(label: "Work-item context") {
+                            TextEditor(text: $model.sourceBody)
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.color("fg"))
+                                .scrollContentBackground(.hidden)
+                                .frame(minHeight: 80, maxHeight: 140)
+                                .padding(8)
+                                .background(theme.color("bg-0"))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                                )
+                                .disabled(model.phase == .creating)
+                        }
+                    }
                 }
                 DialogField(label: "Repository") {
                     ProjectPicker(selection: projectSelection, projects: matchingProjects)
@@ -560,7 +720,7 @@ struct NewMissionDialog: View {
                     agentPicker
                 }
                 DialogField(label: "Initial prompt") {
-                    TextEditor(text: $model.prompt)
+                    TextEditor(text: actions.prompt)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(theme.color("fg"))
                         .scrollContentBackground(.hidden)
@@ -597,7 +757,7 @@ struct NewMissionDialog: View {
         )
         .interactiveDismissDisabled(model.phase == .creating)
         .confirmationDialog(
-            "A Mission already exists for this issue.",
+            "A Mission already exists for this work item.",
             isPresented: duplicateChoicePresented,
             titleVisibility: .visible
         ) {
@@ -690,25 +850,29 @@ struct NewMissionDialog: View {
     }
 }
 
-private struct NewMissionIssueCard: View {
-    let issue: MissionIssueSnapshot
+private struct NewMissionSourceCard: View {
+    let source: MissionSourceSnapshot
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
-                Text(issue.identity.provider.displayName)
-                Text(issue.identity.repositorySlug)
-                Text("#\(issue.identity.number)")
+                Text(source.providerLabel)
+                if let repositorySlug = source.repositoryLocator?.repositorySlug {
+                    Text(repositorySlug)
+                }
+                if let displayReference = source.displayReference {
+                    Text(displayReference)
+                }
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(theme.color("fg-dim"))
-            Text(issue.title)
+            Text(source.title.isEmpty ? "Manual work item" : source.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .textSelection(.enabled)
-            if !issue.labels.isEmpty {
-                Text(issue.labels.joined(separator: " · "))
+            if !source.labels.isEmpty {
+                Text(source.labels.joined(separator: " · "))
                     .font(.system(size: 10.5))
                     .foregroundStyle(theme.color("fg-muted"))
             }
@@ -728,13 +892,13 @@ extension NewMissionDialogModel.Environment {
     @MainActor
     static func live(state: AppState) -> Self {
         Self(
-            resolveIssue: { [weak state] reference in
+            resolveSource: { [weak state] reference in
                 guard let state else {
                     throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
                 }
-                let resolver = MissionIssueResolver(environment: .init(
+                let resolver = MissionSourceResolver(environment: .init(
                     projects: { state.projects },
-                    selectedProjectId: {
+                    selectedProjectID: {
                         state.selectedWorktreeId.flatMap { state.worktree(withId: $0)?.projectId }
                     },
                     remotes: { project in
@@ -742,7 +906,11 @@ extension NewMissionDialogModel.Environment {
                             worktreePath: URL(fileURLWithPath: project.path)
                         )
                     },
-                    providers: .live()
+                    providers: MissionSourceProviderRegistry([
+                        CodeHostMissionSourceProvider(kind: .github, providers: .live()),
+                        CodeHostMissionSourceProvider(kind: .gitlab, providers: .live()),
+                        ManualMissionSourceProvider()
+                    ])
                 ))
                 return try await resolver.resolve(reference)
             },
@@ -782,17 +950,20 @@ extension NewMissionDialogModel.Environment {
                 )
             },
             destinationAvailable: { [weak state] projectID, destination in
-                guard let state else { return false }
+                guard let state,
+                      let project = state.projects.first(where: { $0.id == projectID })
+                else { return false }
                 let candidate = destination.standardizedFileURL.path
-                let reserved = Self.activeMissionDestinationPaths(
-                    in: state.missions.aggregates,
-                    projectID: projectID
-                ).contains(candidate)
-                return !FileManager.default.fileExists(atPath: candidate)
-                    && !reserved
-                    && !state.projectsManager.worktrees(projectId: projectID).contains {
-                        $0.path.standardizedFileURL.path == candidate
-                    }
+                return Self.destinationAvailable(
+                    project: project,
+                    destination: destination,
+                    activeMissionDestinationPaths: Self.activeMissionDestinationPaths(
+                        in: state.missions.aggregates,
+                        projectID: projectID
+                    ),
+                    worktreePaths: state.projectsManager.worktrees(projectId: projectID).map(\.path),
+                    localDestinationExists: FileManager.default.fileExists(atPath: candidate)
+                )
             },
             createMission: { [weak state] draft, allowDuplicate in
                 guard let state else {
@@ -801,15 +972,15 @@ extension NewMissionDialogModel.Environment {
                 do {
                     let preparedDraft = try await state.preparedMissionDraft(draft)
                     return try await state.missions.create(preparedDraft, allowDuplicate: allowDuplicate)
-                } catch MissionStore.Error.duplicateActiveIssueIdentity {
+                } catch MissionStore.Error.duplicateActiveSourceIdentity {
                     if let existing = state.missions.aggregates.first(where: {
-                        $0.mission.state != .completed && $0.issue.identity == draft.issue.identity
+                        $0.mission.state != .completed && $0.source.identity == draft.source.identity
                     }) {
                         throw NewMissionDialogModel.CreationError.duplicate(
                             existing: existing.mission.id
                         )
                     }
-                    throw MissionStore.Error.duplicateActiveIssueIdentity
+                    throw MissionStore.Error.duplicateActiveSourceIdentity
                 }
             },
             openMission: { [weak state] missionID in
@@ -840,5 +1011,19 @@ extension NewMissionDialogModel.Environment {
                 .filter { $0.projectId == projectID }
                 .map { URL(fileURLWithPath: $0.destinationPath).standardizedFileURL.path }
         })
+    }
+
+    static func destinationAvailable(
+        project: ProjectConfig,
+        destination: URL,
+        activeMissionDestinationPaths: Set<String>,
+        worktreePaths: [URL],
+        localDestinationExists: Bool
+    ) -> Bool {
+        let candidate = destination.standardizedFileURL.path
+        let localCollision = project.host == nil && localDestinationExists
+        return !localCollision
+            && !activeMissionDestinationPaths.contains(candidate)
+            && !worktreePaths.contains { $0.standardizedFileURL.path == candidate }
     }
 }

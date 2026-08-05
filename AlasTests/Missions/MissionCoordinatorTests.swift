@@ -6,7 +6,7 @@ import Testing
 @Suite("Mission coordinator")
 struct MissionCoordinatorTests {
     private static let primaryDraft = MissionDraft(
-        issue: MissionFixtures.issue(),
+        source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
         projectId: "project-1",
         baseRef: "origin/main",
         baseRemoteName: "origin",
@@ -1026,7 +1026,7 @@ struct MissionCoordinatorTests {
         let firstID = try await coordinator.create(Self.draft)
         _ = await fake.waitUntilSettled(firstID)
 
-        await #expect(throws: MissionStore.Error.duplicateActiveIssueIdentity) {
+        await #expect(throws: MissionStore.Error.duplicateActiveSourceIdentity) {
             try await coordinator.create(Self.draft)
         }
         let duplicateID = try await coordinator.create(Self.draft, allowDuplicate: true)

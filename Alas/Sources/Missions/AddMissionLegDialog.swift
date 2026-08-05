@@ -133,7 +133,7 @@ struct AddMissionLegDialog: View {
             width: Self.width,
             content: {
                 if let aggregate {
-                    issueCard(aggregate)
+                    sourceCard(aggregate)
                     DialogField(label: "Repository") {
                         ProjectPicker(selection: projectSelection, projects: candidateProjects)
                             .disabled(candidateProjects.count < 2 || actions.isSubmitting)
@@ -239,20 +239,20 @@ struct AddMissionLegDialog: View {
         .disabled(actions.isSubmitting || model.agentOptions.isEmpty)
     }
 
-    private func issueCard(_ aggregate: MissionAggregate) -> some View {
+    private func sourceCard(_ aggregate: MissionAggregate) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("\(aggregate.issue.identity.provider.displayName.uppercased()) · \(aggregate.issue.identity.repositorySlug) #\(aggregate.issue.identity.number)")
+            Text(sourceSummary(aggregate.source))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(theme.color("fg-muted"))
-            Text(aggregate.issue.title)
+            Text(aggregate.source.title)
                 .font(.headline)
                 .foregroundStyle(theme.color("fg"))
-            Text(aggregate.issue.body.isEmpty ? "No issue description captured." : aggregate.issue.body)
+            Text(aggregate.source.body.isEmpty ? "No source context captured." : aggregate.source.body)
                 .font(.system(size: 12))
                 .foregroundStyle(theme.color("fg-dim"))
                 .textSelection(.enabled)
-                .accessibilityIdentifier("add-mission-leg-shared-issue-body")
-                .background(MissionAccessibilityMarker(identifier: "add-mission-leg-shared-issue-body"))
+                .accessibilityIdentifier("add-mission-leg-shared-source-body")
+                .background(MissionAccessibilityMarker(identifier: "add-mission-leg-shared-source-body"))
             Text("EXISTING LEGS")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(theme.color("fg-muted"))
@@ -281,6 +281,17 @@ struct AddMissionLegDialog: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
+    }
+
+    private func sourceSummary(_ source: MissionSourceSnapshot) -> String {
+        let repository = source.repositoryLocator?.repositorySlug
+        let reference = source.displayReference
+        return [source.providerLabel.uppercased(), repository, reference]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: " · ")
     }
 
     private func projectName(for projectID: String) -> String {

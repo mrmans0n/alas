@@ -103,6 +103,7 @@ struct MissionSidebarRow: Equatable, Identifiable {
     let title: String
     let providerName: String
     let providerIconName: String
+    let sourceReference: String?
     let issueNumber: String
     let repositorySlug: String
     let updatedAt: Date
@@ -113,10 +114,11 @@ struct MissionSidebarRow: Equatable, Identifiable {
     init(aggregate: MissionAggregate, knownWorktreeIds _: Set<String> = []) {
         id = aggregate.mission.id
         title = aggregate.mission.title
-        providerName = aggregate.issue.identity.provider.displayName
-        providerIconName = aggregate.issue.identity.provider.iconName
-        issueNumber = "#\(aggregate.issue.identity.number)"
-        repositorySlug = aggregate.issue.identity.repositorySlug
+        providerName = aggregate.source.providerLabel
+        providerIconName = aggregate.source.repositoryLocator?.provider.iconName ?? "link"
+        sourceReference = aggregate.source.displayReference
+        issueNumber = aggregate.source.displayReference ?? ""
+        repositorySlug = aggregate.source.repositoryLocator?.repositorySlug ?? ""
         updatedAt = aggregate.mission.updatedAt
         status = Self.status(for: aggregate)
         tone = Self.tone(for: aggregate)
@@ -129,7 +131,9 @@ struct MissionSidebarRow: Equatable, Identifiable {
     }
 
     var helpText: String {
-        let prefix = "\(providerName) \(repositorySlug) \(issueNumber)"
+        let prefix = [providerName, repositorySlug.isEmpty ? nil : repositorySlug, sourceReference]
+            .compactMap { $0 }
+            .joined(separator: " ")
         if isNavigationEnabled {
             return "\(prefix) · \(status.title)"
         }
@@ -314,9 +318,11 @@ private struct MissionSidebarRowView: View {
                         Icon(name: row.providerIconName, size: 11, color: theme.color("fg-muted"))
                             .frame(width: 13, height: 13)
                             .accessibilityLabel(row.providerName)
-                        Text(row.issueNumber)
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                            .foregroundColor(theme.color("fg-faint"))
+                        if let sourceReference = row.sourceReference {
+                            Text(sourceReference)
+                                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                                .foregroundColor(theme.color("fg-faint"))
+                        }
                         Text(row.title)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(theme.color(row.isNavigationEnabled ? "fg" : "fg-faint"))
