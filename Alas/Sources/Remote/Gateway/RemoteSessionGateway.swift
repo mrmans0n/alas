@@ -20,7 +20,7 @@ final class RemoteSessionGateway {
     private var configSubscriptions: [String: AnyCancellable] = [:]
     private var configCoalesce: [String: Task<Void, Never>] = [:]
     private var lastConfig: [String: RemoteSessionConfig] = [:]
-    private var lastQueue: [String: [RemoteQueuedPrompt]] = [:]
+    private var lastQueue: [String: RemoteQueueSnapshot] = [:]
     private var coalesce: [String: Task<Void, Never>] = [:]
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
@@ -530,6 +530,16 @@ final class RemoteSessionGateway {
         emitPendingElicitationIfAny(id: id, session: session)
     }
 
+    /// Everything `sendQueueState` dedupes on. `steerUndoAvailable` can flip
+    /// (e.g. the 5s steer-undo window expiring) while `items` stays the same
+    /// (already emptied by the steer itself) — both must be in the cache key
+    /// or that flip would be silently swallowed and the client would keep
+    /// showing a stale "undo available" affordance.
+    private struct RemoteQueueSnapshot: Equatable {
+        let items: [RemoteQueuedPrompt]
+        let steerUndoAvailable: Bool
+    }
+
     /// Push the session's queue to the client. `force` bypasses the dedupe so
     /// a fresh subscribe always gets a baseline — otherwise an unchanged
     /// (typically empty) queue would be suppressed and the client would show
@@ -537,8 +547,9 @@ final class RemoteSessionGateway {
     private func sendQueueState(id: String, session: ACPSession, force: Bool = false) {
         let items = RemoteQueueProjection.project(session.queue)
         let steerUndoAvailable = !(session.steerUndo?.snapshot.isEmpty ?? true)
-        guard force || lastQueue[id] != items else { return }
-        lastQueue[id] = items
+        let snapshot = RemoteQueueSnapshot(items: items, steerUndoAvailable: steerUndoAvailable)
+        guard force || lastQueue[id] != snapshot else { return }
+        lastQueue[id] = snapshot
         send(.queueState(sessionId: id, items: items, steerUndoAvailable: steerUndoAvailable))
     }
 

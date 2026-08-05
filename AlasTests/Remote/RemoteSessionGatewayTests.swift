@@ -2014,4 +2014,25 @@ struct RemoteSessionGatewayTests {
         #expect(items?.first?.text == "queued one")
         #expect(items?.first?.status == "pending")
     }
+
+    @Test func resubscribeStillEmitsQueueStateWhenUnchanged() async throws {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.sessions[id] = try makeSessionWithAgentText("x")
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        // First subscribe (e.g. one browser tab) populates lastQueue[id] with
+        // the same (empty) snapshot a second subscribe would compute — without
+        // `force: true` on the subscribe path, the second subscribe's send
+        // would be swallowed by the dedupe.
+        await gateway.handle(.subscribe(sessionId: id))
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }
+        #expect(states == [[], []])
+    }
 }
