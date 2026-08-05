@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-05
+
+### ✨ Features
+
+- Add issue-driven Mission workflows, cross-repository Mission legs, and provider-neutral Mission sources (#940, #944, #957).
+- Add Finder-style file actions and worktree sorting controls in the sidebar (#952, #954).
+- Add support for reopening closed tabs (#956).
+- Support dragging files out of Alas into other apps (#955).
+- Stream progressive `git-gud` inbox refresh and sync feedback (#938, #939).
+- Improve transcript Markdown rendering and native Mermaid preview support (#929, #932).
+- Add edit mode to the run script palette (#930).
+
+### 🐛 Fixes
+
+- Re-apply editor theme styling after remote file loads and keep autocomplete visible (#941, #953).
+- Make the ACP AppKit transcript scroller usable for scrolling back, fix slash-command autocomplete, and avoid one wedged broker hanging every session (#934, #942, #950).
+- Refuse outsized ACP whole-file reads and order requests by acceptance (#946).
+- Fix stale `git-gud` land eligibility and preserve input across availability probes (#935, #947).
+- Stop external Markdown buffer observer loops (#937).
+- Keep imported worktree activity timestamps based on HEAD commits (#951).
+- Cap expanded commit details and bound diff review rendering work (#936, #949).
+
+### 🏗️ Internal
+
+- Cover the ACP undeliverable-response fallback and new scroller behavior with focused tests (#943, #945).
+- Update Rust crate `base64` to 0.23.1 and BeautifulMermaidSwift to 1.0.4 (#933, #948).
+- Clarify run script activation comments (#931).
+
 ## [0.13.10] - 2026-08-02
 
 ### 🏗️ Internal
