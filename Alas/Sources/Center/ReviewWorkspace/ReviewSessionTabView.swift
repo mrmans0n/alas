@@ -216,29 +216,34 @@ struct ReviewSessionTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "text.badge.checkmark")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(theme.color("accent"))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record?.target.title ?? tabState.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .accessibilityLabel(record?.target.title ?? tabState.title)
-                if let sourceDescription = record?.target.sourceDescription {
-                    Text(sourceDescription)
-                        .font(.system(size: 11))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "text.badge.checkmark")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(theme.color("accent"))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record?.target.title ?? tabState.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                        .accessibilityLabel(record?.target.title ?? tabState.title)
+                    if let sourceDescription = record?.target.sourceDescription {
+                        Text(sourceDescription)
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-muted"))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 12)
+                if let providerDescription = record?.target.providerDescription {
+                    Text(providerDescription)
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 12)
-            if let providerDescription = record?.target.providerDescription {
-                Text(providerDescription)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .lineLimit(1)
+            if showsTrackedRevisionRow {
+                trackedRevisionRow
             }
         }
         .padding(.horizontal, 14)
@@ -250,6 +255,94 @@ struct ReviewSessionTabView: View {
                 label: record?.target.title ?? tabState.title
             )
         )
+    }
+
+    private var trackedRevision: TrackedRevision? {
+        guard case .trackedCommit(let revision) = record?.target.payload else { return nil }
+        return revision
+    }
+
+    private var showsTrackedRevisionRow: Bool {
+        trackedRevision != nil || record?.target.kind == .commit
+    }
+
+    private var trackedRevisionRow: some View {
+        HStack(spacing: 8) {
+            if let revision = trackedRevision {
+                Text("\(revision.expression) -> \(String(revision.resolvedSHA.prefix(10)))")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("review-session-revision-following-label")
+
+                if let pending = revision.pendingCheckout {
+                    Text("Paused on checkout to \(pending.branch)")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("warn"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("review-session-revision-pending-checkout")
+                    Button("Update") {
+                        acceptPendingCheckout()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("review-session-revision-accept-checkout")
+                }
+            } else {
+                Text("Fixed commit review")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-muted"))
+            }
+
+            Spacer(minLength: 8)
+
+            if trackedRevision == nil {
+                Button("Follow Revision…") {
+                    promptFollowRevision(prefill: nil)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityIdentifier("review-session-revision-follow")
+            } else {
+                Button("Edit…") {
+                    promptFollowRevision(prefill: trackedRevision?.expression)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityIdentifier("review-session-revision-edit")
+
+                Button("Stop") {
+                    stopFollowingRevision()
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityIdentifier("review-session-revision-stop")
+            }
+        }
+    }
+
+    @MainActor
+    private func promptFollowRevision(prefill: String?) {
+        guard let worktree, let appState else { return }
+        appState.promptFollowRevision(
+            worktreeID: worktree.id,
+            tabID: tabState.id,
+            prefill: prefill
+        )
+    }
+
+    @MainActor
+    private func stopFollowingRevision() {
+        guard let worktree, let appState else { return }
+        appState.stopFollowingRevision(worktreeID: worktree.id, tabID: tabState.id)
+    }
+
+    @MainActor
+    private func acceptPendingCheckout() {
+        guard let worktree, let appState else { return }
+        appState.acceptTrackedRevisionCheckout(worktreeID: worktree.id, tabID: tabState.id)
     }
 
     @ViewBuilder

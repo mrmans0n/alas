@@ -18,6 +18,9 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onOpenWithSystem: (TabID) -> Void
     let onRevealInFinder: (TabID) -> Void
+    var revisionFollowCapability: (Tab) -> RevisionFollowCapability = { tab in
+        RevisionFollowCapability(tab: tab)
+    }
     var onFollowRevision: (TabID) -> Void = { _ in }
     var onEditRevision: (TabID) -> Void = { _ in }
     var onStopFollowingRevision: (TabID) -> Void = { _ in }
@@ -159,15 +162,16 @@ struct TabBarView: View {
                 Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
                 Divider()
             }
-            if tab.supportsRevisionFollowActions {
-                Button(tab.isFollowingRevision ? "Edit Followed Revision…" : "Follow Revision…") {
-                    if tab.isFollowingRevision {
+            let revisionCapability = revisionFollowCapability(tab)
+            if revisionCapability.isSupported {
+                Button(revisionCapability.isFollowing ? "Edit Followed Revision…" : "Follow Revision…") {
+                    if revisionCapability.isFollowing {
                         onEditRevision(tab.id)
                     } else {
                         onFollowRevision(tab.id)
                     }
                 }
-                if tab.isFollowingRevision {
+                if revisionCapability.isFollowing {
                     Button("Stop Following Revision") { onStopFollowingRevision(tab.id) }
                 }
                 Divider()
@@ -201,6 +205,23 @@ struct TabBarView: View {
         } else {
             proxy.scrollTo(activeId, anchor: .center)
         }
+    }
+}
+
+struct RevisionFollowCapability: Equatable {
+    let isSupported: Bool
+    let isFollowing: Bool
+
+    init(isSupported: Bool, isFollowing: Bool) {
+        self.isSupported = isSupported
+        self.isFollowing = isFollowing
+    }
+
+    init(tab: Tab) {
+        self.init(
+            isSupported: tab.supportsRevisionFollowActions,
+            isFollowing: tab.isFollowingRevision
+        )
     }
 }
 

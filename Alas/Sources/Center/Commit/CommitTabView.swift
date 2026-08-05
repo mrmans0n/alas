@@ -24,6 +24,7 @@ struct CommitTabView: View {
     @State private var reviewSessionLaunchError: String?
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var isRefreshingTrackedRevision = false
 
     @Environment(\.theme) private var theme
     private let git = GitService()
@@ -66,7 +67,18 @@ struct CommitTabView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let details {
-                CommitHeaderView(details: details, expanded: $headerExpanded)
+                CommitHeaderView(
+                    details: details,
+                    expanded: $headerExpanded,
+                    revisionExpression: tabState.revision.tracked?.expression,
+                    pendingCheckout: tabState.revision.tracked?.pendingCheckout,
+                    isRefreshingRevision: isRefreshingTrackedRevision,
+                    revisionError: detailsError,
+                    onFollowRevision: { appState.promptFollowRevision(worktreeID: worktreeId, tabID: tabState.id) },
+                    onEditRevision: editFollowedRevision,
+                    onStopFollowingRevision: stopFollowingRevision,
+                    onAcceptPendingCheckout: acceptPendingCheckout
+                )
                 commitReviewContent(details: details)
             } else if loadingDetails {
                 Spinner()
@@ -190,7 +202,9 @@ struct CommitTabView: View {
     private func loadDetails() async {
         let requestedKey = loadTaskID
         activeDetailsKey = requestedKey
+        let isTrackedRefresh = tabState.revision.tracked != nil && details != nil
         loadingDetails = details == nil
+        isRefreshingTrackedRevision = isTrackedRefresh
         detailsError = nil
         if details == nil {
             reviewSession = nil
@@ -205,6 +219,7 @@ struct CommitTabView: View {
         headerExpanded = true
         defer {
             if activeDetailsKey == requestedKey { loadingDetails = false }
+            if activeDetailsKey == requestedKey { isRefreshingTrackedRevision = false }
         }
         do {
             let resolved = try await resolvedRevisionForLoad()
@@ -329,6 +344,25 @@ struct CommitTabView: View {
             },
             onFailure: { reviewSessionLaunchError = $0.localizedDescription }
         )
+    }
+
+    @MainActor
+    private func editFollowedRevision() {
+        appState.promptFollowRevision(
+            worktreeID: worktreeId,
+            tabID: tabState.id,
+            prefill: tabState.revision.tracked?.expression
+        )
+    }
+
+    @MainActor
+    private func stopFollowingRevision() {
+        appState.stopFollowingRevision(worktreeID: worktreeId, tabID: tabState.id)
+    }
+
+    @MainActor
+    private func acceptPendingCheckout() {
+        appState.acceptTrackedRevisionCheckout(worktreeID: worktreeId, tabID: tabState.id)
     }
 }
 
