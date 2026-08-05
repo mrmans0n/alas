@@ -160,6 +160,34 @@ struct NewMissionDialogTests {
         #expect(draft.projectId == "project-b")
     }
 
+    @Test("arbitrary link metadata prefills editable source and prompt")
+    func arbitraryLinkMetadataPrefillsConfirmation() async {
+        let manual = MissionFixtures.manualSource(
+            url: "https://linear.app/acme/issue/ALAS-123/fix-login-timeout",
+            title: "Fix login timeout",
+            body: "Sessions expire during refresh."
+        )
+        let fake = NewMissionDialogFake(
+            resolvedSource: ResolvedMissionSource(
+                source: manual,
+                repositoryLocator: nil,
+                candidateProjectIDs: ["alas"],
+                selectedProjectID: "alas"
+            )
+        )
+        let model = NewMissionDialogModel(environment: fake.environment)
+        model.reference = manual.canonicalURL.absoluteString
+
+        await model.resolve()
+
+        #expect(model.sourceTitle == "Fix login timeout")
+        #expect(model.sourceBody == "Sessions expire during refresh.")
+        #expect(model.branch == "feature/fix-login-timeout")
+        #expect(model.prompt.contains("Fix login timeout"))
+        #expect(model.prompt.contains("Sessions expire during refresh."))
+        #expect(model.validationMessage == nil)
+    }
+
     @Test("provider failure waits for explicit manual continuation")
     func providerFailureWaitsForExplicitManualContinuation() async {
         let fallbackSource = MissionFixtures.manualSource(

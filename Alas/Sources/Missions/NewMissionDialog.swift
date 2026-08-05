@@ -245,8 +245,8 @@ final class NewMissionDialogModel {
             projectID: projectId
         )
         branchIsUserOwned = false
-        sourceTitle = resolution.source.contentOrigin == .manual ? "" : resolution.source.title
-        sourceBody = resolution.source.contentOrigin == .manual ? "" : resolution.source.body
+        sourceTitle = resolution.source.title
+        sourceBody = resolution.source.body
         prompt = MissionPromptBuilder.build(source: resolution.source)
         promptIsUserOwned = false
         agentId = agentOptions.first?.id ?? ""
@@ -909,7 +909,7 @@ extension NewMissionDialogModel.Environment {
                     providers: MissionSourceProviderRegistry([
                         CodeHostMissionSourceProvider(kind: .github, providers: .live()),
                         CodeHostMissionSourceProvider(kind: .gitlab, providers: .live()),
-                        ManualMissionSourceProvider()
+                        ManualMissionSourceProvider(metadataFetcher: .live)
                     ])
                 ))
                 return try await resolver.resolve(reference)

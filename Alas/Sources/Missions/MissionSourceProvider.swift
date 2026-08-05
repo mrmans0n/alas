@@ -104,6 +104,11 @@ private extension MissionSourceReference {
 
 struct ManualMissionSourceProvider: MissionSourceProviding {
     let id: MissionSourceProviderID = .manual
+    private let metadataFetcher: WebPageMetadataFetcher?
+
+    init(metadataFetcher: WebPageMetadataFetcher? = nil) {
+        self.metadataFetcher = metadataFetcher
+    }
 
     func recognizes(_ reference: MissionSourceReference) -> Bool {
         guard case .url = reference else { return false }
@@ -119,12 +124,29 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
         guard case .url(let url) = reference else {
             throw CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
         }
-        let source = try Self.snapshot(for: url)
+        let metadata = try? await metadataFetcher?.metadata(for: url)
+        let source = try Self.snapshot(
+            for: metadata?.canonicalURL ?? url,
+            displayReference: metadata?.displayReference,
+            providerLabel: metadata?.providerLabel,
+            title: metadata?.title ?? "",
+            body: metadata?.summary ?? ""
+        )
+        let inferredProjectID: String?
+        if let metadata {
+            inferredProjectID = await self.inferredProjectID(
+                for: metadata,
+                projects: projects,
+                remotes: remotes
+            )
+        } else {
+            inferredProjectID = nil
+        }
         return .init(
             source: source,
             repositoryLocator: nil,
             candidateProjectIDs: projects.map(\.id),
-            selectedProjectID: selectedProjectID
+            selectedProjectID: inferredProjectID ?? selectedProjectID
         )
     }
 
@@ -141,19 +163,23 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
         identity: MissionSourceIdentity? = nil,
         repositoryLocator: MissionRepositoryLocator? = nil,
         displayReference: String? = nil,
+        providerLabel: String? = nil,
+        title: String = "",
+        body: String = "",
         isRefreshable: Bool = false
     ) throws -> MissionSourceSnapshot {
         let canonicalURL = try canonicalURL(url)
         return .init(
             identity: identity ?? .init(providerID: .manual, stableID: canonicalURL.absoluteString),
             canonicalURL: canonicalURL,
-            providerLabel: repositoryLocator?.provider.displayName
+            providerLabel: providerLabel
+                ?? repositoryLocator?.provider.displayName
                 ?? URLComponents(url: canonicalURL, resolvingAgainstBaseURL: false)?.host
                 ?? "Manual",
             displayReference: displayReference,
             repositoryLocator: repositoryLocator,
-            title: "",
-            body: "",
+            title: title,
+            body: body,
             state: .unknown,
             labels: [],
             assignees: [],
@@ -164,6 +190,70 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
             isEditable: true,
             isRefreshable: isRefreshable
         )
+    }
+
+    private func inferredProjectID(
+        for metadata: WebPageMetadata,
+        projects: [ProjectConfig],
+        remotes: @escaping @Sendable (ProjectConfig) async throws -> [GitRemote]
+    ) async -> String? {
+        let context = "\(metadata.title)\n\(metadata.summary)"
+        var scores: [(id: String, score: Int)] = []
+        for project in projects {
+            var score = Self.projectNameScore(project, context: context)
+            if let projectRemotes = try? await remotes(project) {
+                for remote in CodeHostRemoteDetector.detectAll(from: projectRemotes) {
+                    score = max(score, Self.remoteScore(remote, metadata: metadata))
+                }
+            }
+            if score > 0 {
+                scores.append((project.id, score))
+            }
+        }
+        guard let highest = scores.map(\.score).max() else { return nil }
+        let best = scores.filter { $0.score == highest }
+        return best.count == 1 ? best[0].id : nil
+    }
+
+    private static func projectNameScore(_ project: ProjectConfig, context: String) -> Int {
+        let names = Set([
+            project.name.trimmingCharacters(in: .whitespacesAndNewlines),
+            URL(fileURLWithPath: project.path).lastPathComponent,
+        ])
+        return names.contains { name in
+            name.count >= 3 && context.range(
+                of: name,
+                options: [.caseInsensitive, .diacriticInsensitive]
+            ) != nil
+        } ? 10 : 0
+    }
+
+    private static func remoteScore(
+        _ remote: CodeHostRemote,
+        metadata: WebPageMetadata
+    ) -> Int {
+        let remoteHost = remote.webURL.host?.lowercased()
+        let remotePath = normalizedRepositoryPath(remote.webURL.path)
+        if metadata.links.contains(where: { link in
+            guard link.host?.lowercased() == remoteHost else { return false }
+            let linkPath = normalizedRepositoryPath(link.path)
+            return linkPath == remotePath || linkPath.hasPrefix("\(remotePath)/")
+        }) {
+            return 100
+        }
+        let context = "\(metadata.title)\n\(metadata.summary)"
+        return context.range(
+            of: remote.repositorySlug,
+            options: [.caseInsensitive, .diacriticInsensitive]
+        ) == nil ? 0 : 50
+    }
+
+    private static func normalizedRepositoryPath(_ path: String) -> String {
+        var normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized.lowercased().hasSuffix(".git") {
+            normalized.removeLast(4)
+        }
+        return normalized.lowercased()
     }
 
     static func canonicalURL(_ url: URL) throws -> URL {
