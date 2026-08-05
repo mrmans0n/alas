@@ -84,6 +84,36 @@ struct ACPTranscriptScrollerViewTests {
         #expect(!reports.contains { !$0.programmatic })
     }
 
+    @Test("logical native scroller commits only when AppKit sends its action")
+    func logicalScrollerCommitsOnAction() throws {
+        let s = scroller()
+        let verticalScroller = try #require(s.verticalScroller)
+        var committedValues: [Double] = []
+        s.onLogicalScrollCommit = { committedValues.append($0) }
+
+        #expect(!verticalScroller.isContinuous)
+        s.setLogicalScrollerMetrics(.init(
+            value: 0.25,
+            knobProportion: 0.1,
+            logicalViewportMessages: 10
+        ))
+        #expect(abs(verticalScroller.doubleValue - 0.25) < 0.000_001)
+        #expect(abs(verticalScroller.knobProportion - 0.1) < 0.000_001)
+
+        // A physical document move makes NSScrollView reflect its own
+        // bounded range, but our logical metrics must win immediately.
+        s.setScrollY(1000)
+        #expect(abs(verticalScroller.doubleValue - 0.25) < 0.000_001)
+        #expect(abs(verticalScroller.knobProportion - 0.1) < 0.000_001)
+
+        // Knob tracking changes the control value without navigating. A
+        // non-continuous NSScroller sends its action only when tracking ends.
+        verticalScroller.doubleValue = 0.75
+        #expect(committedValues.isEmpty)
+        _ = verticalScroller.sendAction(verticalScroller.action, to: verticalScroller.target)
+        #expect(committedValues == [0.75])
+    }
+
     /// `onContentWidthChange` is the hook `ACPTranscriptScroller.Coordinator`
     /// uses to reconcile after a real width arrives from AppKit's own layout
     /// pass, without any accompanying SwiftUI model update (P1 finding,

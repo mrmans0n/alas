@@ -90,6 +90,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Set when a head step has been requested and cleared by the next
         /// `update(host:)`. See `handleScroll`'s head-step block.
         private var pendingHeadStep = false
+        /// Global message index selected by a logical scrollbar release that
+        /// still lies in tail-first hydration's unmaterialized prefix.
+        private var pendingLogicalTargetGlobalIndex: Int?
+        /// Stable id to align at the viewport top after its bounded window
+        /// has been reconciled into the AppKit tiling map.
+        private var pendingLogicalTargetId: String?
+        private var isPendingLogicalResolutionScheduled = false
         /// Memoizes the window-sliced row list + its id → message-index
         /// lookup, keyed on (messages generation, window bounds) — the same
         /// cache the legacy list uses. `rememberCurrentAnchor` runs on every
@@ -119,6 +126,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
             scroller.onViewportHeightChange = { [weak self] in
                 self?.reconcileForViewportHeightChange()
+            }
+            scroller.onLogicalScrollCommit = { [weak self] value in
+                self?.commitLogicalScroll(value: value)
             }
             update(host: host)
         }
@@ -213,10 +223,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 scroller?.scrollToBottom()
             }
             reconciler.layoutMountedRows()
+            syncLogicalScrollerMetrics()
         }
 
         func update(host: ACPTranscriptScroller) {
             self.host = host
+            schedulePendingLogicalTargetResolutionIfPossible()
             // Re-apply unconditionally: `reconciler.apply` itself early-
             // returns and records nothing for a non-positive width (host
             // view not yet laid out), so skipping this call based on any
@@ -237,6 +249,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // (or, at width 0, will be re-requested by the next scroll tick).
             pendingHeadStep = false
             restoreInitialPositionIfNeeded()
+            alignPendingLogicalTargetIfPossible()
+            syncLogicalScrollerMetrics()
         }
 
         // MARK: row specs
@@ -630,6 +644,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 if !reconciler.isApplyingSpecs {
                     reconciler.layoutMountedRows()
                 }
+                syncLogicalScrollerMetrics()
                 return
             }
 
@@ -729,7 +744,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // queues several steps that land together as a single
                 // 60-150 row insertion measured in one synchronous pass.
                 pendingHeadStep = true
-                host.transcript.stepHeadBack(boundTail: false)
+                host.transcript.stepHeadBack()
             }
             if ACPTranscriptScroller.shouldStepTailForward(
                 visibleTail: host.transcript.visibleTailBound,
@@ -738,12 +753,140 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 threshold: threshold,
                 previousScrollY: previousY, newScrollY: newY
             ) {
-                host.transcript.stepTailForward(preserving: nil, boundHead: false)
+                host.transcript.stepTailForward(preserving: nil)
             }
 
             if !host.session.followsTranscriptTail {
                 rememberCurrentAnchor()
             }
+            syncLogicalScrollerMetrics()
+        }
+
+        private func commitLogicalScroll(value: Double) {
+            guard let host, let scroller, host.transcript.logicalMessageCount > 0 else { return }
+            if value >= 1 - Double.ulpOfOne {
+                pendingLogicalTargetGlobalIndex = nil
+                pendingLogicalTargetId = nil
+                host.session.followsTranscriptTail = true
+                reconciler?.setFollowsTail(true)
+                host.transcript.resetWindowToTail()
+                host.onRememberScrollAnchor(nil, nil, true)
+                update(host: host)
+                scroller.scrollToBottom()
+                syncLogicalScrollerMetrics()
+                return
+            }
+
+            if host.session.followsTranscriptTail {
+                pauseTailFollow()
+            } else {
+                reconciler?.setFollowsTail(false)
+                host.transcript.freezeVisibleTail()
+            }
+            let target = ACPTranscriptLogicalScrollModel.targetGlobalIndex(
+                value: value,
+                totalCount: host.transcript.logicalMessageCount,
+                viewportHeight: scroller.viewportHeight
+            )
+            pendingLogicalTargetGlobalIndex = target
+            if resolvePendingLogicalTargetIfPossible() {
+                update(host: host)
+            } else {
+                syncLogicalScrollerMetrics()
+            }
+        }
+
+        /// Returns true when the pending global target is materialized and a
+        /// bounded local window has been selected for the next reconcile.
+        @discardableResult
+        private func resolvePendingLogicalTargetIfPossible() -> Bool {
+            guard let host, let target = pendingLogicalTargetGlobalIndex else { return false }
+            let count = host.transcript.logicalMessageCount
+            guard count > 0 else {
+                pendingLogicalTargetGlobalIndex = nil
+                return false
+            }
+            let clampedTarget = min(max(0, target), count - 1)
+            pendingLogicalTargetGlobalIndex = clampedTarget
+            guard let localIndex = host.transcript.localIndex(forGlobalIndex: clampedTarget) else {
+                return false
+            }
+            pendingLogicalTargetGlobalIndex = nil
+            pendingLogicalTargetId = host.transcript.stableId(
+                for: host.transcript.messages[localIndex]
+            )
+            host.transcript.setVisibleWindow(around: localIndex)
+            return true
+        }
+
+        /// `update(host:)` is called from `updateNSView`; selecting a new
+        /// published render window synchronously inside that boundary would
+        /// mutate SwiftUI-observed state during view reconciliation. Once
+        /// backfill makes a queued target available, resolve it on the next
+        /// main-actor turn instead.
+        private func schedulePendingLogicalTargetResolutionIfPossible() {
+            guard !isPendingLogicalResolutionScheduled,
+                  let host,
+                  let target = pendingLogicalTargetGlobalIndex,
+                  host.transcript.localIndex(forGlobalIndex: target) != nil
+            else { return }
+            isPendingLogicalResolutionScheduled = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isPendingLogicalResolutionScheduled = false
+                guard let host = self.host,
+                      self.resolvePendingLogicalTargetIfPossible()
+                else { return }
+                self.update(host: host)
+            }
+        }
+
+        private func alignPendingLogicalTargetIfPossible() {
+            guard let id = pendingLogicalTargetId,
+                  let row = tiling.row(withId: id),
+                  let scroller
+            else { return }
+            scroller.setScrollY(row.minY)
+            pendingLogicalTargetId = nil
+            rememberCurrentAnchor()
+        }
+
+        private func syncLogicalScrollerMetrics() {
+            guard let host, let scroller else { return }
+            let topGlobalIndex = pendingLogicalTargetGlobalIndex
+                ?? currentTopGlobalMessageIndex()
+                ?? host.transcript.globalIndex(forLocalIndex: host.transcript.visibleHead)
+                ?? 0
+            scroller.setLogicalScrollerMetrics(ACPTranscriptLogicalScrollModel.metrics(
+                totalCount: host.transcript.logicalMessageCount,
+                viewportHeight: scroller.viewportHeight,
+                topGlobalIndex: topGlobalIndex,
+                isAtTail: host.session.followsTranscriptTail
+            ))
+        }
+
+        private func currentTopGlobalMessageIndex() -> Int? {
+            guard let host, let scroller,
+                  let anchorId = tiling.nearestNonSyntheticRowId(
+                      to: scroller.scrollY,
+                      syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
+                  )
+            else { return nil }
+            let lookup = visibleRowsCache.lookup(
+                generation: host.transcript.messagesGeneration,
+                head: host.transcript.visibleHead,
+                tail: host.transcript.visibleTailBound,
+                build: {
+                    ACPMessageList.visibleRows(
+                        messages: host.transcript.messages,
+                        visibleHead: host.transcript.visibleHead,
+                        visibleTail: host.transcript.visibleTailBound,
+                        stableId: { host.transcript.stableId(for: $0) }
+                    )
+                }
+            )
+            guard let localIndex = lookup.transcriptIndex(for: anchorId) else { return nil }
+            return host.transcript.globalIndex(forLocalIndex: localIndex)
         }
 
         private func pauseTailFollow() {
@@ -868,6 +1011,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         var mountedRowCountForTesting: Int {
             reconciler?.mountedRowIdsForTesting.count ?? 0
+        }
+
+        var pendingLogicalTargetGlobalIndexForTesting: Int? {
+            pendingLogicalTargetGlobalIndex
+        }
+
+        var topVisibleMessageIdForTesting: String? {
+            guard let scroller else { return nil }
+            return tiling.nearestNonSyntheticRowId(
+                to: scroller.scrollY,
+                syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
+            )
         }
         #endif
     }

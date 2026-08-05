@@ -16,6 +16,8 @@ final class ACPTranscriptDocumentView: NSView {
 final class ACPTranscriptScrollerView: NSScrollView {
     let flippedDocumentView = ACPTranscriptDocumentView()
     var onScroll: ((_ previousY: CGFloat?, _ newY: CGFloat, _ viewportHeight: CGFloat, _ contentHeight: CGFloat, _ isProgrammatic: Bool) -> Void)?
+    var onLogicalScrollCommit: ((Double) -> Void)?
+    private var logicalScrollerMetrics: ACPTranscriptLogicalScrollModel.Metrics?
 
     /// Fired from `layout()` whenever `contentView.bounds.width` differs
     /// from the last width reported — including the very first non-zero
@@ -119,6 +121,9 @@ final class ACPTranscriptScrollerView: NSScrollView {
         drawsBackground = false
         hasVerticalScroller = true
         hasHorizontalScroller = false
+        verticalScroller?.isContinuous = false
+        verticalScroller?.target = self
+        verticalScroller?.action = #selector(commitLogicalScroll(_:))
         automaticallyAdjustsContentInsets = false
         documentView = flippedDocumentView
         flippedDocumentView.frame = NSRect(x: 0, y: 0, width: frameRect.width, height: 0)
@@ -204,6 +209,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
         } else {
             onViewportHeightChange?()
         }
+        applyLogicalScrollerMetrics()
     }
 
     var scrollY: CGFloat { contentView.bounds.origin.y }
@@ -218,6 +224,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
         performProgrammatic {
             flippedDocumentView.frame.size.height = height
         }
+        applyLogicalScrollerMetrics()
     }
 
     /// Grow the document by prepended content and shift the scroll offset by
@@ -237,6 +244,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
             contentView.setBoundsOrigin(NSPoint(x: origin.x, y: clampedScrollY(origin.y + delta)))
             reflectScrolledClipView(contentView)
         }
+        applyLogicalScrollerMetrics()
     }
 
     func setScrollY(_ y: CGFloat) {
@@ -247,6 +255,22 @@ final class ACPTranscriptScrollerView: NSScrollView {
             contentView.setBoundsOrigin(NSPoint(x: contentView.bounds.origin.x, y: clamped))
             reflectScrolledClipView(contentView)
         }
+        applyLogicalScrollerMetrics()
+    }
+
+    func setLogicalScrollerMetrics(_ metrics: ACPTranscriptLogicalScrollModel.Metrics) {
+        logicalScrollerMetrics = metrics
+        applyLogicalScrollerMetrics()
+    }
+
+    private func applyLogicalScrollerMetrics() {
+        guard let logicalScrollerMetrics, let verticalScroller else { return }
+        verticalScroller.doubleValue = logicalScrollerMetrics.value
+        verticalScroller.knobProportion = logicalScrollerMetrics.knobProportion
+    }
+
+    @objc private func commitLogicalScroll(_ sender: NSScroller) {
+        onLogicalScrollCommit?(sender.doubleValue)
     }
 
     /// The scrollable range's clamp, shared by every programmatic offset
@@ -272,5 +296,6 @@ final class ACPTranscriptScrollerView: NSScrollView {
         lastReportedY = newY
         let maxY = max(0, contentHeight - viewportHeight)
         onScroll?(previous, newY, viewportHeight, contentHeight, programmaticAdjustmentDepth > 0)
+        applyLogicalScrollerMetrics()
     }
 }
