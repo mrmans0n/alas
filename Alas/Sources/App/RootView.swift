@@ -836,7 +836,12 @@ private struct RootBaseHandlers: ViewModifier {
                     await state.reopenLastClosedTab()
                 }
             }
-        let g = fReopenClosedTab
+        let gAdjacent = fReopenClosedTab
+            .onReceive(NotificationCenter.default.publisher(for: .alasActivateAdjacentTab)) { notification in
+                guard let direction = notification.object as? CenterTabNavigationDirection else { return }
+                state.activateAdjacentCenterTab(direction, worktreeId: selectedWorktree()?.id)
+            }
+        let g = gAdjacent
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
                 guard let number = notification.object as? Int else { return }
                 state.activateCenterTabNumber(number, worktreeId: selectedWorktree()?.id)
@@ -1001,6 +1006,7 @@ extension Notification.Name {
     static let alasOpenAgentLauncher = Notification.Name("AlasOpenAgentLauncher")
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
     static let alasReopenClosedTab = Notification.Name("AlasReopenClosedTab")
+    static let alasActivateAdjacentTab = Notification.Name("AlasActivateAdjacentTab")
     static let alasActivateTabByNumber = Notification.Name("AlasActivateTabByNumber")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")

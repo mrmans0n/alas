@@ -24,6 +24,69 @@ struct CenterSelectionStateResolverTests {
         #expect(composition.activeId == mission.id)
     }
 
+    @Test func adjacentTabsFollowVisualOrderAndWrap() {
+        let mission = MissionTabState.fixture
+        let firstTerminal = Tab.terminal(TerminalTabState(
+            id: "terminal-1",
+            title: "First Terminal",
+            sessionId: "session-1"
+        ))
+        let secondTerminal = Tab.terminal(TerminalTabState(
+            id: "terminal-2",
+            title: "Second Terminal",
+            sessionId: "session-2"
+        ))
+
+        let fromMission = CenterTabComposition(
+            globalTabs: [.mission(mission)],
+            worktreeTabs: [firstTerminal, secondTerminal],
+            activeGlobalMissionTab: mission,
+            activeWorktreeTabId: firstTerminal.id
+        )
+        #expect(fromMission.adjacentTabID(in: .next) == firstTerminal.id)
+        #expect(fromMission.adjacentTabID(in: .previous) == secondTerminal.id)
+
+        let fromLastTerminal = CenterTabComposition(
+            globalTabs: [.mission(mission)],
+            worktreeTabs: [firstTerminal, secondTerminal],
+            activeGlobalMissionTab: nil,
+            activeWorktreeTabId: secondTerminal.id
+        )
+        #expect(fromLastTerminal.adjacentTabID(in: .next) == mission.id)
+        #expect(fromLastTerminal.adjacentTabID(in: .previous) == firstTerminal.id)
+    }
+
+    @Test func adjacentTabIsUnavailableWithoutAValidChoice() {
+        let terminal = Tab.terminal(TerminalTabState(
+            id: "terminal-1",
+            title: "Terminal",
+            sessionId: "session-1"
+        ))
+
+        let empty = CenterTabComposition(
+            globalTabs: [],
+            worktreeTabs: [],
+            activeGlobalMissionTab: nil,
+            activeWorktreeTabId: nil
+        )
+        let single = CenterTabComposition(
+            globalTabs: [],
+            worktreeTabs: [terminal],
+            activeGlobalMissionTab: nil,
+            activeWorktreeTabId: terminal.id
+        )
+        let missingActive = CenterTabComposition(
+            globalTabs: [],
+            worktreeTabs: [terminal, .mission(.fixture)],
+            activeGlobalMissionTab: nil,
+            activeWorktreeTabId: "missing-tab"
+        )
+
+        #expect(empty.adjacentTabID(in: .next) == nil)
+        #expect(single.adjacentTabID(in: .next) == nil)
+        #expect(missingActive.adjacentTabID(in: .previous) == nil)
+    }
+
     @Test func bulkClosurePlanUsesTheComposedTabOrder() {
         let firstMission = MissionTabState.fixture
         let secondMission = MissionTabState(

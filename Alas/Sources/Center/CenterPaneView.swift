@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum CenterTabNavigationDirection: Sendable {
+    case previous
+    case next
+}
+
 struct CenterTabComposition {
     let tabs: [Tab]
     let activeId: TabID?
@@ -16,6 +21,19 @@ struct CenterTabComposition {
             return .mission(mission)
         } + worktreeTabs
         activeId = activeGlobalMissionTab?.id ?? activeWorktreeTabId
+    }
+
+    func adjacentTabID(in direction: CenterTabNavigationDirection) -> TabID? {
+        guard tabs.count > 1,
+              let activeId,
+              let activeIndex = tabs.firstIndex(where: { $0.id == activeId }) else { return nil }
+        let offset: Int
+        switch direction {
+        case .previous: offset = -1
+        case .next: offset = 1
+        }
+        let targetIndex = (activeIndex + offset + tabs.count) % tabs.count
+        return tabs[targetIndex].id
     }
 }
 

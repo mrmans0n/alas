@@ -19,6 +19,23 @@ struct ShortcutReservationsTests {
         #expect(ShortcutReservations.defaultReserved.contains(.init(key: "r", modifiers: [.command])))
     }
 
+    @Test func adjacentTabBindingsAreDynamicallyReserved() {
+        let next = ShortcutBinding(key: "tab", modifiers: [.control])
+        let previous = ShortcutBinding(key: "tab", modifiers: [.control, .shift])
+        #expect(ShortcutReservations.defaultReserved.contains(next))
+        #expect(ShortcutReservations.defaultReserved.contains(previous))
+
+        var config = AppConfig.defaults
+        let replacement = ShortcutBinding(key: "tab", modifiers: [.control, .option])
+        config.shortcutOverrides[ShortcutAction.selectNextTab.rawValue] = .some(replacement)
+        config.shortcutOverrides[ShortcutAction.selectPreviousTab.rawValue] = .some(nil)
+
+        let reserved = ShortcutReservations.snapshot(from: config)
+        #expect(reserved.contains(replacement))
+        #expect(!reserved.contains(next))
+        #expect(!reserved.contains(previous))
+    }
+
     @Test func defaultsIncludeStandardsAndTabSwitchers() {
         let reserved = ShortcutReservations.defaultReserved
         // ⌘W (Close Tab), ⌘⇧T (Reopen Closed Tab), and ⌘1..⌘9 stay reserved
