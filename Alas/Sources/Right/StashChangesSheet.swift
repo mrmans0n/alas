@@ -1,7 +1,7 @@
 import SwiftUI
 
-struct ParkChangesSheet: View {
-    let onPark: (String, Bool) -> Void
+struct StashChangesSheet: View {
+    let onStash: (String, Bool) -> Void
     let onCancel: () -> Void
 
     @Environment(\.theme) private var theme
@@ -10,7 +10,7 @@ struct ParkChangesSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Park Changes")
+            Text("Stash Changes")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Text("Move current working-tree changes into a git stash.")
@@ -20,7 +20,7 @@ struct ParkChangesSheet: View {
                 text: $message,
                 placeholder: "Optional message",
                 focusOnAppear: true,
-                onSubmit: { onPark(message, includeUntracked) }
+                onSubmit: { onStash(message, includeUntracked) }
             )
             Toggle("Include untracked files", isOn: $includeUntracked)
                 .toggleStyle(.checkbox)
@@ -28,8 +28,8 @@ struct ParkChangesSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                Button("Park Changes") {
-                    onPark(message, includeUntracked)
+                Button("Stash Changes") {
+                    onStash(message, includeUntracked)
                 }
                 .keyboardShortcut(.defaultAction)
             }

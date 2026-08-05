@@ -281,8 +281,8 @@ struct ChangesTabView: View {
                     )
                 },
                 onDiscardFile: { file in rps.requestDiscardFile(path: file.path) },
-                onParkChanges: { rps.requestParkChanges() },
-                parkChangesDisabled: rps.mergeOp.current != nil || rps.stashOperationInFlight,
+                onStashChanges: { rps.requestStashChanges() },
+                stashChangesDisabled: rps.mergeOp.current != nil || rps.stashOperationInFlight,
                 isOpenFileEnabled: { file in
                     DiffOpenFileAvailability.isAvailable(
                         worktreePath: rps.worktree.path,

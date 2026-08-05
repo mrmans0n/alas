@@ -352,7 +352,6 @@
 		3BB7766DF1D9BF15098432F5 /* CommitDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AF335AB8B3061C889A348B3 /* CommitDetails.swift */; };
 		3C30C1EAE4786BB1BE42F994 /* ACPToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3CF39EE3E5E2AB9B0968B3 /* ACPToolCallCard.swift */; };
 		3C57603EA801D8994B0B5525 /* RightPaneState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C1705E68E97111E85D83F3 /* RightPaneState.swift */; };
-		3C5797EAA86E4D493E1EEED8 /* ParkChangesSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B7B0E241FE2BEAE4623BA1 /* ParkChangesSheet.swift */; };
 		3C5E243B78F3461F75AB02A8 /* CodeTextViewCompletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 436E8992D7373486BA25D290 /* CodeTextViewCompletionTests.swift */; };
 		3C8FAA4464E4D928F1DC6C91 /* session-new-response-with-config-options.json in Resources */ = {isa = PBXBuildFile; fileRef = E8A63557B4F06AA00761B547 /* session-new-response-with-config-options.json */; };
 		3C91EAB9AE55849DE5CF1BC7 /* DragOutSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99890AC2531648EB5E9716A8 /* DragOutSessionTests.swift */; };
@@ -1077,6 +1076,7 @@
 		B76AD708A9FD54304F84366A /* ImageFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3F942D660C7ABA8542C77D /* ImageFileType.swift */; };
 		B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FF766C79A3F9F004A513D4D /* UpdateProgressSheet.swift */; };
 		B79D01EECD92181B710D2648 /* CommitInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C01FBF2EE3668E6772CEB1D /* CommitInfo.swift */; };
+		B7C37289F04A218F12C803DB /* StashChangesSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11281859D3CDA9DB8AF34D33 /* StashChangesSheet.swift */; };
 		B7D79703ABCAFBC04A0091E5 /* VisualEffectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97EF761C70A3AF83C00879A /* VisualEffectView.swift */; };
 		B7F21BA3E994F3A0990D4C06 /* ACPOrchestrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B90F0D59BBDA243D619B16 /* ACPOrchestrationStore.swift */; };
 		B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */; };
@@ -1626,6 +1626,7 @@
 		10B3615A1591964AB1C9E524 /* RemoteHostCapabilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHostCapabilities.swift; sourceTree = "<group>"; };
 		10E10C6559E26691EC906737 /* ACPTerminalMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTerminalMessages.swift; sourceTree = "<group>"; };
 		111B9EB86E55850C982CEEFA /* GGReorderSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGReorderSheet.swift; sourceTree = "<group>"; };
+		11281859D3CDA9DB8AF34D33 /* StashChangesSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StashChangesSheet.swift; sourceTree = "<group>"; };
 		11BA9F25CB0A6A2BFDB390EE /* ACPMockClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMockClientTests.swift; sourceTree = "<group>"; };
 		11C3EC94DBE871DFC45C7D25 /* AgentTerminalLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminalLaunchTests.swift; sourceTree = "<group>"; };
 		11DB4509E8835E63F9532E43 /* AppStateFocusMainWorktreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFocusMainWorktreeTests.swift; sourceTree = "<group>"; };
@@ -1641,7 +1642,6 @@
 		136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookEvent.swift; sourceTree = "<group>"; };
 		137E9C84D7F32E747F0AF4C0 /* GatekeeperAssessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatekeeperAssessorTests.swift; sourceTree = "<group>"; };
 		137F79BD0DEB96B6F756ABD4 /* JSONHookSettingsFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONHookSettingsFile.swift; sourceTree = "<group>"; };
-		13B7B0E241FE2BEAE4623BA1 /* ParkChangesSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParkChangesSheet.swift; sourceTree = "<group>"; };
 		14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabView.swift; sourceTree = "<group>"; };
 		141C4CAF1B49032EDF0FF404 /* ProjectIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectIconTests.swift; sourceTree = "<group>"; };
 		14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabMergeConflictCodingTests.swift; sourceTree = "<group>"; };
@@ -3949,7 +3949,6 @@
 				F721FB733081A583D4053DDA /* FileTypeIconView.swift */,
 				542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */,
 				4941BFBEEEAF9DE9E1752548 /* OperationCard.swift */,
-				13B7B0E241FE2BEAE4623BA1 /* ParkChangesSheet.swift */,
 				9B15F58AFF7BC19419935C05 /* PendingDiscard.swift */,
 				F748F06725644571785BF658 /* PendingStashDrop.swift */,
 				91C1705E68E97111E85D83F3 /* RightPaneState.swift */,
@@ -3958,6 +3957,7 @@
 				9C165BAAF80F9B4A5949BD39 /* RightPaneTransitionalView.swift */,
 				FE66950F2226F1182DCDD39A /* RightPaneView.swift */,
 				934BCC470703CF2DF2303357 /* SectionHeader.swift */,
+				11281859D3CDA9DB8AF34D33 /* StashChangesSheet.swift */,
 				40E8D8B829B3A7B0327CAFA1 /* StashesSectionView.swift */,
 				DDE8B45ECF898B83A616586D /* SubHeader.swift */,
 				9D32294F9B916DFAFF5E9A6F /* WorkingTreeChangeGroup.swift */,
@@ -6379,7 +6379,6 @@
 				ACB0AD03C9DFD88A431E6BC5 /* OutdatedThreadsDrawer.swift in Sources */,
 				6635C1BBE700E46738D5648F /* PaneDragMath.swift in Sources */,
 				86718F7E55531B8E4356D7D1 /* PaneTree.swift in Sources */,
-				3C5797EAA86E4D493E1EEED8 /* ParkChangesSheet.swift in Sources */,
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
 				449C7E4A63455D01633B791A /* PendingDiscard.swift in Sources */,
 				F9FED997CCAD027FBBE36C1D /* PendingReview.swift in Sources */,
@@ -6561,6 +6560,7 @@
 				A06C59805BCD9D3200896932 /* StagedDiffLoader.swift in Sources */,
 				514C75877C1C3B1D19BB5BD5 /* StartupScriptInstaller.swift in Sources */,
 				899E7B2794DD3F2114B38AFC /* StartupScriptResolver.swift in Sources */,
+				B7C37289F04A218F12C803DB /* StashChangesSheet.swift in Sources */,
 				7374C72F780CEE12E81997B9 /* StashDiffTabView.swift in Sources */,
 				40345C2068BFBF42B5C629B0 /* StashesSectionView.swift in Sources */,
 				EDC5F3C0F2964AC78C832F87 /* StatusParser.swift in Sources */,
