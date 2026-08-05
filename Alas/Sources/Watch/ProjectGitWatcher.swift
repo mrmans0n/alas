@@ -16,10 +16,11 @@ private final class ProjectGitWatcherStreamContext {
 
 private struct ProjectGitWatcherStreamBatch {
     var headFiles: Set<URL> = []
+    var sawRevision = false
     var sawTopology = false
 
     var hasChanges: Bool {
-        !headFiles.isEmpty || sawTopology
+        !headFiles.isEmpty || sawRevision || sawTopology
     }
 }
 
@@ -41,6 +42,7 @@ final class ProjectGitWatcher {
     }()
 
     var onHeadChanged: (([URL: String]) -> Void)?
+    var onRevisionChanged: (() -> Void)?
     var onTopologyChanged: (() -> Void)?
 
     private let repoPath: URL
@@ -282,6 +284,8 @@ final class ProjectGitWatcher {
                 continue
             case .headChange:
                 batch.headFiles.insert(URL(fileURLWithPath: path).standardizedFileURL)
+            case .revisionChange:
+                batch.sawRevision = true
             case .topologyChange:
                 batch.sawTopology = true
             }
@@ -294,6 +298,9 @@ final class ProjectGitWatcher {
         if !batch.headFiles.isEmpty {
             pendingHeadFiles.formUnion(batch.headFiles)
             headDebouncer.poke()
+        }
+        if batch.sawRevision {
+            onRevisionChanged?()
         }
         if batch.sawTopology {
             topologyDebouncer.poke()

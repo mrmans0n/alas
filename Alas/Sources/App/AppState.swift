@@ -582,6 +582,7 @@ final class AppState {
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
     @ObservationIgnored
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
+    private(set) var revisionChangeGenerations: [String: Int] = [:]
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -3105,6 +3106,7 @@ final class AppState {
             watcher.onHeadChanged = { [weak self] updates in
                 self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
             }
+            watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: project.id) }
             watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: project.id) }
             remoteProjectWatchers[project.id] = watcher
             watcher.start()
@@ -3113,6 +3115,7 @@ final class AppState {
         let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
+        watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
         watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: projectId) }
         watcher.start()
         projectGitWatchers[projectId] = watcher
@@ -3137,12 +3140,37 @@ final class AppState {
     }
 
     func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
+        bumpRevisionGenerationForWorktreePaths(projectId: projectId, paths: Array(branchByWorktreePath.keys))
         let changedPaths = projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
         )
         for path in changedPaths {
             GGStackSummaryStore.shared.summaries[path] = nil
+        }
+    }
+
+    func revisionChangeGeneration(worktreeID: String) -> Int {
+        revisionChangeGenerations[worktreeID, default: 0]
+    }
+
+    private func bumpRevisionGeneration(worktreeID: String) {
+        revisionChangeGenerations[worktreeID, default: 0] += 1
+    }
+
+    private func bumpRevisionGenerationForProject(projectId: String) {
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            bumpRevisionGeneration(worktreeID: worktree.id)
+        }
+    }
+
+    private func bumpRevisionGenerationForWorktreePaths(projectId: String, paths: [URL]) {
+        let affectedPaths = Set(paths.map { Self.canonicalWorktreePath($0.path) })
+        guard !affectedPaths.isEmpty else { return }
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            if affectedPaths.contains(Self.canonicalWorktreePath(worktree.path.path)) {
+                bumpRevisionGeneration(worktreeID: worktree.id)
+            }
         }
     }
 

@@ -38,6 +38,7 @@ struct RemoteProjectGitTickGate {
 @MainActor
 final class RemoteProjectGitWatcher {
     var onHeadChanged: (([URL: String]) -> Void)?
+    var onRevisionChanged: (() -> Void)?
     var onTopologyChanged: (() -> Void)?
 
     private let projectPath: URL
@@ -62,7 +63,10 @@ final class RemoteProjectGitWatcher {
             )
             session.onEvent = { [weak self] event in
                 guard event.kind == .git else { return }
-                Task { @MainActor in _ = await self?.runTick() }
+                Task { @MainActor in
+                    self?.onRevisionChanged?()
+                    _ = await self?.runTick()
+                }
             }
             session.onAvailabilityChanged = { [weak self] _ in
                 self?.restartPolling()

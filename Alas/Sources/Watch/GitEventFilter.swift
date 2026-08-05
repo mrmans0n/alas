@@ -7,6 +7,7 @@ import Foundation
 enum GitEventCategory: Equatable {
     case ignored                  // *.lock under .git/ — mid-write, never react
     case headChange(URL)          // worktree root whose HEAD just changed
+    case revisionChange           // shared refs moved; tracked revisions may resolve differently
     case topologyChange           // .git/worktrees/ contents changed
     case other                    // unrelated event, caller decides
 }
@@ -64,14 +65,8 @@ enum GitEventFilter {
 
         if rel == "worktrees" { return .topologyChange }
 
-        // Branch ref updates: refs/heads/<...> and the consolidated packed-refs
-        // file both reflect commit/checkout/reset/pull activity. Route through
-        // the topology debouncer so refreshWorktrees re-reads lastActivity from
-        // the updated ref file mtimes and re-applies ordering. (For the linked
-        // worktree HEAD case we already short-circuit via `worktrees/<name>/HEAD`
-        // above; this branch covers the shared branch refs.)
-        if rel == "packed-refs" || rel.hasPrefix("refs/heads/") {
-            return .topologyChange
+        if rel == "packed-refs" || rel.hasPrefix("refs/") {
+            return .revisionChange
         }
 
         return .other

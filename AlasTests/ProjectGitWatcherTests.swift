@@ -91,6 +91,30 @@ struct ProjectGitWatcherTests {
         #expect(topologyFires == 1)
     }
 
+    @Test func sharedRefsTriggerRevisionCallback() async throws {
+        let (gitDir, _) = try setupRepo()
+        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent().deletingLastPathComponent()) }
+
+        let watcher = makeWatcher(gitDir: gitDir)
+        var headFires = 0
+        var revisionFires = 0
+        var topologyFires = 0
+        watcher.onHeadChanged = { _ in headFires += 1 }
+        watcher.onRevisionChanged = { revisionFires += 1 }
+        watcher.onTopologyChanged = { topologyFires += 1 }
+
+        watcher.processEvents([
+            gitDir.appendingPathComponent("refs/heads/main").path,
+            gitDir.appendingPathComponent("refs/remotes/origin/main").path,
+            gitDir.appendingPathComponent("refs/tags/v1").path,
+        ])
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        #expect(headFires == 0)
+        #expect(revisionFires == 1)
+        #expect(topologyFires == 0)
+    }
+
     @Test func mixedBatchClearsHeadInFavorOfTopology() async throws {
         let (gitDir, _) = try setupRepo()
         defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent().deletingLastPathComponent()) }
