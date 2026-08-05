@@ -206,7 +206,13 @@ struct ReviewSessionTabView: View {
     }
 
     private var loadTaskID: String {
-        "\(tabState.sessionID.rawValue):\(loadGeneration)"
+        let revisionGeneration: Int
+        if let appState, case .trackedCommit = record?.target.payload {
+            revisionGeneration = appState.revisionChangeGeneration(worktreeID: tabState.worktreeId)
+        } else {
+            revisionGeneration = 0
+        }
+        return "\(tabState.sessionID.rawValue):\(loadGeneration):\(revisionGeneration)"
     }
 
     private var header: some View {
@@ -441,9 +447,8 @@ struct ReviewSessionTabView: View {
 
     private func beginLoadReviewSession() -> ReviewSessionTabLoadToken {
         let token = loadCoordinator.begin()
-        isLoading = true
+        isLoading = loaded == nil
         loadError = nil
-        loaded = nil
         return token
     }
 
@@ -453,16 +458,28 @@ struct ReviewSessionTabView: View {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
             }
 
-            let loadedContext = try await loader.load(target: storedRecord.target)
+            let resolvedRecord = try await resolveTrackedRecordForLoad(storedRecord)
+            guard loadCoordinator.canPublish(token) else { return }
+            if resolvedRecord.record.target != storedRecord.target {
+                try sessionStore.save(resolvedRecord.record)
+            }
+            guard !resolvedRecord.paused else {
+                record = resolvedRecord.record
+                isLoading = false
+                loadCoordinator.finish(token)
+                return
+            }
+
+            let loadedContext = try await loader.load(target: resolvedRecord.record.target)
             guard loadCoordinator.canPublish(token) else { return }
 
             publishInitialLoad(
                 ReviewSessionTabLoadPublication.initial(
-                    record: storedRecord,
+                    record: resolvedRecord.record,
                     loaded: loadedContext
                 )
             )
-            loadDraftCommentController(for: storedRecord)
+            loadDraftCommentController(for: resolvedRecord.record)
             isLoading = false
             loadCoordinator.finish(token)
         } catch is CancellationError {
@@ -474,6 +491,50 @@ struct ReviewSessionTabView: View {
             loadError = error.localizedDescription
             isLoading = false
             loadCoordinator.finish(token)
+        }
+    }
+
+    private func resolveTrackedRecordForLoad(
+        _ storedRecord: ReviewSessionRecord
+    ) async throws -> (record: ReviewSessionRecord, paused: Bool) {
+        guard let worktree, case .trackedCommit(let revision) = storedRecord.target.payload else {
+            return (storedRecord, false)
+        }
+        let candidate = try await TrackedRevisionResolver.live.resolve(
+            at: worktree.path,
+            expression: revision.expression
+        )
+        switch TrackedRevisionPolicy.evaluate(current: revision, candidate: candidate) {
+        case .unchanged(let updated):
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
+            return (
+                storedRecord.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: false,
+                    now: now()
+                ),
+                false
+            )
+        case .follow(let updated):
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: "Review \(updated.expression)")
+            return (
+                storedRecord.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: true,
+                    now: now()
+                ),
+                false
+            )
+        case .pause(let updated):
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
+            return (
+                storedRecord.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: false,
+                    now: now()
+                ),
+                true
+            )
         }
     }
 
