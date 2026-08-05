@@ -22,6 +22,64 @@ struct ACPTranscriptWindowTests {
         #expect(t.visibleHead == 0)
     }
 
+    @Test("tail-first history exposes stable global message indices")
+    func tailFirstHistoryExposesGlobalIndices() {
+        let t = ACPTranscript()
+        let tail = (0..<30).map { index in
+            ACPMessage.systemNotice(id: UUID(), text: "m\(index + 170)")
+        }
+
+        t.replaceMessages(with: tail, messageIndexOffset: 170)
+
+        #expect(t.messageIndexOffset == 170)
+        #expect(t.logicalMessageCount == 200)
+        #expect(t.globalIndex(forLocalIndex: 0) == 170)
+        #expect(t.globalIndex(forLocalIndex: 29) == 199)
+        #expect(t.globalIndex(forLocalIndex: 30) == nil)
+        #expect(t.localIndex(forGlobalIndex: 169) == nil)
+        #expect(t.localIndex(forGlobalIndex: 170) == 0)
+        #expect(t.localIndex(forGlobalIndex: 199) == 29)
+        #expect(t.localIndex(forGlobalIndex: 200) == nil)
+    }
+
+    @Test("backfill prepend preserves the logical history extent")
+    func backfillPrependPreservesLogicalExtent() {
+        let t = ACPTranscript()
+        let tail = (0..<30).map { index in
+            ACPMessage.systemNotice(id: UUID(), text: "m\(index + 170)")
+        }
+        let older = (0..<170).map { index in
+            ACPMessage.systemNotice(id: UUID(), text: "m\(index)")
+        }
+        t.replaceMessages(with: tail, messageIndexOffset: 170)
+
+        t.prependMessages(older)
+
+        #expect(t.messageIndexOffset == 0)
+        #expect(t.logicalMessageCount == 200)
+        #expect(t.globalIndex(forLocalIndex: 170) == 170)
+    }
+
+    @Test("target windows preload one page and remain full near either end")
+    func targetWindowsRemainBounded() {
+        let t = ACPTranscript()
+        t.messages = (0..<200).map { index in
+            .systemNotice(id: UUID(), text: "m\(index)")
+        }
+
+        t.setVisibleWindow(around: 100)
+        #expect(t.visibleHead == 70)
+        #expect(t.visibleTail == 160)
+
+        t.setVisibleWindow(around: 10)
+        #expect(t.visibleHead == 0)
+        #expect(t.visibleTail == 90)
+
+        t.setVisibleWindow(around: 190)
+        #expect(t.visibleHead == 110)
+        #expect(t.visibleTail == 200)
+    }
+
     @Test("resetWindowToTail computes initial head")
     func resetForLongTranscript() {
         let t = ACPTranscript()

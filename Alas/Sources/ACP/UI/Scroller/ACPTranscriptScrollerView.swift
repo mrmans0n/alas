@@ -7,6 +7,34 @@ final class ACPTranscriptDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// Native scroller whose thumb extent is owned by the transcript's logical
+/// full-history range rather than by NSScrollView's bounded physical window.
+/// NSScrollView remains free to drive the control value during ordinary
+/// scrolling and knob tracking; only its physical knob-proportion writes are
+/// rejected after logical metrics have been installed.
+@MainActor
+final class ACPTranscriptLogicalScroller: NSScroller {
+    private var logicalKnobProportion: CGFloat?
+
+    override class var isCompatibleWithOverlayScrollers: Bool {
+        self == ACPTranscriptLogicalScroller.self
+    }
+
+    override var knobProportion: CGFloat {
+        get { logicalKnobProportion ?? super.knobProportion }
+        set {
+            guard logicalKnobProportion == nil else { return }
+            super.knobProportion = newValue
+        }
+    }
+
+    func setLogicalKnobProportion(_ proportion: CGFloat) {
+        let clamped = min(max(proportion, 0), 1)
+        logicalKnobProportion = clamped
+        super.knobProportion = clamped
+    }
+}
+
 /// The transcript's NSScrollView. Exposes the one primitive SwiftUI's
 /// ScrollView can't provide on macOS 26: synchronous scroll-offset
 /// adjustment in the same pass as a content mutation (`applyPrepend`), so
@@ -16,6 +44,8 @@ final class ACPTranscriptDocumentView: NSView {
 final class ACPTranscriptScrollerView: NSScrollView {
     let flippedDocumentView = ACPTranscriptDocumentView()
     var onScroll: ((_ previousY: CGFloat?, _ newY: CGFloat, _ viewportHeight: CGFloat, _ contentHeight: CGFloat, _ isProgrammatic: Bool) -> Void)?
+    var onLogicalScrollCommit: ((Double) -> Void)?
+    private var logicalScrollerMetrics: ACPTranscriptLogicalScrollModel.Metrics?
 
     /// Fired from `layout()` whenever `contentView.bounds.width` differs
     /// from the last width reported — including the very first non-zero
@@ -118,7 +148,11 @@ final class ACPTranscriptScrollerView: NSScrollView {
         super.init(frame: frameRect)
         drawsBackground = false
         hasVerticalScroller = true
+        verticalScroller = ACPTranscriptLogicalScroller()
         hasHorizontalScroller = false
+        verticalScroller?.isContinuous = false
+        verticalScroller?.target = self
+        verticalScroller?.action = #selector(commitLogicalScroll(_:))
         automaticallyAdjustsContentInsets = false
         documentView = flippedDocumentView
         flippedDocumentView.frame = NSRect(x: 0, y: 0, width: frameRect.width, height: 0)
@@ -204,6 +238,16 @@ final class ACPTranscriptScrollerView: NSScrollView {
         } else {
             onViewportHeightChange?()
         }
+        applyLogicalScrollerMetrics()
+    }
+
+    override func reflectScrolledClipView(_ cView: NSClipView) {
+        super.reflectScrolledClipView(cView)
+        // NSScrollView reflects the bounded physical document on every
+        // ordinary scroll tick. The transcript scrollbar represents the
+        // full logical history instead, so those metrics may be used
+        // internally but must not remain visible on the native scroller.
+        applyLogicalScrollerMetrics()
     }
 
     var scrollY: CGFloat { contentView.bounds.origin.y }
@@ -218,6 +262,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
         performProgrammatic {
             flippedDocumentView.frame.size.height = height
         }
+        applyLogicalScrollerMetrics()
     }
 
     /// Grow the document by prepended content and shift the scroll offset by
@@ -237,6 +282,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
             contentView.setBoundsOrigin(NSPoint(x: origin.x, y: clampedScrollY(origin.y + delta)))
             reflectScrolledClipView(contentView)
         }
+        applyLogicalScrollerMetrics()
     }
 
     func setScrollY(_ y: CGFloat) {
@@ -247,6 +293,26 @@ final class ACPTranscriptScrollerView: NSScrollView {
             contentView.setBoundsOrigin(NSPoint(x: contentView.bounds.origin.x, y: clamped))
             reflectScrolledClipView(contentView)
         }
+        applyLogicalScrollerMetrics()
+    }
+
+    func setLogicalScrollerMetrics(_ metrics: ACPTranscriptLogicalScrollModel.Metrics) {
+        logicalScrollerMetrics = metrics
+        applyLogicalScrollerMetrics()
+    }
+
+    private func applyLogicalScrollerMetrics() {
+        guard let logicalScrollerMetrics, let verticalScroller else { return }
+        verticalScroller.doubleValue = logicalScrollerMetrics.value
+        if let logicalScroller = verticalScroller as? ACPTranscriptLogicalScroller {
+            logicalScroller.setLogicalKnobProportion(logicalScrollerMetrics.knobProportion)
+        } else {
+            verticalScroller.knobProportion = logicalScrollerMetrics.knobProportion
+        }
+    }
+
+    @objc private func commitLogicalScroll(_ sender: NSScroller) {
+        onLogicalScrollCommit?(sender.doubleValue)
     }
 
     /// The scrollable range's clamp, shared by every programmatic offset
@@ -272,5 +338,6 @@ final class ACPTranscriptScrollerView: NSScrollView {
         lastReportedY = newY
         let maxY = max(0, contentHeight - viewportHeight)
         onScroll?(previous, newY, viewportHeight, contentHeight, programmaticAdjustmentDepth > 0)
+        applyLogicalScrollerMetrics()
     }
 }

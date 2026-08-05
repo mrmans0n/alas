@@ -10,7 +10,8 @@ import Testing
 private func makeHost(
     session: ACPSession = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t"),
     contentMaxWidth: CGFloat = 800,
-    typography: ACPChatTypography = .default
+    typography: ACPChatTypography = .default,
+    onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in }
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
         session: session,
@@ -23,7 +24,7 @@ private func makeHost(
         forkTargets: [],
         onFork: { _, _ in },
         rememberedScrollAnchor: { nil },
-        onRememberScrollAnchor: { _, _, _ in },
+        onRememberScrollAnchor: onRememberScrollAnchor,
         onOpenTranscriptLink: { _ in true },
         policy: nil,
         scopeKey: "scope",
@@ -628,6 +629,178 @@ struct ACPTranscriptScrollerViewportHeightReconciliationTests {
         scroller.layoutSubtreeIfNeeded()
 
         #expect(abs(scroller.scrollY - scrollYBefore) < 0.5)
+    }
+}
+
+@MainActor
+@Suite("ACPTranscriptScroller logical navigation")
+struct ACPTranscriptScrollerLogicalNavigationTests {
+    private func messages(_ count: Int) -> [ACPMessage] {
+        (0..<count).map { index in
+            .systemNotice(id: UUID(), text: "message \(index)")
+        }
+    }
+
+    private func attach(
+        session: ACPSession,
+        size: NSSize = NSSize(width: 600, height: 400)
+    ) throws -> (ACPTranscriptScroller.Coordinator, ACPTranscriptScrollerView, NSScroller) {
+        let host = makeHost(session: session)
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(origin: .zero, size: size))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        return (coordinator, scroller, try #require(scroller.verticalScroller))
+    }
+
+    private func commit(_ value: Double, through scroller: NSScroller) {
+        scroller.doubleValue = value
+        _ = scroller.sendAction(scroller.action, to: scroller.target)
+    }
+
+    @Test("a released historical position swaps a bounded window and aligns its target")
+    func loadedHistoricalJump() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(allMessages)
+        session.transcript.resetWindowToTail()
+        session.followsTranscriptTail = true
+        let (coordinator, _, nativeScroller) = try attach(session: session)
+
+        commit(0.5, through: nativeScroller)
+
+        // 400pt / 96pt leaves a maximum logical top of 195.833; halfway
+        // rounds to global/local message 98. One 30-row page is preloaded.
+        #expect(!session.followsTranscriptTail)
+        #expect(session.transcript.visibleHead == 68)
+        #expect(session.transcript.visibleTail == 158)
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
+        #expect(coordinator.topVisibleMessageIdForTesting == allMessages[98].stableId)
+    }
+
+    @Test("a release into the unmaterialized prefix waits for backfill")
+    func queuedHydrationJump() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(Array(allMessages.suffix(30)), messageIndexOffset: 170)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        session.followsTranscriptTail = true
+        let (coordinator, _, nativeScroller) = try attach(session: session)
+
+        commit(0.25, through: nativeScroller)
+
+        #expect(!session.followsTranscriptTail)
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == 49)
+
+        session.prependTranscriptMessages(Array(allMessages.prefix(170)))
+        coordinator.update(host: makeHost(session: session))
+
+        // `update(host:)` is the NSViewRepresentable update boundary in
+        // production. Resolving must defer its published window mutation
+        // until that synchronous update has returned.
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == 49)
+        await Task.yield()
+
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
+        #expect(session.transcript.visibleHead == 19)
+        #expect(session.transcript.visibleTail == 109)
+        #expect(coordinator.topVisibleMessageIdForTesting == allMessages[49].stableId)
+    }
+
+    @Test("a later user scroll cancels a queued hydration jump")
+    func userScrollCancelsQueuedHydrationJump() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(Array(allMessages.suffix(30)), messageIndexOffset: 170)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        session.followsTranscriptTail = true
+        let (coordinator, scroller, nativeScroller) = try attach(session: session)
+
+        commit(0.25, through: nativeScroller)
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == 49)
+
+        // A wheel/trackpad scroll in the materialized tail is newer user
+        // intent than the queued release into unhydrated history.
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
+
+        session.prependTranscriptMessages(Array(allMessages.prefix(170)))
+        coordinator.update(host: makeHost(session: session))
+        await Task.yield()
+
+        // Backfill keeps the currently viewed tail window instead of
+        // reviving the stale jump to message 49.
+        #expect(session.transcript.visibleHead == 170)
+        #expect(session.transcript.visibleTailBound == 200)
+    }
+
+    @Test("tail-only scrolling remembers a global anchor index")
+    func tailOnlyScrollRemembersGlobalAnchorIndex() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(Array(allMessages.suffix(30)), messageIndexOffset: 170)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        session.followsTranscriptTail = false
+        var remembered: (id: String?, index: Int?, followsTail: Bool)?
+        let host = makeHost(session: session) { id, index, followsTail in
+            remembered = (id, index, followsTail)
+        }
+        let scroller = ACPTranscriptScrollerView(
+            frame: NSRect(x: 0, y: 0, width: 600, height: 400)
+        )
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
+        scroller.reflectScrolledClipView(scroller.contentView)
+
+        let anchor = try #require(remembered)
+        let anchorId = try #require(anchor.id)
+        let anchorIndex = try #require(anchor.index)
+        let localIndex = try #require(
+            session.transcript.messages.firstIndex { $0.stableId == anchorId }
+        )
+        #expect(anchorIndex == 170 + localIndex)
+        #expect(!anchor.followsTail)
+    }
+
+    @Test("releasing at the logical end resumes the live tail")
+    func tailJump() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages(messages(200))
+        session.transcript.setVisibleWindow(containing: 40)
+        session.followsTranscriptTail = false
+        let (coordinator, scroller, nativeScroller) = try attach(session: session)
+
+        commit(1, through: nativeScroller)
+
+        _ = coordinator // Retain the weak callback owner through the action.
+        #expect(session.followsTranscriptTail)
+        #expect(session.transcript.visibleHead == 170)
+        #expect(session.transcript.visibleTail == nil)
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
+    @Test("AppKit head pagination discards the opposite page")
+    func headPaginationStaysBounded() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages(messages(200))
+        session.transcript.setVisibleWindow(containing: 70)
+        session.followsTranscriptTail = false
+        let (coordinator, scroller, _) = try attach(session: session)
+
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
+        scroller.reflectScrolledClipView(scroller.contentView)
+
+        _ = coordinator // Retain the weak callback owner through the scroll.
+        #expect(session.transcript.visibleHead == 40)
+        #expect(session.transcript.visibleTail == 130)
+        #expect(session.transcript.visibleTailBound - session.transcript.visibleHead == ACPTranscript.maxVisibleRows)
     }
 }
 

@@ -1197,8 +1197,11 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
-    func replaceTranscriptMessages(_ messages: [ACPMessage]) {
-        transcript.replaceMessages(with: messagesPreservingToolCallContentRevisions(messages))
+    func replaceTranscriptMessages(_ messages: [ACPMessage], messageIndexOffset: Int = 0) {
+        transcript.replaceMessages(
+            with: messagesPreservingToolCallContentRevisions(messages),
+            messageIndexOffset: messageIndexOffset
+        )
     }
 
     private func messagesPreservingToolCallContentRevisions(_ messages: [ACPMessage]) -> [ACPMessage] {
