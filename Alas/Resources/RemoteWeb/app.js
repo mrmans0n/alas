@@ -2257,6 +2257,10 @@ function renderChips() {
     box.appendChild(chip);
   });
   box.classList.toggle("hidden", pendingAttachments.length === 0);
+  // pendingAttachments feeds hasText in composerAction — an image-only message
+  // must be able to flip Send/Queue visible without any unrelated event (a
+  // keystroke, an incoming delta) happening to call renderDriveBar first.
+  renderDriveBar(lastStreamingState);
 }
 
 function readAttachment(file) {

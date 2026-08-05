@@ -354,6 +354,34 @@ struct RemoteWebAssetTests {
         #expect(js.contains("let steerUndoAvailable = false;"))
     }
 
+    // Regression (review, task 6): pendingAttachments feeds hasText in
+    // composerAction, but the mutation sites (attach picker, chip removal,
+    // restoreRejectedPrompt) only ever called renderChips(), never
+    // renderDriveBar() — so attaching or removing an image-only message's
+    // photo could leave Send/Queue stuck hidden until some unrelated event
+    // happened to recompute the button. renderChips is the common funnel for
+    // all three mutations, so the fix lives there.
+    @Test func renderChipsRecomputesComposerActionOnAttachmentChanges() throws {
+        let js = try asset("app.js")
+
+        let body = try #require(js.range(of: "function renderChips() {").map { js[$0.lowerBound...].prefix(900) })
+        let closingBrace = try #require(body.range(of: "\n}"))
+        #expect(body[..<closingBrace.lowerBound].contains("renderDriveBar(lastStreamingState);"))
+    }
+
+    // Regression (review, task 6): the CSS fix for `#queue-badge` (Finding 2)
+    // styles the badges purely by id, and renderQueueBadges selects by id
+    // too — so the `queue-badge` class on the badge spans no longer has any
+    // reader and must not linger as a dead attribute implying a styling
+    // mechanism that doesn't exist.
+    @Test func badgeSpansDoNotCarryTheVestigialQueueBadgeClass() throws {
+        let html = try asset("index.html")
+
+        #expect(!html.contains(#"class="queue-badge hidden""#))
+        #expect(html.contains(#"id="send-badge" class="hidden""#))
+        #expect(html.contains(#"id="queue-badge" class="hidden""#))
+    }
+
     @Test func queueParityBustsServiceWorkerAssetCache() throws {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
