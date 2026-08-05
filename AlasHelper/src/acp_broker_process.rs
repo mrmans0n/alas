@@ -686,16 +686,22 @@ const IPC_IO_POLL_SLICE: Duration = Duration::from_millis(500);
 ///
 /// The socket timeout is set once, to a short slice that just wakes a blocked
 /// read periodically; the budget checked on each pass is what actually bounds
-/// the read. (Re-arming the socket per read would express a deadline more
-/// directly, but `setsockopt` starts failing with `EINVAL` once the peer goes
-/// away mid-stream, which would turn an otherwise complete read into an error.)
+/// the read. Darwin returns `EINVAL` if the peer already closed, but that state
+/// cannot block and may still have a complete response buffered, so it is safe
+/// to continue without the timeout. (Re-arming the socket per read would hit
+/// the same race mid-stream and turn an otherwise complete read into an error.)
 ///
 /// One reader must be shared across a whole message: `BufReader` reads ahead,
 /// so building a second one to read a frame body would discard bytes the first
 /// had already pulled off the socket.
 #[cfg(unix)]
 fn ipc_reader(stream: &UnixStream) -> io::Result<BufReader<&UnixStream>> {
-    stream.set_read_timeout(Some(IPC_IO_POLL_SLICE))?;
+    match stream.set_read_timeout(Some(IPC_IO_POLL_SLICE)) {
+        Ok(()) => {}
+        #[cfg(target_os = "macos")]
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
+        Err(error) => return Err(error),
+    }
     Ok(BufReader::new(stream))
 }
 
@@ -2388,6 +2394,29 @@ mod tests {
 
         let value = outcome.expect("a slow but healthy broker must not be given up on");
         assert_eq!(value["slow"], json!(true));
+    }
+
+    /// A fast broker can write its complete response and close before the
+    /// caller installs its read timeout. Darwin reports `EINVAL` for that
+    /// timeout setup, but the buffered response is still valid and readable.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_buffered_response_remains_readable_after_the_broker_closes() {
+        let (mut broker, caller) = UnixStream::pair().expect("socket pair");
+        broker.write_all(b"ready\n").expect("response");
+        broker
+            .shutdown(std::net::Shutdown::Both)
+            .expect("broker closes");
+        drop(broker);
+
+        let mut reader = ipc_reader(&caller).expect("reader setup after broker close");
+        let response = read_line_within(
+            &mut reader,
+            IoBudget::idle(Duration::from_secs(1)),
+        )
+        .expect("buffered response");
+
+        assert_eq!(response, "ready\n");
     }
 
     /// `send_ipc_within` connects with a blocking socket, which is only safe
