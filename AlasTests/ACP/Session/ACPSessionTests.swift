@@ -1031,6 +1031,33 @@ struct ACPSessionTests {
         else { Issue.record("expected user message") }
     }
 
+    @Test("generated title ignores Alas workspace context and uses the remaining prompt")
+    func generatedTitleIgnoresAlasWorkspaceContext() async {
+        let session = ACPSession(
+            id: "s",
+            agentId: "codex",
+            worktreeId: "w",
+            title: "New session",
+            titleSource: .placeholder
+        )
+        let prompt = """
+        <alas-workspace-context>
+        Private workspace metadata that should not become the title.
+        </alas-workspace-context>
+        Fix the session title inference
+        """
+
+        session.recordUserPrompt(text: prompt, attachments: [])
+
+        #expect(session.title == "Fix the session title inference")
+        #expect(session.titleSource == .generated)
+        if case .user(_, _, let text, _, _) = session.transcript.messages.first {
+            #expect(text == prompt)
+        } else {
+            Issue.record("expected the original prompt in the transcript")
+        }
+    }
+
     @Test("transcript tail following is runtime state")
     func transcriptTailFollowingDefaultsToEnabled() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

@@ -334,7 +334,7 @@ final class ACPSession: ObservableObject, Identifiable {
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         if titleSource == .placeholder {
-            let candidate = text
+            let candidate = Self.removingAlasWorkspaceContext(from: text)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .components(separatedBy: .newlines)
                 .joined(separator: " ")
@@ -345,6 +345,20 @@ final class ACPSession: ObservableObject, Identifiable {
                 titleSource = .generated
             }
         }
+    }
+
+    private static func removingAlasWorkspaceContext(from text: String) -> String {
+        var result = text
+        let openingTag = "<alas-workspace-context>"
+        let closingTag = "</alas-workspace-context>"
+        while let openingRange = result.range(of: openingTag),
+              let closingRange = result.range(
+                  of: closingTag,
+                  range: openingRange.upperBound..<result.endIndex
+              ) {
+            result.removeSubrange(openingRange.lowerBound..<closingRange.upperBound)
+        }
+        return result
     }
 
     /// Returns the set of transcript message indices that were appended or
