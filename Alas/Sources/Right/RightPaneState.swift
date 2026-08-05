@@ -50,7 +50,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var expandedStashRefs: Set<String> = []
     var stashFilesByRef: [String: [GitStashFile]] = [:]
     var loadingStashRefs: Set<String> = []
-    var pendingParkChanges: Bool = false
+    var pendingStashChanges: Bool = false
     var pendingStashDrop: PendingStashDrop? = nil
     private(set) var stashOperationInFlight: Bool = false
     private(set) var hasLoadedSnapshot: Bool = false
@@ -1564,7 +1564,7 @@ final class RightPaneState: GGSplitCommitServicing {
         expandedStashRefs = []
         stashFilesByRef = [:]
         loadingStashRefs = []
-        pendingParkChanges = false
+        pendingStashChanges = false
         pendingStashDrop = nil
         stashOperationInFlight = false
         indexFingerprint = ""
@@ -2414,18 +2414,18 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
-    func requestParkChanges() {
+    func requestStashChanges() {
         guard !changes.isEmpty, mergeOp.current == nil, !stashOperationInFlight else { return }
-        pendingParkChanges = true
+        pendingStashChanges = true
     }
 
-    func cancelParkChanges() {
-        pendingParkChanges = false
+    func cancelStashChanges() {
+        pendingStashChanges = false
     }
 
-    func parkChanges(message: String, includeUntracked: Bool) {
-        guard pendingParkChanges, !stashOperationInFlight else { return }
-        pendingParkChanges = false
+    func stashChanges(message: String, includeUntracked: Bool) {
+        guard pendingStashChanges, !stashOperationInFlight else { return }
+        pendingStashChanges = false
         stashOperationInFlight = true
         sidebarError = nil
         Task { @MainActor in

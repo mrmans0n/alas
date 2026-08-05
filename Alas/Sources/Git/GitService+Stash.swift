@@ -128,7 +128,7 @@ extension GitService {
         }
 
         let result = try await Process.git(args, cwd: worktreePath)
-        return Self.stashOperationResult(result, fallback: "Could not park changes.")
+        return Self.stashOperationResult(result, fallback: "Could not stash changes.")
     }
 
     func stashFiles(worktreePath: URL, stash: GitStash) async throws -> [GitStashFile] {

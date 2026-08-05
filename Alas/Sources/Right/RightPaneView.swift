@@ -148,15 +148,15 @@ struct RightPaneView: View {
                 )
                 .sheet(
                     isPresented: Binding(
-                        get: { rps.pendingParkChanges },
-                        set: { if !$0 { rps.cancelParkChanges() } }
+                        get: { rps.pendingStashChanges },
+                        set: { if !$0 { rps.cancelStashChanges() } }
                     )
                 ) {
-                    ParkChangesSheet(
-                        onPark: { message, includeUntracked in
-                            rps.parkChanges(message: message, includeUntracked: includeUntracked)
+                    StashChangesSheet(
+                        onStash: { message, includeUntracked in
+                            rps.stashChanges(message: message, includeUntracked: includeUntracked)
                         },
-                        onCancel: { rps.cancelParkChanges() }
+                        onCancel: { rps.cancelStashChanges() }
                     )
                 }
                 .alert(

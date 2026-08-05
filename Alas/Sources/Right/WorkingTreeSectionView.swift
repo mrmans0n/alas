@@ -18,8 +18,8 @@ struct WorkingTreeSectionView: View {
     var onCompareWithHEAD: ((ChangedFile) -> Void)? = nil
     var onFileHistory:     ((ChangedFile) -> Void)? = nil
     var onDiscardFile:     ((ChangedFile) -> Void)? = nil
-    var onParkChanges:     (() -> Void)? = nil
-    var parkChangesDisabled: Bool = false
+    var onStashChanges:     (() -> Void)? = nil
+    var stashChangesDisabled: Bool = false
     var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
     var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 
@@ -74,10 +74,10 @@ struct WorkingTreeSectionView: View {
                     }
                 }
                 if !changes.isEmpty {
-                    Button("Park Changes…") {
-                        onParkChanges?()
+                    Button("Stash Changes…") {
+                        onStashChanges?()
                     }
-                    .disabled(parkChangesDisabled || changes.isEmpty || onParkChanges == nil)
+                    .disabled(stashChangesDisabled || changes.isEmpty || onStashChanges == nil)
                     Divider()
                 }
                 Button("Discard all working tree changes…", role: .destructive) {
