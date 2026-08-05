@@ -931,7 +931,7 @@ final class ACPSessionManager: ObservableObject {
         for i in tailStart..<total {
             tail.append(wires[i].toMessage())
         }
-        session.replaceTranscriptMessages(tail)
+        session.replaceTranscriptMessages(tail, messageIndexOffset: tailStart)
         session.transcript.visibleHead = 0
         if markCompletedBoundary {
             // Seed completedOutputBoundaryMessageIds from loaded history so

@@ -79,6 +79,16 @@ final class ACPTranscript: ObservableObject {
     /// async load is still running.
     @Published var isBackfillingOlderMessages: Bool = false
 
+    /// Number of known persisted messages that precede `messages[0]` while
+    /// tail-first hydration is still materialising the older prefix. This is
+    /// deliberately non-published: mutation entry points update it before
+    /// publishing the corresponding `messages` change, so observers always
+    /// see one coherent local/global index mapping.
+    private(set) var messageIndexOffset: Int = 0
+
+    /// Total known transcript extent even during the tail-only first paint.
+    var logicalMessageCount: Int { messageIndexOffset + messages.count }
+
     /// Render window: `ACPMessageList` draws `messages[visibleHead..<visibleTail]`.
     /// Reset to `max(0, messages.count - tailWindow)` after hydration so
     /// long transcripts paint quickly; user can scroll up or click the
@@ -169,14 +179,27 @@ final class ACPTranscript: ObservableObject {
         messages[index] = message
     }
 
-    func replaceMessages(with newMessages: [ACPMessage]) {
+    func replaceMessages(with newMessages: [ACPMessage], messageIndexOffset: Int = 0) {
+        self.messageIndexOffset = max(0, messageIndexOffset)
         messages = newMessages
     }
 
     func prependMessages(_ older: [ACPMessage]) {
         guard !older.isEmpty else { return }
+        messageIndexOffset = max(0, messageIndexOffset - older.count)
         pendingMessagesMutation = .prepend(count: older.count)
         messages.insert(contentsOf: older, at: 0)
+    }
+
+    func globalIndex(forLocalIndex index: Int) -> Int? {
+        guard messages.indices.contains(index) else { return nil }
+        return messageIndexOffset + index
+    }
+
+    func localIndex(forGlobalIndex index: Int) -> Int? {
+        let localIndex = index - messageIndexOffset
+        guard messages.indices.contains(localIndex) else { return nil }
+        return localIndex
     }
 
     func messageIndex(messageId: String, kind: TextMessageKind) -> Int? {
@@ -524,6 +547,21 @@ final class ACPTranscript: ObservableObject {
         let head = max(0, min(index, messages.count))
         let tail = min(messages.count, head + Self.maxVisibleRows)
         setVisibleWindow(head: head, tail: tail)
+    }
+
+    /// Select a full bounded window around a navigation target, with one
+    /// page of older context when available. Near either transcript edge the
+    /// window shifts inward instead of shrinking.
+    func setVisibleWindow(around index: Int) {
+        guard !messages.isEmpty else {
+            setVisibleWindow(head: 0, tail: 0)
+            return
+        }
+        let target = max(0, min(index, messages.count - 1))
+        let latestHead = max(0, messages.count - Self.maxVisibleRows)
+        let preferredHead = max(0, target - Self.tailWindow)
+        let head = min(preferredHead, latestHead)
+        setVisibleWindow(head: head, tail: min(messages.count, head + Self.maxVisibleRows))
     }
 
     /// Move the render window head, dropping markdown caches for any message
