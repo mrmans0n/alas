@@ -9,6 +9,7 @@ enum RemoteQueueProjection {
         items.map { item in
             var text = ""
             var imageCount = 0
+            var resourceCount = 0
             for block in item.blocks {
                 switch block {
                 case .text(let value):
@@ -16,13 +17,14 @@ enum RemoteQueueProjection {
                 case .image:
                     imageCount += 1
                 case .resourceLink, .resource:
-                    break
+                    resourceCount += 1
                 }
             }
             return RemoteQueuedPrompt(
                 id: item.id.uuidString,
                 text: text,
                 imageCount: imageCount,
+                resourceCount: resourceCount,
                 status: item.status.rawValue,
                 lastError: item.lastError)
         }

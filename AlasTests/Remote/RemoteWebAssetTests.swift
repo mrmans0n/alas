@@ -410,8 +410,20 @@ struct RemoteWebAssetTests {
 
     @Test func queuedBubblesHideEditWhenTheItemCarriesImages() throws {
         let js = try asset("app.js")
-        #expect(js.contains("if (item.imageCount === 0)"))
         #expect(js.contains("🖼"))
+    }
+
+    // Regression (codex review, PR #964): the web client must never offer an
+    // action that would silently discard content it cannot represent. A
+    // queued item with a resource/file mention is just as lossy to edit as
+    // one with an image (the browser never gets the URI), so Edit must be
+    // gated on BOTH counts and the resource chip must be visible so the
+    // user can see why.
+    @Test func queuedBubblesHideEditWhenTheItemCarriesResources() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("if (item.imageCount === 0 && item.resourceCount === 0)"))
+        #expect(js.contains("📎"))
+        #expect(js.contains("queued-resources"))
     }
 
     // Regression (final branch review): native never renders a `.sending`

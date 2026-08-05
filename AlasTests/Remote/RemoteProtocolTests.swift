@@ -513,8 +513,8 @@ struct RemoteProtocolTests {
         let state = RemoteServerMessage.queueState(
             sessionId: "s1",
             items: [
-                RemoteQueuedPrompt(id: "i1", text: "first", imageCount: 0, status: "sending", lastError: nil),
-                RemoteQueuedPrompt(id: "i2", text: "second", imageCount: 2, status: "pending", lastError: "boom"),
+                RemoteQueuedPrompt(id: "i1", text: "first", imageCount: 0, resourceCount: 0, status: "sending", lastError: nil),
+                RemoteQueuedPrompt(id: "i2", text: "second", imageCount: 2, resourceCount: 1, status: "pending", lastError: "boom"),
             ],
             steerUndoAvailable: true)
         #expect(try roundTrip(state) == state)

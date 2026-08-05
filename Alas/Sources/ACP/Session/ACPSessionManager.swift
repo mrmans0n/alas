@@ -287,9 +287,28 @@ final class ACPSessionManager: ObservableObject {
 
     /// Pull a queued item out for editing and hand its text back. `nil` when
     /// the item is gone or `.sending` — `takeForEditing` refuses in-flight
-    /// items so an edit can never duplicate a prompt already on the wire.
+    /// items so an edit can never duplicate a prompt already on the wire —
+    /// or when its draft carries a mention or an image.
+    ///
+    /// The web composer is plain text: it has no authenticated way to
+    /// re-stage a mention's URI or an image's bytes, so editing such an item
+    /// there would silently drop that content once the user resubmits. The
+    /// web client already hides Edit when `imageCount > 0 || resourceCount >
+    /// 0` for exactly this reason; this mirrors that rule server-side so a
+    /// client that doesn't know it (or a hand-rolled one) can't cause the
+    /// same loss. The draft is inspected BEFORE calling `takeForEditing`,
+    /// which removes-and-returns atomically — refusing after removal would
+    /// strand the prompt outside the queue instead of just leaving it be.
     func queueEdit(for id: ACPSession.ID, itemId: UUID) async -> String? {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return nil }
+        guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return nil }
+        let hasUnrepresentableSegment = session.queue[idx].restorableDraft.segments.contains { segment in
+            switch segment {
+            case .text: return false
+            case .mention, .image: return true
+            }
+        }
+        guard !hasUnrepresentableSegment else { return nil }
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()

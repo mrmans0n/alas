@@ -32,6 +32,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var queueSteerUndos: [String] = []
     var steerPrompts: [(id: String, text: String)] = []
     var queueEditText: String?            // what queueEdit hands back
+    /// When set, `queueEdit` delegates to this real manager instead of
+    /// returning `queueEditText`, so a test can exercise the manager's own
+    /// guard logic (e.g. refusing an item with a mention/image) through the
+    /// gateway rather than a canned stub.
+    var manager: ACPSessionManager?
     var steerPromptAccepts = true
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
@@ -160,8 +165,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func queueForceSend(for id: String, itemId: UUID) { queueForceSends.append((id, itemId)) }
     func queueRemove(for id: String, itemId: UUID) { queueRemoves.append((id, itemId)) }
     func queueRetry(for id: String, itemId: UUID) { queueRetries.append((id, itemId)) }
-    func queueEdit(for id: String, itemId: UUID) -> String? {
+    func queueEdit(for id: String, itemId: UUID) async -> String? {
         queueEdits.append((id, itemId))
+        if let manager { return await manager.queueEdit(for: id, itemId: itemId) }
         return queueEditText
     }
     func queueClear(for id: String) { queueClears.append(id) }
@@ -2199,6 +2205,40 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.queueEdit(sessionId: id, itemId: UUID().uuidString))
 
         #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
+    }
+
+    // Regression (codex review, PR #964): a queued item whose draft carries a
+    // mention (file reference) is just as unrepresentable in the plain-text
+    // web composer as one carrying an image. The web already hides Edit for
+    // these, but the manager must refuse the edit too, so a client that
+    // doesn't know the rule (or a hand-rolled one) can't cause the queued
+    // item's file context to be silently dropped. Routed through the real
+    // manager (not the plain stub) so this exercises the actual guard in
+    // `ACPSessionManager.queueEdit`, not a test double's approximation of it.
+    @Test func queueEditRefusesItemWithMentionAndLeavesItQueued() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        provider.manager = mgr
+        let session = mgr.createSession(agentId: "claude")
+        provider.sessions[session.id] = session
+        provider.writers.insert(session.id)
+        #expect(await mgr.acquireWriterLease(sessionId: session.id) == true)
+
+        let draft = ACPComposerDraft(segments: [
+            .text("see "),
+            .mention(displayName: "App.swift", uri: "file:///App.swift"),
+        ])
+        session.enqueue(
+            blocks: [.text("see "), .resourceLink(uri: "file:///App.swift", name: "App.swift")],
+            draft: draft)
+        let itemId = session.queue[0].id
+
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.queueEdit(sessionId: session.id, itemId: itemId.uuidString))
+
+        #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
+        #expect(session.queue.map(\.id) == [itemId], "the item must remain queued, not be removed then discarded")
     }
 
     @Test func steerIntentRoutesToSteerPromptNotSendPrompt() async {

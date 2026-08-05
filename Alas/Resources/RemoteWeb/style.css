@@ -272,7 +272,7 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .queued-status { align-self: flex-end; color: var(--fg-faint); font-size: 9px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; padding-right: 2px; }
 .queued-status .queued-error { color: var(--del); }
 .queued-bubble { max-width: 82%; padding: 9px 13px; color: var(--fg); background: color-mix(in oklab, var(--accent) 10%, transparent); border: 0.75px dashed color-mix(in oklab, var(--accent) 50%, transparent); border-radius: 13px 13px 4px 13px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.queued-images { display: inline-block; margin-right: 6px; color: var(--fg-muted); font-size: 12px; }
+.queued-images, .queued-resources { display: inline-block; margin-right: 6px; color: var(--fg-muted); font-size: 12px; }
 
 .queued-actions { display: none; gap: 4px; flex-shrink: 0; }
 .queued-row.is-open .queued-actions { display: flex; }

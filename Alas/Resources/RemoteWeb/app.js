@@ -9,7 +9,7 @@ let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
 let olderFetchInFlight = false;
 let stopPending = false;
-let queueItems = [];             // [{id, text, imageCount, status, lastError}] from queueState
+let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError}] from queueState
 let steerUndoAvailable = false;
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
@@ -786,6 +786,9 @@ function queuedRow(item) {
   if (item.imageCount > 0) {
     bubble.appendChild(el("span", "queued-images", "🖼 ×" + item.imageCount));
   }
+  if (item.resourceCount > 0) {
+    bubble.appendChild(el("span", "queued-resources", "📎 ×" + item.resourceCount));
+  }
   bubble.appendChild(document.createTextNode(item.text || ""));
   bubble.onclick = () => setQueuedOpen(item.id);
   stack.appendChild(bubble);
@@ -808,9 +811,10 @@ function queuedActions(item) {
     actions.appendChild(button("qa-retry", "↻", "Retry",
       () => queueAction("queueRetry", item.id)));
   }
-  // Editing an item whose images the web client never received would silently
-  // drop them, so the pencil is withheld rather than made lossy.
-  if (item.imageCount === 0) {
+  // Editing an item whose images or file mentions the web client never
+  // received would silently drop them, so the pencil is withheld rather
+  // than made lossy.
+  if (item.imageCount === 0 && item.resourceCount === 0) {
     actions.appendChild(button("qa-edit", "✎", "Edit",
       () => queueAction("queueEdit", item.id)));
   }
