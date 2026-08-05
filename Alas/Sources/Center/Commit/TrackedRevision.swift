@@ -168,13 +168,13 @@ enum TrackedRevisionRetargeter {
         now: Date
     ) -> TrackedRevisionRetargetingResult? {
         guard case .commit(let oldSHA) = record.target.payload else {
-            guard case .trackedCommit = record.target.payload else { return nil }
+            guard case .trackedCommit(let oldRevision) = record.target.payload else { return nil }
             let oldDraftSessionID = record.target.draftSessionID
             let target = record.target.updatingTrackedRevision(revision, title: title)
             return TrackedRevisionRetargetingResult(
                 record: record.retargetingCommit(
                     to: target,
-                    resolvedSHAChanged: record.target.revisionDescription != target.revisionDescription,
+                    resolvedSHAChanged: oldRevision.resolvedSHA != revision.resolvedSHA,
                     now: now
                 ),
                 oldDraftSessionID: oldDraftSessionID,

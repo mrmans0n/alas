@@ -165,6 +165,43 @@ struct CommitTabStateTests {
         #expect(stopped.record.target.payload == .commit(sha: "bbb"))
     }
 
+    @Test func trackedRevisionRetargeterPreservesVerdictWhenExpressionChangesOnly() throws {
+        let original = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "bbb"
+        ))
+        let edited = try #require(TrackedRevision(
+            expression: "topic", baselineBranch: "feature", resolvedSHA: "bbb"
+        ))
+        let target = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: original,
+            title: "Review HEAD~2"
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            status: .reviewed,
+            verdict: ReviewSessionVerdict(
+                verdict: .approve,
+                summary: "Same bytes",
+                reviewedAt: Date(timeIntervalSince1970: 1)
+            ),
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        let retargeted = try #require(TrackedRevisionRetargeter.follow(
+            record: record,
+            revision: edited,
+            title: "Review topic",
+            now: Date(timeIntervalSince1970: 2)
+        ))
+
+        #expect(retargeted.record.status == .reviewed)
+        #expect(retargeted.record.verdict == record.verdict)
+    }
+
     @Test func trackedRevisionDecodingNormalizesExpressionAndPreservesPendingCheckout() throws {
         let json = """
         {

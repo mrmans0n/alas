@@ -593,16 +593,10 @@ struct ReviewSessionTabView: View {
             if resolvedRecord.paused, resolvedRecord.record.target != storedRecord.target {
                 try sessionStore.save(resolvedRecord.record)
             }
-            guard !resolvedRecord.paused else {
-                record = resolvedRecord.record
-                isLoading = false
-                loadCoordinator.finish(token)
-                return
-            }
 
             let loadedContext = try await loader.load(target: resolvedRecord.record.target)
             guard loadCoordinator.canPublish(token) else { return }
-            if resolvedRecord.record.target != storedRecord.target {
+            if !resolvedRecord.paused, resolvedRecord.record.target != storedRecord.target {
                 try sessionStore.save(resolvedRecord.record)
             }
 
