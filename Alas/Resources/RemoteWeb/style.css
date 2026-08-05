@@ -283,3 +283,6 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .qa-send { color: var(--accent); }
 .qa-retry { color: oklch(0.80 0.14 85); }
 .qa-edit, .qa-remove { color: var(--fg-muted); }
+
+.steer-undo { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border: 0.5px solid var(--line); border-radius: 10px; background: color-mix(in oklab, var(--bg-2) 80%, transparent); color: var(--fg-muted); font-size: 12px; }
+.steer-undo-btn { border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; -webkit-tap-highlight-color: transparent; }

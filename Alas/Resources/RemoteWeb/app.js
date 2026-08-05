@@ -711,7 +711,17 @@ function applyQueueEditRestored(msg) {
   ta.focus();
 }
 
-function steerUndoToast() { return el("div", "steer-undo"); }
+// The server owns the snapshot and its expiry (ACPSession.steerUndo +
+// ACPSessionRunner.armSteerUndoExpiry), so this is render-and-dispatch only:
+// the toast disappears when the next queueState reports the window closed.
+function steerUndoToast() {
+  const toast = el("div", "steer-undo");
+  toast.appendChild(el("span", null, "Queue cleared by steer"));
+  const undo = el("button", "steer-undo-btn", "Undo");
+  undo.onclick = () => queueAction("queueSteerUndo", null);
+  toast.appendChild(undo);
+  return toast;
+}
 
 let openQueuedId = null;   // which bubble has its actions revealed (tap-to-reveal)
 

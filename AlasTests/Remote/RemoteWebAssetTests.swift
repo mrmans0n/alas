@@ -429,4 +429,14 @@ struct RemoteWebAssetTests {
         #expect(sw.contains(#""/app.js?v=61""#))
         #expect(sw.contains(#""/style.css?v=39""#))
     }
+
+    @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(js.contains("function steerUndoToast()"))
+        #expect(js.contains(#""queueSteerUndo""#))
+        #expect(js.contains("Queue cleared by steer"))
+        #expect(css.contains(".steer-undo"))
+    }
 }
