@@ -713,6 +713,7 @@
 		7B25B1405BFDE5570B267213 /* NumstatParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CA79B71B4AA72697392702 /* NumstatParser.swift */; };
 		7B309C87C042B3A18AB31D0F /* SearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49B5B544A3432F8D8105268 /* SearchModel.swift */; };
 		7B85B033B476943E77867BA3 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69024633944E9FFF6DA76FAE /* RootView.swift */; };
+		7BB5B3A83C8D0CB185D2365E /* TrackedRevision.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16D35671971686B20DEA33CB /* TrackedRevision.swift */; };
 		7BBF0BCBD3121E1C20EF93CA /* ReviewReadinessModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467E833E3CE05D82DB88C5C5 /* ReviewReadinessModel.swift */; };
 		7BD8965290B1F007B0E99BCF /* GitServiceMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9749FB435319F01F9E70D08 /* GitServiceMergeTests.swift */; };
 		7C286DF876CD8F71D07B6A93 /* WebSocketFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B22D5EBE7EDAC07C943C91D /* WebSocketFrame.swift */; };
@@ -1656,6 +1657,7 @@
 		169FC38D03727F34855EB521 /* AlasFieldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasFieldTests.swift; sourceTree = "<group>"; };
 		16C9E59E3987C1D3C9989D91 /* PaneTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneTreeTests.swift; sourceTree = "<group>"; };
 		16CA8FEE64D73BDEBAF74878 /* Kbd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Kbd.swift; sourceTree = "<group>"; };
+		16D35671971686B20DEA33CB /* TrackedRevision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedRevision.swift; sourceTree = "<group>"; };
 		178EAF6036A9BEAEA2C55082 /* ProjectMCPServerEditorPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMCPServerEditorPolicyTests.swift; sourceTree = "<group>"; };
 		179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimerTests.swift; sourceTree = "<group>"; };
 		17C2AC0F8B3A1B75239995AC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -5346,6 +5348,7 @@
 				71F9CE2A0C76E75E95A641AE /* DraftAmendPrefill.swift */,
 				BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */,
 				3B2FEDAAF927CDC9E4D19551 /* StagedDiffLoader.swift */,
+				16D35671971686B20DEA33CB /* TrackedRevision.swift */,
 			);
 			path = Commit;
 			sourceTree = "<group>";
@@ -6576,6 +6579,7 @@
 				5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */,
 				45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */,
 				AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */,
+				7BB5B3A83C8D0CB185D2365E /* TrackedRevision.swift in Sources */,
 				6EFCC2646A708D0938485654 /* TrafficLights.swift in Sources */,
 				5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */,
 				443F48C0A1AF36BFAB8B61E8 /* UnionCanvasGeometry.swift in Sources */,
