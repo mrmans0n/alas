@@ -241,6 +241,15 @@ final class ACPTranscriptScrollerView: NSScrollView {
         applyLogicalScrollerMetrics()
     }
 
+    override func reflectScrolledClipView(_ cView: NSClipView) {
+        super.reflectScrolledClipView(cView)
+        // NSScrollView reflects the bounded physical document on every
+        // ordinary scroll tick. The transcript scrollbar represents the
+        // full logical history instead, so those metrics may be used
+        // internally but must not remain visible on the native scroller.
+        applyLogicalScrollerMetrics()
+    }
+
     var scrollY: CGFloat { contentView.bounds.origin.y }
     var viewportHeight: CGFloat { contentView.bounds.height }
     var contentHeight: CGFloat { flippedDocumentView.frame.height }
