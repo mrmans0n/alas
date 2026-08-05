@@ -2035,4 +2035,103 @@ struct RemoteSessionGatewayTests {
         }
         #expect(states == [[], []])
     }
+
+    @Test func allQueueVerbsRequireWriterLease() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let itemId = UUID()
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueClear(sessionId: id))
+        await gateway.handle(.queueSteerUndo(sessionId: id))
+
+        #expect(provider.queueRemoves.isEmpty)
+        #expect(provider.queueRetries.isEmpty)
+        #expect(provider.queueEdits.isEmpty)
+        #expect(provider.queueClears.isEmpty)
+        #expect(provider.queueSteerUndos.isEmpty)
+    }
+
+    @Test func queueVerbsReachProviderForWriter() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let itemId = UUID()
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueClear(sessionId: id))
+        await gateway.handle(.queueSteerUndo(sessionId: id))
+
+        #expect(provider.queueRemoves.map(\.itemId) == [itemId])
+        #expect(provider.queueRetries.map(\.itemId) == [itemId])
+        #expect(provider.queueClears == [id])
+        #expect(provider.queueSteerUndos == [id])
+    }
+
+    @Test func malformedItemIdIsIgnored() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.queueRemove(sessionId: id, itemId: "not-a-uuid"))
+
+        #expect(provider.queueRemoves.isEmpty)
+    }
+
+    @Test func queueEditRepliesWithRestoredText() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        provider.queueEditText = "restore me"
+        let itemId = UUID()
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
+
+        #expect(sent.contains(.queueEditRestored(sessionId: id, itemId: itemId.uuidString, text: "restore me")))
+    }
+
+    @Test func queueEditOnSendingItemRepliesWithNothing() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        provider.queueEditText = nil          // takeForEditing refused
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.queueEdit(sessionId: id, itemId: UUID().uuidString))
+
+        #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
+    }
+
+    @Test func steerIntentRoutesToSteerPromptNotSendPrompt() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.sendPrompt(sessionId: id, text: "redirect", attachments: [], intent: "steer"))
+
+        #expect(provider.steerPrompts.map(\.text) == ["redirect"])
+        #expect(provider.prompts.isEmpty)
+    }
+
+    @Test func autoIntentStillRoutesToSendPrompt() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.sendPrompt(sessionId: id, text: "queue me", attachments: [], intent: "auto"))
+
+        #expect(provider.prompts.map(\.text) == ["queue me"])
+        #expect(provider.steerPrompts.isEmpty)
+    }
 }

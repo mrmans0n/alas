@@ -129,7 +129,6 @@ final class RemoteSessionGateway {
                 send(.promptRejected(sessionId: id))   // oversize / non-image
                 return
             }
-            _ = intent // Task 5 wires steer routing; parked here for now.
             // The manager owns the writer/lease re-check and the eventual
             // delivery result. Emit promptRejected on any failure — refused
             // now (not writer / needs auth) OR a session/prompt RPC that fails
@@ -143,12 +142,20 @@ final class RemoteSessionGateway {
             // these file URIs (the transcript bubble references them), so we
             // must keep the files.
             var refusalIsSynchronous = true
-            await provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
+            let onResult: @MainActor (Bool) -> Void = { [weak self] accepted in
                 guard let self else { return }
                 if !accepted {
                     self.send(.promptRejected(sessionId: id))
                     if refusalIsSynchronous { self.discardAttachmentFiles(materialized) }
                 }
+            }
+            // "steer" cancels the running turn and discards the queue before
+            // sending; "auto" (the default, and everything an older client
+            // sends) takes the ordinary enqueue-or-send route.
+            if intent == "steer" {
+                await provider.steerPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
+            } else {
+                await provider.sendPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
             }
             refusalIsSynchronous = false
         case .stop(let id):
@@ -217,9 +224,32 @@ final class RemoteSessionGateway {
                                      messages: wire))
                 break
             }
-        // Wire protocol only for now — Task 5 wires the actual queue mutations.
-        case .queueForceSend, .queueRemove, .queueRetry, .queueEdit, .queueClear, .queueSteerUndo:
-            break
+        case .queueForceSend(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueForceSend(for: id, itemId: uuid)
+            }
+        case .queueRemove(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueRemove(for: id, itemId: uuid)
+            }
+        case .queueRetry(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueRetry(for: id, itemId: uuid)
+            }
+        case .queueEdit(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                // No reply when the item is gone or already `.sending` —
+                // `takeForEditing` refuses in-flight items so an edit can
+                // never duplicate a prompt that is already on the wire.
+                guard let text = await self.provider.queueEdit(for: id, itemId: uuid) else { return }
+                self.send(.queueEditRestored(sessionId: id, itemId: itemId, text: text))
+            }
+        case .queueClear(let id):
+            guard provider.isWriter(for: id) else { return }
+            await provider.queueClear(for: id)
+        case .queueSteerUndo(let id):
+            guard provider.isWriter(for: id) else { return }
+            await provider.queueSteerUndo(for: id)
         }
     }
 
@@ -551,6 +581,16 @@ final class RemoteSessionGateway {
         guard force || lastQueue[id] != snapshot else { return }
         lastQueue[id] = snapshot
         send(.queueState(sessionId: id, items: items, steerUndoAvailable: steerUndoAvailable))
+    }
+
+    /// Shared preamble for the per-item queue verbs: writer gate plus item-id
+    /// parsing. A non-writer or an unparseable id is dropped silently — the
+    /// next `queueState` re-asserts server truth, so there is nothing for the
+    /// client to reconcile.
+    private func withQueueItem(id: String, itemId: String, _ body: (UUID) async -> Void) async {
+        guard provider.isWriter(for: id) else { return }
+        guard let uuid = UUID(uuidString: itemId) else { return }
+        await body(uuid)
     }
 
     private func wireMessages(id: String, session: ACPSession, indices: [Int]) async -> [RemoteWireMessage] {
