@@ -47,7 +47,6 @@ struct ChangedRow: View {
                         .truncationMode(.middle)
                 }
                 .contentShape(Rectangle())
-                .dragOut { dragPayload?() }
                 Spacer()
                 if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
                 if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
@@ -92,6 +91,7 @@ struct ChangedRow: View {
                 ignoreMenu
             }
         }
+        .dragOut { dragPayload?() }
     }
 }
 
