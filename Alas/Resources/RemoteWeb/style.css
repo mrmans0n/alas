@@ -173,6 +173,21 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 #attach, #config { background: none; color: var(--fg-dim); }
 #attach:active, #config:active { color: var(--fg-muted); }
 
+/* Queue split capsule — the web twin of ACPComposerActionButton's .queue case:
+   a labelled primary half plus a chevron half that opens the steer/stop sheet. */
+/* Every rule that has to beat `#composer-row button` (one id + one type) is
+   written as `#queue-capsule #<id>` (two ids) so it wins outright — relying on
+   source order alone breaks the moment these rules move. */
+#queue-capsule { flex-shrink: 0; display: flex; align-items: stretch; height: 34px; border: 0.5px solid var(--line); border-radius: 17px; background: var(--bg-3); }
+#queue-capsule #queue-primary { width: auto; height: 34px; display: flex; align-items: center; gap: 5px; padding: 0 11px; border: none; border-radius: 17px 0 0 17px; background: none; color: var(--fg); font: inherit; font-size: 13px; font-weight: 650; position: relative; overflow: visible; }
+#queue-capsule #queue-menu { width: auto; height: 34px; padding: 0 9px; border: none; border-left: 0.5px solid var(--line); border-radius: 0 17px 17px 0; background: none; color: var(--fg-muted); }
+#queue-capsule button:active { background: var(--bg-4); }
+
+/* Count badge, mirroring native's warn-colored pill offset off the capsule corner. */
+#send-badge, #queue-badge { position: absolute; top: -5px; right: -6px; min-width: 16px; height: 15px; padding: 0 4px; border-radius: 999px; background: oklch(0.80 0.14 85); border: 1px solid var(--bg-0); color: var(--bg-0); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 13px; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+#send { position: relative; overflow: visible; }
+.option-btn.is-destructive { color: var(--del); }
+
 /* Config sheet (⚙) — reuses .option-btn / .is-selected for the radio lists. */
 #cfg .sheet-card { max-height: min(85vh, 640px); display: flex; flex-direction: column; }
 #cfg-scroll { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }

@@ -9,6 +9,9 @@ let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
 let olderFetchInFlight = false;
 let stopPending = false;
+let queueItems = [];             // [{id, text, imageCount, status, lastError}] from queueState
+let steerUndoAvailable = false;
+let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
@@ -230,6 +233,7 @@ function handle(msg) {
     case "transcriptDelta": applyDelta(msg); break;
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
+    case "queueState": applyQueueState(msg); break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
     case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload); break;
@@ -355,7 +359,9 @@ function openSession(id) {
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
-  $("messages").innerHTML = ""; renderConfigAffordances(); renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
+  $("messages").innerHTML = ""; renderConfigAffordances();
+  queueItems = []; steerUndoAvailable = false; renderQueue();
+  renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
 
 function clearSessionSheetsForOpen() {
@@ -683,6 +689,17 @@ function applyDelta(msg) {
   if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   syncStreamingState(msg.streamingState);
 }
+
+function applyQueueState(msg) {
+  if (msg.sessionId !== currentSession) return;
+  queueItems = msg.items || [];
+  steerUndoAvailable = !!msg.steerUndoAvailable;
+  renderQueue();
+  renderDriveBar(lastStreamingState);
+}
+
+// Queued-prompt bubbles land in Task 7; this task only wires the message.
+function renderQueue() { /* queued bubbles land in Task 7 */ }
 
 function applyPage(msg) {
   // Check the session BEFORE touching shared in-flight state: these globals
@@ -2063,6 +2080,22 @@ function hideElicitation() {
   elicitationInputs = new Map();
 }
 
+// Direct port of composerAction(...) in ComposerAction.swift. Kept as a pure
+// function of (streamingState, hasText) so the two implementations can be
+// diffed against each other by eye.
+function composerAction(streamingState, hasText) {
+  if (streamingState === "idle") {
+    return hasText ? "send" : "hidden";
+  }
+  return hasText ? "queue" : "stop";
+}
+
+// Mirrors ACPSession.visibleQueueCount: the in-flight .sending head gets its
+// own bubble but is not part of the "still waiting" count.
+function queueBadgeCount() {
+  return queueItems.filter(i => i.status !== "sending").length;
+}
+
 function renderDriveBar(streamingState) {
   // Keep the whole bar hidden until the first snapshot tells us the real
   // canDrive — otherwise the take-over banner flashes while opening a session
@@ -2080,9 +2113,22 @@ function renderDriveBar(streamingState) {
   // (composerAction returns .stop for sending/streaming/awaiting*). Without
   // the awaiting states, dismissing a prompt sheet would strand the user on
   // Send with no way to cancel the running turn.
-  const busy = streamingState !== "idle";
-  $("send").classList.toggle("hidden", busy);
-  $("stop").classList.toggle("hidden", !busy);
+  lastStreamingState = streamingState;
+  const hasText = !!$("prompt").value.trim() || pendingAttachments.length > 0;
+  const action = composerAction(streamingState, hasText);
+  $("send").classList.toggle("hidden", action !== "send");
+  $("queue-capsule").classList.toggle("hidden", action !== "queue");
+  $("stop").classList.toggle("hidden", action !== "stop");
+  renderQueueBadges();
+}
+
+function renderQueueBadges() {
+  const count = queueBadgeCount();
+  ["send-badge", "queue-badge"].forEach(badgeId => {
+    const badge = $(badgeId);
+    badge.textContent = String(count);
+    badge.classList.toggle("hidden", count === 0);
+  });
 }
 
 let stopFallbackTimer = null;
@@ -2113,19 +2159,28 @@ function autoGrowPrompt() {
   ta.style.height = "auto";                          // shrink back before measuring
   ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + "px";
 }
-function sendPrompt() {
+function submitPrompt(intent) {
   const ta = $("prompt");
   const text = ta.value.trim();
   if (!currentSession) return;
   if (!text && pendingAttachments.length === 0) return;   // nothing to send
   ensureWriter();                                    // grab the wheel first; ordered before the prompt
-  send({ type: "sendPrompt", sessionId: currentSession, text, attachments: pendingAttachments });
+  send({
+    type: "sendPrompt",
+    sessionId: currentSession,
+    text,
+    attachments: pendingAttachments,
+    intent: intent || "auto",
+  });
   lastSentText = text;                               // keep until the server accepts (or rejects) it
   lastSentAttachments = pendingAttachments;          // ditto for the staged images
   ta.value = "";
   clearAttachments();
   autoGrowPrompt();                                  // collapse back to one row
+  renderDriveBar(lastStreamingState);
 }
+
+function sendPrompt() { submitPrompt("auto"); }
 
 // The server dropped our prompt (lease went stale, materialize failed, etc.).
 // Put the text AND staged images back so the message isn't silently lost — but
@@ -2177,6 +2232,9 @@ function renderConfigSheet() {
 
 function showConfig() { renderConfigSheet(); $("cfg").classList.remove("hidden"); }
 function hideConfig() { $("cfg").classList.add("hidden"); }
+
+function showSteerSheet() { $("steer-sheet").classList.remove("hidden"); }
+function hideSteerSheet() { $("steer-sheet").classList.add("hidden"); }
 
 // --- Attachments ---
 function b64Bytes(b64) { return Math.floor(b64.length * 3 / 4); }   // decoded size estimate, good enough for the cap
@@ -2238,6 +2296,12 @@ listen("worktree-search", "input", (e) => {
 $("config").onclick = showConfig;
 $("cfg-close").onclick = hideConfig;
 $("cfg").onclick = (e) => { if (e.target.id === "cfg") hideConfig(); };
+$("queue-primary").onclick = () => submitPrompt("auto");
+$("queue-menu").onclick = showSteerSheet;
+$("steer-now").onclick = () => { hideSteerSheet(); submitPrompt("steer"); };
+$("steer-stop").onclick = () => { hideSteerSheet(); $("stop").click(); };
+$("steer-close").onclick = hideSteerSheet;
+$("steer-sheet").onclick = (e) => { if (e.target.id === "steer-sheet") hideSteerSheet(); };
 $("cfg-autorun").onchange = (e) => { ensureWriter(); send({ type: "setAutoRun", sessionId: currentSession, enabled: e.target.checked }); };
 $("detail-rename").onclick = () => { if (currentSession) showRenameSheet(currentSession); };
 $("rename-submit").onclick = submitRename;
@@ -2284,7 +2348,7 @@ $("stop").onclick = () => {
   send({ type: "stop", sessionId: currentSession });   // stop is leaseless — no lease takeover first
   markStopping(true);
 };
-listen("prompt", "input", autoGrowPrompt);
+listen("prompt", "input", () => { autoGrowPrompt(); renderDriveBar(lastStreamingState); });
 listen("prompt", "keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });
