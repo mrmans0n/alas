@@ -58,6 +58,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
+    private(set) var isRefreshingProjectTopologies = false
     private(set) var missingMissionTab: MissionTabState?
     private var missingMissionRecoveryTarget: MissingMissionRecoveryTarget?
     private(set) var resolvedMissionPaneBaseRefs: [MissionLegID: String] = [:]
@@ -2915,6 +2916,9 @@ final class AppState {
         saveProjects()
         saveSpaces()
         _ = await refreshAllProjectTopologies()
+        if let worktreeId = projectsManager.visibleWorktrees(projectId: project.id).first?.id {
+            selectWorktree(id: worktreeId)
+        }
         let refreshedProject = projectsManager.projects.first { $0.id == project.id } ?? project
         startProjectGitWatcher(for: refreshedProject)
     }
@@ -3188,6 +3192,8 @@ final class AppState {
     /// existing watchers when a deleted linked-worktree anchor is replaced.
     @discardableResult
     func refreshAllProjectTopologies() async -> Bool {
+        isRefreshingProjectTopologies = true
+        defer { isRefreshingProjectTopologies = false }
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
         let changed = await projectsManager.refreshAll()
         if changed {
