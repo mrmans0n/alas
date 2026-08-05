@@ -234,6 +234,7 @@ function handle(msg) {
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
     case "queueState": applyQueueState(msg); break;
+    case "queueEditRestored": applyQueueEditRestored(msg); break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
     case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload); break;
@@ -698,8 +699,108 @@ function applyQueueState(msg) {
   renderDriveBar(lastStreamingState);
 }
 
-// Queued-prompt bubbles land in Task 7; this task only wires the message.
-function renderQueue() { /* queued bubbles land in Task 7 */ }
+// Append rather than replace, mirroring the native pane's
+// composerDraft.appending(restored) — the user may have started typing
+// something else before tapping Edit, and that must not be clobbered.
+function applyQueueEditRestored(msg) {
+  if (msg.sessionId !== currentSession || !msg.text) return;
+  const ta = $("prompt");
+  ta.value = ta.value ? ta.value + "\n" + msg.text : msg.text;
+  autoGrowPrompt();
+  renderDriveBar(lastStreamingState);
+  ta.focus();
+}
+
+function steerUndoToast() { return el("div", "steer-undo"); }
+
+let openQueuedId = null;   // which bubble has its actions revealed (tap-to-reveal)
+
+function setQueuedOpen(id) {
+  openQueuedId = openQueuedId === id ? null : id;
+  renderQueue();
+}
+
+function queueAction(type, itemId) {
+  if (!currentSession) return;
+  ensureWriter();
+  const msg = { type, sessionId: currentSession };
+  if (itemId) msg.itemId = itemId;
+  send(msg);
+  openQueuedId = null;
+}
+
+function renderQueue() {
+  const box = $("queued");
+  box.innerHTML = "";
+  box.classList.toggle("hidden", queueItems.length === 0 && !steerUndoAvailable);
+  if (steerUndoAvailable) box.appendChild(steerUndoToast());
+  if (queueItems.length === 0) return;
+
+  const waiting = queueBadgeCount();
+  if (waiting > 1) {
+    const header = el("div", "queued-header");
+    header.appendChild(el("span", null, waiting + " queued"));
+    const clear = el("button", "queued-clear", "Clear queue");
+    clear.onclick = () => queueAction("queueClear", null);
+    header.appendChild(clear);
+    box.appendChild(header);
+  }
+
+  queueItems.forEach(item => box.appendChild(queuedRow(item)));
+}
+
+function queuedRow(item) {
+  const pending = item.status === "pending";
+  const row = el("div", "queued-row");
+  if (!pending) row.classList.add("is-sending");
+  if (pending && openQueuedId === item.id) row.classList.add("is-open");
+
+  // A .sending item is mid-RPC — native hides its affordances for the same
+  // reason, so there is nothing to reveal and nothing to act on.
+  if (pending) row.appendChild(queuedActions(item));
+
+  const stack = el("div", "queued-stack");
+  const status = el("div", "queued-status");
+  status.appendChild(el("span", null, pending ? "Queued" : "Sending"));
+  if (item.lastError) status.appendChild(el("span", "queued-error", " · " + item.lastError));
+  stack.appendChild(status);
+
+  const bubble = el("div", "queued-bubble");
+  if (item.imageCount > 0) {
+    bubble.appendChild(el("span", "queued-images", "🖼 ×" + item.imageCount));
+  }
+  bubble.appendChild(document.createTextNode(item.text || ""));
+  if (pending) bubble.onclick = () => setQueuedOpen(item.id);
+  stack.appendChild(bubble);
+
+  row.appendChild(stack);
+  return row;
+}
+
+function queuedActions(item) {
+  const actions = el("div", "queued-actions");
+  const button = (cls, glyph, label, onclick) => {
+    const b = el("button", cls, glyph);
+    b.setAttribute("aria-label", label);
+    b.onclick = onclick;
+    return b;
+  };
+  actions.appendChild(button("qa-send", "▲", "Send now",
+    () => queueAction("queueForceSend", item.id)));
+  if (item.lastError) {
+    actions.appendChild(button("qa-retry", "↻", "Retry",
+      () => queueAction("queueRetry", item.id)));
+  }
+  // Editing an item whose images the web client never received would silently
+  // drop them, so the pencil is withheld rather than made lossy.
+  if (item.imageCount === 0) {
+    actions.appendChild(button("qa-edit", "✎", "Edit",
+      () => queueAction("queueEdit", item.id)));
+  }
+  actions.appendChild(button("qa-remove", "✕", "Remove from queue",
+    () => queueAction("queueRemove", item.id)));
+  return actions;
+}
 
 function applyPage(msg) {
   // Check the session BEFORE touching shared in-flight state: these globals

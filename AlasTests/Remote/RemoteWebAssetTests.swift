@@ -382,6 +382,43 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"id="queue-badge" class="hidden""#))
     }
 
+    @Test func remoteWebRendersQueuedBubblesOutsideTheTranscriptScroller() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"<div id="queued" class="hidden"></div>"#))
+        #expect(js.contains("function renderQueue()"))
+        #expect(js.contains(#"el("div", "queued-bubble")"#))
+        #expect(js.contains("function setQueuedOpen(id)"))
+        #expect(js.contains("function queueAction(type, itemId)"))
+        #expect(css.contains("#queued"))
+        #expect(css.contains(".queued-bubble"))
+        #expect(css.contains(".queued-actions"))
+    }
+
+    @Test func queuedBubblesDispatchEveryQueueVerb() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains(#""queueForceSend""#))
+        #expect(js.contains(#""queueRemove""#))
+        #expect(js.contains(#""queueRetry""#))
+        #expect(js.contains(#""queueEdit""#))
+        #expect(js.contains(#""queueClear""#))
+        #expect(js.contains(#"case "queueEditRestored""#))
+    }
+
+    @Test func queuedBubblesHideEditWhenTheItemCarriesImages() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("if (item.imageCount === 0)"))
+        #expect(js.contains("🖼"))
+    }
+
+    @Test func sendingQueueItemsExposeNoActions() throws {
+        let js = try asset("app.js")
+        #expect(js.contains(#"const pending = item.status === "pending";"#))
+    }
+
     @Test func queueParityBustsServiceWorkerAssetCache() throws {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
