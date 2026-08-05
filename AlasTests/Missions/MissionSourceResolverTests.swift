@@ -77,6 +77,39 @@ struct MissionSourceResolverTests {
         #expect(result.selectedProjectID == "project-b")
     }
 
+    @Test func loginPageMetadataDoesNotReplaceOriginalTicketURL() async throws {
+        let fetcher = WebPageMetadataFetcher { _ in
+            let html = """
+            <html>
+              <head>
+                <title>Log in - Jira</title>
+                <link rel="canonical" href="https://jira.example.com/login.jsp">
+              </head>
+            </html>
+            """
+            return .init(
+                data: Data(html.utf8),
+                url: URL(string: "https://jira.example.com/login.jsp")!,
+                mimeType: "text/html",
+                textEncodingName: "utf-8"
+            )
+        }
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([ManualMissionSourceProvider(metadataFetcher: fetcher)])
+        ))
+
+        let result = try await resolver.resolve("https://jira.example.com/browse/ALAS-123")
+
+        #expect(result.source.identity == .init(
+            providerID: .manual,
+            stableID: "https://jira.example.com/browse/ALAS-123"
+        ))
+        #expect(result.source.canonicalURL.absoluteString == "https://jira.example.com/browse/ALAS-123")
+        #expect(result.source.title.isEmpty)
+        #expect(result.source.body.isEmpty)
+        #expect(result.source.providerLabel == "jira.example.com")
+    }
+
     @Test func unconfiguredIssuesURLBecomesPlainManualSource() async throws {
         let recorder = SourceProviderRecorder()
         let resolver = MissionSourceResolver(environment: Self.environment(recorder: recorder))

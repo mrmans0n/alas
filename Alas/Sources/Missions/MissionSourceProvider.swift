@@ -124,9 +124,10 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
         guard case .url(let url) = reference else {
             throw CodeHostProviderError.malformedOutput("Enter an issue number or an absolute HTTP(S) URL.")
         }
-        let metadata = try? await metadataFetcher?.metadata(for: url)
+        let metadata = (try? await metadataFetcher?.metadata(for: url))
+            .flatMap { Self.metadataDescribingInput($0, inputURL: url) }
         let source = try Self.snapshot(
-            for: metadata?.canonicalURL ?? url,
+            for: url,
             displayReference: metadata?.displayReference,
             providerLabel: metadata?.providerLabel,
             title: metadata?.title ?? "",
@@ -215,6 +216,47 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
         return best.count == 1 ? best[0].id : nil
     }
 
+    private static func metadataDescribingInput(
+        _ metadata: WebPageMetadata,
+        inputURL: URL
+    ) -> WebPageMetadata? {
+        guard !looksLikeAuthenticationPage(metadata),
+              canonicalURL(metadata.canonicalURL, describes: inputURL, displayReference: metadata.displayReference)
+        else { return nil }
+        return metadata
+    }
+
+    private static func canonicalURL(
+        _ canonicalURL: URL,
+        describes inputURL: URL,
+        displayReference: String?
+    ) -> Bool {
+        guard canonicalURL.host?.caseInsensitiveCompare(inputURL.host ?? "") == .orderedSame else {
+            return false
+        }
+        if normalizedPath(canonicalURL.path) == normalizedPath(inputURL.path) {
+            return true
+        }
+        guard let displayReference, !displayReference.isEmpty else { return false }
+        return inputURL.absoluteString.range(
+            of: displayReference,
+            options: [.caseInsensitive, .diacriticInsensitive]
+        ) != nil
+    }
+
+    private static func looksLikeAuthenticationPage(_ metadata: WebPageMetadata) -> Bool {
+        let title = metadata.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !title.isEmpty else { return false }
+        let authenticationTitles = [
+            "log in",
+            "login",
+            "sign in",
+            "signin",
+            "authentication required",
+        ]
+        return authenticationTitles.contains { title == $0 || title.hasPrefix("\($0) ") || title.hasPrefix("\($0) -") }
+    }
+
     private static func projectNameScore(_ project: ProjectConfig, context: String) -> Int {
         let names = Set([
             project.name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -249,11 +291,15 @@ struct ManualMissionSourceProvider: MissionSourceProviding {
     }
 
     private static func normalizedRepositoryPath(_ path: String) -> String {
-        var normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var normalized = normalizedPath(path)
         if normalized.lowercased().hasSuffix(".git") {
             normalized.removeLast(4)
         }
         return normalized.lowercased()
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
     }
 
     static func canonicalURL(_ url: URL) throws -> URL {
