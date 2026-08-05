@@ -125,6 +125,12 @@ struct GGInboxTabView: View {
         return url
     }
 
+    static func reviewRequestKind(prURL: String?) -> CodeHostKind {
+        guard let url = validPRURL(prURL),
+              url.pathComponents.contains("merge_requests") else { return .github }
+        return .gitlab
+    }
+
     static func ciIconName(_ status: String?) -> String? {
         switch GGCIStatus(rawValue: status ?? "") {
         case .success:            return "checkmark.circle"
@@ -319,24 +325,32 @@ struct GGInboxTabView: View {
     }
 
     private func bucketList(_ snapshot: GGInboxSnapshot) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(GGInboxBucket.allCases, id: \.self) { bucket in
-                    let entries = bucket.entries(in: snapshot.buckets)
-                    if !entries.isEmpty {
-                        bucketSection(bucket, entries: entries)
+        GeometryReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(GGInboxBucket.allCases, id: \.self) { bucket in
+                        let entries = bucket.entries(in: snapshot.buckets)
+                        if !entries.isEmpty {
+                            bucketSection(bucket, entries: entries)
+                        }
+                    }
+                    if !snapshot.stackErrors.isEmpty {
+                        stackErrorsSection(snapshot.stackErrors)
                     }
                 }
-                if !snapshot.stackErrors.isEmpty {
-                    stackErrorsSection(snapshot.stackErrors)
-                }
+                .frame(
+                    maxWidth: ACPChatLayout.contentMaxWidth(forPaneWidth: proxy.size.width),
+                    alignment: .leading
+                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
-            .padding(.vertical, 6)
         }
     }
 
     private func bucketSection(_ bucket: GGInboxBucket, entries: [GGInboxEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
                 Text(bucket.title.uppercased())
                     .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
@@ -345,50 +359,80 @@ struct GGInboxTabView: View {
                     .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
                     .foregroundColor(theme.color(bucket.themeToken))
             }
-            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+            .padding(.top, 10).padding(.bottom, 4)
             ForEach(entries, id: \.sha) { entry in
-                row(entry)
+                row(entry, bucket: bucket)
             }
         }
     }
 
-    private func row(_ entry: GGInboxEntry) -> some View {
+    private func row(_ entry: GGInboxEntry, bucket: GGInboxBucket) -> some View {
         let targetWorktreeId = resolveWorktreeId(entry)
-        return HStack(spacing: 8) {
+        let kind = Self.reviewRequestKind(prURL: entry.prUrl)
+        let tint = theme.color(bucket.themeToken)
+        return HStack(spacing: 10) {
             Text("\(entry.position)")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
-            Text(entry.stackName)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(theme.color("fg-muted"))
-            Text(entry.title).font(.system(size: 12))
-                .foregroundColor(theme.color("fg")).lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: 8)
-            if let behind = entry.behindBase, behind > 0 {
-                Text("behind \(behind)")
-                    .font(.system(size: 10.5)).foregroundColor(theme.color("warn"))
-            }
-            if let icon = Self.ciIconName(entry.ciStatus) {
-                Icon(name: icon, size: 11, color: theme.color(Self.ciIconColorToken(entry.ciStatus)))
-            }
-            if let refreshError = entry.refreshError {
-                Text(refreshError)
-                    .font(.system(size: 10.5))
-                    .foregroundColor(theme.color("warn"))
-                    .lineLimit(2)
-            }
-            if let url = Self.validPRURL(entry.prUrl) {
-                Button { NSWorkspace.shared.open(url) } label: {
-                    prNumberLabel(entry.prNumber)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.title)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 6) {
+                    Text(entry.stackName)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .lineLimit(1)
+                    if let icon = Self.ciIconName(entry.ciStatus) {
+                        Icon(
+                            name: icon,
+                            size: 10,
+                            color: theme.color(Self.ciIconColorToken(entry.ciStatus))
+                        )
+                    }
                 }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .help("Open PR in browser")
-            } else {
-                prNumberLabel(entry.prNumber)
+                if let refreshError = entry.refreshError {
+                    Text(refreshError)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(theme.color("warn"))
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                if let url = Self.validPRURL(entry.prUrl) {
+                    Button { NSWorkspace.shared.open(url) } label: {
+                        reviewReferenceLabel(entry.prNumber, kind: kind)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Open \(kind.reviewRequestLabel) \(kind.reviewRequestNumberPrefix)\(entry.prNumber)")
+                } else {
+                    reviewReferenceLabel(entry.prNumber, kind: kind)
+                }
+                if let behind = entry.behindBase, behind > 0 {
+                    Text("behind \(behind)")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(theme.color("warn"))
+                }
+            }
+            .frame(width: 64, alignment: .trailing)
+            .padding(.leading, 10)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(tint.opacity(0.28)).frame(width: 0.5)
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 5)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(tint.opacity(0.28), lineWidth: 0.5)
+        }
         .contentShape(Rectangle())
         .opacity(targetWorktreeId == nil ? 0.55 : 1)
         .onTapGesture {
@@ -414,7 +458,7 @@ struct GGInboxTabView: View {
             Text("STACK ERRORS")
                 .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
                 .foregroundColor(theme.color("warn"))
-                .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 4)
+                .padding(.top, 12).padding(.bottom, 4)
             ForEach(errors, id: \.stackName) { item in
                 HStack(spacing: 8) {
                     Text(item.stackName).font(.system(size: 11, design: .monospaced))
@@ -422,13 +466,13 @@ struct GGInboxTabView: View {
                     Text(item.error).font(.system(size: 11))
                         .foregroundColor(theme.color("fg-dim")).lineLimit(2)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 3)
+                .padding(.vertical, 3)
             }
         }
     }
 
-    private func prNumberLabel(_ number: Int) -> some View {
-        Text("#\(number)")
+    private func reviewReferenceLabel(_ number: Int, kind: CodeHostKind) -> some View {
+        Text("\(kind.reviewRequestNumberPrefix)\(number)")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundColor(theme.color("accent"))
     }

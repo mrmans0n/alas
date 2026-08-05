@@ -175,9 +175,12 @@ enum GGInboxBucket: String, CaseIterable, Equatable, Decodable {
 
     var themeToken: String {
         switch self {
+        case .refreshFailed, .changesRequested: return "del"
         case .readyToLand: return "add"
-        case .refreshFailed, .changesRequested, .blockedOnCi: return "warn"
-        case .awaitingReview, .behindBase, .draft: return "fg-dim"
+        case .blockedOnCi: return "caution"
+        case .awaitingReview: return "accent"
+        case .behindBase: return "warn"
+        case .draft: return "fg-muted"
         }
     }
 
