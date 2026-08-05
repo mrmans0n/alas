@@ -37,6 +37,9 @@ struct ReviewTargetPaletteModelTests {
             loadBranches: { _ in branches },
             resolveRevision: { _, ref in "resolved-\(ref)" },
             currentBranch: { _ in "feature" },
+            resolveTrackedRevision: { _, expression in
+                TrackedRevisionCandidate(branch: "feature", sha: "resolved-\(expression)")
+            },
             headSHA: { _ in "head-sha" },
             openTarget: onOpen
         )

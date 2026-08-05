@@ -431,9 +431,7 @@ final class ReviewTargetPaletteModel {
         revisionValidationError = nil
         guard !expression.isEmpty else { return }
         do {
-            async let sha = env.resolveRevision(worktree, expression)
-            async let branch = env.currentBranch(worktree)
-            let (resolvedSHA, currentBranch) = try await (sha, branch)
+            let candidate = try await env.resolveTrackedRevision(worktree, expression)
             guard revisionValidationToken == token,
                   query.trimmingCharacters(in: .whitespacesAndNewlines) == expression,
                   case .targets(let current) = level,
@@ -441,8 +439,8 @@ final class ReviewTargetPaletteModel {
             else { return }
             followedRevisionRow = .followedRevision(
                 expression: expression,
-                resolvedSHA: resolvedSHA,
-                branch: currentBranch
+                resolvedSHA: candidate.sha,
+                branch: candidate.branch
             )
             setSelectedIndex(0, selectable: targetRows().map(\.isSelectable))
         } catch {

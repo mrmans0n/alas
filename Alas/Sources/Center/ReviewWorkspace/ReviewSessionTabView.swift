@@ -212,7 +212,8 @@ struct ReviewSessionTabView: View {
         } else {
             revisionGeneration = 0
         }
-        return "\(tabState.sessionID.rawValue):\(loadGeneration):\(revisionGeneration)"
+        let retargetGeneration = appState?.reviewSessionRetargetGeneration(sessionID: tabState.sessionID) ?? 0
+        return "\(tabState.sessionID.rawValue):\(loadGeneration):\(revisionGeneration):\(retargetGeneration)"
     }
 
     private var header: some View {

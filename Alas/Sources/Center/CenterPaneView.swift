@@ -156,7 +156,7 @@ struct CenterPaneView: View {
                         )
                     case .reviewSession(let state):
                         let record = try? ReviewSessionStore().load(id: state.sessionID)
-                        guard record?.target.kind == .commit else {
+                        guard record?.target.kind == .commit || record?.target.kind == .trackedCommit else {
                             return RevisionFollowCapability(isSupported: false, isFollowing: false)
                         }
                         let isFollowing: Bool

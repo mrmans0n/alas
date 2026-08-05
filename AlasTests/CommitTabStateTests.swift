@@ -60,11 +60,19 @@ struct CommitTabStateTests {
         let namedRef = try #require(TrackedRevision(
             expression: " topic~2 ", baselineBranch: "feature", resolvedSHA: "old"
         ))
+        let headPrefixRef = try #require(TrackedRevision(
+            expression: "HEAD-feature", baselineBranch: "feature", resolvedSHA: "old"
+        ))
+        let atPrefixRef = try #require(TrackedRevision(
+            expression: "@feature", baselineBranch: "feature", resolvedSHA: "old"
+        ))
 
         #expect(headRelative.expression == "HEAD~3")
         #expect(headRelative.dependsOnWorktreeHEAD)
         #expect(headAlias.dependsOnWorktreeHEAD)
         #expect(!namedRef.dependsOnWorktreeHEAD)
+        #expect(!headPrefixRef.dependsOnWorktreeHEAD)
+        #expect(!atPrefixRef.dependsOnWorktreeHEAD)
         #expect(TrackedRevision(expression: " \n ", baselineBranch: "feature", resolvedSHA: "old") == nil)
     }
 

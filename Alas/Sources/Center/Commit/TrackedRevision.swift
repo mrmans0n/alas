@@ -52,7 +52,24 @@ struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
     }
 
     var dependsOnWorktreeHEAD: Bool {
-        expression.hasPrefix("HEAD") || expression.hasPrefix("@")
+        Self.usesWorktreeHEADAlias(expression)
+    }
+
+    static func usesWorktreeHEADAlias(_ expression: String) -> Bool {
+        let expression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        if expression == "HEAD" || expression == "@" { return true }
+        if expression.hasPrefix("HEAD") {
+            return isSupportedHEADSuffix(expression.dropFirst("HEAD".count))
+        }
+        if expression.hasPrefix("@") {
+            return isSupportedHEADSuffix(expression.dropFirst("@".count))
+        }
+        return false
+    }
+
+    fileprivate static func isSupportedHEADSuffix(_ suffix: Substring) -> Bool {
+        guard let first = suffix.first else { return false }
+        return first == "~" || first == "^" || first == "{" || suffix.hasPrefix("@{")
     }
 
     func resolving(_ candidate: TrackedRevisionCandidate) -> Self {
@@ -113,9 +130,15 @@ struct TrackedRevisionResolver {
             let startingBranch = try await branch(worktreePath)
             let startingHEAD = try await resolve(worktreePath, "HEAD")
             let pinnedExpression: String
-            if expression.hasPrefix("HEAD") {
+            if expression == "HEAD" {
+                pinnedExpression = startingHEAD
+            } else if expression.hasPrefix("HEAD"),
+                      TrackedRevision.isSupportedHEADSuffix(expression.dropFirst("HEAD".count)) {
                 pinnedExpression = startingHEAD + expression.dropFirst("HEAD".count)
-            } else if expression.hasPrefix("@") {
+            } else if expression == "@" {
+                pinnedExpression = startingHEAD
+            } else if expression.hasPrefix("@"),
+                      TrackedRevision.isSupportedHEADSuffix(expression.dropFirst("@".count)) {
                 pinnedExpression = startingHEAD + expression.dropFirst("@".count)
             } else {
                 pinnedExpression = expression

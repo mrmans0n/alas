@@ -9,6 +9,7 @@ struct ReviewTargetPaletteEnvironment {
     var loadBranches: (Worktree) async throws -> [String]
     var resolveRevision: (Worktree, String) async throws -> String
     var currentBranch: (Worktree) async throws -> String
+    var resolveTrackedRevision: (Worktree, String) async throws -> TrackedRevisionCandidate
     var headSHA: (Worktree) async throws -> String
     /// Opens the review session and closes the palette. The worktree is the
     /// session's host — callers switch the app's active worktree to it.

@@ -583,6 +583,7 @@ final class AppState {
     @ObservationIgnored
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
     private(set) var revisionChangeGenerations: [String: Int] = [:]
+    private(set) var reviewSessionRetargetGenerations: [String: Int] = [:]
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -3154,6 +3155,10 @@ final class AppState {
         revisionChangeGenerations[worktreeID, default: 0]
     }
 
+    func reviewSessionRetargetGeneration(sessionID: ReviewSessionID) -> Int {
+        reviewSessionRetargetGenerations[sessionID.rawValue, default: 0]
+    }
+
     func followRevision(worktreeID: String, tabID: TabID, expression: String) {
         Task { @MainActor in
             await applyFollowRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
@@ -3204,6 +3209,7 @@ final class AppState {
             _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
                 $0.revision = .following(accepted)
             }
+            bumpRevisionGeneration(worktreeID: worktreeID)
         case .reviewSession(let state):
             acceptTrackedReviewSessionCheckout(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
         default:
@@ -3303,9 +3309,14 @@ final class AppState {
                 $0.selectedFileID = result.record.selectedFileID
                 $0.focusedCommentID = result.record.focusedCommentID
             }
+            bumpReviewSessionRetargetGeneration(sessionID: result.record.id)
         } catch {
             Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
         }
+    }
+
+    private func bumpReviewSessionRetargetGeneration(sessionID: ReviewSessionID) {
+        reviewSessionRetargetGenerations[sessionID.rawValue, default: 0] += 1
     }
 
     private func bumpRevisionGeneration(worktreeID: String) {
