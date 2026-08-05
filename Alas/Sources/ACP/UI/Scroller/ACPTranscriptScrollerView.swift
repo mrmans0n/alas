@@ -7,6 +7,34 @@ final class ACPTranscriptDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// Native scroller whose thumb extent is owned by the transcript's logical
+/// full-history range rather than by NSScrollView's bounded physical window.
+/// NSScrollView remains free to drive the control value during ordinary
+/// scrolling and knob tracking; only its physical knob-proportion writes are
+/// rejected after logical metrics have been installed.
+@MainActor
+final class ACPTranscriptLogicalScroller: NSScroller {
+    private var logicalKnobProportion: CGFloat?
+
+    override class var isCompatibleWithOverlayScrollers: Bool {
+        self == ACPTranscriptLogicalScroller.self
+    }
+
+    override var knobProportion: CGFloat {
+        get { logicalKnobProportion ?? super.knobProportion }
+        set {
+            guard logicalKnobProportion == nil else { return }
+            super.knobProportion = newValue
+        }
+    }
+
+    func setLogicalKnobProportion(_ proportion: CGFloat) {
+        let clamped = min(max(proportion, 0), 1)
+        logicalKnobProportion = clamped
+        super.knobProportion = clamped
+    }
+}
+
 /// The transcript's NSScrollView. Exposes the one primitive SwiftUI's
 /// ScrollView can't provide on macOS 26: synchronous scroll-offset
 /// adjustment in the same pass as a content mutation (`applyPrepend`), so
@@ -120,6 +148,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
         super.init(frame: frameRect)
         drawsBackground = false
         hasVerticalScroller = true
+        verticalScroller = ACPTranscriptLogicalScroller()
         hasHorizontalScroller = false
         verticalScroller?.isContinuous = false
         verticalScroller?.target = self
@@ -266,7 +295,11 @@ final class ACPTranscriptScrollerView: NSScrollView {
     private func applyLogicalScrollerMetrics() {
         guard let logicalScrollerMetrics, let verticalScroller else { return }
         verticalScroller.doubleValue = logicalScrollerMetrics.value
-        verticalScroller.knobProportion = logicalScrollerMetrics.knobProportion
+        if let logicalScroller = verticalScroller as? ACPTranscriptLogicalScroller {
+            logicalScroller.setLogicalKnobProportion(logicalScrollerMetrics.knobProportion)
+        } else {
+            verticalScroller.knobProportion = logicalScrollerMetrics.knobProportion
+        }
     }
 
     @objc private func commitLogicalScroll(_ sender: NSScroller) {

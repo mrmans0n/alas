@@ -114,6 +114,24 @@ struct ACPTranscriptScrollerViewTests {
         #expect(committedValues == [0.75])
     }
 
+    @Test("physical scroll metrics cannot replace the logical knob proportion")
+    func physicalMetricsCannotReplaceLogicalKnobProportion() throws {
+        let s = scroller()
+        let verticalScroller = try #require(s.verticalScroller)
+        s.setLogicalScrollerMetrics(.init(
+            value: 0.25,
+            knobProportion: 0.1,
+            logicalViewportMessages: 10
+        ))
+
+        // NSScrollView writes the bounded physical document proportion on
+        // ordinary scroll ticks. Once logical metrics are active, that
+        // upstream write must not resize the transcript thumb.
+        verticalScroller.knobProportion = 0.8
+
+        #expect(abs(verticalScroller.knobProportion - 0.1) < 0.000_001)
+    }
+
     /// `onContentWidthChange` is the hook `ACPTranscriptScroller.Coordinator`
     /// uses to reconcile after a real width arrives from AppKit's own layout
     /// pass, without any accompanying SwiftUI model update (P1 finding,
