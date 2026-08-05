@@ -27,18 +27,15 @@ struct WorktreeSortMenuTests {
         ])
     }
 
-    @Test func visibilityIncludesHeaderHoverFocusAndMenuTracking() {
+    @Test func visibilityIncludesHeaderHoverAndMenuTracking() {
         #expect(!WorktreeSortMenu.isVisible(
-            headerHovered: false, focused: false, menuTracking: false
+            headerHovered: false, menuTracking: false
         ))
         #expect(WorktreeSortMenu.isVisible(
-            headerHovered: true, focused: false, menuTracking: false
+            headerHovered: true, menuTracking: false
         ))
         #expect(WorktreeSortMenu.isVisible(
-            headerHovered: false, focused: true, menuTracking: false
-        ))
-        #expect(WorktreeSortMenu.isVisible(
-            headerHovered: false, focused: false, menuTracking: true
+            headerHovered: false, menuTracking: true
         ))
     }
 }
