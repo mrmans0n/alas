@@ -144,6 +144,7 @@ final class RemoteProjectGitWatcher {
                 (URL(fileURLWithPath: $0.key), $0.value)
             }))
         }
+        if delta.headMoved { onRevisionChanged?() }
         if delta.topologyChanged { onTopologyChanged?() }
         return true
     }

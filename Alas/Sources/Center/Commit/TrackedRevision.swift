@@ -133,12 +133,12 @@ struct TrackedRevisionResolver {
             if expression == "HEAD" {
                 pinnedExpression = startingHEAD
             } else if expression.hasPrefix("HEAD"),
-                      TrackedRevision.isSupportedHEADSuffix(expression.dropFirst("HEAD".count)) {
+                      TrackedRevision.shouldPinHEADSuffix(expression.dropFirst("HEAD".count)) {
                 pinnedExpression = startingHEAD + expression.dropFirst("HEAD".count)
             } else if expression == "@" {
                 pinnedExpression = startingHEAD
             } else if expression.hasPrefix("@"),
-                      TrackedRevision.isSupportedHEADSuffix(expression.dropFirst("@".count)) {
+                      TrackedRevision.shouldPinHEADSuffix(expression.dropFirst("@".count)) {
                 pinnedExpression = startingHEAD + expression.dropFirst("@".count)
             } else {
                 pinnedExpression = expression
@@ -151,6 +151,13 @@ struct TrackedRevisionResolver {
             }
             try Task.checkCancellation()
         }
+    }
+}
+
+private extension TrackedRevision {
+    static func shouldPinHEADSuffix(_ suffix: Substring) -> Bool {
+        guard let first = suffix.first else { return false }
+        return first == "~" || first == "^"
     }
 }
 

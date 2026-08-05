@@ -3301,8 +3301,12 @@ final class AppState {
         worktreeID: String,
         tabID: TabID
     ) {
+        let sessionStore = ReviewSessionStore()
+        var savedRecord = false
+        let previousRecord = try? sessionStore.load(id: result.record.id)
         do {
-            try ReviewSessionStore().save(result.record)
+            try sessionStore.save(result.record)
+            savedRecord = true
             try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
             _ = tabs.updateReviewSession(worktreeId: worktreeID, tabId: tabID) {
                 $0.title = result.record.target.title
@@ -3311,6 +3315,9 @@ final class AppState {
             }
             bumpReviewSessionRetargetGeneration(sessionID: result.record.id)
         } catch {
+            if savedRecord, let previousRecord {
+                try? sessionStore.save(previousRecord)
+            }
             Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
         }
     }

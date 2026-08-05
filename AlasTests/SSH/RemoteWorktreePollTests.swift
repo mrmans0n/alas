@@ -45,6 +45,7 @@ struct RemoteWorktreePollTests {
         let delta = RemoteWorktreePoll.classify(old: old, new: new)
         #expect(delta == RemoteWorktreePollDelta(
             branchLabelsByPath: ["/srv/wt/feature": "other"],
+            headMoved: false,
             topologyChanged: false
         ))
     }
@@ -66,7 +67,11 @@ struct RemoteWorktreePollTests {
             branch: new[0].branch
         )
         let delta = RemoteWorktreePoll.classify(old: old, new: new)
-        #expect(delta == RemoteWorktreePollDelta(branchLabelsByPath: [:], topologyChanged: true))
+        #expect(delta == RemoteWorktreePollDelta(
+            branchLabelsByPath: [:],
+            headMoved: true,
+            topologyChanged: true
+        ))
     }
 
     @Test func addedOrRemovedWorktreeYieldsTopologyChange() {

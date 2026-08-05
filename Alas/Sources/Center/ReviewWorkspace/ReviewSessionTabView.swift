@@ -588,7 +588,16 @@ struct ReviewSessionTabView: View {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
             }
 
-            let resolvedRecord = try await resolveTrackedRecordForLoad(storedRecord)
+            let resolvedRecord: (record: ReviewSessionRecord, paused: Bool)
+            let refreshError: String?
+            do {
+                resolvedRecord = try await resolveTrackedRecordForLoad(storedRecord)
+                refreshError = nil
+            } catch {
+                guard case .trackedCommit = storedRecord.target.payload else { throw error }
+                resolvedRecord = (storedRecord, false)
+                refreshError = error.localizedDescription
+            }
             guard loadCoordinator.canPublish(token) else { return }
             if resolvedRecord.paused, resolvedRecord.record.target != storedRecord.target {
                 try sessionStore.save(resolvedRecord.record)
@@ -606,6 +615,7 @@ struct ReviewSessionTabView: View {
                     loaded: loadedContext
                 )
             )
+            loadError = refreshError
             loadDraftCommentController(for: resolvedRecord.record)
             isLoading = false
             loadCoordinator.finish(token)
