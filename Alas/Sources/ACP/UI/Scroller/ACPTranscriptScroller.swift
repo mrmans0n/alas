@@ -661,12 +661,29 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // tail-follow the same as a trackpad gesture or scroller-knob
             // drag would — without misclassifying clicks on transcript
             // controls (which aren't scrollbar hits) as scrolling.
-            let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
-                currentEventType,
-                previousMinY: previousY,
-                newMinY: newY,
-                isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
-            )
+            //
+            // `scroller.isUserScrollActive` is what makes this reachable at
+            // all. The event-based test alone answers false for ~97-99% of
+            // scroll ticks under responsive scrolling (the same measurement
+            // `shouldStepHeadBack` documents), so the pause it gates almost
+            // never fired: a reader who scrolled up out of the tail kept
+            // `followsTranscriptTail` set, and once their gesture ended —
+            // and with it the suppression window in
+            // `ACPTranscriptScrollerReconciler.repinsToTail` — the next
+            // update pinned them straight back to the bottom. The scroll
+            // view's own live-scroll notifications are posted only for
+            // genuine user scrolling and never for a programmatic
+            // `setBoundsOrigin`, so they identify the gesture where the event
+            // stream cannot. The event test is kept alongside because it
+            // additionally covers input that never opens a live-scroll
+            // session (a scrollbar-track click, magnify, swipe).
+            let isHeadPaginationDriven = scroller.isUserScrollActive
+                || ACPUserScrollEvent.isHeadPaginationDriven(
+                    currentEventType,
+                    previousMinY: previousY,
+                    newMinY: newY,
+                    isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
+                )
 
             let decision = ACPScrollDirectionClassifier.decide(
                 previousOffsetY: previousY,
@@ -836,6 +853,23 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             didRestoreInitialPosition = true
             scroller.setScrollY(row.minY)
         }
+
+        #if DEBUG
+        /// Re-measures every mounted row, reproducing what streaming content
+        /// does continuously (`acp-thought:`/`tc-*` rows invalidating their
+        /// intrinsic size). This is the path that used to yank a scrolled-away
+        /// reader back to the bottom.
+        func remeasureMountedRowsForTesting() {
+            guard let reconciler else { return }
+            for id in reconciler.mountedRowIdsForTesting {
+                reconciler.remeasureRow(id: id)
+            }
+        }
+
+        var mountedRowCountForTesting: Int {
+            reconciler?.mountedRowIdsForTesting.count ?? 0
+        }
+        #endif
     }
 }
 
