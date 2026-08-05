@@ -24,6 +24,15 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renamed: [(id: String, title: String)] = []
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
+    var queueForceSends: [(id: String, itemId: UUID)] = []
+    var queueRemoves: [(id: String, itemId: UUID)] = []
+    var queueRetries: [(id: String, itemId: UUID)] = []
+    var queueEdits: [(id: String, itemId: UUID)] = []
+    var queueClears: [String] = []
+    var queueSteerUndos: [String] = []
+    var steerPrompts: [(id: String, text: String)] = []
+    var queueEditText: String?            // what queueEdit hands back
+    var steerPromptAccepts = true
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
@@ -147,6 +156,21 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return renameSucceeds
     }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
+
+    func queueForceSend(for id: String, itemId: UUID) { queueForceSends.append((id, itemId)) }
+    func queueRemove(for id: String, itemId: UUID) { queueRemoves.append((id, itemId)) }
+    func queueRetry(for id: String, itemId: UUID) { queueRetries.append((id, itemId)) }
+    func queueEdit(for id: String, itemId: UUID) -> String? {
+        queueEdits.append((id, itemId))
+        return queueEditText
+    }
+    func queueClear(for id: String) { queueClears.append(id) }
+    func queueSteerUndo(for id: String) { queueSteerUndos.append(id) }
+    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
+        let accepted = writers.contains(id) && steerPromptAccepts
+        if accepted { steerPrompts.append((id, text)) }
+        onResult(accepted)
+    }
 }
 
 #if DEBUG
@@ -1938,5 +1962,20 @@ struct RemoteSessionGatewayTests {
         // The retry reuses the cache the first (superseded) attempt already
         // populated — no second real fetch needed.
         #expect(provider.fullToolCallContentCallCount == 1)
+    }
+
+    @Test func queueVerbsReachTheProviderOnlyForWriters() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let itemId = UUID()
+
+        await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
+        #expect(provider.queueForceSends.isEmpty)
+
+        provider.writers.insert(id)
+        await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
+        #expect(provider.queueForceSends.map(\.itemId) == [itemId])
     }
 }

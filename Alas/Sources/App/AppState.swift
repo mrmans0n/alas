@@ -7787,6 +7787,56 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    func queueForceSend(for id: String, itemId: UUID) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queueForceSend(for: id, itemId: itemId)
+            return
+        }
+    }
+
+    func queueRemove(for id: String, itemId: UUID) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queueRemove(for: id, itemId: itemId)
+            return
+        }
+    }
+
+    func queueRetry(for id: String, itemId: UUID) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queueRetry(for: id, itemId: itemId)
+            return
+        }
+    }
+
+    func queueEdit(for id: String, itemId: UUID) async -> String? {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            return await mgr.queueEdit(for: id, itemId: itemId)
+        }
+        return nil
+    }
+
+    func queueClear(for id: String) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queueClear(for: id)
+            return
+        }
+    }
+
+    func queueSteerUndo(for id: String) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queueSteerUndo(for: id)
+            return
+        }
+    }
+
+    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.steerPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+            return
+        }
+        onResult(false)
+    }
+
     func setModel(for id: String, modelId: String) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.setModel(for: id, modelId: modelId)
