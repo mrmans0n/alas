@@ -98,6 +98,9 @@ extension AppState {
             resolveRevision: { worktree, ref in
                 try await GitService().resolveRevision(at: worktree.path, ref: ref)
             },
+            currentBranch: { worktree in
+                try await GitService().currentBranch(worktreePath: worktree.path)
+            },
             headSHA: { worktree in
                 try await GitService().headSHA(at: worktree.path)
             },

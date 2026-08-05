@@ -36,9 +36,31 @@ struct ReviewTargetPaletteModelTests {
             loadCommitsAhead: { _ in (commits, comparisonRef) },
             loadBranches: { _ in branches },
             resolveRevision: { _, ref in "resolved-\(ref)" },
+            currentBranch: { _ in "feature" },
             headSHA: { _ in "head-sha" },
             openTarget: onOpen
         )
+    }
+
+    @Test func exactRevisionQueryLaunchesTrackedCommit() async throws {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        var opened: ReviewSessionTarget?
+        let env = environment(worktrees: [w], branches: [], onOpen: { target, _ in opened = target })
+        model.open(prefill: w)
+        await model.loadTargets(environment: env)
+
+        model.query = "HEAD~3"
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows().contains(.followedRevision(
+            expression: "HEAD~3",
+            resolvedSHA: "resolved-HEAD~3",
+            branch: "feature"
+        )))
+        await model.activateSelection(environment: env)
+        #expect(opened?.kind == .trackedCommit)
+        #expect(opened?.revisionDescription == "HEAD~3 -> resolved-HEAD~3")
     }
 
     @Test func worktreeEntriesPutCurrentFirstThenAlpha() {
