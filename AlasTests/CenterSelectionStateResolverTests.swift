@@ -54,6 +54,31 @@ struct CenterSelectionStateResolverTests {
         #expect(result == .empty)
     }
 
+    @Test func loadingProjectWhenProjectExistsBeforeWorktreesResolve() {
+        let project = ProjectConfig.fixture
+        let mgr = ProjectsManager(persistedProjects: [project])
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: nil,
+            projects: [project],
+            projectsManager: mgr,
+            isRefreshingProjectTopologies: true
+        )
+        let result = resolver.resolve()
+        #expect(result == .loadingProject)
+    }
+
+    @Test func emptyWhenProjectExistsWithoutSelectionOrRefresh() {
+        let project = ProjectConfig.fixture
+        let mgr = ProjectsManager(persistedProjects: [project])
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: nil,
+            projects: [project],
+            projectsManager: mgr
+        )
+        let result = resolver.resolve()
+        #expect(result == .empty)
+    }
+
     @Test func globalMissionTakesPrecedenceOverSelectedWorktree() {
         let project = ProjectConfig.fixture
         let worktree = Worktree.fixture(projectId: project.id)

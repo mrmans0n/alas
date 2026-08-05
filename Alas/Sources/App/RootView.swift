@@ -223,6 +223,7 @@ struct RootView: View {
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
             projectsManager: state.projectsManager,
+            isRefreshingProjectTopologies: state.isRefreshingProjectTopologies,
             activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
             allowsHiddenSelectedWorktree: allowsHiddenSelectedWorktreeForMission
         )
@@ -274,6 +275,8 @@ struct RootView: View {
             )
         case .creating(let wt):
             CreatingWorktreeView(worktree: wt)
+        case .loadingProject:
+            LoadingProjectView()
         case .empty:
             if let tabState = state.missingMissionTab {
                 MissionTabView(state: state, worktree: nil, tabState: tabState)
