@@ -8,6 +8,7 @@ enum GitEventCategory: Equatable {
     case ignored                  // *.lock under .git/ — mid-write, never react
     case headChange(URL)          // worktree root whose HEAD just changed
     case revisionChange           // shared refs moved; tracked revisions may resolve differently
+    case revisionAndTopologyChange
     case topologyChange           // .git/worktrees/ contents changed
     case other                    // unrelated event, caller decides
 }
@@ -65,7 +66,13 @@ enum GitEventFilter {
 
         if rel == "worktrees" { return .topologyChange }
 
-        if rel == "packed-refs" || rel.hasPrefix("refs/") {
+        if rel == "packed-refs" {
+            return .revisionChange
+        }
+        if rel.hasPrefix("refs/heads/") {
+            return .revisionAndTopologyChange
+        }
+        if rel.hasPrefix("refs/") {
             return .revisionChange
         }
 

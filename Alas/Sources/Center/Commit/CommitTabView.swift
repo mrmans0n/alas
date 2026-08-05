@@ -226,7 +226,11 @@ struct CommitTabView: View {
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             let d = try await git.commitDetails(at: worktreePath, sha: resolved.sha)
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
-            let loaded = try await loadReviewSession(details: d, sha: resolved.sha)
+            let loaded = try await loadReviewSession(
+                details: d,
+                sha: resolved.sha,
+                preservesPublishedSession: isTrackedRefresh
+            )
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.details = d
             publishReviewSession(loaded, preservingSelectionByPathFrom: selectedReviewFileID)
@@ -258,16 +262,24 @@ struct CommitTabView: View {
         }
     }
 
-    private func loadReviewSession(details: CommitDetails, sha: String) async throws -> DiffReviewLoadedSession {
+    private func loadReviewSession(
+        details: CommitDetails,
+        sha: String,
+        preservesPublishedSession: Bool = false
+    ) async throws -> DiffReviewLoadedSession {
         let requestedToken = CommitReviewLoadToken.next(key: reviewKey(details: details, sha: sha))
         activeReviewKey = requestedToken.key
         activeReviewID = requestedToken.id
-        loadingReviewSession = true
+        if !preservesPublishedSession {
+            loadingReviewSession = true
+            reviewSession = nil
+        }
         reviewSessionError = nil
-        reviewSession = nil
         defer {
             if requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID) {
-                loadingReviewSession = false
+                if !preservesPublishedSession {
+                    loadingReviewSession = false
+                }
                 activeReviewKey = nil
             }
         }
@@ -290,7 +302,9 @@ struct CommitTabView: View {
                 !Task.isCancelled,
                 requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID)
             else { throw CancellationError() }
-            reviewSessionError = (error as NSError).localizedDescription
+            if !preservesPublishedSession {
+                reviewSessionError = (error as NSError).localizedDescription
+            }
             throw error
         }
     }

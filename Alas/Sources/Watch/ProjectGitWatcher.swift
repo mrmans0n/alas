@@ -286,6 +286,9 @@ final class ProjectGitWatcher {
                 batch.headFiles.insert(URL(fileURLWithPath: path).standardizedFileURL)
             case .revisionChange:
                 batch.sawRevision = true
+            case .revisionAndTopologyChange:
+                batch.sawRevision = true
+                batch.sawTopology = true
             case .topologyChange:
                 batch.sawTopology = true
             }

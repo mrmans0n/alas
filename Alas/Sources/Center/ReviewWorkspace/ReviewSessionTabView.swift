@@ -349,12 +349,12 @@ struct ReviewSessionTabView: View {
     private var content: some View {
         if isLoading {
             stateView(title: "Loading review session...", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
-        } else if let loadError {
-            stateView(title: "Could not load review session", detail: loadError, color: theme.color("del"), showsRetry: loadsOnAppear)
         } else if let loaded, loaded.session.files.isEmpty {
             stateView(title: "No files to review", detail: "This review session has no file diffs.", color: theme.color("fg-dim"), showsRetry: false)
         } else if let loaded {
             reviewSurface(loaded)
+        } else if let loadError {
+            stateView(title: "Could not load review session", detail: loadError, color: theme.color("del"), showsRetry: loadsOnAppear)
         } else {
             stateView(title: "No review session loaded", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
         }
@@ -388,6 +388,9 @@ struct ReviewSessionTabView: View {
             if let providerPublishError, !providerPublishError.isEmpty {
                 providerErrorBanner(providerPublishError)
             }
+            if let loadError, !loadError.isEmpty {
+                trackedRefreshErrorBanner(loadError)
+            }
             DiffReviewSurface(
                 session: loaded.session,
                 selectedFileID: Binding(
@@ -420,6 +423,39 @@ struct ReviewSessionTabView: View {
             )
             .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
         }
+    }
+
+    private func trackedRefreshErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("del"))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("Retry") {
+                loadGeneration += 1
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .accessibilityIdentifier("review-session-revision-error-retry")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.color("del").opacity(0.08))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(theme.color("line"))
+                .frame(height: 1)
+        }
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "review-session-revision-error",
+                label: message
+            )
+        )
     }
 
     private func providerErrorBanner(_ message: String) -> some View {
@@ -553,7 +589,7 @@ struct ReviewSessionTabView: View {
 
             let resolvedRecord = try await resolveTrackedRecordForLoad(storedRecord)
             guard loadCoordinator.canPublish(token) else { return }
-            if resolvedRecord.record.target != storedRecord.target {
+            if resolvedRecord.paused, resolvedRecord.record.target != storedRecord.target {
                 try sessionStore.save(resolvedRecord.record)
             }
             guard !resolvedRecord.paused else {
@@ -565,6 +601,9 @@ struct ReviewSessionTabView: View {
 
             let loadedContext = try await loader.load(target: resolvedRecord.record.target)
             guard loadCoordinator.canPublish(token) else { return }
+            if resolvedRecord.record.target != storedRecord.target {
+                try sessionStore.save(resolvedRecord.record)
+            }
 
             publishInitialLoad(
                 ReviewSessionTabLoadPublication.initial(

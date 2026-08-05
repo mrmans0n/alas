@@ -91,7 +91,7 @@ struct ProjectGitWatcherTests {
         #expect(topologyFires == 1)
     }
 
-    @Test func sharedRefsTriggerRevisionCallback() async throws {
+    @Test func sharedRefsTriggerRevisionAndLocalBranchTopologyCallbacks() async throws {
         let (gitDir, _) = try setupRepo()
         defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent().deletingLastPathComponent()) }
 
@@ -112,7 +112,7 @@ struct ProjectGitWatcherTests {
 
         #expect(headFires == 0)
         #expect(revisionFires == 1)
-        #expect(topologyFires == 0)
+        #expect(topologyFires == 1)
     }
 
     @Test func mixedBatchClearsHeadInFavorOfTopology() async throws {

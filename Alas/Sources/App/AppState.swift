@@ -3212,15 +3212,26 @@ final class AppState {
     }
 
     private func applyFollowRevision(worktreeID: String, tabID: TabID, expression: String) async {
-        guard let worktree = worktree(withId: worktreeID),
-              let candidate = try? await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression),
-              let revision = TrackedRevision(
-                  expression: expression,
-                  baselineBranch: candidate.branch,
-                  resolvedSHA: candidate.sha
-              ),
-              let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })
-        else { return }
+        guard let worktree = worktree(withId: worktreeID) else { return }
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression)
+        } catch {
+            Self.showWarningAlert(
+                title: "Invalid Revision",
+                message: (error as NSError).localizedDescription
+            )
+            return
+        }
+        guard let revision = TrackedRevision(
+            expression: expression,
+            baselineBranch: candidate.branch,
+            resolvedSHA: candidate.sha
+        ) else {
+            Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
+            return
+        }
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
 
         switch tab {
         case .commit:
