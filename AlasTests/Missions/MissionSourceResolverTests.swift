@@ -25,6 +25,91 @@ struct MissionSourceResolverTests {
         #expect(await recorder.resolveCount == 0)
     }
 
+    @Test func arbitraryURLPrefillsMetadataAndInfersRepositoryProject() async throws {
+        let fetcher = WebPageMetadataFetcher { url in
+            let html = """
+            <meta property="og:title" content="ALAS-123 Fix delayed refresh | Linear">
+            <meta property="og:description" content="Update the sync logic.">
+            <a href="https://github.com/acme/alas/pull/99">Implementation</a>
+            """
+            return .init(
+                data: Data(html.utf8),
+                url: url,
+                mimeType: "text/html",
+                textEncodingName: "utf-8"
+            )
+        }
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([ManualMissionSourceProvider(metadataFetcher: fetcher)]),
+            remotes: { project in
+                let slug = project.id == Self.projectA.id ? "acme/alas" : "other/project"
+                return [GitRemote(name: "origin", url: "git@github.com:\(slug).git")]
+            }
+        ))
+
+        let result = try await resolver.resolve(
+            "https://linear.app/acme/issue/ALAS-123/fix-delayed-refresh"
+        )
+
+        #expect(result.source.providerLabel == "Linear")
+        #expect(result.source.displayReference == "ALAS-123")
+        #expect(result.source.title == "ALAS-123 Fix delayed refresh")
+        #expect(result.source.body == "Update the sync logic.")
+        #expect(result.source.contentOrigin == .manual)
+        #expect(result.source.isEditable)
+        #expect(result.candidateProjectIDs == ["project-a", "project-b"])
+        #expect(result.selectedProjectID == "project-a")
+    }
+
+    @Test func failedArbitraryURLFetchStillProducesBlankManualSource() async throws {
+        let fetcher = WebPageMetadataFetcher { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([ManualMissionSourceProvider(metadataFetcher: fetcher)])
+        ))
+
+        let result = try await resolver.resolve("https://example.com/tickets/ALAS-123")
+
+        #expect(result.source.title.isEmpty)
+        #expect(result.source.body.isEmpty)
+        #expect(result.source.providerLabel == "example.com")
+        #expect(result.selectedProjectID == "project-b")
+    }
+
+    @Test func loginPageMetadataDoesNotReplaceOriginalTicketURL() async throws {
+        let fetcher = WebPageMetadataFetcher { _ in
+            let html = """
+            <html>
+              <head>
+                <title>Log in - Jira</title>
+                <link rel="canonical" href="https://jira.example.com/login.jsp">
+              </head>
+            </html>
+            """
+            return .init(
+                data: Data(html.utf8),
+                url: URL(string: "https://jira.example.com/login.jsp")!,
+                mimeType: "text/html",
+                textEncodingName: "utf-8"
+            )
+        }
+        let resolver = MissionSourceResolver(environment: Self.environment(
+            providers: .init([ManualMissionSourceProvider(metadataFetcher: fetcher)])
+        ))
+
+        let result = try await resolver.resolve("https://jira.example.com/browse/ALAS-123")
+
+        #expect(result.source.identity == .init(
+            providerID: .manual,
+            stableID: "https://jira.example.com/browse/ALAS-123"
+        ))
+        #expect(result.source.canonicalURL.absoluteString == "https://jira.example.com/browse/ALAS-123")
+        #expect(result.source.title.isEmpty)
+        #expect(result.source.body.isEmpty)
+        #expect(result.source.providerLabel == "jira.example.com")
+    }
+
     @Test func unconfiguredIssuesURLBecomesPlainManualSource() async throws {
         let recorder = SourceProviderRecorder()
         let resolver = MissionSourceResolver(environment: Self.environment(recorder: recorder))
