@@ -43,6 +43,15 @@ struct SidebarHeaderViewTests {
         #expect(sortControls.first?.accessibilityActionNames().contains(.press) == true)
     }
 
+    @Test func sortAccessibilityButtonHasNoVisibleChromeOrFocus() {
+        let controller = hostHeader()
+        let sortButton = accessibilityElements(in: controller.view, matching: "Sort worktrees").first as? NSButton
+
+        #expect(sortButton?.title == "")
+        #expect(sortButton?.isBordered == false)
+        #expect(sortButton?.acceptsFirstResponder == false)
+    }
+
     private func accessibilityElements(in view: NSView, matching expected: String) -> [NSView] {
         let matches = view.accessibilityLabel() == expected ? [view] : []
         return matches + view.subviews.flatMap {

@@ -29,22 +29,19 @@ struct WorktreeSortMenu: View {
     let headerHovered: Bool
 
     @Environment(\.theme) private var theme
-    @FocusState private var focused: Bool
     @State private var hovering = false
     @State private var menuTracking = false
 
     nonisolated static func isVisible(
         headerHovered: Bool,
-        focused: Bool,
         menuTracking: Bool
     ) -> Bool {
-        headerHovered || focused || menuTracking
+        headerHovered || menuTracking
     }
 
     private var visible: Bool {
         Self.isVisible(
             headerHovered: headerHovered,
-            focused: focused,
             menuTracking: menuTracking
         )
     }
@@ -77,8 +74,6 @@ struct WorktreeSortMenu: View {
         .buttonStyle(.plain)
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(visible)
-        .focusable()
-        .focused($focused)
         .onHover { hovering = $0 }
         .simultaneousGesture(TapGesture().onEnded { menuTracking = true })
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
@@ -104,6 +99,8 @@ private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let button = PointerTransparentMenuButton(frame: .zero)
+        button.title = ""
+        button.isBordered = false
         button.menu = context.coordinator.makeMenu()
         button.setAccessibilityLabel("Sort worktrees")
         button.setAccessibilityHelp("Sort worktrees")
@@ -174,6 +171,8 @@ private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
 }
 
 private final class PointerTransparentMenuButton: NSButton {
+    override var acceptsFirstResponder: Bool { false }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
