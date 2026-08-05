@@ -62,6 +62,57 @@ final class ACPTranscriptScrollerView: NSScrollView {
     private var lastReportedY: CGFloat?
     private var programmaticAdjustmentDepth = 0
     private var boundsObserver: NSObjectProtocol?
+    private var liveScrollObservers: [NSObjectProtocol] = []
+
+    /// True between `willStartLiveScroll` and `didEndLiveScroll`.
+    private var isLiveScrolling = false
+    /// `systemUptime` at the last `didEndLiveScroll`, or nil if a gesture has
+    /// never finished. Same timebase as `ACPUserScrollEvent`.
+    private var lastLiveScrollEnd: TimeInterval?
+
+    /// How long after a gesture ends the scroller still counts as
+    /// user-driven. Trackpad momentum and the elastic bounce-back keep moving
+    /// the viewport after `didEndLiveScroll`, and re-pinning to the tail
+    /// during that settle is precisely the rebound jank this guards against.
+    /// Matches `ACPUserScrollEvent.freshnessWindow` so the two notions of
+    /// "recent enough to be the user" cannot drift apart.
+    nonisolated static let userScrollGracePeriod: TimeInterval = ACPUserScrollEvent.freshnessWindow
+
+    /// Whether the user is scrolling right now, or has just stopped.
+    ///
+    /// This is the authoritative signal for user intent, and it exists
+    /// because `NSApp.currentEvent` is not: as the transcript slides under a
+    /// stationary cursor, AppKit generates `mouseEntered`/`mouseExited`
+    /// tracking events, and one of those — not the scroll wheel event — is
+    /// almost always what is current when the clip view posts its
+    /// bounds-change notification. A capture of one real gesture classified
+    /// 414 of 417 ticks as not-user-driven on that basis, which left
+    /// `pauseTailFollow()` unreachable and trapped the reader at the bottom
+    /// of the transcript (see `ACPTranscriptScrollerLiveScrollTests`).
+    ///
+    /// `NSScrollView` posts the live-scroll notifications only for genuine
+    /// user-driven scrolling — never for a programmatic `setBoundsOrigin` —
+    /// so this cleanly separates the two without inspecting events at all.
+    var isUserScrollActive: Bool {
+        Self.isUserScrollActive(
+            isLiveScrolling: isLiveScrolling,
+            lastLiveScrollEnd: lastLiveScrollEnd,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+    }
+
+    /// Pure form of `isUserScrollActive`, so the grace-period boundary is
+    /// testable without waiting in real time.
+    nonisolated static func isUserScrollActive(
+        isLiveScrolling: Bool,
+        lastLiveScrollEnd: TimeInterval?,
+        now: TimeInterval,
+        grace: TimeInterval = userScrollGracePeriod
+    ) -> Bool {
+        if isLiveScrolling { return true }
+        guard let lastLiveScrollEnd else { return false }
+        return now - lastLiveScrollEnd <= grace
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -80,6 +131,31 @@ final class ACPTranscriptScrollerView: NSScrollView {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.reportScroll() }
         }
+        installLiveScrollObservers()
+    }
+
+    /// Tracks the scroll view's own live-scroll notifications, which is what
+    /// `isUserScrollActive` reports. Registered with `queue: nil` so the
+    /// flags are already current by the time the bounds-change notification
+    /// for the same gesture runs.
+    private func installLiveScrollObservers() {
+        let center = NotificationCenter.default
+        liveScrollObservers.append(center.addObserver(
+            forName: NSScrollView.willStartLiveScrollNotification, object: self, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.isLiveScrolling = true
+            }
+        })
+        liveScrollObservers.append(center.addObserver(
+            forName: NSScrollView.didEndLiveScrollNotification, object: self, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.isLiveScrolling = false
+                self.lastLiveScrollEnd = ProcessInfo.processInfo.systemUptime
+            }
+        })
     }
 
     @available(*, unavailable)
@@ -88,6 +164,9 @@ final class ACPTranscriptScrollerView: NSScrollView {
     deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
+        }
+        for observer in liveScrollObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 
@@ -162,6 +241,8 @@ final class ACPTranscriptScrollerView: NSScrollView {
 
     func setScrollY(_ y: CGFloat) {
         let clamped = clampedScrollY(y)
+        if abs(clamped - scrollY) > 0.01 {
+        }
         performProgrammatic {
             contentView.setBoundsOrigin(NSPoint(x: contentView.bounds.origin.x, y: clamped))
             reflectScrolledClipView(contentView)
@@ -189,6 +270,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
         guard newY != lastReportedY else { return }
         let previous = lastReportedY
         lastReportedY = newY
+        let maxY = max(0, contentHeight - viewportHeight)
         onScroll?(previous, newY, viewportHeight, contentHeight, programmaticAdjustmentDepth > 0)
     }
 }
