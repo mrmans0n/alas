@@ -314,11 +314,11 @@ struct CenterPaneView: View {
                     case .commit(let s):
                         CommitTabView(
                             worktreePath: worktree.path,
-                            sha: s.sha,
+                            tabState: s,
                             worktreeId: worktree.id,
                             appState: state
                         )
-                        .id(s.sha)
+                        .id(s.id)
                     case .commitEditor(let s):
                         CommitEditorTabView(
                             worktreePath: worktree.path,

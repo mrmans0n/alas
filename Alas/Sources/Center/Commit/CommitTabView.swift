@@ -3,7 +3,7 @@ import SwiftUI
 
 struct CommitTabView: View {
     let worktreePath: URL
-    let sha: String
+    let tabState: CommitTabState
     let worktreeId: String
     @Bindable var appState: AppState
 
@@ -28,6 +28,16 @@ struct CommitTabView: View {
     @Environment(\.theme) private var theme
     private let git = GitService()
     private let reviewLoader = CommitReviewLoader()
+    private let revisionResolver = TrackedRevisionResolver.live
+
+    private var sha: String { tabState.sha }
+
+    private var loadTaskID: String {
+        if let tracked = tabState.revision.tracked {
+            return "\(tabState.id):\(tracked.expression):\(appState.revisionChangeGeneration(worktreeID: worktreeId))"
+        }
+        return "\(tabState.id):\(sha)"
+    }
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(
@@ -79,7 +89,7 @@ struct CommitTabView: View {
                 Color.clear
             }
         }
-        .task(id: sha) { await loadDetails() }
+        .task(id: loadTaskID) { await loadDetails() }
     }
 
     @ViewBuilder
@@ -107,7 +117,7 @@ struct CommitTabView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(4)
                 AlasButton(title: "Retry", style: .subtle) {
-                    Task { await loadReviewSession(details: details) }
+                    Task { await loadDetails() }
                 }
             }
             .padding(24)
@@ -166,7 +176,7 @@ struct CommitTabView: View {
                     target: Self.reviewSessionTarget(
                         worktreeID: worktreeId,
                         repositoryPath: worktreePath,
-                        sha: sha,
+                        sha: details.info.sha,
                         title: details.info.subject
                     )
                 )
@@ -178,14 +188,17 @@ struct CommitTabView: View {
     }
 
     private func loadDetails() async {
-        let requestedKey = sha
+        let requestedKey = loadTaskID
         activeDetailsKey = requestedKey
-        loadingDetails = true
+        loadingDetails = details == nil
         detailsError = nil
-        details = nil
-        reviewSession = nil
+        if details == nil {
+            reviewSession = nil
+        }
         reviewSessionError = nil
-        selectedReviewFileID = nil
+        if details == nil {
+            selectedReviewFileID = nil
+        }
         activeReviewKey = nil
         activeReviewID = UUID()
         loadingReviewSession = false
@@ -194,21 +207,44 @@ struct CommitTabView: View {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
         do {
-            let d = try await git.commitDetails(at: worktreePath, sha: sha)
+            let resolved = try await resolvedRevisionForLoad()
+            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            let d = try await git.commitDetails(at: worktreePath, sha: resolved.sha)
+            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            let loaded = try await loadReviewSession(details: d, sha: resolved.sha)
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.details = d
-            await loadReviewSession(details: d)
+            publishReviewSession(loaded, preservingSelectionByPathFrom: selectedReviewFileID)
+            if let tracked = resolved.trackedRevision {
+                appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
+                    $0.revision = .following(tracked)
+                    $0.title = d.info.subject
+                }
+            }
         } catch {
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.detailsError = (error as NSError).localizedDescription
         }
     }
 
-    private func loadReviewSession(details: CommitDetails) async {
-        guard CommitReviewLoadIdentity.isCurrent(details: details, currentDetails: self.details, sha: sha) else {
-            return
+    private func resolvedRevisionForLoad() async throws -> (sha: String, trackedRevision: TrackedRevision?) {
+        guard case .following(let tracked) = tabState.revision else {
+            return (tabState.sha, nil)
         }
-        let requestedToken = CommitReviewLoadToken.next(key: reviewKey(details: details))
+        let candidate = try await revisionResolver.resolve(at: worktreePath, expression: tracked.expression)
+        switch TrackedRevisionPolicy.evaluate(current: tracked, candidate: candidate) {
+        case .unchanged(let revision), .follow(let revision):
+            return (revision.resolvedSHA, revision)
+        case .pause(let revision):
+            appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
+                $0.revision = .following(revision)
+            }
+            return (tracked.resolvedSHA, nil)
+        }
+    }
+
+    private func loadReviewSession(details: CommitDetails, sha: String) async throws -> DiffReviewLoadedSession {
+        let requestedToken = CommitReviewLoadToken.next(key: reviewKey(details: details, sha: sha))
         activeReviewKey = requestedToken.key
         activeReviewID = requestedToken.id
         loadingReviewSession = true
@@ -229,22 +265,29 @@ struct CommitTabView: View {
             )
             guard
                 !Task.isCancelled,
-                requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID),
-                CommitReviewLoadIdentity.isCurrent(details: details, currentDetails: self.details, sha: sha)
-            else { return }
-            reviewSession = loaded
-            selectedReviewFileID = selectedReviewFileID.flatMap { selected in
-                loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
-            } ?? loaded.summary.files.first?.id
+                requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID)
+            else { throw CancellationError() }
+            return loaded
         } catch is CancellationError {
+            throw CancellationError()
         } catch {
             guard
                 !Task.isCancelled,
-                requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID),
-                CommitReviewLoadIdentity.isCurrent(details: details, currentDetails: self.details, sha: sha)
-            else { return }
+                requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID)
+            else { throw CancellationError() }
             reviewSessionError = (error as NSError).localizedDescription
+            throw error
         }
+    }
+
+    private func publishReviewSession(
+        _ loaded: DiffReviewLoadedSession,
+        preservingSelectionByPathFrom previousSelection: DiffReviewFileID?
+    ) {
+        reviewSession = loaded
+        selectedReviewFileID = previousSelection.flatMap { selected in
+            loaded.summary.files.first { $0.path == selected.path }?.id
+        } ?? loaded.summary.files.first?.id
     }
 
     private func openFileAction(for path: String) -> (() -> Void)? {
@@ -258,7 +301,7 @@ struct CommitTabView: View {
         }
     }
 
-    private func reviewKey(details: CommitDetails) -> String {
+    private func reviewKey(details: CommitDetails, sha: String) -> String {
         let fileKey = details.files
             .map { file in
                 [
