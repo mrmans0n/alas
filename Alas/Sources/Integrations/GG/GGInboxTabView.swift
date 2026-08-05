@@ -125,6 +125,12 @@ struct GGInboxTabView: View {
         return url
     }
 
+    static func reviewRequestKind(prURL: String?) -> CodeHostKind {
+        guard let url = validPRURL(prURL),
+              url.pathComponents.contains("merge_requests") else { return .github }
+        return .gitlab
+    }
+
     static func ciIconName(_ status: String?) -> String? {
         switch GGCIStatus(rawValue: status ?? "") {
         case .success:            return "checkmark.circle"
@@ -354,6 +360,7 @@ struct GGInboxTabView: View {
 
     private func row(_ entry: GGInboxEntry) -> some View {
         let targetWorktreeId = resolveWorktreeId(entry)
+        let kind = Self.reviewRequestKind(prURL: entry.prUrl)
         return HStack(spacing: 8) {
             Text("\(entry.position)")
                 .font(.system(size: 11, design: .monospaced))
@@ -379,13 +386,13 @@ struct GGInboxTabView: View {
             }
             if let url = Self.validPRURL(entry.prUrl) {
                 Button { NSWorkspace.shared.open(url) } label: {
-                    prNumberLabel(entry.prNumber)
+                    reviewReferenceLabel(entry.prNumber, kind: kind)
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .help("Open PR in browser")
+                .help("Open \(kind.reviewRequestLabel) \(kind.reviewRequestNumberPrefix)\(entry.prNumber)")
             } else {
-                prNumberLabel(entry.prNumber)
+                reviewReferenceLabel(entry.prNumber, kind: kind)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 5)
@@ -427,8 +434,8 @@ struct GGInboxTabView: View {
         }
     }
 
-    private func prNumberLabel(_ number: Int) -> some View {
-        Text("#\(number)")
+    private func reviewReferenceLabel(_ number: Int, kind: CodeHostKind) -> some View {
+        Text("\(kind.reviewRequestNumberPrefix)\(number)")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundColor(theme.color("accent"))
     }

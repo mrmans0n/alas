@@ -185,6 +185,24 @@ struct GGInboxHelpersTests {
         #expect(GGInboxTabView.validPRURL("file:///tmp/secret") == nil)
     }
 
+    @Test func reviewRequestKindUsesURLPathConvention() {
+        #expect(GGInboxTabView.reviewRequestKind(
+            prURL: "https://github.com/mrmans0n/alas/pull/498"
+        ) == .github)
+        #expect(GGInboxTabView.reviewRequestKind(
+            prURL: "https://gitlab.com/group/project/-/merge_requests/500"
+        ) == .gitlab)
+        #expect(GGInboxTabView.reviewRequestKind(
+            prURL: "https://gitlab.example.com/group/project/-/merge_requests/501"
+        ) == .gitlab)
+    }
+
+    @Test func reviewRequestKindFallsBackToGitHub() {
+        #expect(GGInboxTabView.reviewRequestKind(prURL: nil) == .github)
+        #expect(GGInboxTabView.reviewRequestKind(prURL: "https://example.test/42") == .github)
+        #expect(GGInboxTabView.reviewRequestKind(prURL: "file:///tmp/merge_requests/42") == .github)
+    }
+
     @Test func tabStateIdentityAndCodableRoundTrip() throws {
         let state = GGInboxTabState(projectId: "p1", projectName: "alas")
         #expect(state.id == "gg-inbox:p1")
