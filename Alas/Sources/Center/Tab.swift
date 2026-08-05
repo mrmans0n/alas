@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 typealias TabID = String
@@ -337,17 +338,82 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
     }
 }
 
+enum CommitRevision: Codable, Equatable, Hashable, Sendable {
+    case fixed(sha: String)
+    case following(TrackedRevision)
+
+    var resolvedSHA: String {
+        switch self {
+        case .fixed(let sha):
+            sha
+        case .following(let revision):
+            revision.resolvedSHA
+        }
+    }
+
+    var tracked: TrackedRevision? {
+        if case .following(let revision) = self {
+            return revision
+        }
+        return nil
+    }
+}
+
 struct CommitTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
-    let sha: String
-    let title: String
+    var revision: CommitRevision
+    var title: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case revision
+        case sha
+        case title
+    }
+
+    var sha: String { revision.resolvedSHA }
 
     init(worktreeId: String, sha: String, title: String) {
         self.id = "commit:\(worktreeId):\(sha)"
         self.worktreeId = worktreeId
-        self.sha = sha
+        self.revision = .fixed(sha: sha)
         self.title = title
+    }
+
+    init(worktreeId: String, trackedRevision: TrackedRevision, title: String) {
+        self.id = "commit:\(worktreeId):tracked:\(Self.trackedIDDigest(for: trackedRevision.expression))"
+        self.worktreeId = worktreeId
+        self.revision = .following(trackedRevision)
+        self.title = title
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        title = try container.decode(String.self, forKey: .title)
+        if let decodedRevision = try container.decodeIfPresent(CommitRevision.self, forKey: .revision) {
+            revision = decodedRevision
+        } else {
+            revision = .fixed(sha: try container.decode(String.self, forKey: .sha))
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(worktreeId, forKey: .worktreeId)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(sha, forKey: .sha)
+        try container.encode(title, forKey: .title)
+    }
+
+    private static func trackedIDDigest(for expression: String) -> String {
+        SHA256.hash(data: Data(expression.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 

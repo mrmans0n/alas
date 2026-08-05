@@ -742,6 +742,24 @@ final class TabsManager {
     }
 
     @discardableResult
+    func updateCommit(
+        worktreeId: String,
+        tabId: TabID,
+        mutate: (inout CommitTabState) -> Void
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .commit(var state) = file.tabs[idx]
+        else { return nil }
+        mutate(&state)
+        let tab = Tab.commit(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openCommitEditor(
         worktreeId: String,
         baseRef: String,

@@ -3,6 +3,15 @@ import Foundation
 @testable import Alas
 
 struct CommitTabStateTests {
+    @Test func legacyCommitJSONDecodesAsFixedRevision() throws {
+        let json = #"{"id":"commit:wt:abc","worktreeId":"wt","sha":"abc","title":"Old"}"#
+
+        let state = try JSONDecoder().decode(CommitTabState.self, from: Data(json.utf8))
+
+        #expect(state.revision == .fixed(sha: "abc"))
+        #expect(state.id == "commit:wt:abc")
+    }
+
     @Test func idIsStablePerWorktreeAndSha() {
         let a = CommitTabState(worktreeId: "wt-1", sha: "a3f2c1d", title: "x")
         let b = CommitTabState(worktreeId: "wt-1", sha: "a3f2c1d", title: "different title")
@@ -23,6 +32,22 @@ struct CommitTabStateTests {
         #expect(r.worktreeId == "wt-1")
         #expect(r.sha == "deadbeefcafebabe")
         #expect(r.title == "fix: foo")
+    }
+
+    @Test func followedRevisionRoundTrips() throws {
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "deadbeef"
+        ))
+        let state = CommitTabState(worktreeId: "wt", trackedRevision: tracked, title: "Follow HEAD")
+
+        let decoded = try JSONDecoder().decode(
+            CommitTabState.self,
+            from: JSONEncoder().encode(state)
+        )
+
+        #expect(decoded == state)
+        #expect(decoded.revision == .following(tracked))
+        #expect(decoded.sha == "deadbeef")
     }
 
     @Test func trackedRevisionTrimsExpressionAndClassifiesHEADDependence() throws {
