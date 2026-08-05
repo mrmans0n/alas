@@ -95,12 +95,12 @@ struct InstallNudgeResolverTests {
             dismissedInstallNudges: [],
             installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
             masonSnapshot: MasonSnapshot(packages: [
-                package(id: "kotlin-language-server", languageId: "kotlin", extensions: ["kt", "kts"], command: "kotlin-language-server")
+                package(id: "clangd", languageId: "c", extensions: ["c"], command: "clangd")
             ]),
             availabilityStatus: { _ in .notInstalled }
         )
 
-        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/Main.kt")
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/main.c")
 
         #expect(nudge == nil)
     }

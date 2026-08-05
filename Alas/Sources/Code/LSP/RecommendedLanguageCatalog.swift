@@ -170,10 +170,9 @@ enum RecommendedLanguageCatalog {
             displayName: "Kotlin",
             masonId: nil,
             aliasOf: nil,
-            // kotlin-lsp (JetBrains) is distributed via GitHub releases only — out of scope.
-            // kotlin-language-server (community/fwcd) is a different server and would not
-            // satisfy the LanguageServerRegistry spawn expectation for "kotlin-lsp".
-            recipes: []
+            recipes: [
+                InstallRecipe(installer: .brew, package: "JetBrains/utils/kotlin-lsp"),
+            ]
         ),
     ]
 
