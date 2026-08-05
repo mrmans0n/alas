@@ -9,6 +9,7 @@ enum ReviewSessionTargetKind: String, Codable, Equatable, Hashable, Sendable {
     case localChanges = "local-changes"
     case draftCommit = "draft-commit"
     case commit
+    case trackedCommit = "tracked-commit"
     case commitRange = "commit-range"
     case branch
     case reviewRequest = "review-request"
@@ -85,6 +86,56 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
             revisionDescription: sha,
             draftSessionID: .commit(worktreeID: worktreeID, repositoryPath: repositoryPath, sha: sha),
             payload: .commit(sha: sha)
+        )
+    }
+
+    static func trackedCommit(
+        worktreeID: String,
+        repositoryPath: URL,
+        revision: TrackedRevision,
+        title: String
+    ) -> Self {
+        let path = standardizedPath(repositoryPath)
+        let revisionDescription = "\(revision.expression) -> \(revision.resolvedSHA)"
+        return ReviewSessionTarget(
+            id: makeID(.trackedCommit, [worktreeID, path, revision.expression]),
+            kind: .trackedCommit,
+            worktreeID: worktreeID,
+            repositoryPath: standardizedURL(repositoryPath),
+            title: title,
+            sourceDescription: "Commit \(revisionDescription)",
+            providerDescription: nil,
+            providerURL: nil,
+            revisionDescription: revisionDescription,
+            draftSessionID: .trackedCommit(
+                worktreeID: worktreeID,
+                repositoryPath: repositoryPath,
+                expression: revision.expression
+            ),
+            payload: .trackedCommit(revision)
+        )
+    }
+
+    func updatingTrackedRevision(
+        _ revision: TrackedRevision,
+        title: String
+    ) -> ReviewSessionTarget {
+        guard case .trackedCommit = payload else { return self }
+        return .trackedCommit(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            revision: revision,
+            title: title
+        )
+    }
+
+    func freezingTrackedRevision(title: String) -> ReviewSessionTarget? {
+        guard case .trackedCommit(let revision) = payload else { return nil }
+        return .commit(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            sha: revision.resolvedSHA,
+            title: title
         )
     }
 
@@ -239,6 +290,7 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
         case localChanges(scope: ReviewDraftLocalChangesScope)
         case draftCommit
         case commit(sha: String)
+        case trackedCommit(TrackedRevision)
         case commitRange(base: String, head: String)
         case branch(base: String, head: String)
         case reviewRequest(provider: CodeHostKind, host: String, repositorySlug: String, number: Int, headSHA: String?)
@@ -254,6 +306,9 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
             case .commit(let sha):
                 hasher.combine(2)
                 hasher.combine(sha)
+            case .trackedCommit(let revision):
+                hasher.combine(7)
+                hasher.combine(revision)
             case .commitRange(let base, let head):
                 hasher.combine(3)
                 hasher.combine(base)
@@ -409,6 +464,21 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
     func focusingComment(_ commentID: String?, now: Date) -> ReviewSessionRecord {
         var record = self
         record.focusedCommentID = commentID
+        record.updatedAt = now
+        return record
+    }
+
+    func retargetingCommit(
+        to target: ReviewSessionTarget,
+        resolvedSHAChanged: Bool,
+        now: Date
+    ) -> ReviewSessionRecord {
+        var record = self
+        record.target = target
+        if resolvedSHAChanged {
+            record.status = .active
+            record.verdict = nil
+        }
         record.updatedAt = now
         return record
     }

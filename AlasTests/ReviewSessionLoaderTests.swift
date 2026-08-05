@@ -106,6 +106,76 @@ struct ReviewSessionLoaderTests {
         #expect(loaded.feedbackTarget.sourceDescription == "Commit deadbeef")
     }
 
+    @Test func trackedCommitLoaderUsesResolvedSHAAndFeedbackDescription() async throws {
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~3", baselineBranch: "feature", resolvedSHA: "bbb"
+        ))
+        let target = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: revision,
+            title: "Review HEAD~3"
+        )
+        var loadedPayload: ReviewSessionTarget.Payload?
+        let loader = ReviewSessionLoader(
+            commit: { target in
+                loadedPayload = target.payload
+                guard case .trackedCommit(let loadedRevision) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                #expect(loadedRevision.resolvedSHA == "bbb")
+                return DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
+            }
+        )
+
+        let loaded = try await loader.load(target: target)
+
+        #expect(loadedPayload == .trackedCommit(revision))
+        #expect(loaded.feedbackTarget.sourceDescription == "Commit HEAD~3 -> bbb")
+        #expect(loaded.feedbackTarget.revisionDescription == "HEAD~3 -> bbb")
+    }
+
+    @MainActor
+    @Test func productionLoaderPassesResolvedSHAForTrackedCommit() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "first"], cwd: repo)
+        let sha = try await GitService().resolveRevision(at: repo, ref: "HEAD")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repo),
+            projectId: "project-1",
+            name: "main",
+            branch: "main",
+            path: repo,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD", baselineBranch: "main", resolvedSHA: sha
+        ))
+        let target = ReviewSessionTarget.trackedCommit(
+            worktreeID: worktree.id,
+            repositoryPath: repo,
+            revision: revision,
+            title: "Review HEAD"
+        )
+        let loader = ReviewSessionLoader.production(
+            appState: AppState(store: MemoryStore()),
+            worktree: worktree
+        )
+
+        let loaded = try await loader.load(target: target)
+
+        #expect(loaded.feedbackTarget.revisionDescription == "HEAD -> \(sha)")
+    }
+
     @MainActor
     @Test func productionLoaderLoadsProviderReviewRequestWithProviderContext() async throws {
         let repo = FileManager.default.temporaryDirectory

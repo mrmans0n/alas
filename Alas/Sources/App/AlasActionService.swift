@@ -556,7 +556,7 @@ struct AlasActionService {
         worktreePath: URL
     ) async -> FileIDNamespaceResolution {
         switch sessionID.sourceKind {
-        case .commit:
+        case .commit, .trackedCommit:
             return .resolved("commit")
         case .commitRange, .branch:
             return .resolved("range")

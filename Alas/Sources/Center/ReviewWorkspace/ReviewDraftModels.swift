@@ -3,6 +3,7 @@ import Foundation
 enum ReviewDraftSourceKind: String, Codable, Equatable, Hashable, Sendable {
     case localChanges = "local-changes"
     case commit
+    case trackedCommit = "tracked-commit"
     case commitRange = "commit-range"
     case draftCommit = "draft-commit"
     case branch
@@ -40,6 +41,10 @@ struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresen
 
     static func commit(worktreeID: String, repositoryPath: URL, sha: String) -> Self {
         make(.commit, [worktreeID, repositoryPath.standardizedFileURL.path, sha])
+    }
+
+    static func trackedCommit(worktreeID: String, repositoryPath: URL, expression: String) -> Self {
+        make(.trackedCommit, [worktreeID, repositoryPath.standardizedFileURL.path, expression])
     }
 
     static func commitRange(worktreeID: String, repositoryPath: URL, base: String, head: String) -> Self {

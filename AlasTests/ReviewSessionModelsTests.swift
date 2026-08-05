@@ -73,6 +73,33 @@ struct ReviewSessionModelsTests {
         #expect(branch.sourceDescription == "Branch feature against main")
     }
 
+    @Test func trackedCommitIdentityUsesExpressionNotResolvedSHA() throws {
+        let repositoryPath = URL(fileURLWithPath: "/repo/../repo")
+        let revision = try #require(TrackedRevision(
+            expression: " HEAD~3 ", baselineBranch: "feature", resolvedSHA: "aaa"
+        ))
+        let first = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            revision: revision,
+            title: "Review HEAD~3"
+        )
+        let moved = revision.resolving(.init(branch: "feature", sha: "bbb"))
+        let second = first.updatingTrackedRevision(moved, title: "Review rewritten commit")
+
+        #expect(first.kind == .trackedCommit)
+        #expect(first.id == second.id)
+        #expect(first.draftSessionID == second.draftSessionID)
+        #expect(first.draftSessionID == .trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            expression: "HEAD~3"
+        ))
+        #expect(second.revisionDescription == "HEAD~3 -> bbb")
+        #expect(second.sourceDescription == "Commit HEAD~3 -> bbb")
+        #expect(second.freezingTrackedRevision(title: "Fixed")?.payload == .commit(sha: "bbb"))
+    }
+
     @Test func draftReviewRequestTargetUsesRepositoryPathDraftID() {
         let repositoryPath = URL(fileURLWithPath: "/repo")
         let target = ReviewSessionTarget.draftReviewRequest(
@@ -180,5 +207,61 @@ struct ReviewSessionModelsTests {
         ))
         #expect(reviewed.updatedAt == Date(timeIntervalSince1970: 20))
         #expect(reviewed.markedAddressed(now: Date(timeIntervalSince1970: 30)).status == .reviewed)
+    }
+
+    @Test func retargetingTrackedCommitReopensVerdictAndPreservesHandoffs() throws {
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~3", baselineBranch: "feature", resolvedSHA: "aaa"
+        ))
+        let target = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: revision,
+            title: "Review HEAD~3"
+        )
+        let handoff = ReviewFeedbackHandoff(
+            id: "handoff-1",
+            sessionID: target.id,
+            commentIDs: ["comment-1"],
+            target: .existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex"),
+            createdAt: Date(timeIntervalSince1970: 30),
+            promptRevision: "rev-1",
+            status: .sent
+        )
+        let reviewed = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            status: .reviewed,
+            verdict: ReviewSessionVerdict(
+                verdict: .approve,
+                summary: "Looks good",
+                reviewedAt: Date(timeIntervalSince1970: 40)
+            ),
+            handoffs: [handoff],
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 40)
+        )
+        let movedTarget = target.updatingTrackedRevision(
+            revision.resolving(.init(branch: "feature", sha: "bbb")),
+            title: "Review rewritten commit"
+        )
+
+        let moved = reviewed.retargetingCommit(
+            to: movedTarget,
+            resolvedSHAChanged: true,
+            now: Date(timeIntervalSince1970: 50)
+        )
+        let unchanged = reviewed.retargetingCommit(
+            to: target,
+            resolvedSHAChanged: false,
+            now: Date(timeIntervalSince1970: 60)
+        )
+
+        #expect(moved.status == .active)
+        #expect(moved.verdict == nil)
+        #expect(moved.handoffs == reviewed.handoffs)
+        #expect(moved.updatedAt == Date(timeIntervalSince1970: 50))
+        #expect(unchanged.status == .reviewed)
+        #expect(unchanged.verdict == reviewed.verdict)
     }
 }

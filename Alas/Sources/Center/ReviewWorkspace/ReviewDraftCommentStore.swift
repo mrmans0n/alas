@@ -63,6 +63,28 @@ struct ReviewDraftCommentStore {
         try store.write(snapshot, to: url)
     }
 
+    func migrate(from sourceID: ReviewDraftSessionID, to targetID: ReviewDraftSessionID) throws {
+        guard sourceID != targetID else { return }
+        var snapshot = try readSnapshot()
+        let moved = snapshot.commentsBySessionID.removeValue(forKey: sourceID.rawValue) ?? []
+        guard !moved.isEmpty else {
+            try store.write(snapshot, to: url)
+            return
+        }
+
+        var mergedByID: [String: ReviewDraftComment] = [:]
+        for comment in snapshot.commentsBySessionID[targetID.rawValue] ?? [] {
+            mergedByID[comment.id] = comment
+        }
+        for comment in moved {
+            var rekeyed = comment
+            rekeyed.sessionID = targetID
+            mergedByID[rekeyed.id] = rekeyed
+        }
+        snapshot.commentsBySessionID[targetID.rawValue] = Array(mergedByID.values)
+        try store.write(snapshot, to: url)
+    }
+
     private func readSnapshot() throws -> Snapshot {
         try store.readIfExists(Snapshot.self, from: url) ?? Snapshot(commentsBySessionID: [:])
     }
