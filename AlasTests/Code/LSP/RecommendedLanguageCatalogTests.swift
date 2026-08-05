@@ -96,4 +96,12 @@ struct RecommendedLanguageCatalogTests {
         let goRecipe = entry?.resolvedRecipes.first(where: { $0.installer == .go })
         #expect(goRecipe?.package == "golang.org/x/tools/gopls")
     }
+
+    @Test("kotlin entry installs JetBrains kotlin-lsp with Homebrew")
+    func kotlinRecipe() {
+        let entry = RecommendedLanguageCatalog.entry(forLanguage: "kotlin")
+        #expect(entry?.resolvedRecipes == [
+            InstallRecipe(installer: .brew, package: "JetBrains/utils/kotlin-lsp"),
+        ])
+    }
 }
