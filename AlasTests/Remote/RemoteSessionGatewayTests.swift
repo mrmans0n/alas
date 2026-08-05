@@ -861,10 +861,10 @@ struct RemoteSessionGatewayTests {
     @Test func sendPromptRoutesOnlyWhenWriter() async {
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [])) // not writer → ignored
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto")) // not writer → ignored
         #expect(provider.prompts.isEmpty)
         provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: []))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
@@ -872,9 +872,9 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         provider.writers.insert("s1")
         let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ", attachments: [])) // blank → ignored
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ", attachments: [], intent: "auto")) // blank → ignored
         #expect(provider.prompts.isEmpty)
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [])) // trimmed before forwarding
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [], intent: "auto")) // trimmed before forwarding
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
@@ -884,21 +884,21 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [])) // not writer
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto")) // not writer
         #expect(provider.prompts.isEmpty)
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         // When we ARE the writer and the manager accepts, the prompt routes
         // and no rejection is sent.
         sent.removeAll()
         provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: []))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
         #expect(provider.prompts.map(\.text) == ["hi"])
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
         // Writer, but the manager refuses the submit (e.g. needs auth) — the
         // client must still be told so it can restore the text.
         sent.removeAll()
         provider.sendPromptAccepts = false
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "later", attachments: []))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "later", attachments: [], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
@@ -1032,7 +1032,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         let big = String(repeating: "A", count: 14_000_000)   // ~10.5MB decoded > cap
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: nil, mimeType: "image/png", dataBase64: big)]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: nil, mimeType: "image/png", dataBase64: big)], intent: "auto"))
         #expect(provider.lastAttachments.isEmpty)
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
@@ -1042,7 +1042,7 @@ struct RemoteSessionGatewayTests {
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "f.txt", mimeType: "text/plain", dataBase64: "AAAA")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "f.txt", mimeType: "text/plain", dataBase64: "AAAA")], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
@@ -1135,7 +1135,7 @@ struct RemoteSessionGatewayTests {
         let many = (0..<(RemoteSessionGateway.maxAttachmentCount + 1)).map { _ in
             RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")
         }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many, intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(provider.writtenAttachmentURLs.isEmpty)   // rejected before any write
     }
@@ -1147,7 +1147,7 @@ struct RemoteSessionGatewayTests {
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(provider.writtenAttachmentURLs.isEmpty)
     }
@@ -1157,7 +1157,7 @@ struct RemoteSessionGatewayTests {
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
         #expect(provider.lastAttachments.count == 1)
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
     }
@@ -1171,7 +1171,7 @@ struct RemoteSessionGatewayTests {
         provider.sendPromptAccepts = false
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(!provider.writtenAttachmentURLs.isEmpty)
         for url in provider.writtenAttachmentURLs {
@@ -1189,7 +1189,7 @@ struct RemoteSessionGatewayTests {
         provider.sendPromptResultIsAsync = true
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
         try await Task.sleep(nanoseconds: 30_000_000)   // let the async onResult land
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(!provider.writtenAttachmentURLs.isEmpty)

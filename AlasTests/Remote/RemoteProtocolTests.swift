@@ -315,7 +315,7 @@ struct RemoteProtocolTests {
     @Test func clientMessageDecodesSendPrompt() throws {
         let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hello"}"#.data(using: .utf8)!
         let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
-        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello", attachments: []))
+        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello", attachments: [], intent: "auto"))
     }
 
     @Test func clientMessageDecodesTakeOverAndStop() throws {
@@ -343,7 +343,7 @@ struct RemoteProtocolTests {
 
     @Test func clientDriveVerbsRoundTrip() throws {
         #expect(try roundTrip(RemoteClientMessage.takeOver(sessionId: "s1")) == .takeOver(sessionId: "s1"))
-        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello", attachments: [])) == .sendPrompt(sessionId: "s1", text: "hello", attachments: []))
+        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello", attachments: [], intent: "auto")) == .sendPrompt(sessionId: "s1", text: "hello", attachments: [], intent: "auto"))
         #expect(try roundTrip(RemoteClientMessage.stop(sessionId: "s1")) == .stop(sessionId: "s1"))
     }
 
@@ -405,7 +405,8 @@ struct RemoteProtocolTests {
         let msg = RemoteClientMessage.sendPrompt(
             sessionId: "s1",
             text: "look",
-            attachments: [RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "AAAA")])
+            attachments: [RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "AAAA")],
+            intent: "auto")
         #expect(try roundTrip(msg) == msg)
     }
 
@@ -455,8 +456,87 @@ struct RemoteProtocolTests {
         #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isControl)
     }
 
+    @Test func clientMessageDecodesQueueVerbs() throws {
+        let force = #"{"type":"queueForceSend","sessionId":"s1","itemId":"i1"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: force)
+            == .queueForceSend(sessionId: "s1", itemId: "i1"))
+
+        let remove = #"{"type":"queueRemove","sessionId":"s1","itemId":"i2"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: remove)
+            == .queueRemove(sessionId: "s1", itemId: "i2"))
+
+        let retry = #"{"type":"queueRetry","sessionId":"s1","itemId":"i3"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: retry)
+            == .queueRetry(sessionId: "s1", itemId: "i3"))
+
+        let edit = #"{"type":"queueEdit","sessionId":"s1","itemId":"i4"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: edit)
+            == .queueEdit(sessionId: "s1", itemId: "i4"))
+
+        let clear = #"{"type":"queueClear","sessionId":"s1"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: clear)
+            == .queueClear(sessionId: "s1"))
+
+        let undo = #"{"type":"queueSteerUndo","sessionId":"s1"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: undo)
+            == .queueSteerUndo(sessionId: "s1"))
+    }
+
+    @Test func queueVerbsRoundTrip() throws {
+        let messages: [RemoteClientMessage] = [
+            .queueForceSend(sessionId: "s1", itemId: "i1"),
+            .queueRemove(sessionId: "s1", itemId: "i2"),
+            .queueRetry(sessionId: "s1", itemId: "i3"),
+            .queueEdit(sessionId: "s1", itemId: "i4"),
+            .queueClear(sessionId: "s1"),
+            .queueSteerUndo(sessionId: "s1"),
+        ]
+        for message in messages {
+            #expect(try roundTrip(message) == message)
+        }
+    }
+
+    @Test func sendPromptWithoutIntentDecodesAsAuto() throws {
+        let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hi"}"#.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
+        #expect(msg == .sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
+    }
+
+    @Test func sendPromptCarriesSteerIntent() throws {
+        let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hi","intent":"steer"}"#.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
+        #expect(msg == .sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "steer"))
+        #expect(try roundTrip(msg) == msg)
+    }
+
+    @Test func queueStateRoundTrips() throws {
+        let state = RemoteServerMessage.queueState(
+            sessionId: "s1",
+            items: [
+                RemoteQueuedPrompt(id: "i1", text: "first", imageCount: 0, status: "sending", lastError: nil),
+                RemoteQueuedPrompt(id: "i2", text: "second", imageCount: 2, status: "pending", lastError: "boom"),
+            ],
+            steerUndoAvailable: true)
+        #expect(try roundTrip(state) == state)
+    }
+
+    @Test func queueEditRestoredRoundTrips() throws {
+        let restored = RemoteServerMessage.queueEditRestored(sessionId: "s1", itemId: "i1", text: "edit me")
+        #expect(try roundTrip(restored) == restored)
+    }
+
+    @Test func queueVerbsAreDriveOrdering() {
+        #expect(RemoteClientMessage.queueForceSend(sessionId: "s1", itemId: "i1").isDriveOrdering)
+        #expect(RemoteClientMessage.queueRemove(sessionId: "s1", itemId: "i1").isDriveOrdering)
+        #expect(RemoteClientMessage.queueRetry(sessionId: "s1", itemId: "i1").isDriveOrdering)
+        #expect(RemoteClientMessage.queueEdit(sessionId: "s1", itemId: "i1").isDriveOrdering)
+        #expect(RemoteClientMessage.queueClear(sessionId: "s1").isDriveOrdering)
+        #expect(RemoteClientMessage.queueSteerUndo(sessionId: "s1").isDriveOrdering)
+        #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
+    }
+
     @Test func onlySendPromptAndTakeOverAreDriveOrdering() {
-        #expect(RemoteClientMessage.sendPrompt(sessionId: "s", text: "hi", attachments: []).isDriveOrdering)
+        #expect(RemoteClientMessage.sendPrompt(sessionId: "s", text: "hi", attachments: [], intent: "auto").isDriveOrdering)
         #expect(RemoteClientMessage.takeOver(sessionId: "s").isDriveOrdering)
         #expect(!RemoteClientMessage.subscribe(sessionId: "s").isDriveOrdering)
         #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isDriveOrdering)

@@ -104,7 +104,7 @@ final class RemoteSessionGateway {
             if let session = provider.session(for: id) {
                 await sendSnapshot(id: id, session: session)
             }
-        case .sendPrompt(let id, let text, let attachments):
+        case .sendPrompt(let id, let text, let attachments, let intent):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
             // decoded images to disk, and a non-writer must be rejected without
             // leaving orphan files under acp-attachments/. The manager re-checks
@@ -126,6 +126,7 @@ final class RemoteSessionGateway {
                 send(.promptRejected(sessionId: id))   // oversize / non-image
                 return
             }
+            _ = intent // Task 5 wires steer routing; parked here for now.
             // The manager owns the writer/lease re-check and the eventual
             // delivery result. Emit promptRejected on any failure — refused
             // now (not writer / needs auth) OR a session/prompt RPC that fails
@@ -213,6 +214,9 @@ final class RemoteSessionGateway {
                                      messages: wire))
                 break
             }
+        // Wire protocol only for now — Task 5 wires the actual queue mutations.
+        case .queueForceSend, .queueRemove, .queueRetry, .queueEdit, .queueClear, .queueSteerUndo:
+            break
         }
     }
 

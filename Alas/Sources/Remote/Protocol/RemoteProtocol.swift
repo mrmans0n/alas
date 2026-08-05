@@ -38,17 +38,23 @@ enum RemoteClientMessage: Equatable, Sendable {
         content: [String: ACPElicitationValue]?
     )
     case takeOver(sessionId: String)
-    case sendPrompt(sessionId: String, text: String, attachments: [RemoteAttachment])
+    case sendPrompt(sessionId: String, text: String, attachments: [RemoteAttachment], intent: String)
     case stop(sessionId: String)
     case setModel(sessionId: String, modelId: String)
     case setMode(sessionId: String, modeId: String)
     case setAutoRun(sessionId: String, enabled: Bool)
     case renameSession(sessionId: String, title: String)
     case fetchOlder(sessionId: String, beforeIndex: Int, limit: Int)
+    case queueForceSend(sessionId: String, itemId: String)
+    case queueRemove(sessionId: String, itemId: String)
+    case queueRetry(sessionId: String, itemId: String)
+    case queueEdit(sessionId: String, itemId: String)
+    case queueClear(sessionId: String)
+    case queueSteerUndo(sessionId: String)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -89,7 +95,10 @@ extension RemoteClientMessage: Codable {
             self = .sendPrompt(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 text: try c.decode(String.self, forKey: .text),
-                attachments: try c.decodeIfPresent([RemoteAttachment].self, forKey: .attachments) ?? [])
+                attachments: try c.decodeIfPresent([RemoteAttachment].self, forKey: .attachments) ?? [],
+                // Absent on clients cached before queue parity shipped; those
+                // clients only ever meant "auto".
+                intent: try c.decodeIfPresent(String.self, forKey: .intent) ?? "auto")
         case "stop":
             self = .stop(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "setModel":
@@ -107,6 +116,26 @@ extension RemoteClientMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 beforeIndex: try c.decode(Int.self, forKey: .beforeIndex),
                 limit: try c.decode(Int.self, forKey: .limit))
+        case "queueForceSend":
+            self = .queueForceSend(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId))
+        case "queueRemove":
+            self = .queueRemove(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId))
+        case "queueRetry":
+            self = .queueRetry(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId))
+        case "queueEdit":
+            self = .queueEdit(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId))
+        case "queueClear":
+            self = .queueClear(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "queueSteerUndo":
+            self = .queueSteerUndo(sessionId: try c.decode(String.self, forKey: .sessionId))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -148,11 +177,12 @@ extension RemoteClientMessage: Codable {
         case .takeOver(let s):
             try c.encode("takeOver", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .sendPrompt(let s, let t, let a):
+        case .sendPrompt(let s, let t, let a, let intent):
             try c.encode("sendPrompt", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(t, forKey: .text)
             try c.encode(a, forKey: .attachments)
+            try c.encode(intent, forKey: .intent)
         case .stop(let s):
             try c.encode("stop", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -177,6 +207,28 @@ extension RemoteClientMessage: Codable {
             try c.encode(id, forKey: .sessionId)
             try c.encode(beforeIndex, forKey: .beforeIndex)
             try c.encode(limit, forKey: .limit)
+        case .queueForceSend(let s, let itemId):
+            try c.encode("queueForceSend", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
+        case .queueRemove(let s, let itemId):
+            try c.encode("queueRemove", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
+        case .queueRetry(let s, let itemId):
+            try c.encode("queueRetry", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
+        case .queueEdit(let s, let itemId):
+            try c.encode("queueEdit", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
+        case .queueClear(let s):
+            try c.encode("queueClear", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+        case .queueSteerUndo(let s):
+            try c.encode("queueSteerUndo", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
         }
     }
 }
@@ -200,7 +252,10 @@ extension RemoteClientMessage {
     /// stop stays fast when a client is simply scrolled up mid-backfill.
     var isDriveOrdering: Bool {
         switch self {
-        case .sendPrompt, .takeOver: return true
+        case .sendPrompt, .takeOver,
+             .queueForceSend, .queueRemove, .queueRetry, .queueEdit,
+             .queueClear, .queueSteerUndo:
+            return true
         default: return false
         }
     }
@@ -234,6 +289,8 @@ enum RemoteServerMessage: Equatable, Sendable {
     case promptRejected(sessionId: String)
     case sessionConfig(RemoteSessionConfig)
     case sessionRenamed(sessionId: String, title: String)
+    case queueState(sessionId: String, items: [RemoteQueuedPrompt], steerUndoAvailable: Bool)
+    case queueEditRestored(sessionId: String, itemId: String, text: String)
     case error(message: String)
 }
 
@@ -243,6 +300,7 @@ extension RemoteServerMessage: Codable {
         case worktrees, agents, session
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
+        case items, steerUndoAvailable, itemId, text
     }
 
     init(from decoder: Decoder) throws {
@@ -324,6 +382,16 @@ extension RemoteServerMessage: Codable {
             self = .sessionRenamed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 title: try c.decode(String.self, forKey: .title))
+        case "queueState":
+            self = .queueState(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                items: try c.decode([RemoteQueuedPrompt].self, forKey: .items),
+                steerUndoAvailable: try c.decodeIfPresent(Bool.self, forKey: .steerUndoAvailable) ?? false)
+        case "queueEditRestored":
+            self = .queueEditRestored(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId),
+                text: try c.decode(String.self, forKey: .text))
         case "error": self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
@@ -415,6 +483,16 @@ extension RemoteServerMessage: Codable {
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(title, forKey: .title)
+        case .queueState(let id, let items, let steerUndoAvailable):
+            try c.encode("queueState", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(items, forKey: .items)
+            try c.encode(steerUndoAvailable, forKey: .steerUndoAvailable)
+        case .queueEditRestored(let id, let itemId, let text):
+            try c.encode("queueEditRestored", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
+            try c.encode(text, forKey: .text)
         case .error(let m): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
         }
