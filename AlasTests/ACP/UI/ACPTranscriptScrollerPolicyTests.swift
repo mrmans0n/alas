@@ -707,6 +707,38 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         #expect(coordinator.topVisibleMessageIdForTesting == allMessages[49].stableId)
     }
 
+    @Test("a later user scroll cancels a queued hydration jump")
+    func userScrollCancelsQueuedHydrationJump() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(Array(allMessages.suffix(30)), messageIndexOffset: 170)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        session.followsTranscriptTail = true
+        let (coordinator, scroller, nativeScroller) = try attach(session: session)
+
+        commit(0.25, through: nativeScroller)
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == 49)
+
+        // A wheel/trackpad scroll in the materialized tail is newer user
+        // intent than the queued release into unhydrated history.
+        scroller.contentView.setBoundsOrigin(NSPoint(
+            x: 0,
+            y: max(0, scroller.scrollY - 10)
+        ))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
+
+        session.prependTranscriptMessages(Array(allMessages.prefix(170)))
+        coordinator.update(host: makeHost(session: session))
+        await Task.yield()
+
+        // Backfill keeps the currently viewed tail window instead of
+        // reviving the stale jump to message 49.
+        #expect(session.transcript.visibleHead == 170)
+        #expect(session.transcript.visibleTailBound == 200)
+    }
+
     @Test("releasing at the logical end resumes the live tail")
     func tailJump() throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

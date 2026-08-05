@@ -648,6 +648,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 return
             }
 
+            // A wheel/trackpad move after a logical release is newer user
+            // intent. Do not let a queued jump into not-yet-materialized
+            // history revive when a later backfill makes its target
+            // available and teleport the viewport away from this position.
+            pendingLogicalTargetGlobalIndex = nil
+            pendingLogicalTargetId = nil
+
             // This tick is the user moving the viewport, not us. Two things
             // follow from that: a row that vanished from an earlier update is
             // no longer worth restoring to if it comes back (see
