@@ -132,6 +132,24 @@ enum Tab: Codable, Equatable, Identifiable {
         }
     }
 
+    var supportsRevisionFollowActions: Bool {
+        switch self {
+        case .commit, .reviewSession:
+            true
+        default:
+            false
+        }
+    }
+
+    var isFollowingRevision: Bool {
+        switch self {
+        case .commit(let state):
+            state.revision.tracked != nil
+        default:
+            false
+        }
+    }
+
     var relativeFilePath: String? {
         switch self {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath

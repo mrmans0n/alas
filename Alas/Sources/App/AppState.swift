@@ -3160,6 +3160,24 @@ final class AppState {
         }
     }
 
+    func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
+        let alert = NSAlert()
+        alert.messageText = prefill == nil ? "Follow Revision" : "Edit Followed Revision"
+        alert.informativeText = "Enter a single Git revision expression, such as HEAD~3."
+        alert.addButton(withTitle: "Follow")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = prefill ?? "HEAD"
+        alert.accessoryView = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let expression = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expression.isEmpty else {
+            Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
+            return
+        }
+        followRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
+    }
+
     func stopFollowingRevision(worktreeID: String, tabID: TabID) {
         if let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) {
             switch tab {

@@ -147,6 +147,19 @@ struct CenterPaneView: View {
                     }
                     FileSystemOpen.reveal(url: url)
                 },
+                onFollowRevision: { id in
+                    state.promptFollowRevision(worktreeID: worktree.id, tabID: id)
+                },
+                onEditRevision: { id in
+                    let prefill: String? = {
+                        guard case .commit(let s)? = tabs.first(where: { $0.id == id }) else { return nil }
+                        return s.revision.tracked?.expression
+                    }()
+                    state.promptFollowRevision(worktreeID: worktree.id, tabID: id, prefill: prefill)
+                },
+                onStopFollowingRevision: { id in
+                    state.stopFollowingRevision(worktreeID: worktree.id, tabID: id)
+                },
                 systemActionsEnabled: !worktree.path.isRemoteAlasPath,
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)

@@ -18,6 +18,9 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onOpenWithSystem: (TabID) -> Void
     let onRevealInFinder: (TabID) -> Void
+    var onFollowRevision: (TabID) -> Void = { _ in }
+    var onEditRevision: (TabID) -> Void = { _ in }
+    var onStopFollowingRevision: (TabID) -> Void = { _ in }
     /// Whether system-open / reveal-in-Finder actions are available for this
     /// worktree. False for remote worktrees (local `NSWorkspace` can't touch
     /// them); the menu items are hidden when this is false so users don't see
@@ -154,6 +157,19 @@ struct TabBarView: View {
                 Button("Rename…") { onRenameACPSession(tab.id) }
                 Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
                 Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
+                Divider()
+            }
+            if tab.supportsRevisionFollowActions {
+                Button(tab.isFollowingRevision ? "Edit Followed Revision…" : "Follow Revision…") {
+                    if tab.isFollowingRevision {
+                        onEditRevision(tab.id)
+                    } else {
+                        onFollowRevision(tab.id)
+                    }
+                }
+                if tab.isFollowingRevision {
+                    Button("Stop Following Revision") { onStopFollowingRevision(tab.id) }
+                }
                 Divider()
             }
             Button("Close") { onClose(tab.id) }
