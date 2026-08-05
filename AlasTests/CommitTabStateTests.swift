@@ -120,6 +120,43 @@ struct CommitTabStateTests {
         #expect(current.acceptingPendingCheckout() == nil)
     }
 
+    @Test func trackedRevisionRetargeterFollowsAndStopsReviewRecords() throws {
+        let fixedTarget = ReviewSessionTarget.commit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "aaa",
+            title: "Review aaa"
+        )
+        let record = ReviewSessionRecord(
+            id: fixedTarget.id,
+            target: fixedTarget,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "bbb"
+        ))
+
+        let followed = try #require(TrackedRevisionRetargeter.follow(
+            record: record,
+            revision: revision,
+            title: "Review HEAD~2",
+            now: Date(timeIntervalSince1970: 2)
+        ))
+        let stopped = try #require(TrackedRevisionRetargeter.stop(
+            record: followed.record,
+            title: "Review bbb",
+            now: Date(timeIntervalSince1970: 3)
+        ))
+
+        #expect(followed.oldDraftSessionID == fixedTarget.draftSessionID)
+        #expect(followed.newDraftSessionID == followed.record.target.draftSessionID)
+        #expect(followed.record.target.draftSessionID.sourceKind == .trackedCommit)
+        #expect(stopped.oldDraftSessionID == followed.record.target.draftSessionID)
+        #expect(stopped.newDraftSessionID.sourceKind == .commit)
+        #expect(stopped.record.target.payload == .commit(sha: "bbb"))
+    }
+
     @Test func trackedRevisionDecodingNormalizesExpressionAndPreservesPendingCheckout() throws {
         let json = """
         {

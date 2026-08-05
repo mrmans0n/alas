@@ -130,3 +130,61 @@ struct TrackedRevisionResolver {
         }
     }
 }
+
+struct TrackedRevisionRetargetingResult {
+    let record: ReviewSessionRecord
+    let oldDraftSessionID: ReviewDraftSessionID
+    let newDraftSessionID: ReviewDraftSessionID
+}
+
+enum TrackedRevisionRetargeter {
+    static func follow(
+        record: ReviewSessionRecord,
+        revision: TrackedRevision,
+        title: String,
+        now: Date
+    ) -> TrackedRevisionRetargetingResult? {
+        guard case .commit(let oldSHA) = record.target.payload else {
+            guard case .trackedCommit = record.target.payload else { return nil }
+            let oldDraftSessionID = record.target.draftSessionID
+            let target = record.target.updatingTrackedRevision(revision, title: title)
+            return TrackedRevisionRetargetingResult(
+                record: record.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: record.target.revisionDescription != target.revisionDescription,
+                    now: now
+                ),
+                oldDraftSessionID: oldDraftSessionID,
+                newDraftSessionID: target.draftSessionID
+            )
+        }
+        let target = ReviewSessionTarget.trackedCommit(
+            worktreeID: record.target.worktreeID,
+            repositoryPath: record.target.repositoryPath,
+            revision: revision,
+            title: title
+        )
+        return TrackedRevisionRetargetingResult(
+            record: record.retargetingCommit(
+                to: target,
+                resolvedSHAChanged: oldSHA != revision.resolvedSHA,
+                now: now
+            ),
+            oldDraftSessionID: record.target.draftSessionID,
+            newDraftSessionID: target.draftSessionID
+        )
+    }
+
+    static func stop(
+        record: ReviewSessionRecord,
+        title: String,
+        now: Date
+    ) -> TrackedRevisionRetargetingResult? {
+        guard let target = record.target.freezingTrackedRevision(title: title) else { return nil }
+        return TrackedRevisionRetargetingResult(
+            record: record.retargetingCommit(to: target, resolvedSHAChanged: false, now: now),
+            oldDraftSessionID: record.target.draftSessionID,
+            newDraftSessionID: target.draftSessionID
+        )
+    }
+}

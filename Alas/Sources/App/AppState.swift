@@ -3154,6 +3154,131 @@ final class AppState {
         revisionChangeGenerations[worktreeID, default: 0]
     }
 
+    func followRevision(worktreeID: String, tabID: TabID, expression: String) {
+        Task { @MainActor in
+            await applyFollowRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
+        }
+    }
+
+    func stopFollowingRevision(worktreeID: String, tabID: TabID) {
+        if let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) {
+            switch tab {
+            case .commit(let state):
+                guard case .following(let revision) = state.revision else { return }
+                _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
+                    $0.revision = .fixed(sha: revision.resolvedSHA)
+                }
+            case .reviewSession(let state):
+                stopFollowingReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
+            default:
+                return
+            }
+        }
+    }
+
+    func acceptTrackedRevisionCheckout(worktreeID: String, tabID: TabID) {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
+        switch tab {
+        case .commit(let state):
+            guard case .following(let revision) = state.revision,
+                  let accepted = revision.acceptingPendingCheckout()
+            else { return }
+            _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
+                $0.revision = .following(accepted)
+            }
+        case .reviewSession(let state):
+            acceptTrackedReviewSessionCheckout(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
+        default:
+            return
+        }
+    }
+
+    private func applyFollowRevision(worktreeID: String, tabID: TabID, expression: String) async {
+        guard let worktree = worktree(withId: worktreeID),
+              let candidate = try? await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression),
+              let revision = TrackedRevision(
+                  expression: expression,
+                  baselineBranch: candidate.branch,
+                  resolvedSHA: candidate.sha
+              ),
+              let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })
+        else { return }
+
+        switch tab {
+        case .commit:
+            _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
+                $0.revision = .following(revision)
+            }
+        case .reviewSession(let state):
+            followReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID, revision: revision)
+        default:
+            return
+        }
+    }
+
+    private func followReviewSession(
+        worktreeID: String,
+        tabID: TabID,
+        sessionID: ReviewSessionID,
+        revision: TrackedRevision
+    ) {
+        let store = ReviewSessionStore()
+        guard let record = try? store.load(id: sessionID),
+              let result = TrackedRevisionRetargeter.follow(
+                  record: record,
+                  revision: revision,
+                  title: "Review \(revision.expression)",
+                  now: Date()
+              )
+        else { return }
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func stopFollowingReviewSession(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
+        let store = ReviewSessionStore()
+        guard let record = try? store.load(id: sessionID),
+              let result = TrackedRevisionRetargeter.stop(
+                  record: record,
+                  title: "Review \(record.target.revisionDescription ?? "commit")",
+                  now: Date()
+              )
+        else { return }
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func acceptTrackedReviewSessionCheckout(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
+        let store = ReviewSessionStore()
+        guard let record = try? store.load(id: sessionID),
+              case .trackedCommit(let revision) = record.target.payload,
+              let accepted = revision.acceptingPendingCheckout(),
+              let result = TrackedRevisionRetargeter.follow(
+                  record: record,
+                  revision: accepted,
+                  title: "Review \(accepted.expression)",
+                  now: Date()
+              )
+        else { return }
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func persistReviewRetargeting(
+        _ result: TrackedRevisionRetargetingResult,
+        worktreeID: String,
+        tabID: TabID
+    ) {
+        do {
+            try ReviewSessionStore().save(result.record)
+            try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
+            _ = tabs.updateReviewSession(worktreeId: worktreeID, tabId: tabID) {
+                $0.title = result.record.target.title
+                $0.selectedFileID = result.record.selectedFileID
+                $0.focusedCommentID = result.record.focusedCommentID
+            }
+        } catch {
+            Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
+        }
+    }
+
     private func bumpRevisionGeneration(worktreeID: String) {
         revisionChangeGenerations[worktreeID, default: 0] += 1
     }
