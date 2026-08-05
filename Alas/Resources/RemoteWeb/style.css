@@ -268,12 +268,10 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .queued-clear { border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 .queued-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; opacity: 0.6; }
-.queued-row.is-sending { opacity: 0.85; }
 .queued-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
 .queued-status { align-self: flex-end; color: var(--fg-faint); font-size: 9px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; padding-right: 2px; }
 .queued-status .queued-error { color: var(--del); }
 .queued-bubble { max-width: 82%; padding: 9px 13px; color: var(--fg); background: color-mix(in oklab, var(--accent) 10%, transparent); border: 0.75px dashed color-mix(in oklab, var(--accent) 50%, transparent); border-radius: 13px 13px 4px 13px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.queued-row.is-sending .queued-bubble { border-style: solid; cursor: default; }
 .queued-images { display: inline-block; margin-right: 6px; color: var(--fg-muted); font-size: 12px; }
 
 .queued-actions { display: none; gap: 4px; flex-shrink: 0; }

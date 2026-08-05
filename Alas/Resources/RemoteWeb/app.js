@@ -742,9 +742,17 @@ function queueAction(type, itemId) {
 function renderQueue() {
   const box = $("queued");
   box.innerHTML = "";
-  box.classList.toggle("hidden", queueItems.length === 0 && !steerUndoAvailable);
+  // A .sending item stays in session.queue for the whole RPC round-trip
+  // (flushQueueIfIdle marks the head .sending before sendNow records the
+  // prompt into the transcript), but never gets its own bubble here —
+  // mirroring native's ACPMessageList.shouldRenderQueueBubble, which also
+  // returns false for .sending. Rendering it would double-show the same
+  // text: once as the transcript's user bubble, once as a ghosted queued
+  // one, for the entire duration of the turn.
+  const visible = queueItems.filter(i => i.status !== "sending");
+  box.classList.toggle("hidden", visible.length === 0 && !steerUndoAvailable);
   if (steerUndoAvailable) box.appendChild(steerUndoToast());
-  if (queueItems.length === 0) return;
+  if (visible.length === 0) return;
 
   const waiting = queueBadgeCount();
   if (waiting > 1) {
@@ -756,22 +764,21 @@ function renderQueue() {
     box.appendChild(header);
   }
 
-  queueItems.forEach(item => box.appendChild(queuedRow(item)));
+  visible.forEach(item => box.appendChild(queuedRow(item)));
 }
 
+// Only ever called with a `.pending` item — renderQueue() filters `.sending`
+// out before it reaches here — so every row always gets its actions and its
+// "Queued" status.
 function queuedRow(item) {
-  const pending = item.status === "pending";
   const row = el("div", "queued-row");
-  if (!pending) row.classList.add("is-sending");
-  if (pending && openQueuedId === item.id) row.classList.add("is-open");
+  if (openQueuedId === item.id) row.classList.add("is-open");
 
-  // A .sending item is mid-RPC — native hides its affordances for the same
-  // reason, so there is nothing to reveal and nothing to act on.
-  if (pending) row.appendChild(queuedActions(item));
+  row.appendChild(queuedActions(item));
 
   const stack = el("div", "queued-stack");
   const status = el("div", "queued-status");
-  status.appendChild(el("span", null, pending ? "Queued" : "Sending"));
+  status.appendChild(el("span", null, "Queued"));
   if (item.lastError) status.appendChild(el("span", "queued-error", " · " + item.lastError));
   stack.appendChild(status);
 
@@ -780,7 +787,7 @@ function queuedRow(item) {
     bubble.appendChild(el("span", "queued-images", "🖼 ×" + item.imageCount));
   }
   bubble.appendChild(document.createTextNode(item.text || ""));
-  if (pending) bubble.onclick = () => setQueuedOpen(item.id);
+  bubble.onclick = () => setQueuedOpen(item.id);
   stack.appendChild(bubble);
 
   row.appendChild(stack);
@@ -2308,6 +2315,11 @@ function restoreRejectedPrompt() {
   }
   lastSentText = null;
   lastSentAttachments = [];
+  // renderChips() above only runs when there were attachments — a text-only
+  // restore would otherwise leave the composer action (Send/Queue/hidden)
+  // stale at "hidden" from the submit that just got rejected, stranding the
+  // restored text with no way to send it.
+  renderDriveBar(lastStreamingState);
 }
 
 // --- Session config sheet (⚙) + attachments (📎) ---

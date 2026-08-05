@@ -414,9 +414,24 @@ struct RemoteWebAssetTests {
         #expect(js.contains("🖼"))
     }
 
-    @Test func sendingQueueItemsExposeNoActions() throws {
+    // Regression (final branch review): native never renders a `.sending`
+    // queue item (ACPMessageList.shouldRenderQueueBubble returns false for
+    // it) — flushQueueIfIdle marks the head `.sending` while it's still in
+    // session.queue, and sendNow records the same prompt into the
+    // transcript, so a `.sending` bubble here would double-show that text
+    // for the whole duration of the queued turn. renderQueue() must filter
+    // `.sending` out before building any rows, not merely gate a row's
+    // actions/status on it.
+    @Test func sendingQueueItemsAreSkippedEntirely() throws {
         let js = try asset("app.js")
-        #expect(js.contains(#"const pending = item.status === "pending";"#))
+        let body = try #require(js.range(of: "function renderQueue() {").map { js[$0.lowerBound...].prefix(1250) })
+        #expect(body.contains(#"const visible = queueItems.filter(i => i.status !== "sending");"#))
+        #expect(body.contains("visible.forEach(item => box.appendChild(queuedRow(item)));"))
+        #expect(!body.contains("queueItems.forEach(item => box.appendChild(queuedRow(item)));"))
+        // queuedRow itself no longer branches on status — every row it builds
+        // is implicitly `.pending` since renderQueue() filters upstream.
+        #expect(!js.contains(#"item.status === "pending""#))
+        #expect(!js.contains("is-sending"))
     }
 
     @Test func queueParityBustsServiceWorkerAssetCache() throws {

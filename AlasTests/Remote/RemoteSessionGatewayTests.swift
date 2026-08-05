@@ -2036,6 +2036,96 @@ struct RemoteSessionGatewayTests {
         #expect(states == [[], []])
     }
 
+    @Test func queueMutationOnLiveSessionEmitsQueueState() async throws {
+        // The three existing queueState tests above only exercise the
+        // force:true subscribe path. This covers the load-bearing one: the
+        // emission inside the config-coalesce closure in observe(id:session:)
+        // that carries a live queue mutation (a real enqueue while the
+        // browser tab is already open) to the client.
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.subscribe(sessionId: id))
+        sent.removeAll()
+
+        let item = QueuedPrompt(blocks: [.text("queued one")])
+        session.queue = [item]                      // mutate the LIVE queue, not via subscribe
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }.last
+        let queued = try #require(items, "expected a queueState after mutating session.queue")
+        #expect(queued.count == 1)
+        #expect(queued.first?.id == item.id.uuidString)
+        #expect(queued.first?.text == "queued one")
+    }
+
+    @Test func reassigningIdenticalQueueValueDoesNotReemitQueueState() async throws {
+        // The dedupe in sendQueueState must hold on the live-mutation path
+        // too, not just be inert scaffolding — @Published fires
+        // objectWillChange on every assignment regardless of equality, so
+        // this exercises the gateway's own dedupe rather than Combine's.
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let item = QueuedPrompt(blocks: [.text("queued one")])
+        session.queue = [item]
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let countAfterMutation = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
+        #expect(countAfterMutation == 2)   // force:true baseline at subscribe + the mutation above
+
+        session.queue = [item]             // reassign the identical value
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let countAfterReassign = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
+        #expect(countAfterReassign == countAfterMutation)   // dedupe swallowed the no-op reassignment
+    }
+
+    @Test func steerUndoAvailableFlipEmitsQueueStateWithQueueUnchanged() async throws {
+        // Regression guard for RemoteQueueSnapshot: steerUndoAvailable can
+        // flip (a steer discards the queue, then the 5s undo window expires)
+        // while `items` stays exactly as-is (already emptied by the steer
+        // itself). Both transitions must independently reach the wire, or
+        // the client is left showing a stale "undo available" affordance.
+        // session.queue is never touched here, so a dedupe key that only
+        // looked at items would swallow both sends.
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.subscribe(sessionId: id))
+        sent.removeAll()
+
+        let discardedSnapshot = [QueuedPrompt(blocks: [.text("discarded by steer")])]
+        session.steerUndo = .init(id: UUID(), snapshot: discardedSnapshot)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let afterSet = sent.compactMap { message -> Bool? in
+            if case .queueState(_, _, let steerUndoAvailable) = message { return steerUndoAvailable }
+            return nil
+        }
+        #expect(afterSet.last == true, "expected a queueState with steerUndoAvailable=true after arming the undo window")
+
+        session.steerUndo = nil   // the window expires; session.queue is untouched throughout
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let afterClear = sent.compactMap { message -> Bool? in
+            if case .queueState(_, _, let steerUndoAvailable) = message { return steerUndoAvailable }
+            return nil
+        }
+        #expect(afterClear.last == false, "expected a second queueState with steerUndoAvailable=false after the window closed")
+        #expect(afterClear.count == afterSet.count + 1, "both the arm and the clear must independently reach the wire")
+    }
+
     @Test func allQueueVerbsRequireWriterLease() async {
         let provider = FakeSessionsProvider()
         let id = "s1"
