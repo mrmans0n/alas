@@ -1978,4 +1978,40 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
         #expect(provider.queueForceSends.map(\.itemId) == [itemId])
     }
+
+    @Test func subscribeEmitsQueueStateEvenWhenQueueIsEmpty() async throws {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.sessions[id] = try makeSessionWithAgentText("x")
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }
+        #expect(states == [[]])
+    }
+
+    @Test func subscribeProjectsExistingQueue() async throws {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        session.queue = [QueuedPrompt(blocks: [.text("queued one")])]
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }.first
+        #expect(items?.count == 1)
+        #expect(items?.first?.text == "queued one")
+        #expect(items?.first?.status == "pending")
+    }
 }

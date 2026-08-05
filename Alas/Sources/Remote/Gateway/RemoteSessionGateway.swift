@@ -20,6 +20,7 @@ final class RemoteSessionGateway {
     private var configSubscriptions: [String: AnyCancellable] = [:]
     private var configCoalesce: [String: Task<Void, Never>] = [:]
     private var lastConfig: [String: RemoteSessionConfig] = [:]
+    private var lastQueue: [String: [RemoteQueuedPrompt]] = [:]
     private var coalesce: [String: Task<Void, Never>] = [:]
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
@@ -67,6 +68,7 @@ final class RemoteSessionGateway {
             if let cfg = provider.sessionConfig(for: id) {
                 send(.sessionConfig(cfg))
             }
+            sendQueueState(id: id, session: session, force: true)
             observe(id: id, session: session)
         case .unsubscribe(let id):
             subscriptions[id] = nil
@@ -74,6 +76,7 @@ final class RemoteSessionGateway {
             configCoalesce[id]?.cancel()
             configCoalesce[id] = nil
             lastConfig[id] = nil
+            lastQueue[id] = nil
             coalesce[id]?.cancel()
             coalesce[id] = nil
             lastPermissionReq[id] = nil
@@ -323,6 +326,7 @@ final class RemoteSessionGateway {
         configCoalesce.values.forEach { $0.cancel() }
         configCoalesce.removeAll()
         lastConfig.removeAll()
+        lastQueue.removeAll()
         coalesce.values.forEach { $0.cancel() }
         coalesce.removeAll()
         lastPermissionReq.removeAll()
@@ -435,6 +439,10 @@ final class RemoteSessionGateway {
             self.configCoalesce[id]?.cancel()
             self.configCoalesce[id] = Task { @MainActor [weak self, weak session] in
                 guard !Task.isCancelled, let self, let session else { return }
+                // Same publisher, independently deduped: ACPSession's
+                // objectWillChange fires for queue mutations too, and the
+                // queue changes far more often than the config does.
+                self.sendQueueState(id: id, session: session)
                 let cfg = RemoteSessionConfig(
                     sessionId: id,
                     models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
@@ -520,6 +528,18 @@ final class RemoteSessionGateway {
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
+    }
+
+    /// Push the session's queue to the client. `force` bypasses the dedupe so
+    /// a fresh subscribe always gets a baseline — otherwise an unchanged
+    /// (typically empty) queue would be suppressed and the client would show
+    /// nothing until the next mutation.
+    private func sendQueueState(id: String, session: ACPSession, force: Bool = false) {
+        let items = RemoteQueueProjection.project(session.queue)
+        let steerUndoAvailable = !(session.steerUndo?.snapshot.isEmpty ?? true)
+        guard force || lastQueue[id] != items else { return }
+        lastQueue[id] = items
+        send(.queueState(sessionId: id, items: items, steerUndoAvailable: steerUndoAvailable))
     }
 
     private func wireMessages(id: String, session: ACPSession, indices: [Int]) async -> [RemoteWireMessage] {
