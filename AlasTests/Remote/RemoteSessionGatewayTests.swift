@@ -24,6 +24,20 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renamed: [(id: String, title: String)] = []
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
+    var queueForceSends: [(id: String, itemId: UUID)] = []
+    var queueRemoves: [(id: String, itemId: UUID)] = []
+    var queueRetries: [(id: String, itemId: UUID)] = []
+    var queueEdits: [(id: String, itemId: UUID)] = []
+    var queueClears: [String] = []
+    var queueSteerUndos: [String] = []
+    var steerPrompts: [(id: String, text: String)] = []
+    var queueEditText: String?            // what queueEdit hands back
+    /// When set, `queueEdit` delegates to this real manager instead of
+    /// returning `queueEditText`, so a test can exercise the manager's own
+    /// guard logic (e.g. refusing an item with a mention/image) through the
+    /// gateway rather than a canned stub.
+    var manager: ACPSessionManager?
+    var steerPromptAccepts = true
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
@@ -147,6 +161,22 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return renameSucceeds
     }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
+
+    func queueForceSend(for id: String, itemId: UUID) { queueForceSends.append((id, itemId)) }
+    func queueRemove(for id: String, itemId: UUID) { queueRemoves.append((id, itemId)) }
+    func queueRetry(for id: String, itemId: UUID) { queueRetries.append((id, itemId)) }
+    func queueEdit(for id: String, itemId: UUID) async -> String? {
+        queueEdits.append((id, itemId))
+        if let manager { return await manager.queueEdit(for: id, itemId: itemId) }
+        return queueEditText
+    }
+    func queueClear(for id: String) { queueClears.append(id) }
+    func queueSteerUndo(for id: String) { queueSteerUndos.append(id) }
+    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
+        let accepted = writers.contains(id) && steerPromptAccepts
+        if accepted { steerPrompts.append((id, text)) }
+        onResult(accepted)
+    }
 }
 
 #if DEBUG
@@ -861,10 +891,10 @@ struct RemoteSessionGatewayTests {
     @Test func sendPromptRoutesOnlyWhenWriter() async {
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [])) // not writer → ignored
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto")) // not writer → ignored
         #expect(provider.prompts.isEmpty)
         provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: []))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
@@ -872,9 +902,9 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         provider.writers.insert("s1")
         let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ", attachments: [])) // blank → ignored
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ", attachments: [], intent: "auto")) // blank → ignored
         #expect(provider.prompts.isEmpty)
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [])) // trimmed before forwarding
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [], intent: "auto")) // trimmed before forwarding
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
@@ -884,21 +914,21 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [])) // not writer
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto")) // not writer
         #expect(provider.prompts.isEmpty)
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         // When we ARE the writer and the manager accepts, the prompt routes
         // and no rejection is sent.
         sent.removeAll()
         provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: []))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
         #expect(provider.prompts.map(\.text) == ["hi"])
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
         // Writer, but the manager refuses the submit (e.g. needs auth) — the
         // client must still be told so it can restore the text.
         sent.removeAll()
         provider.sendPromptAccepts = false
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "later", attachments: []))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "later", attachments: [], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
@@ -1032,7 +1062,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         let big = String(repeating: "A", count: 14_000_000)   // ~10.5MB decoded > cap
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: nil, mimeType: "image/png", dataBase64: big)]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: nil, mimeType: "image/png", dataBase64: big)], intent: "auto"))
         #expect(provider.lastAttachments.isEmpty)
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
@@ -1042,7 +1072,7 @@ struct RemoteSessionGatewayTests {
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "f.txt", mimeType: "text/plain", dataBase64: "AAAA")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "f.txt", mimeType: "text/plain", dataBase64: "AAAA")], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
@@ -1135,7 +1165,7 @@ struct RemoteSessionGatewayTests {
         let many = (0..<(RemoteSessionGateway.maxAttachmentCount + 1)).map { _ in
             RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")
         }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many, intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(provider.writtenAttachmentURLs.isEmpty)   // rejected before any write
     }
@@ -1147,7 +1177,7 @@ struct RemoteSessionGatewayTests {
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(provider.writtenAttachmentURLs.isEmpty)
     }
@@ -1157,7 +1187,7 @@ struct RemoteSessionGatewayTests {
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
         #expect(provider.lastAttachments.count == 1)
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
     }
@@ -1171,7 +1201,7 @@ struct RemoteSessionGatewayTests {
         provider.sendPromptAccepts = false
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(!provider.writtenAttachmentURLs.isEmpty)
         for url in provider.writtenAttachmentURLs {
@@ -1189,7 +1219,7 @@ struct RemoteSessionGatewayTests {
         provider.sendPromptResultIsAsync = true
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
         try await Task.sleep(nanoseconds: 30_000_000)   // let the async onResult land
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         #expect(!provider.writtenAttachmentURLs.isEmpty)
@@ -1938,5 +1968,300 @@ struct RemoteSessionGatewayTests {
         // The retry reuses the cache the first (superseded) attempt already
         // populated — no second real fetch needed.
         #expect(provider.fullToolCallContentCallCount == 1)
+    }
+
+    @Test func queueVerbsReachTheProviderOnlyForWriters() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let itemId = UUID()
+
+        await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
+        #expect(provider.queueForceSends.isEmpty)
+
+        provider.writers.insert(id)
+        await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
+        #expect(provider.queueForceSends.map(\.itemId) == [itemId])
+    }
+
+    @Test func subscribeEmitsQueueStateEvenWhenQueueIsEmpty() async throws {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.sessions[id] = try makeSessionWithAgentText("x")
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }
+        #expect(states == [[]])
+    }
+
+    @Test func subscribeProjectsExistingQueue() async throws {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        session.queue = [QueuedPrompt(blocks: [.text("queued one")])]
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }.first
+        #expect(items?.count == 1)
+        #expect(items?.first?.text == "queued one")
+        #expect(items?.first?.status == "pending")
+    }
+
+    @Test func resubscribeStillEmitsQueueStateWhenUnchanged() async throws {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.sessions[id] = try makeSessionWithAgentText("x")
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        // First subscribe (e.g. one browser tab) populates lastQueue[id] with
+        // the same (empty) snapshot a second subscribe would compute — without
+        // `force: true` on the subscribe path, the second subscribe's send
+        // would be swallowed by the dedupe.
+        await gateway.handle(.subscribe(sessionId: id))
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }
+        #expect(states == [[], []])
+    }
+
+    @Test func queueMutationOnLiveSessionEmitsQueueState() async throws {
+        // The three existing queueState tests above only exercise the
+        // force:true subscribe path. This covers the load-bearing one: the
+        // emission inside the config-coalesce closure in observe(id:session:)
+        // that carries a live queue mutation (a real enqueue while the
+        // browser tab is already open) to the client.
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.subscribe(sessionId: id))
+        sent.removeAll()
+
+        let item = QueuedPrompt(blocks: [.text("queued one")])
+        session.queue = [item]                      // mutate the LIVE queue, not via subscribe
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
+            if case .queueState(_, let items, _) = message { return items }
+            return nil
+        }.last
+        let queued = try #require(items, "expected a queueState after mutating session.queue")
+        #expect(queued.count == 1)
+        #expect(queued.first?.id == item.id.uuidString)
+        #expect(queued.first?.text == "queued one")
+    }
+
+    @Test func reassigningIdenticalQueueValueDoesNotReemitQueueState() async throws {
+        // The dedupe in sendQueueState must hold on the live-mutation path
+        // too, not just be inert scaffolding — @Published fires
+        // objectWillChange on every assignment regardless of equality, so
+        // this exercises the gateway's own dedupe rather than Combine's.
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let item = QueuedPrompt(blocks: [.text("queued one")])
+        session.queue = [item]
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let countAfterMutation = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
+        #expect(countAfterMutation == 2)   // force:true baseline at subscribe + the mutation above
+
+        session.queue = [item]             // reassign the identical value
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let countAfterReassign = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
+        #expect(countAfterReassign == countAfterMutation)   // dedupe swallowed the no-op reassignment
+    }
+
+    @Test func steerUndoAvailableFlipEmitsQueueStateWithQueueUnchanged() async throws {
+        // Regression guard for RemoteQueueSnapshot: steerUndoAvailable can
+        // flip (a steer discards the queue, then the 5s undo window expires)
+        // while `items` stays exactly as-is (already emptied by the steer
+        // itself). Both transitions must independently reach the wire, or
+        // the client is left showing a stale "undo available" affordance.
+        // session.queue is never touched here, so a dedupe key that only
+        // looked at items would swallow both sends.
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions[id] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.subscribe(sessionId: id))
+        sent.removeAll()
+
+        let discardedSnapshot = [QueuedPrompt(blocks: [.text("discarded by steer")])]
+        session.steerUndo = .init(id: UUID(), snapshot: discardedSnapshot)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let afterSet = sent.compactMap { message -> Bool? in
+            if case .queueState(_, _, let steerUndoAvailable) = message { return steerUndoAvailable }
+            return nil
+        }
+        #expect(afterSet.last == true, "expected a queueState with steerUndoAvailable=true after arming the undo window")
+
+        session.steerUndo = nil   // the window expires; session.queue is untouched throughout
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let afterClear = sent.compactMap { message -> Bool? in
+            if case .queueState(_, _, let steerUndoAvailable) = message { return steerUndoAvailable }
+            return nil
+        }
+        #expect(afterClear.last == false, "expected a second queueState with steerUndoAvailable=false after the window closed")
+        #expect(afterClear.count == afterSet.count + 1, "both the arm and the clear must independently reach the wire")
+    }
+
+    @Test func allQueueVerbsRequireWriterLease() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        let itemId = UUID()
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueClear(sessionId: id))
+        await gateway.handle(.queueSteerUndo(sessionId: id))
+
+        #expect(provider.queueRemoves.isEmpty)
+        #expect(provider.queueRetries.isEmpty)
+        #expect(provider.queueEdits.isEmpty)
+        #expect(provider.queueClears.isEmpty)
+        #expect(provider.queueSteerUndos.isEmpty)
+    }
+
+    @Test func queueVerbsReachProviderForWriter() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let itemId = UUID()
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
+        await gateway.handle(.queueClear(sessionId: id))
+        await gateway.handle(.queueSteerUndo(sessionId: id))
+
+        #expect(provider.queueRemoves.map(\.itemId) == [itemId])
+        #expect(provider.queueRetries.map(\.itemId) == [itemId])
+        #expect(provider.queueClears == [id])
+        #expect(provider.queueSteerUndos == [id])
+    }
+
+    @Test func malformedItemIdIsIgnored() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.queueRemove(sessionId: id, itemId: "not-a-uuid"))
+
+        #expect(provider.queueRemoves.isEmpty)
+    }
+
+    @Test func queueEditRepliesWithRestoredText() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        provider.queueEditText = "restore me"
+        let itemId = UUID()
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
+
+        #expect(sent.contains(.queueEditRestored(sessionId: id, itemId: itemId.uuidString, text: "restore me")))
+    }
+
+    @Test func queueEditOnSendingItemRepliesWithNothing() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        provider.queueEditText = nil          // takeForEditing refused
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.queueEdit(sessionId: id, itemId: UUID().uuidString))
+
+        #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
+    }
+
+    // Regression (codex review, PR #964): a queued item whose draft carries a
+    // mention (file reference) is just as unrepresentable in the plain-text
+    // web composer as one carrying an image. The web already hides Edit for
+    // these, but the manager must refuse the edit too, so a client that
+    // doesn't know the rule (or a hand-rolled one) can't cause the queued
+    // item's file context to be silently dropped. Routed through the real
+    // manager (not the plain stub) so this exercises the actual guard in
+    // `ACPSessionManager.queueEdit`, not a test double's approximation of it.
+    @Test func queueEditRefusesItemWithMentionAndLeavesItQueued() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        provider.manager = mgr
+        let session = mgr.createSession(agentId: "claude")
+        provider.sessions[session.id] = session
+        provider.writers.insert(session.id)
+        #expect(await mgr.acquireWriterLease(sessionId: session.id) == true)
+
+        let draft = ACPComposerDraft(segments: [
+            .text("see "),
+            .mention(displayName: "App.swift", uri: "file:///App.swift"),
+        ])
+        session.enqueue(
+            blocks: [.text("see "), .resourceLink(uri: "file:///App.swift", name: "App.swift")],
+            draft: draft)
+        let itemId = session.queue[0].id
+
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gateway.handle(.queueEdit(sessionId: session.id, itemId: itemId.uuidString))
+
+        #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
+        #expect(session.queue.map(\.id) == [itemId], "the item must remain queued, not be removed then discarded")
+    }
+
+    @Test func steerIntentRoutesToSteerPromptNotSendPrompt() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.sendPrompt(sessionId: id, text: "redirect", attachments: [], intent: "steer"))
+
+        #expect(provider.steerPrompts.map(\.text) == ["redirect"])
+        #expect(provider.prompts.isEmpty)
+    }
+
+    @Test func autoIntentStillRoutesToSendPrompt() async {
+        let provider = FakeSessionsProvider()
+        let id = "s1"
+        provider.writers.insert(id)
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.sendPrompt(sessionId: id, text: "queue me", attachments: [], intent: "auto"))
+
+        #expect(provider.prompts.map(\.text) == ["queue me"])
+        #expect(provider.steerPrompts.isEmpty)
     }
 }

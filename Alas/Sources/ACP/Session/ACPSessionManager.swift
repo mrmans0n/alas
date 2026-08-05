@@ -260,6 +260,86 @@ final class ACPSessionManager: ObservableObject {
         await runner.userCancel(confirmingLease: false)
     }
 
+    // MARK: - Remote queue control
+
+    /// Promote a queued item to the head (or steer to it when a turn is
+    /// running) — the remote-web twin of the queued bubble's "send now".
+    func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
+        guard await confirmedWriterLease(for: id) else { return }
+        runners[id]?.forceSendQueuedItem(id: itemId)
+    }
+
+    func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        session.removeFromQueue(id: itemId)
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+    }
+
+    /// Clear a failed item's error so the flusher re-attempts it.
+    func queueRetry(for id: ACPSession.ID, itemId: UUID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return }
+        session.queue[idx].lastError = nil
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+    }
+
+    /// Pull a queued item out for editing and hand its text back. `nil` when
+    /// the item is gone or `.sending` — `takeForEditing` refuses in-flight
+    /// items so an edit can never duplicate a prompt already on the wire —
+    /// or when its draft carries a mention or an image.
+    ///
+    /// The web composer is plain text: it has no authenticated way to
+    /// re-stage a mention's URI or an image's bytes, so editing such an item
+    /// there would silently drop that content once the user resubmits. The
+    /// web client already hides Edit when `imageCount > 0 || resourceCount >
+    /// 0` for exactly this reason; this mirrors that rule server-side so a
+    /// client that doesn't know it (or a hand-rolled one) can't cause the
+    /// same loss. The draft is inspected BEFORE calling `takeForEditing`,
+    /// which removes-and-returns atomically — refusing after removal would
+    /// strand the prompt outside the queue instead of just leaving it be.
+    func queueEdit(for id: ACPSession.ID, itemId: UUID) async -> String? {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return nil }
+        guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return nil }
+        let hasUnrepresentableSegment = session.queue[idx].restorableDraft.segments.contains { segment in
+            switch segment {
+            case .text: return false
+            case .mention, .image: return true
+            }
+        }
+        guard !hasUnrepresentableSegment else { return nil }
+        guard let draft = session.takeForEditing(id: itemId) else { return nil }
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        return RemoteQueueProjection.plainText(from: draft)
+    }
+
+    func queueClear(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        session.clearPendingQueue()
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+    }
+
+    func queueSteerUndo(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id) else { return }
+        runners[id]?.steerUndo()
+    }
+
+    /// Steer from the remote client: same route the composer's ⌥⏎ takes.
+    /// `ACPSubmitRoute.resolve` handles the degenerate idle+empty case by
+    /// falling back to a plain send.
+    func steerPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        guard await confirmedWriterLease(for: id) else {
+            onResult(false)
+            return
+        }
+        let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .steer,
+                              onCompleted: { ok in onResult(ok) })
+        if !accepted { onResult(false) }
+    }
+
     /// Pending model/mode to apply once a runner registers (the writer took over
     /// but `attach` is still in flight). Keyed by session id. Applied in `attach`.
     var pendingModel: [ACPSession.ID: String] = [:]

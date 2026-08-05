@@ -28,6 +28,20 @@ protocol RemoteSessionsProvider: AnyObject {
     func setMode(for id: String, modeId: String) async
     func setAutoRun(for id: String, enabled: Bool) async
     func renameSession(for id: String, title: String) -> Bool
+    /// Queue mutation. All of these are writer-gated inside the manager (the
+    /// gateway also pre-checks, mirroring `sendPrompt`) and delegate to the
+    /// same native call sites the ACP pane uses, so the `.sending`-head,
+    /// persistence, and flush invariants are not duplicated for the remote path.
+    func queueForceSend(for id: String, itemId: UUID) async
+    func queueRemove(for id: String, itemId: UUID) async
+    func queueRetry(for id: String, itemId: UUID) async
+    /// Removes the item and returns its text for the web composer, or nil if
+    /// the item is gone or already `.sending` (mid-RPC, must not be duplicated).
+    func queueEdit(for id: String, itemId: UUID) async -> String?
+    func queueClear(for id: String) async
+    func queueSteerUndo(for id: String) async
+    /// Cancel the in-flight turn, discard the queue, send this prompt instead.
+    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?

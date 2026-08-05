@@ -48,11 +48,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=60"#))
-        #expect(html.contains(#"/style.css?v=38"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v38";"#))
-        #expect(sw.contains(#""/app.js?v=60""#))
-        #expect(sw.contains(#""/style.css?v=38""#))
+        #expect(html.contains(#"/app.js?v=61"#))
+        #expect(html.contains(#"/style.css?v=39"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v39";"#))
+        #expect(sw.contains(#""/app.js?v=61""#))
+        #expect(sw.contains(#""/style.css?v=39""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -65,11 +65,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=60"#))
-        #expect(html.contains(#"/style.css?v=38"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v38";"#))
-        #expect(sw.contains(#""/app.js?v=60""#))
-        #expect(sw.contains(#""/style.css?v=38""#))
+        #expect(html.contains(#"/app.js?v=61"#))
+        #expect(html.contains(#"/style.css?v=39"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v39";"#))
+        #expect(sw.contains(#""/app.js?v=61""#))
+        #expect(sw.contains(#""/style.css?v=39""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -110,8 +110,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-state-active"))
         #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=60"))
-        #expect(html.contains("/style.css?v=38"))
+        #expect(html.contains("/app.js?v=61"))
+        #expect(html.contains("/style.css?v=39"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -136,8 +136,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=60""#))
-        #expect(sw.contains(#""/style.css?v=38""#))
+        #expect(sw.contains(#""/app.js?v=61""#))
+        #expect(sw.contains(#""/style.css?v=39""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -285,9 +285,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v38"))
-        #expect(sw.contains("/app.js?v=60"))
-        #expect(html.contains("app.js?v=60"))
+        #expect(sw.contains("alas-remote-shell-v39"))
+        #expect(sw.contains("/app.js?v=61"))
+        #expect(html.contains("app.js?v=61"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -317,5 +317,153 @@ struct RemoteWebAssetTests {
         #expect(sw.contains(#"url.pathname.startsWith("/api/")"#))
         #expect(!sw.contains(#""/health","#))
         #expect(!sw.contains(#""/remote-info","#))
+    }
+
+    @Test func remoteWebDerivesComposerActionLikeNativePane() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("function composerAction(streamingState, hasText)"))
+        #expect(js.contains(#"return hasText ? "send" : "hidden";"#))
+        #expect(js.contains(#"return hasText ? "queue" : "stop";"#))
+        #expect(js.contains("function queueBadgeCount()"))
+        #expect(js.contains("function submitPrompt(intent)"))
+        #expect(js.contains(#"intent: intent || "auto""#))
+    }
+
+    @Test func remoteWebRendersQueueSplitCapsule() throws {
+        let html = try asset("index.html")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="queue-capsule""#))
+        #expect(html.contains(#"id="queue-primary""#))
+        #expect(html.contains(#"id="queue-menu""#))
+        #expect(html.contains(#"id="queue-badge""#))
+        #expect(html.contains(#"id="steer-sheet""#))
+        #expect(html.contains(#"id="steer-now""#))
+        #expect(html.contains(#"id="steer-stop""#))
+        #expect(css.contains("#queue-capsule"))
+        #expect(css.contains("#queue-badge"))
+    }
+
+    @Test func remoteWebHandlesQueueStateMessage() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains(#"case "queueState""#))
+        #expect(js.contains("function applyQueueState(msg)"))
+        #expect(js.contains("let queueItems = [];"))
+        #expect(js.contains("let steerUndoAvailable = false;"))
+    }
+
+    // Regression (review, task 6): pendingAttachments feeds hasText in
+    // composerAction, but the mutation sites (attach picker, chip removal,
+    // restoreRejectedPrompt) only ever called renderChips(), never
+    // renderDriveBar() — so attaching or removing an image-only message's
+    // photo could leave Send/Queue stuck hidden until some unrelated event
+    // happened to recompute the button. renderChips is the common funnel for
+    // all three mutations, so the fix lives there.
+    @Test func renderChipsRecomputesComposerActionOnAttachmentChanges() throws {
+        let js = try asset("app.js")
+
+        let body = try #require(js.range(of: "function renderChips() {").map { js[$0.lowerBound...].prefix(900) })
+        let closingBrace = try #require(body.range(of: "\n}"))
+        #expect(body[..<closingBrace.lowerBound].contains("renderDriveBar(lastStreamingState);"))
+    }
+
+    // Regression (review, task 6): the CSS fix for `#queue-badge` (Finding 2)
+    // styles the badges purely by id, and renderQueueBadges selects by id
+    // too — so the `queue-badge` class on the badge spans no longer has any
+    // reader and must not linger as a dead attribute implying a styling
+    // mechanism that doesn't exist.
+    @Test func badgeSpansDoNotCarryTheVestigialQueueBadgeClass() throws {
+        let html = try asset("index.html")
+
+        #expect(!html.contains(#"class="queue-badge hidden""#))
+        #expect(html.contains(#"id="send-badge" class="hidden""#))
+        #expect(html.contains(#"id="queue-badge" class="hidden""#))
+    }
+
+    @Test func remoteWebRendersQueuedBubblesOutsideTheTranscriptScroller() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"<div id="queued" class="hidden"></div>"#))
+        #expect(js.contains("function renderQueue()"))
+        #expect(js.contains(#"el("div", "queued-bubble")"#))
+        #expect(js.contains("function setQueuedOpen(id)"))
+        #expect(js.contains("function queueAction(type, itemId)"))
+        #expect(css.contains("#queued"))
+        #expect(css.contains(".queued-bubble"))
+        #expect(css.contains(".queued-actions"))
+    }
+
+    @Test func queuedBubblesDispatchEveryQueueVerb() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains(#""queueForceSend""#))
+        #expect(js.contains(#""queueRemove""#))
+        #expect(js.contains(#""queueRetry""#))
+        #expect(js.contains(#""queueEdit""#))
+        #expect(js.contains(#""queueClear""#))
+        #expect(js.contains(#"case "queueEditRestored""#))
+    }
+
+    @Test func queuedBubblesHideEditWhenTheItemCarriesImages() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("🖼"))
+    }
+
+    // Regression (codex review, PR #964): the web client must never offer an
+    // action that would silently discard content it cannot represent. A
+    // queued item with a resource/file mention is just as lossy to edit as
+    // one with an image (the browser never gets the URI), so Edit must be
+    // gated on BOTH counts and the resource chip must be visible so the
+    // user can see why.
+    @Test func queuedBubblesHideEditWhenTheItemCarriesResources() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("if (item.imageCount === 0 && item.resourceCount === 0)"))
+        #expect(js.contains("📎"))
+        #expect(js.contains("queued-resources"))
+    }
+
+    // Regression (final branch review): native never renders a `.sending`
+    // queue item (ACPMessageList.shouldRenderQueueBubble returns false for
+    // it) — flushQueueIfIdle marks the head `.sending` while it's still in
+    // session.queue, and sendNow records the same prompt into the
+    // transcript, so a `.sending` bubble here would double-show that text
+    // for the whole duration of the queued turn. renderQueue() must filter
+    // `.sending` out before building any rows, not merely gate a row's
+    // actions/status on it.
+    @Test func sendingQueueItemsAreSkippedEntirely() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function renderQueue() {").map { js[$0.lowerBound...].prefix(1250) })
+        #expect(body.contains(#"const visible = queueItems.filter(i => i.status !== "sending");"#))
+        #expect(body.contains("visible.forEach(item => box.appendChild(queuedRow(item)));"))
+        #expect(!body.contains("queueItems.forEach(item => box.appendChild(queuedRow(item)));"))
+        // queuedRow itself no longer branches on status — every row it builds
+        // is implicitly `.pending` since renderQueue() filters upstream.
+        #expect(!js.contains(#"item.status === "pending""#))
+        #expect(!js.contains("is-sending"))
+    }
+
+    @Test func queueParityBustsServiceWorkerAssetCache() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(html.contains(#"/app.js?v=61"#))
+        #expect(html.contains(#"/style.css?v=39"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v39";"#))
+        #expect(sw.contains(#""/app.js?v=61""#))
+        #expect(sw.contains(#""/style.css?v=39""#))
+    }
+
+    @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(js.contains("function steerUndoToast()"))
+        #expect(js.contains(#""queueSteerUndo""#))
+        #expect(js.contains("Queue cleared by steer"))
+        #expect(css.contains(".steer-undo"))
     }
 }

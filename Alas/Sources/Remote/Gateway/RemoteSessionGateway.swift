@@ -20,6 +20,7 @@ final class RemoteSessionGateway {
     private var configSubscriptions: [String: AnyCancellable] = [:]
     private var configCoalesce: [String: Task<Void, Never>] = [:]
     private var lastConfig: [String: RemoteSessionConfig] = [:]
+    private var lastQueue: [String: RemoteQueueSnapshot] = [:]
     private var coalesce: [String: Task<Void, Never>] = [:]
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
@@ -67,6 +68,7 @@ final class RemoteSessionGateway {
             if let cfg = provider.sessionConfig(for: id) {
                 send(.sessionConfig(cfg))
             }
+            sendQueueState(id: id, session: session, force: true)
             observe(id: id, session: session)
         case .unsubscribe(let id):
             subscriptions[id] = nil
@@ -74,6 +76,7 @@ final class RemoteSessionGateway {
             configCoalesce[id]?.cancel()
             configCoalesce[id] = nil
             lastConfig[id] = nil
+            lastQueue[id] = nil
             coalesce[id]?.cancel()
             coalesce[id] = nil
             lastPermissionReq[id] = nil
@@ -104,7 +107,7 @@ final class RemoteSessionGateway {
             if let session = provider.session(for: id) {
                 await sendSnapshot(id: id, session: session)
             }
-        case .sendPrompt(let id, let text, let attachments):
+        case .sendPrompt(let id, let text, let attachments, let intent):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
             // decoded images to disk, and a non-writer must be rejected without
             // leaving orphan files under acp-attachments/. The manager re-checks
@@ -139,12 +142,20 @@ final class RemoteSessionGateway {
             // these file URIs (the transcript bubble references them), so we
             // must keep the files.
             var refusalIsSynchronous = true
-            await provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
+            let onResult: @MainActor (Bool) -> Void = { [weak self] accepted in
                 guard let self else { return }
                 if !accepted {
                     self.send(.promptRejected(sessionId: id))
                     if refusalIsSynchronous { self.discardAttachmentFiles(materialized) }
                 }
+            }
+            // "steer" cancels the running turn and discards the queue before
+            // sending; "auto" (the default, and everything an older client
+            // sends) takes the ordinary enqueue-or-send route.
+            if intent == "steer" {
+                await provider.steerPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
+            } else {
+                await provider.sendPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
             }
             refusalIsSynchronous = false
         case .stop(let id):
@@ -213,6 +224,32 @@ final class RemoteSessionGateway {
                                      messages: wire))
                 break
             }
+        case .queueForceSend(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueForceSend(for: id, itemId: uuid)
+            }
+        case .queueRemove(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueRemove(for: id, itemId: uuid)
+            }
+        case .queueRetry(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueRetry(for: id, itemId: uuid)
+            }
+        case .queueEdit(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                // No reply when the item is gone or already `.sending` —
+                // `takeForEditing` refuses in-flight items so an edit can
+                // never duplicate a prompt that is already on the wire.
+                guard let text = await self.provider.queueEdit(for: id, itemId: uuid) else { return }
+                self.send(.queueEditRestored(sessionId: id, itemId: itemId, text: text))
+            }
+        case .queueClear(let id):
+            guard provider.isWriter(for: id) else { return }
+            await provider.queueClear(for: id)
+        case .queueSteerUndo(let id):
+            guard provider.isWriter(for: id) else { return }
+            await provider.queueSteerUndo(for: id)
         }
     }
 
@@ -319,6 +356,7 @@ final class RemoteSessionGateway {
         configCoalesce.values.forEach { $0.cancel() }
         configCoalesce.removeAll()
         lastConfig.removeAll()
+        lastQueue.removeAll()
         coalesce.values.forEach { $0.cancel() }
         coalesce.removeAll()
         lastPermissionReq.removeAll()
@@ -431,6 +469,10 @@ final class RemoteSessionGateway {
             self.configCoalesce[id]?.cancel()
             self.configCoalesce[id] = Task { @MainActor [weak self, weak session] in
                 guard !Task.isCancelled, let self, let session else { return }
+                // Same publisher, independently deduped: ACPSession's
+                // objectWillChange fires for queue mutations too, and the
+                // queue changes far more often than the config does.
+                self.sendQueueState(id: id, session: session)
                 let cfg = RemoteSessionConfig(
                     sessionId: id,
                     models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
@@ -516,6 +558,39 @@ final class RemoteSessionGateway {
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
+    }
+
+    /// Everything `sendQueueState` dedupes on. `steerUndoAvailable` can flip
+    /// (e.g. the 5s steer-undo window expiring) while `items` stays the same
+    /// (already emptied by the steer itself) — both must be in the cache key
+    /// or that flip would be silently swallowed and the client would keep
+    /// showing a stale "undo available" affordance.
+    private struct RemoteQueueSnapshot: Equatable {
+        let items: [RemoteQueuedPrompt]
+        let steerUndoAvailable: Bool
+    }
+
+    /// Push the session's queue to the client. `force` bypasses the dedupe so
+    /// a fresh subscribe always gets a baseline — otherwise an unchanged
+    /// (typically empty) queue would be suppressed and the client would show
+    /// nothing until the next mutation.
+    private func sendQueueState(id: String, session: ACPSession, force: Bool = false) {
+        let items = RemoteQueueProjection.project(session.queue)
+        let steerUndoAvailable = !(session.steerUndo?.snapshot.isEmpty ?? true)
+        let snapshot = RemoteQueueSnapshot(items: items, steerUndoAvailable: steerUndoAvailable)
+        guard force || lastQueue[id] != snapshot else { return }
+        lastQueue[id] = snapshot
+        send(.queueState(sessionId: id, items: items, steerUndoAvailable: steerUndoAvailable))
+    }
+
+    /// Shared preamble for the per-item queue verbs: writer gate plus item-id
+    /// parsing. A non-writer or an unparseable id is dropped silently — the
+    /// next `queueState` re-asserts server truth, so there is nothing for the
+    /// client to reconcile.
+    private func withQueueItem(id: String, itemId: String, _ body: (UUID) async -> Void) async {
+        guard provider.isWriter(for: id) else { return }
+        guard let uuid = UUID(uuidString: itemId) else { return }
+        await body(uuid)
     }
 
     private func wireMessages(id: String, session: ACPSession, indices: [Int]) async -> [RemoteWireMessage] {

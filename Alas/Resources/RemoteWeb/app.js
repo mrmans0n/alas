@@ -9,6 +9,9 @@ let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
 let olderFetchInFlight = false;
 let stopPending = false;
+let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError}] from queueState
+let steerUndoAvailable = false;
+let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
@@ -230,6 +233,8 @@ function handle(msg) {
     case "transcriptDelta": applyDelta(msg); break;
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
+    case "queueState": applyQueueState(msg); break;
+    case "queueEditRestored": applyQueueEditRestored(msg); break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
     case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload); break;
@@ -355,7 +360,9 @@ function openSession(id) {
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
-  $("messages").innerHTML = ""; renderConfigAffordances(); renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
+  $("messages").innerHTML = ""; renderConfigAffordances();
+  queueItems = []; steerUndoAvailable = false; renderQueue();
+  renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
 
 function clearSessionSheetsForOpen() {
@@ -682,6 +689,138 @@ function applyDelta(msg) {
   msg.upserts.forEach(m => upsertMessage(m));
   if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   syncStreamingState(msg.streamingState);
+}
+
+function applyQueueState(msg) {
+  if (msg.sessionId !== currentSession) return;
+  queueItems = msg.items || [];
+  steerUndoAvailable = !!msg.steerUndoAvailable;
+  renderQueue();
+  renderDriveBar(lastStreamingState);
+}
+
+// Append rather than replace, mirroring the native pane's
+// composerDraft.appending(restored) — the user may have started typing
+// something else before tapping Edit, and that must not be clobbered.
+function applyQueueEditRestored(msg) {
+  if (msg.sessionId !== currentSession || !msg.text) return;
+  const ta = $("prompt");
+  ta.value = ta.value ? ta.value + "\n" + msg.text : msg.text;
+  autoGrowPrompt();
+  renderDriveBar(lastStreamingState);
+  ta.focus();
+}
+
+// The server owns the snapshot and its expiry (ACPSession.steerUndo +
+// ACPSessionRunner.armSteerUndoExpiry), so this is render-and-dispatch only:
+// the toast disappears when the next queueState reports the window closed.
+function steerUndoToast() {
+  const toast = el("div", "steer-undo");
+  toast.appendChild(el("span", null, "Queue cleared by steer"));
+  const undo = el("button", "steer-undo-btn", "Undo");
+  undo.onclick = () => queueAction("queueSteerUndo", null);
+  toast.appendChild(undo);
+  return toast;
+}
+
+let openQueuedId = null;   // which bubble has its actions revealed (tap-to-reveal)
+
+function setQueuedOpen(id) {
+  openQueuedId = openQueuedId === id ? null : id;
+  renderQueue();
+}
+
+function queueAction(type, itemId) {
+  if (!currentSession) return;
+  ensureWriter();
+  const msg = { type, sessionId: currentSession };
+  if (itemId) msg.itemId = itemId;
+  send(msg);
+  openQueuedId = null;
+}
+
+function renderQueue() {
+  const box = $("queued");
+  box.innerHTML = "";
+  // A .sending item stays in session.queue for the whole RPC round-trip
+  // (flushQueueIfIdle marks the head .sending before sendNow records the
+  // prompt into the transcript), but never gets its own bubble here —
+  // mirroring native's ACPMessageList.shouldRenderQueueBubble, which also
+  // returns false for .sending. Rendering it would double-show the same
+  // text: once as the transcript's user bubble, once as a ghosted queued
+  // one, for the entire duration of the turn.
+  const visible = queueItems.filter(i => i.status !== "sending");
+  box.classList.toggle("hidden", visible.length === 0 && !steerUndoAvailable);
+  if (steerUndoAvailable) box.appendChild(steerUndoToast());
+  if (visible.length === 0) return;
+
+  const waiting = queueBadgeCount();
+  if (waiting > 1) {
+    const header = el("div", "queued-header");
+    header.appendChild(el("span", null, waiting + " queued"));
+    const clear = el("button", "queued-clear", "Clear queue");
+    clear.onclick = () => queueAction("queueClear", null);
+    header.appendChild(clear);
+    box.appendChild(header);
+  }
+
+  visible.forEach(item => box.appendChild(queuedRow(item)));
+}
+
+// Only ever called with a `.pending` item — renderQueue() filters `.sending`
+// out before it reaches here — so every row always gets its actions and its
+// "Queued" status.
+function queuedRow(item) {
+  const row = el("div", "queued-row");
+  if (openQueuedId === item.id) row.classList.add("is-open");
+
+  row.appendChild(queuedActions(item));
+
+  const stack = el("div", "queued-stack");
+  const status = el("div", "queued-status");
+  status.appendChild(el("span", null, "Queued"));
+  if (item.lastError) status.appendChild(el("span", "queued-error", " · " + item.lastError));
+  stack.appendChild(status);
+
+  const bubble = el("div", "queued-bubble");
+  if (item.imageCount > 0) {
+    bubble.appendChild(el("span", "queued-images", "🖼 ×" + item.imageCount));
+  }
+  if (item.resourceCount > 0) {
+    bubble.appendChild(el("span", "queued-resources", "📎 ×" + item.resourceCount));
+  }
+  bubble.appendChild(document.createTextNode(item.text || ""));
+  bubble.onclick = () => setQueuedOpen(item.id);
+  stack.appendChild(bubble);
+
+  row.appendChild(stack);
+  return row;
+}
+
+function queuedActions(item) {
+  const actions = el("div", "queued-actions");
+  const button = (cls, glyph, label, onclick) => {
+    const b = el("button", cls, glyph);
+    b.setAttribute("aria-label", label);
+    b.onclick = onclick;
+    return b;
+  };
+  actions.appendChild(button("qa-send", "▲", "Send now",
+    () => queueAction("queueForceSend", item.id)));
+  if (item.lastError) {
+    actions.appendChild(button("qa-retry", "↻", "Retry",
+      () => queueAction("queueRetry", item.id)));
+  }
+  // Editing an item whose images or file mentions the web client never
+  // received would silently drop them, so the pencil is withheld rather
+  // than made lossy.
+  if (item.imageCount === 0 && item.resourceCount === 0) {
+    actions.appendChild(button("qa-edit", "✎", "Edit",
+      () => queueAction("queueEdit", item.id)));
+  }
+  actions.appendChild(button("qa-remove", "✕", "Remove from queue",
+    () => queueAction("queueRemove", item.id)));
+  return actions;
 }
 
 function applyPage(msg) {
@@ -2063,6 +2202,22 @@ function hideElicitation() {
   elicitationInputs = new Map();
 }
 
+// Direct port of composerAction(...) in ComposerAction.swift. Kept as a pure
+// function of (streamingState, hasText) so the two implementations can be
+// diffed against each other by eye.
+function composerAction(streamingState, hasText) {
+  if (streamingState === "idle") {
+    return hasText ? "send" : "hidden";
+  }
+  return hasText ? "queue" : "stop";
+}
+
+// Mirrors ACPSession.visibleQueueCount: the in-flight .sending head gets its
+// own bubble but is not part of the "still waiting" count.
+function queueBadgeCount() {
+  return queueItems.filter(i => i.status !== "sending").length;
+}
+
 function renderDriveBar(streamingState) {
   // Keep the whole bar hidden until the first snapshot tells us the real
   // canDrive — otherwise the take-over banner flashes while opening a session
@@ -2080,9 +2235,22 @@ function renderDriveBar(streamingState) {
   // (composerAction returns .stop for sending/streaming/awaiting*). Without
   // the awaiting states, dismissing a prompt sheet would strand the user on
   // Send with no way to cancel the running turn.
-  const busy = streamingState !== "idle";
-  $("send").classList.toggle("hidden", busy);
-  $("stop").classList.toggle("hidden", !busy);
+  lastStreamingState = streamingState;
+  const hasText = !!$("prompt").value.trim() || pendingAttachments.length > 0;
+  const action = composerAction(streamingState, hasText);
+  $("send").classList.toggle("hidden", action !== "send");
+  $("queue-capsule").classList.toggle("hidden", action !== "queue");
+  $("stop").classList.toggle("hidden", action !== "stop");
+  renderQueueBadges();
+}
+
+function renderQueueBadges() {
+  const count = queueBadgeCount();
+  ["send-badge", "queue-badge"].forEach(badgeId => {
+    const badge = $(badgeId);
+    badge.textContent = String(count);
+    badge.classList.toggle("hidden", count === 0);
+  });
 }
 
 let stopFallbackTimer = null;
@@ -2113,19 +2281,28 @@ function autoGrowPrompt() {
   ta.style.height = "auto";                          // shrink back before measuring
   ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + "px";
 }
-function sendPrompt() {
+function submitPrompt(intent) {
   const ta = $("prompt");
   const text = ta.value.trim();
   if (!currentSession) return;
   if (!text && pendingAttachments.length === 0) return;   // nothing to send
   ensureWriter();                                    // grab the wheel first; ordered before the prompt
-  send({ type: "sendPrompt", sessionId: currentSession, text, attachments: pendingAttachments });
+  send({
+    type: "sendPrompt",
+    sessionId: currentSession,
+    text,
+    attachments: pendingAttachments,
+    intent: intent || "auto",
+  });
   lastSentText = text;                               // keep until the server accepts (or rejects) it
   lastSentAttachments = pendingAttachments;          // ditto for the staged images
   ta.value = "";
   clearAttachments();
   autoGrowPrompt();                                  // collapse back to one row
+  renderDriveBar(lastStreamingState);
 }
+
+function sendPrompt() { submitPrompt("auto"); }
 
 // The server dropped our prompt (lease went stale, materialize failed, etc.).
 // Put the text AND staged images back so the message isn't silently lost — but
@@ -2142,6 +2319,11 @@ function restoreRejectedPrompt() {
   }
   lastSentText = null;
   lastSentAttachments = [];
+  // renderChips() above only runs when there were attachments — a text-only
+  // restore would otherwise leave the composer action (Send/Queue/hidden)
+  // stale at "hidden" from the submit that just got rejected, stranding the
+  // restored text with no way to send it.
+  renderDriveBar(lastStreamingState);
 }
 
 // --- Session config sheet (⚙) + attachments (📎) ---
@@ -2178,6 +2360,9 @@ function renderConfigSheet() {
 function showConfig() { renderConfigSheet(); $("cfg").classList.remove("hidden"); }
 function hideConfig() { $("cfg").classList.add("hidden"); }
 
+function showSteerSheet() { $("steer-sheet").classList.remove("hidden"); }
+function hideSteerSheet() { $("steer-sheet").classList.add("hidden"); }
+
 // --- Attachments ---
 function b64Bytes(b64) { return Math.floor(b64.length * 3 / 4); }   // decoded size estimate, good enough for the cap
 function attachedBytes() { return pendingAttachments.reduce((n, a) => n + b64Bytes(a.dataBase64), 0); }
@@ -2199,6 +2384,10 @@ function renderChips() {
     box.appendChild(chip);
   });
   box.classList.toggle("hidden", pendingAttachments.length === 0);
+  // pendingAttachments feeds hasText in composerAction — an image-only message
+  // must be able to flip Send/Queue visible without any unrelated event (a
+  // keystroke, an incoming delta) happening to call renderDriveBar first.
+  renderDriveBar(lastStreamingState);
 }
 
 function readAttachment(file) {
@@ -2238,6 +2427,12 @@ listen("worktree-search", "input", (e) => {
 $("config").onclick = showConfig;
 $("cfg-close").onclick = hideConfig;
 $("cfg").onclick = (e) => { if (e.target.id === "cfg") hideConfig(); };
+$("queue-primary").onclick = () => submitPrompt("auto");
+$("queue-menu").onclick = showSteerSheet;
+$("steer-now").onclick = () => { hideSteerSheet(); submitPrompt("steer"); };
+$("steer-stop").onclick = () => { hideSteerSheet(); $("stop").click(); };
+$("steer-close").onclick = hideSteerSheet;
+$("steer-sheet").onclick = (e) => { if (e.target.id === "steer-sheet") hideSteerSheet(); };
 $("cfg-autorun").onchange = (e) => { ensureWriter(); send({ type: "setAutoRun", sessionId: currentSession, enabled: e.target.checked }); };
 $("detail-rename").onclick = () => { if (currentSession) showRenameSheet(currentSession); };
 $("rename-submit").onclick = submitRename;
@@ -2284,7 +2479,7 @@ $("stop").onclick = () => {
   send({ type: "stop", sessionId: currentSession });   // stop is leaseless — no lease takeover first
   markStopping(true);
 };
-listen("prompt", "input", autoGrowPrompt);
+listen("prompt", "input", () => { autoGrowPrompt(); renderDriveBar(lastStreamingState); });
 listen("prompt", "keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });

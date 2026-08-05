@@ -11,6 +11,21 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
     let index: Int            // transcript position; the client orders and windows by this
 }
 
+/// One queued prompt as sent to the web client. Deliberately carries an image
+/// COUNT, never image bytes or URIs — the web client has no authenticated way
+/// to fetch attachment data, and a queued bubble only needs to say "there are
+/// images here" to render its placeholder. `resourceCount` mirrors the same
+/// idea for `.resourceLink`/`.resource` blocks (file mentions): the browser
+/// never receives the underlying URI, only a count to render as a chip.
+struct RemoteQueuedPrompt: Codable, Equatable, Sendable {
+    let id: String          // QueuedPrompt.id, uuidString
+    let text: String        // .text blocks, joined
+    let imageCount: Int
+    let resourceCount: Int
+    let status: String      // "pending" | "sending"
+    let lastError: String?
+}
+
 struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     let projectName: String
     let worktreeName: String
