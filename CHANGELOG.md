@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-05
+
+### ✨ Features
+
+- Prefill manual Mission ticket metadata from linked web pages (#962).
+
+### 🐛 Fixes
+
+- Make ACP tail-follow pause reachable while scrolling responsively and tolerate closed broker reads (#959, #960).
+- Fix changed file row clicks (#961).
+- Polish the sidebar worktree sort control chrome (#958).
+
 ## [0.14.0] - 2026-08-05
 
 ### ✨ Features
