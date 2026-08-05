@@ -950,7 +950,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     )
                 }
             )
-            host.onRememberScrollAnchor(anchorId, lookup.transcriptIndex(for: anchorId), false)
+            let globalIndex = lookup.transcriptIndex(for: anchorId)
+                .flatMap { host.transcript.globalIndex(forLocalIndex: $0) }
+            host.onRememberScrollAnchor(anchorId, globalIndex, false)
         }
 
         /// Runs once per Coordinator lifetime, but only actually latches

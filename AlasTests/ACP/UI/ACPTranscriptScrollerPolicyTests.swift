@@ -10,7 +10,8 @@ import Testing
 private func makeHost(
     session: ACPSession = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t"),
     contentMaxWidth: CGFloat = 800,
-    typography: ACPChatTypography = .default
+    typography: ACPChatTypography = .default,
+    onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in }
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
         session: session,
@@ -23,7 +24,7 @@ private func makeHost(
         forkTargets: [],
         onFork: { _, _ in },
         rememberedScrollAnchor: { nil },
-        onRememberScrollAnchor: { _, _, _ in },
+        onRememberScrollAnchor: onRememberScrollAnchor,
         onOpenTranscriptLink: { _ in true },
         policy: nil,
         scopeKey: "scope",
@@ -722,10 +723,7 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
 
         // A wheel/trackpad scroll in the materialized tail is newer user
         // intent than the queued release into unhydrated history.
-        scroller.contentView.setBoundsOrigin(NSPoint(
-            x: 0,
-            y: max(0, scroller.scrollY - 10)
-        ))
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
         #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
 
@@ -737,6 +735,38 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         // reviving the stale jump to message 49.
         #expect(session.transcript.visibleHead == 170)
         #expect(session.transcript.visibleTailBound == 200)
+    }
+
+    @Test("tail-only scrolling remembers a global anchor index")
+    func tailOnlyScrollRemembersGlobalAnchorIndex() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(Array(allMessages.suffix(30)), messageIndexOffset: 170)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        session.followsTranscriptTail = false
+        var remembered: (id: String?, index: Int?, followsTail: Bool)?
+        let host = makeHost(session: session) { id, index, followsTail in
+            remembered = (id, index, followsTail)
+        }
+        let scroller = ACPTranscriptScrollerView(
+            frame: NSRect(x: 0, y: 0, width: 600, height: 400)
+        )
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
+        scroller.reflectScrolledClipView(scroller.contentView)
+
+        let anchor = try #require(remembered)
+        let anchorId = try #require(anchor.id)
+        let anchorIndex = try #require(anchor.index)
+        let localIndex = try #require(
+            session.transcript.messages.firstIndex { $0.stableId == anchorId }
+        )
+        #expect(anchorIndex == 170 + localIndex)
+        #expect(!anchor.followsTail)
     }
 
     @Test("releasing at the logical end resumes the live tail")
