@@ -92,6 +92,8 @@ struct DiffReviewSurface: View {
     @State private var scrollCommand: DiffReviewScrollCommand?
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
+    @State private var appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
+    @StateObject private var appKitPresentationStore = AppKitDiffReviewPresentationStore()
     /// The file the scrollspy last reported as scrolled into view. Used to tell
     /// cross-file comment navigation (file section not yet realized → needs a
     /// two-phase scroll) from same-file navigation (section already realized →
@@ -242,6 +244,10 @@ struct DiffReviewSurface: View {
         .onChange(of: fileSetKey) { _, _ in
             synchronizeSelectionWithSession()
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)) { _ in
+            appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
+            resetScrollCommandBookkeeping()
+        }
     }
 
     private func reviewSurface(firstFileID: DiffReviewFileID) -> some View {
@@ -263,7 +269,14 @@ struct DiffReviewSurface: View {
                 threads: threads,
                 onSelectFile: scrollToFile
             )
-            mainReviewStream(session, firstFileID: firstFileID)
+            Group {
+                if Self.usesAppKitScroller(flagEnabled: appKitScrollerEnabled) {
+                    appKitMainReviewStream(session)
+                } else {
+                    legacyMainReviewStream(session, firstFileID: firstFileID)
+                }
+            }
+            .id(appKitScrollerEnabled)
             if shouldShowReviewSummaryRail {
                 ReviewDraftSummaryRail(
                     comments: allDraftComments,
@@ -280,7 +293,7 @@ struct DiffReviewSurface: View {
         }
     }
 
-    private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
+    private func legacyMainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -348,6 +361,78 @@ struct DiffReviewSurface: View {
             }
         }
         .background(theme.color("bg-1"))
+    }
+
+    private func appKitMainReviewStream(_ session: DiffReviewLoadedSession) -> some View {
+        AppKitDiffReviewScroller(
+            inputs: appKitRowInputs(for: session),
+            fileCommand: scrollCommand,
+            inlineFeedbackCommand: inlineFeedbackScrollCommand,
+            draftCommentCommand: draftCommentScrollCommand,
+            onNavigationFile: selectAppKitNavigationFile,
+            onActiveFileChange: updateSelectedFileFromAppKitViewport
+        )
+        .background(theme.color("bg-1"))
+    }
+
+    private func appKitRowInputs(for session: DiffReviewLoadedSession) -> [AppKitDiffReviewRowInput] {
+        session.files.map { file in
+            let state = appKitPresentationStore.state(for: file)
+            state.synchronize(file: file, contextSignature: DiffReviewContextStateSignature(
+                fileID: file.id.rawValue,
+                providerID: file.contextProvider?.id.uuidString ?? "no-context-provider",
+                structuralHash: file.displayModel?.structuralHash
+            ))
+            state.synchronizeRenderBudget(resetSignal: file.displayModel?.contentHash)
+            state.actionRelay.update(
+                inlineFeedbackActions: inlineFeedbackActions,
+                onSelectInlineFeedback: onSelectInlineFeedback,
+                draftCommentActions: draftCommentActions,
+                onSelectDraftComment: onSelectDraftComment,
+                onSaveDraftComment: { anchor, body in
+                    onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
+                },
+                onContextExpansionActivated: { contextExpandedFileIDs.insert(file.id) },
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                onStageReply: onStageReply
+            )
+            return AppKitDiffReviewRowInput(
+                file: file,
+                inlineFeedback: inlineFeedbackByFileID[file.id] ?? [],
+                draftComments: draftCommentsByFileID[file.id] ?? [],
+                threads: DiffReviewProviderFeedbackResolver.threads(
+                    threads, for: file.summary.path, includeFileLevel: file.imageProvider != nil
+                ),
+                annotations: inlineAnnotations(for: file.summary.path),
+                state: state,
+                theme: theme,
+                layoutMode: layoutMode,
+                wrapLines: wrapLines,
+                showWhitespace: showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsSourceBadge: showsSourceBadges,
+                focusedFeedbackID: focusedFeedbackID,
+                focusedDraftCommentID: focusedDraftCommentID,
+                allowsDraftCommentCreation: allowsDraftCommentCreation,
+                actionPresence: .init(
+                    canOpenFile: file.openFile != nil,
+                    canUnstageFile: file.stagedMutationActions?.unstageFile != nil,
+                    canCreateDraftComment: allowsDraftCommentCreation,
+                    canReply: canReply,
+                    canResolve: canResolve,
+                    canAddToReview: canAddToReview
+                ),
+                lspContext: lspContextForFile(file),
+                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+                draftCommentActions: state.actionRelay.draftCommentActionsForRow,
+                onContextExpansionActivated: { contextExpandedFileIDs.insert(file.id) }
+            )
+        }
     }
 
     @ViewBuilder
@@ -545,6 +630,7 @@ struct DiffReviewSurface: View {
         synchronizedFileSetKey = result.fileSetKey
         programmaticScroll = result.programmaticScroll
         contextExpandedFileIDs.formIntersection(Set(fileIDs))
+        appKitPresentationStore.prune(keeping: Set(fileIDs))
         if DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
             previousFileSetKey: previousFileSetKey,
             previousSelection: previousSelection,
@@ -565,10 +651,33 @@ struct DiffReviewSurface: View {
         scrollSpyActiveFileID = id
         scrollCommand = scrollCommandController.command(to: id)
 
+        guard !appKitScrollerEnabled else {
+            programmaticScroll.finishProgrammaticScroll(token)
+            return
+        }
+
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)
             programmaticScroll.finishProgrammaticScroll(token)
         }
+    }
+
+    private func updateSelectedFileFromAppKitViewport(_ fileID: DiffReviewFileID) {
+        guard programmaticScroll.acceptsScrollSpyUpdate(for: fileID), fileID != selectedFileID else { return }
+        selectedFileID = fileID
+        scrollSpyActiveFileID = fileID
+    }
+
+    private func selectAppKitNavigationFile(_ fileID: DiffReviewFileID) {
+        selectedFileID = fileID
+        scrollSpyActiveFileID = fileID
+    }
+
+    private func resetScrollCommandBookkeeping() {
+        scrollCommand = nil
+        scrollCommandController.reset()
+        programmaticScroll = DiffReviewProgrammaticScrollController()
+        scrollSpyActiveFileID = nil
     }
 
     private func inlineAnnotations(for filePath: String) -> [DiffInlineAnnotation] {
@@ -584,6 +693,10 @@ struct DiffReviewSurface: View {
             includeFileLevel: false
         )
     }
+}
+
+extension DiffReviewSurface {
+    static func usesAppKitScroller(flagEnabled: Bool) -> Bool { flagEnabled }
 }
 
 enum DiffReviewSurfaceSelectionSync {

@@ -9,6 +9,11 @@ import Testing
 struct DiffReviewSurfaceTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func appKitScrollerSwitchMatchesRuntimeFlag() {
+        #expect(DiffReviewSurface.usesAppKitScroller(flagEnabled: true))
+        #expect(!DiffReviewSurface.usesAppKitScroller(flagEnabled: false))
+    }
+
     @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
         let model = ReviewDraftComposerFocusModel()
         let controller = NSHostingController(

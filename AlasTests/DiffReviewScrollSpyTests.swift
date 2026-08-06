@@ -91,6 +91,15 @@ struct DiffReviewScrollSpyTests {
         #expect(controller.acceptsScrollSpyUpdate(for: first))
     }
 
+    @Test func resetScrollCommandGenerationStartsNewToggleSequence() {
+        let file = DiffReviewFileID(namespace: "unstaged", path: "first.swift")
+        var controller = DiffReviewScrollCommandController()
+        _ = controller.command(to: file)
+        controller.reset()
+
+        #expect(controller.command(to: file).generation == 1)
+    }
+
     @Test func activeSelectionSkipsRedundantScrollUpdates() {
         let first = DiffReviewFileID(namespace: "unstaged", path: "first.swift")
         let second = DiffReviewFileID(namespace: "unstaged", path: "second.swift")
