@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-06
+
+### ✨ Features
+
+- Add queue parity for the remote web client (#964).
+- Redesign `git-gud` inbox cards (#965).
+- Stabilize the AppKit transcript scrollbar (#966).
+- Add directional tab navigation shortcuts (#970).
+
+### 🐛 Fixes
+
+- Show a loading screen while the repository loads (#963).
+- Hide workspace context from ACP session titles (#967).
+- Add the Kotlin LSP install recipe (#969).
+
+### 🏗️ Internal
+
+- Rename park changes terminology to stash changes (#968).
+
 ## [0.14.1] - 2026-08-05
 
 ### ✨ Features
