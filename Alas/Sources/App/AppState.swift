@@ -3296,11 +3296,13 @@ final class AppState {
             guard case .following(let revision) = state.revision,
                   let accepted = revision.preparingPendingCheckoutAcceptance()
             else { return }
+            _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
             _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
                 $0.revision = .following(accepted)
             }
             bumpRevisionGeneration(worktreeID: worktreeID)
         case .reviewSession(let state):
+            _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
             acceptTrackedReviewSessionCheckout(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
         default:
             return
