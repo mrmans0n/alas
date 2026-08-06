@@ -532,6 +532,7 @@ struct DiffPaneView: View {
                     toolbar
                 }
                 diffBody
+                    .id(appKitScrollerEnabled)
             }
             .frame(
                 maxWidth: .infinity,
@@ -540,7 +541,6 @@ struct DiffPaneView: View {
             )
             .background(theme.color("bg-1"))
         }
-        .id(appKitScrollerEnabled)
         .onReceive(
             NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
         ) { _ in
