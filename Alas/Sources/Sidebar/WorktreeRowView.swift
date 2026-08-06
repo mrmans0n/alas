@@ -182,9 +182,8 @@ struct WorktreeRowView: View {
                 if operationState != nil {
                     HStack(spacing: 5) {
                         if Self.showsProgress(operationState: operationState) {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(theme.color("warning"))
+                            Spinner(lineWidth: 1.5, duration: 0.7, color: theme.color("warning"))
+                                .frame(width: 10, height: 10)
                                 .accessibilityHidden(true)
                         }
                         Text(Self.statusText(for: operationState))
