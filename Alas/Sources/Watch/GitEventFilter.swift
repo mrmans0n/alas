@@ -79,7 +79,7 @@ enum GitEventFilter {
         if rel == "worktrees" { return .topologyChange }
 
         if rel == "packed-refs" {
-            return .revisionChange
+            return .revisionAndTopologyChange
         }
         if rel == "config" || rel == "config.worktree" {
             return .revisionChange

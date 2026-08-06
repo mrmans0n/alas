@@ -86,12 +86,12 @@ struct GitEventFilterTests {
         ) == .revisionAndTopologyChange)
     }
 
-    @Test func packedRefsUpdateIsRevisionChange() {
+    @Test func packedRefsUpdateIsRevisionAndTopologyChange() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/packed-refs",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
-        ) == .revisionChange)
+        ) == .revisionAndTopologyChange)
     }
 
     @Test func configUpdateIsRevisionChange() {
