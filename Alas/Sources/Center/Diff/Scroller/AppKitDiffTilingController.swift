@@ -62,19 +62,23 @@ final class AppKitDiffTilingController {
     func anchor(viewportMinY: CGFloat) -> AppKitDiffScrollAnchor? {
         guard let index = firstRowIndex(intersectingY: viewportMinY) else { return nil }
         let row = rows[index]
-        return .init(rowID: row.id, intraRowOffset: max(0, viewportMinY - row.minY))
+        return .init(rowID: row.id, intraRowOffset: viewportMinY - row.minY)
     }
 
     func viewportMinY(for anchor: AppKitDiffScrollAnchor?) -> CGFloat? {
         guard let anchor, let row = row(withID: anchor.rowID) else { return nil }
-        return row.minY + anchor.intraRowOffset
+        let intraRowOffset = min(max(0, anchor.intraRowOffset), row.height)
+        return min(max(0, row.minY + intraRowOffset), documentHeight)
     }
 
     func mountBand(viewportMinY: CGFloat, viewportHeight: CGFloat, overscan: CGFloat) -> Range<Int> {
         guard !rows.isEmpty else { return 0..<0 }
         let lowY = viewportMinY - overscan
         let highY = viewportMinY + viewportHeight + overscan
-        guard let first = firstRowIndex(intersectingY: lowY) else { return rows.count..<rows.count }
+        guard let first = firstRowIndex(intersectingRangeFrom: lowY, to: highY) else {
+            let emptyIndex = firstRowIndex(afterY: lowY) ?? rows.count
+            return emptyIndex..<emptyIndex
+        }
 
         var upperBound = first + 1
         while upperBound < rows.count, rows[upperBound].minY < highY {
@@ -100,9 +104,24 @@ final class AppKitDiffTilingController {
         return min(max(0, desired), max(0, documentHeight - viewportHeight))
     }
 
-    /// Returns the first row whose half-open range has a bottom edge strictly
-    /// after `y`; this is the row intersecting or immediately following it.
+    /// Returns the row containing `y` under the half-open interval convention.
     private func firstRowIndex(intersectingY y: CGFloat) -> Int? {
+        guard let index = firstRowIndex(afterY: y), rows[index].minY <= y else { return nil }
+        return index
+    }
+
+    /// Returns the first row that intersects the half-open range `[lowY, highY)`.
+    private func firstRowIndex(intersectingRangeFrom lowY: CGFloat, to highY: CGFloat) -> Int? {
+        guard lowY < highY, let index = firstRowIndex(afterY: lowY), rows[index].minY < highY else {
+            return nil
+        }
+        return index
+    }
+
+    /// Binary-searches for the first row with a bottom edge strictly after `y`.
+    /// The result may be a later row when `y` lies in padding or spacing; callers
+    /// that need an actual intersection must verify the corresponding min edge.
+    private func firstRowIndex(afterY y: CGFloat) -> Int? {
         guard let last = rows.indices.last, rows[last].maxY > y else { return nil }
         var lower = 0
         var upper = last
@@ -127,10 +146,18 @@ final class AppKitDiffTilingController {
     }
 
     private func rebuildIndex() {
-        indexByID.removeAll(keepingCapacity: true)
-        for (index, row) in rows.enumerated() {
-            assert(indexByID[row.id] == nil, "duplicate AppKit diff row id \(row.id)")
-            indexByID[row.id] = index
+        var assertedIDs = Set<String>()
+        for row in rows {
+            assert(assertedIDs.insert(row.id).inserted, "duplicate AppKit diff row id \(row.id)")
         }
+        indexByID = Self.lastIndexByID(for: rows.map(\.id))
+    }
+
+    static func lastIndexByID(for rowIDs: [String]) -> [String: Int] {
+        var result: [String: Int] = [:]
+        for (index, id) in rowIDs.enumerated() {
+            result[id] = index
+        }
+        return result
     }
 }

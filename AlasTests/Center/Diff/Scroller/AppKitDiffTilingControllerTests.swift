@@ -73,6 +73,23 @@ struct AppKitDiffTilingControllerTests {
         #expect(tiling.activeOwnerID(viewportMinY: 100, viewportHeight: 100) == nil)
     }
 
+    @Test("top padding and row spacing do not intersect a viewport")
+    func gapsDoNotIntersectViewport() {
+        let tiling = controller(rowSpacing: 20, topPadding: 10)
+        tiling.replaceAll(rows: [
+            .init(id: "a", ownerID: "file-a", height: 100),
+            .init(id: "b", ownerID: "file-b", height: 100),
+        ])
+
+        #expect(tiling.mountBand(viewportMinY: 0, viewportHeight: 10, overscan: 0).isEmpty)
+        #expect(tiling.activeOwnerID(viewportMinY: 0, viewportHeight: 10) == nil)
+        #expect(tiling.anchor(viewportMinY: 0) == nil)
+
+        #expect(tiling.mountBand(viewportMinY: 110, viewportHeight: 20, overscan: 0).isEmpty)
+        #expect(tiling.activeOwnerID(viewportMinY: 110, viewportHeight: 20) == nil)
+        #expect(tiling.anchor(viewportMinY: 110) == nil)
+    }
+
     @Test("center target offset clamps to the top and document bottom")
     func centerOffsetClamping() {
         let tiling = controller()
@@ -111,6 +128,15 @@ struct AppKitDiffTilingControllerTests {
         #expect(tiling.updateHeight(id: "a", to: 140, viewportMinY: 50) == 0)
     }
 
+    @Test("anchor restoration clamps invalid intra-row offsets")
+    func anchorRestorationClampsOffsets() {
+        let tiling = controller(topPadding: 10, bottomPadding: 20)
+        tiling.replaceAll(rows: [.init(id: "a", ownerID: nil, height: 100)])
+
+        #expect(tiling.viewportMinY(for: .init(rowID: "a", intraRowOffset: -20)) == 10)
+        #expect(tiling.viewportMinY(for: .init(rowID: "a", intraRowOffset: 200)) == 110)
+    }
+
     @Test("row equality tokens compare equal values of the same type")
     func equalityTokens() {
         let number = AppKitDiffRowEqualityToken(1)
@@ -118,15 +144,10 @@ struct AppKitDiffTilingControllerTests {
         #expect(!number.isEqual(to: AppKitDiffRowEqualityToken("1")))
     }
 
-    // Duplicate IDs deliberately trigger a debug assertion. The controller
-    // still assigns the last entry deterministically in non-asserting builds.
-    @Test("duplicate IDs use the last layout outside debug assertions", .disabled("Debug assertions intentionally trap on duplicate IDs"))
-    func duplicateIDsUseLastLayout() {
-        let tiling = controller()
-        tiling.replaceAll(rows: [
-            .init(id: "a", ownerID: nil, height: 10),
-            .init(id: "a", ownerID: nil, height: 20),
-        ])
-        #expect(tiling.index(ofID: "a") == 1)
+    @Test("duplicate IDs map to the last row index")
+    func duplicateIDsUseLastIndex() {
+        let indexByID = AppKitDiffTilingController.lastIndexByID(for: ["a", "b", "a"])
+
+        #expect(indexByID == ["a": 2, "b": 1])
     }
 }
