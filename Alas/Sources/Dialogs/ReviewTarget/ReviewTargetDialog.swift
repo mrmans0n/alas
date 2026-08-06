@@ -52,6 +52,12 @@ struct ReviewTargetDialog: View {
                     await model.loadTargets(environment: environment)
                 }
             }
+            .task(id: validationTaskKey) {
+                guard case .targets = model.level else { return }
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                guard !Task.isCancelled else { return }
+                await model.validateRevisionQuery(environment: environment)
+            }
         }
     }
 
@@ -64,6 +70,15 @@ struct ReviewTargetDialog: View {
         switch model.level {
         case .worktrees: return "worktrees"
         case .targets(let worktree): return "targets:\(worktree.id)"
+        }
+    }
+
+    private var validationTaskKey: String {
+        switch model.level {
+        case .worktrees:
+            return "revision-validation:worktrees"
+        case .targets(let worktree):
+            return "revision-validation:\(worktree.id):\(model.query)"
         }
     }
 
@@ -260,6 +275,24 @@ struct ReviewTargetDialog: View {
                 .padding(.bottom, 3)
         case .message(let text):
             messageRow(text)
+        case .followedRevision(let expression, let resolvedSHA, let branch, _):
+            followedRevisionRow(
+                expression: expression,
+                resolvedSHA: resolvedSHA,
+                branch: branch,
+                isSelected: isSelected
+            )
+            .onTapGesture {
+                model.setSelectedIndex(index, selectable: selectable)
+                Task { await model.activateSelection(environment: environment) }
+            }
+            .onHover { hovering in
+                guard hovering else { return }
+                let current = NSEvent.mouseLocation
+                if lastHoverLocation == current { return }
+                lastHoverLocation = current
+                model.setSelectedIndex(index, selectable: selectable)
+            }
         case .commit(let commit):
             commitRow(commit, isSelected: isSelected, selectedCommit: selectedCommit)
                 .onTapGesture {
@@ -336,6 +369,33 @@ struct ReviewTargetDialog: View {
             Text(name)
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg"))
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(isSelected ? theme.color("accent-soft") : Color.clear)
+        .contentShape(Rectangle())
+    }
+
+    private func followedRevisionRow(
+        expression: String,
+        resolvedSHA: String,
+        branch: String,
+        isSelected: Bool
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pin")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-muted"))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(expression)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                Text("\(String(resolvedSHA.prefix(10))) · \(branch)")
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
             Spacer()
         }
         .padding(.horizontal, 14)

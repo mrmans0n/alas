@@ -19,6 +19,15 @@ struct ReviewDraftCommentStore {
         return snapshot.commentsBySessionID.values.flatMap { $0 }.sorted(by: sortComments)
     }
 
+    func snapshot() throws -> ReviewDraftCommentStoreSnapshot {
+        let snapshot = try readSnapshot()
+        return ReviewDraftCommentStoreSnapshot(commentsBySessionID: snapshot.commentsBySessionID)
+    }
+
+    func restore(_ saved: ReviewDraftCommentStoreSnapshot) throws {
+        try store.write(Snapshot(commentsBySessionID: saved.commentsBySessionID), to: url)
+    }
+
     func find(commentID: String) throws -> ReviewDraftComment? {
         let snapshot = try readSnapshot()
         for comments in snapshot.commentsBySessionID.values {
@@ -63,6 +72,28 @@ struct ReviewDraftCommentStore {
         try store.write(snapshot, to: url)
     }
 
+    func migrate(from sourceID: ReviewDraftSessionID, to targetID: ReviewDraftSessionID) throws {
+        guard sourceID != targetID else { return }
+        var snapshot = try readSnapshot()
+        let moved = snapshot.commentsBySessionID.removeValue(forKey: sourceID.rawValue) ?? []
+        guard !moved.isEmpty else {
+            try store.write(snapshot, to: url)
+            return
+        }
+
+        var mergedByID: [String: ReviewDraftComment] = [:]
+        for comment in snapshot.commentsBySessionID[targetID.rawValue] ?? [] {
+            mergedByID[comment.id] = comment
+        }
+        for comment in moved {
+            var rekeyed = comment
+            rekeyed.sessionID = targetID
+            mergedByID[rekeyed.id] = rekeyed
+        }
+        snapshot.commentsBySessionID[targetID.rawValue] = Array(mergedByID.values)
+        try store.write(snapshot, to: url)
+    }
+
     private func readSnapshot() throws -> Snapshot {
         try store.readIfExists(Snapshot.self, from: url) ?? Snapshot(commentsBySessionID: [:])
     }
@@ -86,4 +117,8 @@ struct ReviewDraftCommentStore {
     private struct Snapshot: Codable, Equatable {
         var commentsBySessionID: [String: [ReviewDraftComment]]
     }
+}
+
+struct ReviewDraftCommentStoreSnapshot: Equatable {
+    fileprivate var commentsBySessionID: [String: [ReviewDraftComment]]
 }

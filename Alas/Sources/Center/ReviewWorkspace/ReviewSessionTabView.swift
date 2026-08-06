@@ -73,6 +73,7 @@ struct ReviewSessionTabView: View {
     @Environment(\.theme) private var theme
     @State private var record: ReviewSessionRecord?
     @State private var loaded: ReviewSessionLoadedContext?
+    @State private var loadedTrackedResolvedSHA: String?
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var selectedFileID: DiffReviewFileID?
@@ -139,6 +140,7 @@ struct ReviewSessionTabView: View {
         self.now = now
         self._record = State(initialValue: record)
         self._loaded = State(initialValue: loaded)
+        self._loadedTrackedResolvedSHA = State(initialValue: Self.trackedResolvedSHA(in: record))
         self._selectedFileID = State(initialValue: record?.selectedFileID ?? tabState.selectedFileID)
         self._focusedDraftCommentID = State(initialValue: record?.focusedCommentID ?? tabState.focusedCommentID)
         if let record {
@@ -203,36 +205,51 @@ struct ReviewSessionTabView: View {
                 record = refreshed
             }
         }
+        .onChange(of: tabState.sessionID) { _, _ in
+            rekeyDraftControllerForCurrentSession()
+        }
     }
 
     private var loadTaskID: String {
-        "\(tabState.sessionID.rawValue):\(loadGeneration)"
+        let revisionGeneration: Int
+        if let appState, case .trackedCommit = record?.target.payload {
+            revisionGeneration = appState.revisionChangeGeneration(worktreeID: tabState.worktreeId)
+        } else {
+            revisionGeneration = 0
+        }
+        let retargetGeneration = appState?.reviewSessionRetargetGeneration(sessionID: tabState.sessionID) ?? 0
+        return "\(tabState.sessionID.rawValue):\(loadGeneration):\(revisionGeneration):\(retargetGeneration)"
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "text.badge.checkmark")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(theme.color("accent"))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record?.target.title ?? tabState.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .accessibilityLabel(record?.target.title ?? tabState.title)
-                if let sourceDescription = record?.target.sourceDescription {
-                    Text(sourceDescription)
-                        .font(.system(size: 11))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "text.badge.checkmark")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(theme.color("accent"))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record?.target.title ?? tabState.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                        .accessibilityLabel(record?.target.title ?? tabState.title)
+                    if let sourceDescription = record?.target.sourceDescription {
+                        Text(sourceDescription)
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-muted"))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 12)
+                if let providerDescription = record?.target.providerDescription {
+                    Text(providerDescription)
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 12)
-            if let providerDescription = record?.target.providerDescription {
-                Text(providerDescription)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .lineLimit(1)
+            if showsTrackedRevisionRow {
+                trackedRevisionRow
             }
         }
         .padding(.horizontal, 14)
@@ -246,18 +263,115 @@ struct ReviewSessionTabView: View {
         )
     }
 
+    private var trackedRevision: TrackedRevision? {
+        guard case .trackedCommit(let revision) = record?.target.payload else { return nil }
+        return revision
+    }
+
+    private var showsTrackedRevisionRow: Bool {
+        trackedRevision != nil || record?.target.kind == .commit
+    }
+
+    private var trackedRevisionRow: some View {
+        HStack(spacing: 8) {
+            if let revision = trackedRevision {
+                Text("\(revision.expression) -> \(String(revision.resolvedSHA.prefix(10)))")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("review-session-revision-following-label")
+
+                if let pending = revision.pendingCheckout {
+                    Text("Paused on checkout to \(pending.branch)")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("warn"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("review-session-revision-pending-checkout")
+                    Button("Update") {
+                        acceptPendingCheckout()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("review-session-revision-accept-checkout")
+                }
+            } else {
+                Text("Fixed commit review")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-muted"))
+            }
+
+            Spacer(minLength: 8)
+
+            if trackedRevision == nil {
+                Button("Follow Revision…") {
+                    promptFollowRevision(prefill: nil)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityIdentifier("review-session-revision-follow")
+            } else {
+                Button("Edit…") {
+                    promptFollowRevision(prefill: trackedRevision?.expression)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityIdentifier("review-session-revision-edit")
+
+                Button("Stop") {
+                    stopFollowingRevision()
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityIdentifier("review-session-revision-stop")
+            }
+        }
+    }
+
+    @MainActor
+    private func promptFollowRevision(prefill: String?) {
+        guard let worktree, let appState else { return }
+        appState.promptFollowRevision(
+            worktreeID: worktree.id,
+            tabID: tabState.id,
+            prefill: prefill
+        )
+    }
+
+    @MainActor
+    private func stopFollowingRevision() {
+        guard let worktree, let appState else { return }
+        appState.stopFollowingRevision(worktreeID: worktree.id, tabID: tabState.id)
+    }
+
+    @MainActor
+    private func acceptPendingCheckout() {
+        guard let worktree, let appState else { return }
+        appState.acceptTrackedRevisionCheckout(worktreeID: worktree.id, tabID: tabState.id)
+    }
+
     @ViewBuilder
     private var content: some View {
         if isLoading {
             stateView(title: "Loading review session...", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
-        } else if let loadError {
-            stateView(title: "Could not load review session", detail: loadError, color: theme.color("del"), showsRetry: loadsOnAppear)
         } else if let loaded, loaded.session.files.isEmpty {
-            stateView(title: "No files to review", detail: "This review session has no file diffs.", color: theme.color("fg-dim"), showsRetry: false)
+            emptyReviewState()
         } else if let loaded {
             reviewSurface(loaded)
+        } else if let loadError {
+            stateView(title: "Could not load review session", detail: loadError, color: theme.color("del"), showsRetry: loadsOnAppear)
         } else {
             stateView(title: "No review session loaded", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
+        }
+    }
+
+    private func emptyReviewState() -> some View {
+        VStack(spacing: 0) {
+            if let loadError, !loadError.isEmpty {
+                trackedRefreshErrorBanner(loadError)
+            }
+            stateView(title: "No files to review", detail: "This review session has no file diffs.", color: theme.color("fg-dim"), showsRetry: false)
         }
     }
 
@@ -288,6 +402,9 @@ struct ReviewSessionTabView: View {
         VStack(spacing: 0) {
             if let providerPublishError, !providerPublishError.isEmpty {
                 providerErrorBanner(providerPublishError)
+            }
+            if let loadError, !loadError.isEmpty {
+                trackedRefreshErrorBanner(loadError)
             }
             DiffReviewSurface(
                 session: loaded.session,
@@ -321,6 +438,39 @@ struct ReviewSessionTabView: View {
             )
             .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
         }
+    }
+
+    private func trackedRefreshErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("del"))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("Retry") {
+                loadGeneration += 1
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .accessibilityIdentifier("review-session-revision-error-retry")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.color("del").opacity(0.08))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(theme.color("line"))
+                .frame(height: 1)
+        }
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "review-session-revision-error",
+                label: message
+            )
+        )
     }
 
     private func providerErrorBanner(_ message: String) -> some View {
@@ -441,9 +591,8 @@ struct ReviewSessionTabView: View {
 
     private func beginLoadReviewSession() -> ReviewSessionTabLoadToken {
         let token = loadCoordinator.begin()
-        isLoading = true
+        isLoading = loaded == nil
         loadError = nil
-        loaded = nil
         return token
     }
 
@@ -453,16 +602,54 @@ struct ReviewSessionTabView: View {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
             }
 
-            let loadedContext = try await loader.load(target: storedRecord.target)
+            let resolvedRecord: (record: ReviewSessionRecord, paused: Bool)
+            let refreshError: String?
+            do {
+                resolvedRecord = try await resolveTrackedRecordForLoad(storedRecord)
+                refreshError = nil
+            } catch {
+                guard case .trackedCommit = storedRecord.target.payload else { throw error }
+                resolvedRecord = (storedRecord, false)
+                refreshError = error.localizedDescription
+            }
             guard loadCoordinator.canPublish(token) else { return }
+            var refreshedRecord = mergeLatestMutableFields(into: resolvedRecord.record, fallback: storedRecord)
+            if let loaded,
+               Self.canReuseLoadedTrackedDiff(
+                   loadedTrackedResolvedSHA: loadedTrackedResolvedSHA,
+                   refreshedRecord: refreshedRecord
+               ) {
+                if refreshedRecord.target != storedRecord.target {
+                    try sessionStore.save(refreshedRecord)
+                }
+                record = refreshedRecord
+                self.loaded = loaded.replacingFeedbackTarget(for: refreshedRecord.target)
+                loadedTrackedResolvedSHA = Self.trackedResolvedSHA(in: refreshedRecord)
+                loadError = refreshError
+                loadDraftCommentController(for: refreshedRecord)
+                isLoading = false
+                loadCoordinator.finish(token)
+                return
+            }
+            if resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
+                try sessionStore.save(refreshedRecord)
+            }
+
+            let loadedContext = try await loader.load(target: refreshedRecord.target)
+            guard loadCoordinator.canPublish(token) else { return }
+            refreshedRecord = mergeLatestMutableFields(into: refreshedRecord, fallback: storedRecord)
+            if !resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
+                try sessionStore.save(refreshedRecord)
+            }
 
             publishInitialLoad(
                 ReviewSessionTabLoadPublication.initial(
-                    record: storedRecord,
+                    record: refreshedRecord,
                     loaded: loadedContext
                 )
             )
-            loadDraftCommentController(for: storedRecord)
+            loadError = refreshError
+            loadDraftCommentController(for: refreshedRecord)
             isLoading = false
             loadCoordinator.finish(token)
         } catch is CancellationError {
@@ -477,9 +664,85 @@ struct ReviewSessionTabView: View {
         }
     }
 
+    private func mergeLatestMutableFields(
+        into refreshedRecord: ReviewSessionRecord,
+        fallback: ReviewSessionRecord
+    ) -> ReviewSessionRecord {
+        let latestRecord = (try? sessionStore.load(id: refreshedRecord.id)) ?? fallback
+        var merged = refreshedRecord
+        merged.selectedFileID = latestRecord.selectedFileID
+        merged.focusedCommentID = latestRecord.focusedCommentID
+        merged.handoffs = latestRecord.handoffs
+        merged.lastSendError = latestRecord.lastSendError
+        if Self.trackedResolvedSHA(in: latestRecord) == Self.trackedResolvedSHA(in: refreshedRecord) {
+            merged.status = latestRecord.status
+            merged.verdict = latestRecord.verdict
+            merged.updatedAt = latestRecord.updatedAt
+        }
+        return merged
+    }
+
+    static func canReuseLoadedTrackedDiff(
+        loadedTrackedResolvedSHA: String?,
+        refreshedRecord: ReviewSessionRecord
+    ) -> Bool {
+        guard case .trackedCommit = refreshedRecord.target.payload else { return false }
+        return loadedTrackedResolvedSHA == trackedResolvedSHA(in: refreshedRecord)
+    }
+
+    private static func trackedResolvedSHA(in record: ReviewSessionRecord?) -> String? {
+        guard case .trackedCommit(let revision) = record?.target.payload else { return nil }
+        return revision.resolvedSHA
+    }
+
+    private func resolveTrackedRecordForLoad(
+        _ storedRecord: ReviewSessionRecord
+    ) async throws -> (record: ReviewSessionRecord, paused: Bool) {
+        guard let worktree, case .trackedCommit(let revision) = storedRecord.target.payload else {
+            return (storedRecord, false)
+        }
+        let candidate = try await TrackedRevisionResolver.live.resolve(
+            at: worktree.path,
+            expression: revision.expression
+        )
+        switch TrackedRevisionPolicy.evaluate(current: revision, candidate: candidate) {
+        case .unchanged(let updated):
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
+            return (
+                storedRecord.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: false,
+                    now: now()
+                ),
+                false
+            )
+        case .follow(let updated):
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: "Review \(updated.expression)")
+            return (
+                storedRecord.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: true,
+                    now: now()
+                ),
+                false
+            )
+        case .pause(let updated):
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
+            return (
+                storedRecord.retargetingCommit(
+                    to: target,
+                    resolvedSHAChanged: false,
+                    now: now()
+                ),
+                true
+            )
+        }
+    }
+
     private func publishInitialLoad(_ publication: ReviewSessionTabLoadPublication) {
         record = publication.record
         loaded = publication.loaded
+        loadedTrackedResolvedSHA = Self.trackedResolvedSHA(in: publication.record)
         selectedFileID = publication.selectedFileID
         focusedDraftCommentID = publication.focusedDraftCommentID
     }
@@ -501,13 +764,26 @@ struct ReviewSessionTabView: View {
         }
     }
 
+    private func rekeyDraftControllerForCurrentSession() {
+        guard persistsState,
+              let refreshed = try? sessionStore.load(id: tabState.sessionID)
+        else { return }
+        record = refreshed
+        loadDraftCommentController(for: refreshed)
+    }
+
     private func draftCommentActions(for loaded: ReviewSessionLoadedContext) -> ReviewDraftCommentActions {
+        let handoffOriginRecordID = record?.id
         var actions = ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
             sender: feedbackSender,
             sessionID: tabState.sessionID,
-            recordHandoff: recordSessionHandoff,
-            recordSendFailure: recordSessionSendFailure,
+            recordHandoff: { handoff in
+                recordSessionHandoff(handoff, originRecordID: handoffOriginRecordID)
+            },
+            recordSendFailure: { error in
+                recordSessionSendFailure(error, originRecordID: handoffOriginRecordID)
+            },
             worktreeID: persistsState ? tabState.worktreeId : nil,
             now: now,
             sessionStore: { sessionStore }
@@ -899,27 +1175,27 @@ struct ReviewSessionTabView: View {
         )
     }
 
-    private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff) {
+    private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff, originRecordID: ReviewSessionID?) {
         record = ReviewSessionHandoffPersistence.record(
             handoff,
             currentRecord: record,
+            originRecordID: originRecordID,
             sessionStore: sessionStore,
             persistsState: persistsState,
             now: now
         )
     }
 
-    private func recordSessionSendFailure(_ error: Error) {
-        guard var current = record else { return }
-        current.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
-        current.updatedAt = now()
-        record = current
-        guard persistsState else { return }
-        do {
-            try sessionStore.save(current)
-        } catch {
-            // Visible send failure state is already set; failure to persist that state is non-blocking.
-        }
+    private func recordSessionSendFailure(_ error: Error, originRecordID: ReviewSessionID?) {
+        guard let visibleRecord = record else { return }
+        record = ReviewSessionHandoffPersistence.recordSendFailure(
+            error,
+            currentRecord: visibleRecord,
+            originRecordID: originRecordID,
+            sessionStore: sessionStore,
+            persistsState: persistsState,
+            now: now
+        )
     }
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {
@@ -1026,6 +1302,7 @@ enum ReviewSessionHandoffPersistence {
     static func record(
         _ handoff: ReviewFeedbackHandoff,
         currentRecord: ReviewSessionRecord?,
+        originRecordID: ReviewSessionID? = nil,
         sessionStore: ReviewSessionStore,
         persistsState: Bool,
         now: () -> Date
@@ -1035,7 +1312,12 @@ enum ReviewSessionHandoffPersistence {
         }
 
         do {
-            let current = try sessionStore.load(id: handoff.sessionID) ?? currentRecord
+            let current = try operationRecord(
+                sessionID: handoff.sessionID,
+                currentRecord: currentRecord,
+                originRecordID: originRecordID,
+                sessionStore: sessionStore
+            )
             guard let current else { return nil }
             let updated = current.recording(handoff: handoff)
             try sessionStore.save(updated)
@@ -1046,6 +1328,53 @@ enum ReviewSessionHandoffPersistence {
             visibleRecord.updatedAt = now()
             return visibleRecord
         }
+    }
+
+    @MainActor
+    static func recordSendFailure(
+        _ error: Error,
+        currentRecord: ReviewSessionRecord,
+        originRecordID: ReviewSessionID? = nil,
+        sessionStore: ReviewSessionStore,
+        persistsState: Bool,
+        now: () -> Date
+    ) -> ReviewSessionRecord {
+        let sessionID = originRecordID ?? currentRecord.id
+        let current = (try? operationRecord(
+            sessionID: sessionID,
+            currentRecord: currentRecord,
+            originRecordID: originRecordID,
+            sessionStore: sessionStore
+        )) ?? currentRecord
+        var updated = current
+        updated.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
+        updated.updatedAt = now()
+        guard persistsState else { return updated }
+        do {
+            try sessionStore.save(updated)
+        } catch {
+            // Visible send failure state is already set; failure to persist that state is non-blocking.
+        }
+        return updated
+    }
+
+    private static func operationRecord(
+        sessionID: ReviewSessionID,
+        currentRecord: ReviewSessionRecord?,
+        originRecordID: ReviewSessionID?,
+        sessionStore: ReviewSessionStore
+    ) throws -> ReviewSessionRecord? {
+        let direct = try sessionStore.load(id: sessionID)
+        let replacement = try sessionStore.loadReplacement(for: sessionID)
+        if let currentRecord {
+            if currentRecord.id == originRecordID || currentRecord.id == sessionID {
+                return direct ?? currentRecord
+            }
+            if currentRecord.id == replacement?.id {
+                return replacement
+            }
+        }
+        return replacement ?? direct ?? currentRecord
     }
 }
 

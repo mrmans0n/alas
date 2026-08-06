@@ -4,6 +4,18 @@ import Foundation
 
 @MainActor
 struct ProjectsManagerHeadUpdatesTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_ value: T, to url: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
+    }
+
     private func makeManager() -> (ProjectsManager, ProjectConfig) {
         let project = ProjectConfig(
             id: "p1",
@@ -130,5 +142,29 @@ struct ProjectsManagerHeadUpdatesTests {
             branchByWorktreePath: [URL(fileURLWithPath: "/x"): "y"]
         )
         // No crash, no state change. Nothing to assert beyond that.
+    }
+
+    @Test func appStateHeadUpdatesInvalidateFollowersAcrossProject() {
+        let project = ProjectConfig(
+            id: "p1",
+            name: "p1",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let main = wt(path: "/repo", branch: "main")
+        let linked = wt(path: "/wts/feature", branch: "feature")
+        seed(state.projectsManager, projectId: project.id, [main, linked])
+
+        state.handleProjectHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [main.path: "main-updated"]
+        )
+
+        #expect(state.revisionChangeGeneration(worktreeID: main.id) == 1)
+        #expect(state.revisionChangeGeneration(worktreeID: linked.id) == 1)
+        #expect(state.projectsManager.worktrees(projectId: project.id).first { $0.id == main.id }?.branch == "main-updated")
+        #expect(state.projectsManager.worktrees(projectId: project.id).first { $0.id == linked.id }?.branch == "feature")
     }
 }

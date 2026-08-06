@@ -195,10 +195,11 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     if let Ok(relative) = path.strip_prefix(&info.worktree_dir) {
         let relative = relative.to_string_lossy();
         let relative = relative.trim_matches('/');
-        if matches!(
-            relative,
-            "HEAD" | "index" | "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "REBASE_HEAD"
-        ) || relative == "rebase-merge"
+        if matches!(relative, "HEAD" | "index")
+            || is_revision_pseudo_ref(relative)
+            || is_top_level_symbolic_revision(path, relative)
+            || relative.starts_with("refs/")
+            || relative == "rebase-merge"
             || relative.starts_with("rebase-merge/")
             || relative == "rebase-apply"
             || relative.starts_with("rebase-apply/")
@@ -211,12 +212,17 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     };
     let relative = relative.to_string_lossy();
     let relative = relative.trim_matches('/');
-    if relative == "FETCH_HEAD"
+    if relative == "config"
+        || relative == "config.worktree"
         || relative == "packed-refs"
         || relative == "refs/stash"
-        || relative == "logs/refs/stash"
-        || relative.starts_with("refs/heads/")
-        || relative.starts_with("refs/remotes/")
+        || relative == "shallow"
+        || relative == "info/grafts"
+        || relative == "objects/info/alternates"
+        || relative == "logs/HEAD"
+        || relative.starts_with("logs/refs/")
+        || relative.starts_with("refs/")
+        || is_revision_pseudo_ref(relative)
     {
         return true;
     }
@@ -225,9 +231,72 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     }
     if let Some(rest) = relative.strip_prefix("worktrees/") {
         let parts: Vec<_> = rest.split('/').filter(|part| !part.is_empty()).collect();
-        return parts.len() == 1 || (parts.len() == 2 && parts[1] == "HEAD");
+        return parts.len() == 1
+            || (parts.len() == 2 && parts[1] == "config.worktree")
+            || (parts.len() == 2 && (parts[1] == "HEAD" || is_revision_pseudo_ref(parts[1])))
+            || (parts.len() >= 3 && parts[1] == "logs")
+            || (parts.len() >= 3 && parts[1] == "refs")
+            || (parts.len() >= 2 && (parts[1] == "rebase-merge" || parts[1] == "rebase-apply"));
     }
     false
+}
+
+fn is_revision_pseudo_ref(relative: &str) -> bool {
+    matches!(
+        relative,
+        "AUTO_MERGE"
+            | "CHERRY_PICK_HEAD"
+            | "FETCH_HEAD"
+            | "MERGE_HEAD"
+            | "ORIG_HEAD"
+            | "REBASE_HEAD"
+            | "REVERT_HEAD"
+    )
+}
+
+fn is_top_level_symbolic_revision(path: &Path, relative: &str) -> bool {
+    if relative.is_empty() || relative.contains('/') {
+        return false;
+    }
+    if is_non_revision_top_level_name(relative) {
+        return false;
+    }
+    std::fs::read_to_string(path)
+        .map(|contents| is_top_level_revision_content(&contents))
+        .unwrap_or(true)
+}
+
+fn is_top_level_revision_content(contents: &str) -> bool {
+    let line = contents.lines().next().unwrap_or("").trim();
+    line.starts_with("ref: refs/")
+        || ((line.len() == 40 || line.len() == 64)
+            && line.chars().all(|char| char.is_ascii_hexdigit()))
+}
+
+fn is_non_revision_top_level_name(relative: &str) -> bool {
+    matches!(
+        relative,
+        "branches"
+            | "COMMIT_EDITMSG"
+            | "commondir"
+            | "config"
+            | "config.worktree"
+            | "description"
+            | "gc.log"
+            | "gitdir"
+            | "hooks"
+            | "index"
+            | "info"
+            | "logs"
+            | "MERGE_MSG"
+            | "modules"
+            | "objects"
+            | "packed-refs"
+            | "refs"
+            | "SQUASH_MSG"
+            | "TAG_EDITMSG"
+            | "worktrees"
+    )
 }
 
 #[cfg(test)]
@@ -295,13 +364,36 @@ mod tests {
             &info
         ));
         assert!(is_relevant_git_path(&root.join(".git/FETCH_HEAD"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/ORIG_HEAD"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/AUTO_MERGE"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/config"), &info));
+        assert!(is_relevant_git_path(
+            &root.join(".git/config.worktree"),
+            &info
+        ));
         assert!(is_relevant_git_path(
             &root.join(".git/refs/remotes/origin/main"),
             &info
         ));
+        assert!(is_relevant_git_path(&root.join(".git/refs/tags/v1"), &info));
         assert!(is_relevant_git_path(&root.join(".git/refs/stash"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/shallow"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/info/grafts"), &info));
+        assert!(is_relevant_git_path(
+            &root.join(".git/objects/info/alternates"),
+            &info
+        ));
+        assert!(is_relevant_git_path(&root.join(".git/logs/HEAD"), &info));
         assert!(is_relevant_git_path(
             &root.join(".git/logs/refs/stash"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/logs/refs/heads/main"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/logs/refs/tags/v1"),
             &info
         ));
         assert!(is_relevant_git_path(&root.join(".git/packed-refs"), &info));
@@ -309,6 +401,35 @@ mod tests {
         assert!(is_relevant_git_path(&root.join(".git/MERGE_HEAD"), &info));
         assert!(!is_relevant_git_path(&root.join(".git/index.lock"), &info));
         assert!(!is_relevant_git_path(&root.join("src/main.rs"), &info));
+    }
+
+    #[test]
+    fn top_level_symbolic_refs_are_git_events() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-symbolic-ref-{}-{nonce}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).expect("git dir");
+        let symbolic = git_dir.join("FOO");
+        std::fs::write(&symbolic, "ref: refs/heads/main\n").expect("symbolic ref");
+        let direct = git_dir.join("DIRECT");
+        std::fs::write(&direct, "0123456789abcdef0123456789abcdef01234567\n").expect("direct ref");
+        let non_ref = git_dir.join("BAR");
+        std::fs::write(&non_ref, "not a ref\n").expect("non ref");
+        let deleted_symbolic = git_dir.join("DELETED_FOO");
+        let info = git_info(&root);
+
+        assert!(is_relevant_git_path(&symbolic, &info));
+        assert!(is_relevant_git_path(&direct, &info));
+        assert!(!is_relevant_git_path(&non_ref, &info));
+        assert!(is_relevant_git_path(&deleted_symbolic, &info));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -325,6 +446,38 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/worktrees/feature/CHERRY_PICK_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/ORIG_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/FETCH_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/config.worktree"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/logs/HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/logs/refs/heads/topic"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/refs/worktree/follow"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/refs/bisect/good-abc"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/refs/rewritten/main"),
             &info
         ));
         assert!(is_relevant_git_path(

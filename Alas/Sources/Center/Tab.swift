@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 typealias TabID = String
@@ -128,6 +129,24 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggInbox:      return "branch"
         case .ggSplitCommit: return "arrow.trianglehead.branch"
         case .mission:      return "scope"
+        }
+    }
+
+    var supportsRevisionFollowActions: Bool {
+        switch self {
+        case .commit, .reviewSession:
+            true
+        default:
+            false
+        }
+    }
+
+    var isFollowingRevision: Bool {
+        switch self {
+        case .commit(let state):
+            state.revision.tracked != nil
+        default:
+            false
         }
     }
 
@@ -262,20 +281,51 @@ struct FileHistoryTabState: Codable, Equatable, Identifiable {
 }
 
 struct ReviewSessionTabState: Codable, Equatable, Identifiable {
-    let id: TabID
+    var id: TabID
     let worktreeId: String
-    let sessionID: ReviewSessionID
+    var viewID: TabID
+    var sessionID: ReviewSessionID
     var title: String
     var selectedFileID: DiffReviewFileID?
     var focusedCommentID: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case viewID
+        case sessionID
+        case title
+        case selectedFileID
+        case focusedCommentID
+    }
+
     init(worktreeId: String, record: ReviewSessionRecord) {
         self.id = "review-session:\(record.id.rawValue)"
         self.worktreeId = worktreeId
+        self.viewID = id
         self.sessionID = record.id
         self.title = record.target.title
         self.selectedFileID = record.selectedFileID
         self.focusedCommentID = record.focusedCommentID
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        viewID = try container.decodeIfPresent(TabID.self, forKey: .viewID) ?? id
+        sessionID = try container.decode(ReviewSessionID.self, forKey: .sessionID)
+        title = try container.decode(String.self, forKey: .title)
+        selectedFileID = try container.decodeIfPresent(DiffReviewFileID.self, forKey: .selectedFileID)
+        focusedCommentID = try container.decodeIfPresent(String.self, forKey: .focusedCommentID)
+    }
+
+    mutating func retarget(to record: ReviewSessionRecord) {
+        id = "review-session:\(record.id.rawValue)"
+        sessionID = record.id
+        title = record.target.title
+        selectedFileID = record.selectedFileID
+        focusedCommentID = record.focusedCommentID
     }
 }
 
@@ -337,17 +387,111 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
     }
 }
 
+enum CommitRevision: Codable, Equatable, Hashable, Sendable {
+    case fixed(sha: String)
+    case following(TrackedRevision)
+
+    var resolvedSHA: String {
+        switch self {
+        case .fixed(let sha):
+            sha
+        case .following(let revision):
+            revision.resolvedSHA
+        }
+    }
+
+    var tracked: TrackedRevision? {
+        if case .following(let revision) = self {
+            return revision
+        }
+        return nil
+    }
+}
+
 struct CommitTabState: Codable, Equatable, Identifiable {
-    let id: TabID
+    var id: TabID
     let worktreeId: String
-    let sha: String
-    let title: String
+    var viewID: TabID
+    var revision: CommitRevision
+    var title: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case viewID
+        case revision
+        case sha
+        case title
+    }
+
+    var sha: String { revision.resolvedSHA }
+
+    var fixedSHA: String? {
+        guard case .fixed(let sha) = revision else { return nil }
+        return sha
+    }
 
     init(worktreeId: String, sha: String, title: String) {
-        self.id = "commit:\(worktreeId):\(sha)"
+        self.id = Self.fixedID(worktreeId: worktreeId, sha: sha)
         self.worktreeId = worktreeId
-        self.sha = sha
+        self.viewID = id
+        self.revision = .fixed(sha: sha)
         self.title = title
+    }
+
+    init(worktreeId: String, trackedRevision: TrackedRevision, title: String) {
+        self.id = Self.trackedID(worktreeId: worktreeId, expression: trackedRevision.expression)
+        self.worktreeId = worktreeId
+        self.viewID = id
+        self.revision = .following(trackedRevision)
+        self.title = title
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        viewID = try container.decodeIfPresent(TabID.self, forKey: .viewID) ?? id
+        title = try container.decode(String.self, forKey: .title)
+        if let decodedRevision = try container.decodeIfPresent(CommitRevision.self, forKey: .revision) {
+            revision = decodedRevision
+        } else {
+            revision = .fixed(sha: try container.decode(String.self, forKey: .sha))
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(worktreeId, forKey: .worktreeId)
+        try container.encode(viewID, forKey: .viewID)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(sha, forKey: .sha)
+        try container.encode(title, forKey: .title)
+    }
+
+    mutating func follow(_ revision: TrackedRevision) {
+        id = Self.trackedID(worktreeId: worktreeId, expression: revision.expression)
+        self.revision = .following(revision)
+    }
+
+    mutating func fix(sha: String) {
+        id = Self.fixedID(worktreeId: worktreeId, sha: sha)
+        revision = .fixed(sha: sha)
+    }
+
+    private static func fixedID(worktreeId: String, sha: String) -> String {
+        "commit:\(worktreeId):\(sha)"
+    }
+
+    private static func trackedID(worktreeId: String, expression: String) -> String {
+        "commit:\(worktreeId):tracked:\(trackedIDDigest(for: expression))"
+    }
+
+    private static func trackedIDDigest(for expression: String) -> String {
+        SHA256.hash(data: Data(expression.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 

@@ -24,13 +24,14 @@ final class ReviewTargetPaletteModel {
 
     enum TargetRow: Equatable {
         case header(String)
+        case followedRevision(expression: String, resolvedSHA: String, branch: String, headSHA: String)
         case commit(CommitInfo)
         case branch(String)
         case message(String)
 
         var isSelectable: Bool {
             switch self {
-            case .commit, .branch: return true
+            case .followedRevision, .commit, .branch: return true
             case .header, .message: return false
             }
         }
@@ -42,6 +43,8 @@ final class ReviewTargetPaletteModel {
         var stableId: String {
             switch self {
             case .header(let title):  return "header:\(title)"
+            case .followedRevision(let expression, let resolvedSHA, let branch, let headSHA):
+                return "followed:\(expression):\(resolvedSHA):\(branch):\(headSHA)"
             case .commit(let commit): return "commit:\(commit.sha)"
             case .branch(let name):   return "branch:\(name)"
             case .message(let text):  return "message:\(text)"
@@ -62,6 +65,8 @@ final class ReviewTargetPaletteModel {
             // of the first matching commit/branch. Level 1 has no header
             // rows, so 0 is already a real, selectable entry there.
             if case .targets = level {
+                followedRevisionRow = nil
+                revisionValidationError = nil
                 setSelectedIndex(0, selectable: targetRows().map(\.isSelectable))
             } else {
                 selectedIndex = 0
@@ -85,6 +90,9 @@ final class ReviewTargetPaletteModel {
     private(set) var branches: [String] = []
     private(set) var isLoadingTargets = false
     private(set) var targetsError: String?
+    private(set) var followedRevisionRow: TargetRow?
+    private(set) var revisionValidationError: String?
+    private var revisionValidationToken = UUID()
 
     // MARK: - Lifecycle
 
@@ -114,6 +122,8 @@ final class ReviewTargetPaletteModel {
         branches = []
         targetsError = nil
         isLoadingTargets = false
+        followedRevisionRow = nil
+        revisionValidationError = nil
         aheadCounts = [:]
         comparisonRefs = [:]
     }
@@ -162,8 +172,19 @@ final class ReviewTargetPaletteModel {
     func targetRows() -> [TargetRow] {
         guard case .targets = level else { return [] }
         if isLoadingTargets { return [.message("Loading commits…")] }
-        if let targetsError { return [.message(targetsError)] }
-        var rows: [TargetRow] = [.header("Commits")]
+        var rows: [TargetRow] = []
+        let revisionExpression = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let followedRevisionRow,
+           case .followedRevision(let expression, _, _, _) = followedRevisionRow,
+           expression == revisionExpression {
+            rows.append(.header("Followed Revision"))
+            rows.append(followedRevisionRow)
+        }
+        if let targetsError {
+            rows.append(.message(targetsError))
+            return rows
+        }
+        rows.append(.header("Commits"))
         let filteredCommits = ReviewScopeSelection.filteredCommits(commits, query: query)
         if filteredCommits.isEmpty {
             rows.append(.message(
@@ -181,6 +202,9 @@ final class ReviewTargetPaletteModel {
         if !filteredBranches.isEmpty {
             rows.append(.header("Branches"))
             rows.append(contentsOf: filteredBranches.map(TargetRow.branch))
+        }
+        if let revisionValidationError, rows.filter(\.isSelectable).isEmpty {
+            rows.append(.message(revisionValidationError))
         }
         return rows
     }
@@ -222,7 +246,7 @@ final class ReviewTargetPaletteModel {
                 return true
             case .header, .message:
                 nextIndex += step
-            case .branch:
+            case .followedRevision, .branch:
                 return true
             }
         }
@@ -386,6 +410,12 @@ final class ReviewTargetPaletteModel {
             let rows = targetRows()
             guard rows.indices.contains(selectedIndex) else { return }
             switch rows[selectedIndex] {
+            case .followedRevision(let expression, _, _, _):
+                await launchFollowedRevision(
+                    expression: expression,
+                    worktree: worktree,
+                    environment: env
+                )
             case .commit(let commit):
                 launchCommitSelection(commit, worktree: worktree, environment: env)
             case .branch(let name):
@@ -394,6 +424,52 @@ final class ReviewTargetPaletteModel {
                 break
             }
         }
+    }
+
+    func validateRevisionQuery(environment env: ReviewTargetPaletteEnvironment) async {
+        guard case .targets(let worktree) = level else { return }
+        let expression = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        revisionValidationToken = UUID()
+        let token = revisionValidationToken
+        followedRevisionRow = nil
+        revisionValidationError = nil
+        guard !expression.isEmpty else { return }
+        do {
+            let candidate = try await env.resolveTrackedRevision(worktree, expression)
+            guard revisionValidationToken == token,
+                  query.trimmingCharacters(in: .whitespacesAndNewlines) == expression,
+                  case .targets(let current) = level,
+                  current.id == worktree.id
+            else { return }
+            let previousSelection = targetRows().indices.contains(selectedIndex) ? targetRows()[selectedIndex] : nil
+            followedRevisionRow = .followedRevision(
+                expression: expression,
+                resolvedSHA: candidate.sha,
+                branch: candidate.branch,
+                headSHA: candidate.headSHA
+            )
+            preserveSelectionAfterRevisionValidation(previousSelection: previousSelection)
+        } catch {
+            guard revisionValidationToken == token else { return }
+            revisionValidationError = "Could not resolve \(expression): \(error.localizedDescription)"
+        }
+    }
+
+    private func preserveSelectionAfterRevisionValidation(previousSelection: TargetRow?) {
+        let rows = targetRows()
+        let selectable = rows.map(\.isSelectable)
+        let selectableIndexes = selectable.indices.filter { selectable[$0] }
+        if selectableIndexes.count == 1 {
+            setSelectedIndex(selectableIndexes[0], selectable: selectable)
+            return
+        }
+        if let previousSelection,
+           let preservedIndex = rows.firstIndex(of: previousSelection),
+           selectable[preservedIndex] {
+            selectedIndex = preservedIndex
+            return
+        }
+        setSelectedIndex(selectedIndex, selectable: selectable)
     }
 
     private func launchFullRange(
@@ -456,6 +532,35 @@ final class ReviewTargetPaletteModel {
         } catch {
             launchError = "Could not resolve \(name): \(error.localizedDescription)"
         }
+    }
+
+    private func launchFollowedRevision(
+        expression: String,
+        worktree: Worktree,
+        environment env: ReviewTargetPaletteEnvironment
+    ) async {
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await env.resolveTrackedRevision(worktree, expression)
+        } catch {
+            launchError = "Could not resolve \(expression): \(error.localizedDescription)"
+            return
+        }
+        guard let revision = TrackedRevision(
+            expression: expression,
+            baselineBranch: candidate.branch,
+            baselineHEAD: candidate.headSHA,
+            resolvedSHA: candidate.sha
+        ) else { return }
+        env.openTarget(
+            ReviewSessionTarget.trackedCommit(
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path,
+                revision: revision,
+                title: "Review \(revision.expression)"
+            ),
+            worktree
+        )
     }
 
     // Commits arrive newest-first (git log order); "older" = larger index.

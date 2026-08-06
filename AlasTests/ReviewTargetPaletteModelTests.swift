@@ -36,9 +36,61 @@ struct ReviewTargetPaletteModelTests {
             loadCommitsAhead: { _ in (commits, comparisonRef) },
             loadBranches: { _ in branches },
             resolveRevision: { _, ref in "resolved-\(ref)" },
+            currentBranch: { _ in "feature" },
+            resolveTrackedRevision: { _, expression in
+                TrackedRevisionCandidate(branch: "feature", sha: "resolved-\(expression)")
+            },
             headSHA: { _ in "head-sha" },
             openTarget: onOpen
         )
+    }
+
+    @Test func exactRevisionQueryLaunchesTrackedCommit() async throws {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        var opened: ReviewSessionTarget?
+        let env = environment(worktrees: [w], branches: [], onOpen: { target, _ in opened = target })
+        model.open(prefill: w)
+        await model.loadTargets(environment: env)
+
+        model.query = "HEAD~3"
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows().contains(.followedRevision(
+            expression: "HEAD~3",
+            resolvedSHA: "resolved-HEAD~3",
+            branch: "feature",
+            headSHA: "resolved-HEAD~3"
+        )))
+        await model.activateSelection(environment: env)
+        #expect(opened?.kind == .trackedCommit)
+        #expect(opened?.revisionDescription == "HEAD~3 -> resolved-HEAD~3")
+    }
+
+    @Test func revisionActivationReResolvesCachedFollowedRow() async throws {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        var opened: ReviewSessionTarget?
+        var resolution = TrackedRevisionCandidate(branch: "feature", sha: "old-head", headSHA: "old-head")
+        var env = environment(worktrees: [w], branches: [], onOpen: { target, _ in opened = target })
+        env.resolveTrackedRevision = { _, _ in resolution }
+        model.open(prefill: w)
+        await model.loadTargets(environment: env)
+
+        model.query = "HEAD"
+        await model.validateRevisionQuery(environment: env)
+        resolution = TrackedRevisionCandidate(branch: "other", sha: "new-head", headSHA: "new-head")
+
+        await model.activateSelection(environment: env)
+
+        #expect(opened?.kind == .trackedCommit)
+        #expect(opened?.revisionDescription == "HEAD -> new-head")
+        #expect(opened?.payload == .trackedCommit(try #require(TrackedRevision(
+            expression: "HEAD",
+            baselineBranch: "other",
+            baselineHEAD: "new-head",
+            resolvedSHA: "new-head"
+        ))))
     }
 
     @Test func worktreeEntriesPutCurrentFirstThenAlpha() {
@@ -253,6 +305,75 @@ struct ReviewTargetPaletteModelTests {
         #expect(opened?.payload == .branch(base: "resolved-main", head: "head-sha"))
     }
 
+    @Test func revisionValidationPreservesExistingBranchSelection() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        let env = environment(commits: [], branches: ["main"])
+        await model.loadTargets(environment: env)
+        model.query = "main"
+        #expect(model.targetRows().contains(.branch("main")))
+        #expect(model.selectedIndex == 3)
+
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows()[1] == .followedRevision(
+            expression: "main",
+            resolvedSHA: "resolved-main",
+            branch: "feature",
+            headSHA: "resolved-main"
+        ))
+        #expect(model.selectedIndex == 5)
+        #expect(model.targetRows()[model.selectedIndex] == .branch("main"))
+    }
+
+    @Test func revisionValidationSelectsFollowedRowWhenItIsTheOnlySelectableTarget() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        let env = environment(commits: [], branches: [])
+        await model.loadTargets(environment: env)
+        model.query = "HEAD~3"
+
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows() == [
+            .header("Followed Revision"),
+            .followedRevision(
+                expression: "HEAD~3",
+                resolvedSHA: "resolved-HEAD~3",
+                branch: "feature",
+                headSHA: "resolved-HEAD~3"
+            ),
+            .header("Commits"),
+            .message("No commits ahead of the base branch"),
+        ])
+        #expect(model.selectedIndex == 1)
+    }
+
+    @Test func queryChangeClearsPreviousFollowedRevisionBeforeDebounce() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        let env = environment(commits: [], branches: [])
+        await model.loadTargets(environment: env)
+        model.query = "HEAD~3"
+        await model.validateRevisionQuery(environment: env)
+        #expect(model.targetRows().contains(.followedRevision(
+            expression: "HEAD~3",
+            resolvedSHA: "resolved-HEAD~3",
+            branch: "feature",
+            headSHA: "resolved-HEAD~3"
+        )))
+
+        model.query = "HEAD~4"
+
+        #expect(!model.targetRows().contains(.followedRevision(
+            expression: "HEAD~3",
+            resolvedSHA: "resolved-HEAD~3",
+            branch: "feature",
+            headSHA: "resolved-HEAD~3"
+        )))
+        #expect(model.targetRows().filter(\.isSelectable).isEmpty)
+    }
+
     @Test func backReturnsToWorktreesAndResetsQueryAndAnchor() {
         let model = ReviewTargetPaletteModel()
         model.open()
@@ -281,5 +402,29 @@ struct ReviewTargetPaletteModelTests {
         env.loadCommitsAhead = { _ in throw Boom() }
         await model.loadTargets(environment: env)
         #expect(model.targetRows() == [.message("Could not load commits: boom")])
+    }
+
+    @Test func targetRowsShowsFollowedRevisionWhenTargetLoadingFails() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        struct Boom: Error, LocalizedError { var errorDescription: String? { "boom" } }
+        var env = environment()
+        env.loadCommitsAhead = { _ in throw Boom() }
+        await model.loadTargets(environment: env)
+        model.query = "HEAD~3"
+
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows() == [
+            .header("Followed Revision"),
+            .followedRevision(
+                expression: "HEAD~3",
+                resolvedSHA: "resolved-HEAD~3",
+                branch: "feature",
+                headSHA: "resolved-HEAD~3"
+            ),
+            .message("Could not load commits: boom"),
+        ])
+        #expect(model.selectedIndex == 1)
     }
 }

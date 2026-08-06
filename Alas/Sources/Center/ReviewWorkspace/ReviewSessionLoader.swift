@@ -14,6 +14,22 @@ struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
     let providerContext: ReviewSessionProviderContext?
+
+    func replacingFeedbackTarget(for target: ReviewSessionTarget) -> ReviewSessionLoadedContext {
+        ReviewSessionLoadedContext(
+            session: session,
+            feedbackTarget: ReviewFeedbackTarget(
+                title: target.title,
+                repositoryPath: target.repositoryPath.path,
+                providerDescription: target.providerDescription,
+                sourceDescription: target.sourceDescription,
+                sessionDescription: "Review session: \(target.title)",
+                revisionDescription: target.revisionDescription,
+                priorHandoffDescription: nil
+            ),
+            providerContext: providerContext
+        )
+    }
 }
 
 enum ReviewSessionLauncher {
@@ -101,7 +117,13 @@ struct ReviewSessionLoader {
                 return filterLocalChanges(session, scope: .staged)
             },
             commit: { target in
-                guard case .commit(let sha) = target.payload else {
+                let sha: String
+                switch target.payload {
+                case .commit(let commitSHA):
+                    sha = commitSHA
+                case .trackedCommit(let revision):
+                    sha = revision.resolvedSHA
+                default:
                     throw ReviewSessionLoaderError.unsupportedTarget
                 }
                 let details = try await git.commitDetails(at: target.repositoryPath, sha: sha)
@@ -245,6 +267,9 @@ struct ReviewSessionLoader {
             session = try await draftCommit(target)
             providerContext = nil
         case .commit:
+            session = try await commit(target)
+            providerContext = nil
+        case .trackedCommit:
             session = try await commit(target)
             providerContext = nil
         case .commitRange:

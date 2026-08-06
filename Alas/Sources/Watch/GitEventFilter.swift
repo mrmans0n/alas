@@ -7,6 +7,8 @@ import Foundation
 enum GitEventCategory: Equatable {
     case ignored                  // *.lock under .git/ — mid-write, never react
     case headChange(URL)          // worktree root whose HEAD just changed
+    case revisionChange           // shared refs moved; tracked revisions may resolve differently
+    case revisionAndTopologyChange
     case topologyChange           // .git/worktrees/ contents changed
     case other                    // unrelated event, caller decides
 }
@@ -59,21 +61,112 @@ enum GitEventFilter {
                 let worktreeRoot = URL(fileURLWithPath: gitlink).deletingLastPathComponent()
                 return .headChange(worktreeRoot.standardizedFileURL)
             }
+            if parts.count == 3 && Self.revisionPseudoRefs.contains(parts[2]) {
+                return .revisionChange
+            }
+            if parts.count == 3 && parts[2] == "config.worktree" {
+                return .revisionChange
+            }
+            if parts.count >= 4 && parts[2] == "logs" {
+                return .revisionChange
+            }
+            if parts.count >= 4 && parts[2] == "refs" {
+                return .revisionChange
+            }
             return .other
         }
 
         if rel == "worktrees" { return .topologyChange }
 
-        // Branch ref updates: refs/heads/<...> and the consolidated packed-refs
-        // file both reflect commit/checkout/reset/pull activity. Route through
-        // the topology debouncer so refreshWorktrees re-reads lastActivity from
-        // the updated ref file mtimes and re-applies ordering. (For the linked
-        // worktree HEAD case we already short-circuit via `worktrees/<name>/HEAD`
-        // above; this branch covers the shared branch refs.)
-        if rel == "packed-refs" || rel.hasPrefix("refs/heads/") {
-            return .topologyChange
+        if rel == "packed-refs" {
+            return .revisionAndTopologyChange
+        }
+        if rel == "config" || rel == "config.worktree" {
+            return .revisionChange
+        }
+        if rel == "shallow" {
+            return .revisionChange
+        }
+        if rel == "info/grafts" {
+            return .revisionChange
+        }
+        if rel == "objects/info/alternates" {
+            return .revisionChange
+        }
+        if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {
+            return .revisionChange
+        }
+        if Self.revisionPseudoRefs.contains(rel) {
+            return .revisionChange
+        }
+        if isTopLevelSymbolicRevision(eventPath: eventPath, relativePath: rel) {
+            return .revisionChange
+        }
+        if rel.hasPrefix("refs/heads/") {
+            return .revisionAndTopologyChange
+        }
+        if rel.hasPrefix("refs/") {
+            return .revisionChange
         }
 
         return .other
+    }
+
+    private static let revisionPseudoRefs: Set<String> = [
+        "AUTO_MERGE",
+        "CHERRY_PICK_HEAD",
+        "FETCH_HEAD",
+        "MERGE_HEAD",
+        "ORIG_HEAD",
+        "REBASE_HEAD",
+        "REVERT_HEAD",
+    ]
+
+    private static func isTopLevelSymbolicRevision(eventPath: String, relativePath: String) -> Bool {
+        guard !relativePath.isEmpty,
+              !relativePath.contains("/")
+        else { return false }
+        if nonRevisionTopLevelNames.contains(relativePath) {
+            return false
+        }
+        guard let contents = try? String(contentsOfFile: eventPath, encoding: .utf8) else {
+            return true
+        }
+        return isTopLevelRevisionContent(contents)
+    }
+
+    private static let nonRevisionTopLevelNames: Set<String> = [
+        "branches",
+        "COMMIT_EDITMSG",
+        "commondir",
+        "config",
+        "config.worktree",
+        "description",
+        "gc.log",
+        "gitdir",
+        "hooks",
+        "index",
+        "info",
+        "logs",
+        "MERGE_MSG",
+        "modules",
+        "objects",
+        "packed-refs",
+        "refs",
+        "SQUASH_MSG",
+        "TAG_EDITMSG",
+        "worktrees",
+    ]
+
+    private static func isTopLevelRevisionContent(_ contents: String) -> Bool {
+        let line = contents
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if line.hasPrefix("ref: refs/") {
+            return true
+        }
+        return (line.count == 40 || line.count == 64) && line.allSatisfy(\.isHexDigit)
     }
 }

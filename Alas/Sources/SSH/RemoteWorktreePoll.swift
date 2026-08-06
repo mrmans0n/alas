@@ -10,6 +10,8 @@ struct RemoteWorktreePollEntry: Equatable {
 struct RemoteWorktreePollDelta: Equatable {
     /// Worktree path to display branch label, for `applyHeadUpdates`.
     let branchLabelsByPath: [String: String]
+    /// True when any existing worktree HEAD moved.
+    let headMoved: Bool
     /// True when worktrees were added/removed or any HEAD moved.
     let topologyChanged: Bool
 }
@@ -80,6 +82,7 @@ enum RemoteWorktreePoll {
 
         return RemoteWorktreePollDelta(
             branchLabelsByPath: branchLabelsByPath,
+            headMoved: headMoved,
             topologyChanged: pathSetChanged || headMoved
         )
     }

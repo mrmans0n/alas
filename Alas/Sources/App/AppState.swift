@@ -35,6 +35,37 @@ private struct MissingMissionRecoveryTarget: Equatable {
     }
 }
 
+enum ReviewSessionConsolidation {
+    static func merge(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
+        var merged = existing
+        if merged.selectedFileID == nil {
+            merged.selectedFileID = source.selectedFileID
+        }
+        if merged.focusedCommentID == nil {
+            merged.focusedCommentID = source.focusedCommentID
+        }
+        if merged.handoffs.isEmpty {
+            merged.handoffs = source.handoffs
+        } else {
+            let existingHandoffIDs = Set(merged.handoffs.map(\.id))
+            merged.handoffs.append(contentsOf: source.handoffs.filter { !existingHandoffIDs.contains($0.id) })
+        }
+        if merged.lastSendError == nil {
+            merged.lastSendError = source.lastSendError
+        }
+        if merged.verdict == nil {
+            merged.verdict = source.verdict
+        }
+        if merged.verdict != nil {
+            merged.status = .reviewed
+        } else if merged.status == .active, source.status != .active {
+            merged.status = source.status
+        }
+        merged.updatedAt = max(merged.updatedAt, source.updatedAt)
+        return merged
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -582,6 +613,9 @@ final class AppState {
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
     @ObservationIgnored
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
+    private(set) var revisionChangeGenerations: [String: Int] = [:]
+    private(set) var reviewSessionRetargetGenerations: [String: Int] = [:]
+    private var followRevisionRequestGenerations: [String: Int] = [:]
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -3105,7 +3139,11 @@ final class AppState {
             watcher.onHeadChanged = { [weak self] updates in
                 self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
             }
-            watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: project.id) }
+            watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: project.id) }
+            watcher.onTopologyChanged = { [weak self] in
+                self?.bumpRevisionGenerationForProject(projectId: project.id)
+                self?.handleProjectTopologyChange(projectId: project.id)
+            }
             remoteProjectWatchers[project.id] = watcher
             watcher.start()
             return
@@ -3113,7 +3151,11 @@ final class AppState {
         let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
-        watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: projectId) }
+        watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
+        watcher.onTopologyChanged = { [weak self] in
+            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.handleProjectTopologyChange(projectId: projectId)
+        }
         watcher.start()
         projectGitWatchers[projectId] = watcher
     }
@@ -3137,12 +3179,380 @@ final class AppState {
     }
 
     func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
+        bumpRevisionGenerationForProject(projectId: projectId)
         let changedPaths = projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
         )
         for path in changedPaths {
             GGStackSummaryStore.shared.summaries[path] = nil
+        }
+    }
+
+    func revisionChangeGeneration(worktreeID: String) -> Int {
+        revisionChangeGenerations[worktreeID, default: 0]
+    }
+
+    func reviewSessionRetargetGeneration(sessionID: ReviewSessionID) -> Int {
+        reviewSessionRetargetGenerations[sessionID.rawValue, default: 0]
+    }
+
+    func followRevision(worktreeID: String, tabID: TabID, expression: String) {
+        let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
+        let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
+        Task { @MainActor in
+            await applyFollowRevision(
+                worktreeID: worktreeID,
+                requestKey: requestKey,
+                requestGeneration: requestGeneration,
+                expression: expression
+            )
+        }
+    }
+
+    func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
+        let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
+        let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
+        Task { @MainActor in
+            let resolvedPrefill: String?
+            if let prefill {
+                resolvedPrefill = prefill
+            } else {
+                resolvedPrefill = await suggestedFollowRevisionPrefill(worktreeID: worktreeID, tabID: tabID)
+            }
+            guard isCurrentFollowRevisionRequest(
+                worktreeID: worktreeID,
+                requestKey: requestKey,
+                requestGeneration: requestGeneration
+            ) else { return }
+            presentFollowRevisionPrompt(worktreeID: worktreeID, tabID: tabID, prefill: resolvedPrefill, isEditing: prefill != nil)
+        }
+    }
+
+    private func presentFollowRevisionPrompt(worktreeID: String, tabID: TabID, prefill: String?, isEditing: Bool) {
+        let alert = NSAlert()
+        alert.messageText = isEditing ? "Edit Followed Revision" : "Follow Revision"
+        alert.informativeText = "Enter a single Git revision expression, such as HEAD~3."
+        alert.addButton(withTitle: "Follow")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = prefill ?? ""
+        alert.accessoryView = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let expression = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expression.isEmpty else {
+            Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
+            return
+        }
+        followRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
+    }
+
+    private func suggestedFollowRevisionPrefill(worktreeID: String, tabID: TabID) async -> String? {
+        guard let worktree = worktree(withId: worktreeID),
+              let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
+        else { return nil }
+        let result = try? await Process.git(
+            ["rev-list", "--first-parent", "--max-count=200", "HEAD"],
+            cwd: worktree.path
+        )
+        guard result?.exitCode == 0 else { return nil }
+        let firstParentSHAs = result?.stdout
+            .split(whereSeparator: \.isNewline)
+            .map(String.init) ?? []
+        return FollowRevisionPrefill.expression(displayedSHA: displayedSHA, firstParentSHAs: firstParentSHAs)
+    }
+
+    private func displayedCommitSHA(worktreeID: String, tabID: TabID) -> String? {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return nil }
+        switch tab {
+        case .commit(let state):
+            return state.sha
+        case .reviewSession(let state):
+            let record = try? ReviewSessionStore().load(id: state.sessionID)
+            if case .commit(let sha) = record?.target.payload {
+                return sha
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    func stopFollowingRevision(worktreeID: String, tabID: TabID) {
+        if let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) {
+            switch tab {
+            case .commit(let state):
+                guard case .following(let revision) = state.revision else { return }
+                _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
+                _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
+                    $0.fix(sha: revision.resolvedSHA)
+                }
+            case .reviewSession(let state):
+                _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
+                stopFollowingReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
+            default:
+                return
+            }
+        }
+    }
+
+    func acceptTrackedRevisionCheckout(worktreeID: String, tabID: TabID) {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
+        switch tab {
+        case .commit(let state):
+            guard case .following(let revision) = state.revision,
+                  let accepted = revision.preparingPendingCheckoutAcceptance()
+            else { return }
+            _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
+            _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
+                $0.revision = .following(accepted)
+            }
+            bumpRevisionGeneration(worktreeID: worktreeID)
+        case .reviewSession(let state):
+            _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
+            acceptTrackedReviewSessionCheckout(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
+        default:
+            return
+        }
+    }
+
+    private func applyFollowRevision(
+        worktreeID: String,
+        requestKey: String,
+        requestGeneration: Int,
+        expression: String
+    ) async {
+        guard let worktree = worktree(withId: worktreeID) else { return }
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression)
+        } catch {
+            guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
+            else { return }
+            Self.showWarningAlert(
+                title: "Invalid Revision",
+                message: (error as NSError).localizedDescription
+            )
+            return
+        }
+        guard let revision = TrackedRevision(
+            expression: expression,
+            baselineBranch: candidate.branch,
+            baselineHEAD: candidate.headSHA,
+            resolvedSHA: candidate.sha
+        ) else {
+            guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
+            else { return }
+            Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
+            return
+        }
+        guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration),
+              let tab = followRevisionRequestTab(worktreeID: worktreeID, requestKey: requestKey)
+        else {
+            return
+        }
+
+        switch tab {
+        case .commit:
+            _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tab.id) {
+                $0.follow(revision)
+            }
+        case .reviewSession(let state):
+            followReviewSession(worktreeID: worktreeID, tabID: tab.id, sessionID: state.sessionID, revision: revision)
+        default:
+            return
+        }
+    }
+
+    private func bumpFollowRevisionRequestGeneration(_ key: String) -> Int {
+        let next = followRevisionRequestGenerations[key, default: 0] + 1
+        followRevisionRequestGenerations[key] = next
+        return next
+    }
+
+    private func isCurrentFollowRevisionRequest(
+        worktreeID: String,
+        requestKey: String,
+        requestGeneration: Int
+    ) -> Bool {
+        followRevisionRequestGenerations[requestKey] == requestGeneration &&
+            followRevisionRequestTab(worktreeID: worktreeID, requestKey: requestKey) != nil
+    }
+
+    private func followRevisionRequestTab(worktreeID: String, requestKey: String) -> Tab? {
+        tabs.tabs(forWorktree: worktreeID).first { followRevisionRequestKey(for: $0) == requestKey }
+    }
+
+    private func followRevisionRequestKey(worktreeID: String, tabID: TabID) -> String {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else {
+            return "\(worktreeID):\(tabID)"
+        }
+        return followRevisionRequestKey(for: tab)
+    }
+
+    private func followRevisionRequestKey(for tab: Tab) -> String {
+        switch tab {
+        case .commit(let state):
+            return "\(state.worktreeId):\(state.viewID)"
+        case .reviewSession(let state):
+            return "\(state.worktreeId):\(state.viewID)"
+        default:
+            return "\(tab.id)"
+        }
+    }
+
+    private func followReviewSession(
+        worktreeID: String,
+        tabID: TabID,
+        sessionID: ReviewSessionID,
+        revision: TrackedRevision
+    ) {
+        let store = ReviewSessionStore()
+        guard let record = try? store.load(id: sessionID),
+              let result = TrackedRevisionRetargeter.follow(
+                  record: record,
+                  revision: revision,
+                  title: "Review \(revision.expression)",
+                  now: Date()
+              )
+        else { return }
+        if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            let merged = mergedReviewSession(existing: existing, source: result.record)
+            do {
+                let draftStore = ReviewDraftCommentStore()
+                let draftSnapshot = try draftStore.snapshot()
+                try draftStore.migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                do {
+                    try store.replace(id: record.id, with: merged)
+                } catch {
+                    try? draftStore.restore(draftSnapshot)
+                    throw error
+                }
+                invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
+                tabs.close(worktreeId: worktreeID, tabId: tabID)
+            } catch {
+                Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
+                return
+            }
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            bumpReviewSessionRetargetGeneration(sessionID: merged.id)
+            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            return
+        }
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func stopFollowingReviewSession(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
+        let store = ReviewSessionStore()
+        guard let record = try? store.load(id: sessionID),
+              let result = TrackedRevisionRetargeter.stop(
+                  record: record,
+                  title: "Review \(record.target.revisionDescription ?? "commit")",
+                  now: Date()
+              )
+        else { return }
+        if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            let merged = mergedReviewSession(existing: existing, source: result.record)
+            do {
+                let draftStore = ReviewDraftCommentStore()
+                let draftSnapshot = try draftStore.snapshot()
+                try draftStore.migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                do {
+                    try store.replace(id: record.id, with: merged)
+                } catch {
+                    try? draftStore.restore(draftSnapshot)
+                    throw error
+                }
+                invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
+                tabs.close(worktreeId: worktreeID, tabId: tabID)
+            } catch {
+                Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
+                return
+            }
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            bumpReviewSessionRetargetGeneration(sessionID: merged.id)
+            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            return
+        }
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func acceptTrackedReviewSessionCheckout(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
+        let store = ReviewSessionStore()
+        guard let record = try? store.load(id: sessionID),
+              case .trackedCommit(let revision) = record.target.payload,
+              let accepted = revision.preparingPendingCheckoutAcceptance(),
+              let result = TrackedRevisionRetargeter.follow(
+                  record: record,
+                  revision: accepted,
+                  title: "Review \(accepted.expression)",
+                  now: Date()
+              )
+        else { return }
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func mergedReviewSession(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
+        ReviewSessionConsolidation.merge(existing: existing, source: source)
+    }
+
+    private func persistReviewRetargeting(
+        _ result: TrackedRevisionRetargetingResult,
+        worktreeID: String,
+        tabID: TabID
+    ) {
+        let sessionStore = ReviewSessionStore()
+        var savedRecord = false
+        let previousOldRecord = try? sessionStore.load(id: result.oldRecordID)
+        let previousNewRecord = try? sessionStore.load(id: result.record.id)
+        do {
+            try sessionStore.replace(id: result.oldRecordID, with: result.record)
+            savedRecord = true
+            try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
+            _ = tabs.updateReviewSession(worktreeId: worktreeID, tabId: tabID) {
+                $0.retarget(to: result.record)
+            }
+            bumpReviewSessionRetargetGeneration(sessionID: result.record.id)
+        } catch {
+            if savedRecord {
+                if let previousOldRecord {
+                    try? sessionStore.save(previousOldRecord)
+                }
+                if result.record.id != result.oldRecordID {
+                    if let previousNewRecord {
+                        try? sessionStore.save(previousNewRecord)
+                    } else {
+                        try? sessionStore.delete(id: result.record.id)
+                    }
+                }
+            }
+            Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
+        }
+    }
+
+    private func bumpReviewSessionRetargetGeneration(sessionID: ReviewSessionID) {
+        reviewSessionRetargetGenerations[sessionID.rawValue, default: 0] += 1
+    }
+
+    private func bumpRevisionGeneration(worktreeID: String) {
+        revisionChangeGenerations[worktreeID, default: 0] += 1
+    }
+
+    private func bumpRevisionGenerationForProject(projectId: String) {
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            bumpRevisionGeneration(worktreeID: worktree.id)
+        }
+    }
+
+    private func bumpRevisionGenerationForWorktreePaths(projectId: String, paths: [URL]) {
+        let affectedPaths = Set(paths.map { Self.canonicalWorktreePath($0.path) })
+        guard !affectedPaths.isEmpty else { return }
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            if affectedPaths.contains(Self.canonicalWorktreePath(worktree.path.path)) {
+                bumpRevisionGeneration(worktreeID: worktree.id)
+            }
         }
     }
 
@@ -4816,6 +5226,7 @@ final class AppState {
             if case .acpSession(let s) = tab {
                 cleanupACPSession(worktreeId: worktreeId, sessionId: s.sessionId)
             }
+            invalidateFollowRevisionRequests(for: [tab])
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
@@ -4875,6 +5286,22 @@ final class AppState {
         }
     }
 
+    private func invalidateFollowRevisionRequests(for tabs: [Tab]) {
+        for tab in tabs {
+            switch tab {
+            case .commit, .reviewSession:
+                _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
+            default:
+                continue
+            }
+        }
+    }
+
+    private func invalidateFollowRevisionRequests(allTabs: [Tab], closedIds: [TabID]) {
+        let closedSet = Set(closedIds)
+        invalidateFollowRevisionRequests(for: allTabs.filter { closedSet.contains($0.id) })
+    }
+
     /// Detach a single ACP session's runner and remove it from the
     /// worktree's manager. Different from `disposeACPManager`, which
     /// tears down the whole worktree's manager — this leaves the
@@ -4928,6 +5355,7 @@ final class AppState {
     func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
@@ -4943,6 +5371,7 @@ final class AppState {
 
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = allTabs.map(\.id).filter(ids.contains)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         for id in closed {
             tabs.close(worktreeId: worktreeId, tabId: id)
         }
@@ -5087,6 +5516,7 @@ final class AppState {
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
@@ -5099,6 +5529,7 @@ final class AppState {
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
@@ -5107,6 +5538,7 @@ final class AppState {
     func closeTabsToRight(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
@@ -7178,7 +7610,7 @@ final class AppState {
         }
 
         let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .commit(let state) = tab { return state.sha == commit.sha }
+            if case .commit(let state) = tab { return state.fixedSHA == commit.sha }
             return false
         }
         if let existing {

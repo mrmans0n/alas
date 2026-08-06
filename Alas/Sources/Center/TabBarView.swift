@@ -18,6 +18,12 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onOpenWithSystem: (TabID) -> Void
     let onRevealInFinder: (TabID) -> Void
+    var revisionFollowCapability: (Tab) -> RevisionFollowCapability = { tab in
+        RevisionFollowCapability(tab: tab)
+    }
+    var onFollowRevision: (TabID) -> Void = { _ in }
+    var onEditRevision: (TabID) -> Void = { _ in }
+    var onStopFollowingRevision: (TabID) -> Void = { _ in }
     /// Whether system-open / reveal-in-Finder actions are available for this
     /// worktree. False for remote worktrees (local `NSWorkspace` can't touch
     /// them); the menu items are hidden when this is false so users don't see
@@ -156,6 +162,20 @@ struct TabBarView: View {
                 Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
                 Divider()
             }
+            let revisionCapability = revisionFollowCapability(tab)
+            if revisionCapability.isSupported {
+                Button(revisionCapability.isFollowing ? "Edit Followed Revision…" : "Follow Revision…") {
+                    if revisionCapability.isFollowing {
+                        onEditRevision(tab.id)
+                    } else {
+                        onFollowRevision(tab.id)
+                    }
+                }
+                if revisionCapability.isFollowing {
+                    Button("Stop Following Revision") { onStopFollowingRevision(tab.id) }
+                }
+                Divider()
+            }
             Button("Close") { onClose(tab.id) }
             Button("Close Other Tabs") { onCloseOthers(tab.id) }
                 .disabled(tabs.count <= 1)
@@ -185,6 +205,23 @@ struct TabBarView: View {
         } else {
             proxy.scrollTo(activeId, anchor: .center)
         }
+    }
+}
+
+struct RevisionFollowCapability: Equatable {
+    let isSupported: Bool
+    let isFollowing: Bool
+
+    init(isSupported: Bool, isFollowing: Bool) {
+        self.isSupported = isSupported
+        self.isFollowing = isFollowing
+    }
+
+    init(tab: Tab) {
+        self.init(
+            isSupported: tab.supportsRevisionFollowActions,
+            isFollowing: tab.isFollowingRevision
+        )
     }
 }
 

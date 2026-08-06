@@ -165,6 +165,52 @@ struct CenterPaneView: View {
                     }
                     FileSystemOpen.reveal(url: url)
                 },
+                revisionFollowCapability: { tab in
+                    switch tab {
+                    case .commit(let state):
+                        return RevisionFollowCapability(
+                            isSupported: true,
+                            isFollowing: state.revision.tracked != nil
+                        )
+                    case .reviewSession(let state):
+                        let record = try? ReviewSessionStore().load(id: state.sessionID)
+                        guard record?.target.kind == .commit || record?.target.kind == .trackedCommit else {
+                            return RevisionFollowCapability(isSupported: false, isFollowing: false)
+                        }
+                        let isFollowing: Bool
+                        if case .trackedCommit = record?.target.payload {
+                            isFollowing = true
+                        } else {
+                            isFollowing = false
+                        }
+                        return RevisionFollowCapability(isSupported: true, isFollowing: isFollowing)
+                    default:
+                        return RevisionFollowCapability(isSupported: false, isFollowing: false)
+                    }
+                },
+                onFollowRevision: { id in
+                    state.promptFollowRevision(worktreeID: worktree.id, tabID: id)
+                },
+                onEditRevision: { id in
+                    let prefill: String? = {
+                        switch tabs.first(where: { $0.id == id }) {
+                        case .commit(let s):
+                            return s.revision.tracked?.expression
+                        case .reviewSession(let s):
+                            let record = try? ReviewSessionStore().load(id: s.sessionID)
+                            if case .trackedCommit(let revision) = record?.target.payload {
+                                return revision.expression
+                            }
+                            return nil
+                        default:
+                            return nil
+                        }
+                    }()
+                    state.promptFollowRevision(worktreeID: worktree.id, tabID: id, prefill: prefill)
+                },
+                onStopFollowingRevision: { id in
+                    state.stopFollowingRevision(worktreeID: worktree.id, tabID: id)
+                },
                 systemActionsEnabled: !worktree.path.isRemoteAlasPath,
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
@@ -332,11 +378,11 @@ struct CenterPaneView: View {
                     case .commit(let s):
                         CommitTabView(
                             worktreePath: worktree.path,
-                            sha: s.sha,
+                            tabState: s,
                             worktreeId: worktree.id,
                             appState: state
                         )
-                        .id(s.sha)
+                        .id(s.viewID)
                     case .commitEditor(let s):
                         CommitEditorTabView(
                             worktreePath: worktree.path,
@@ -390,7 +436,7 @@ struct CenterPaneView: View {
                             tabState: sessionState,
                             appState: state
                         )
-                        .id(sessionState.id)
+                        .id(sessionState.viewID)
                     case .mission(let missionState):
                         MissionTabView(
                             state: state,
