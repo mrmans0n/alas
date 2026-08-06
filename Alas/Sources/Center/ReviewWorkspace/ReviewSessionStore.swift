@@ -14,8 +14,16 @@ struct ReviewSessionStore {
         if let record = snapshot.recordsByID[id.rawValue] {
             return record
         }
-        guard let replacementID = snapshot.replacementIDsByOldID[id.rawValue] else { return nil }
-        return snapshot.recordsByID[replacementID]
+        var currentID = id.rawValue
+        var seen: Set<String> = []
+        while let replacementID = snapshot.replacementIDsByOldID[currentID],
+              seen.insert(currentID).inserted {
+            if let record = snapshot.recordsByID[replacementID] {
+                return record
+            }
+            currentID = replacementID
+        }
+        return nil
     }
 
     func list(worktreeID: String) throws -> [ReviewSessionRecord] {
@@ -49,6 +57,9 @@ struct ReviewSessionStore {
         if oldID != record.id {
             snapshot.recordsByID[oldID.rawValue] = nil
             snapshot.replacementIDsByOldID[oldID.rawValue] = record.id.rawValue
+            for (alias, replacementID) in snapshot.replacementIDsByOldID where replacementID == oldID.rawValue {
+                snapshot.replacementIDsByOldID[alias] = record.id.rawValue
+            }
         }
         snapshot.recordsByID[record.id.rawValue] = record
         try store.write(snapshot, to: url)

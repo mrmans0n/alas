@@ -197,20 +197,37 @@ final class RemoteProjectGitWatcher {
             }
             .sorted { $0.key < $1.key }
         for (pathKey, path) in worktreePaths {
-            for ref in Self.revisionPseudoRefs {
-                let probe = try? await Process.git(
-                    ["rev-parse", "--verify", "-q", "\(ref)^{commit}"],
-                    cwd: path
-                )
-                guard let probe, !RemoteExec.isConnectionFailure(exitCode: probe.exitCode) else {
-                    return nil
-                }
-                pseudoRefCommits["\(pathKey):\(ref)"] = probe.exitCode == 0
-                    ? probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : ""
+            guard let commits = await pollPseudoRefCommits(at: path) else { return nil }
+            for (ref, commit) in commits {
+                pseudoRefCommits["\(pathKey):\(ref)"] = commit
             }
         }
         return Self.sharedRefsSignature(showRefOutput: result.stdout, pseudoRefCommits: pseudoRefCommits)
+    }
+
+    private func pollPseudoRefCommits(at path: URL) async -> [String: String]? {
+        let refs = Self.revisionPseudoRefs
+        let stdin = refs.map { "\($0)^{commit}" }.joined(separator: "\n") + "\n"
+        let result = try? await Process.git(
+            ["cat-file", "--batch-check=%(objectname)"],
+            cwd: path,
+            stdin: stdin
+        )
+        guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+            return nil
+        }
+        guard result.exitCode == 0 else { return Dictionary(uniqueKeysWithValues: refs.map { ($0, "") }) }
+        let lines = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
+        var commits: [String: String] = [:]
+        for (idx, ref) in refs.enumerated() {
+            guard lines.indices.contains(idx) else {
+                commits[ref] = ""
+                continue
+            }
+            let line = lines[idx].trimmingCharacters(in: .whitespacesAndNewlines)
+            commits[ref] = line.contains(" missing") ? "" : line
+        }
+        return commits
     }
 
     deinit { pollTask?.cancel() }

@@ -152,6 +152,26 @@ struct ReviewSessionStoreTests {
         #expect(try store.load(id: retargeted.id) == retargeted)
     }
 
+    @Test func replaceRewritesExistingAliasesTransitively() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = makeRecord(id: "source", worktreeID: "wt-1", updatedAt: 1)
+        var middle = source
+        middle.id = ReviewSessionID(rawValue: "middle")
+        var final = source
+        final.id = ReviewSessionID(rawValue: "final")
+
+        try store.save(source)
+        try store.replace(id: source.id, with: middle)
+        try store.replace(id: middle.id, with: final)
+
+        #expect(try store.load(id: source.id) == final)
+        #expect(try store.load(id: middle.id) == final)
+        #expect(try store.load(id: final.id) == final)
+    }
+
     private func makeRecord(id: String, worktreeID: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
         let target = ReviewSessionTarget.commit(
             worktreeID: worktreeID,
