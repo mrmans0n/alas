@@ -65,6 +65,37 @@ struct ReviewSessionTabViewTests {
         #expect(!coordinator.canPublish(older))
     }
 
+    @Test func loadedTrackedDiffReuseComparesLoadedRevision() throws {
+        let oldRevision = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            resolvedSHA: "aaa"
+        ))
+        let newRevision = oldRevision.resolving(.init(branch: "feature", sha: "bbb"))
+        let oldTarget = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: oldRevision,
+            title: "Review HEAD~3"
+        )
+        let newTarget = oldTarget.updatingTrackedRevision(newRevision, title: "Review HEAD~3")
+        let refreshed = ReviewSessionRecord(
+            id: newTarget.id,
+            target: newTarget,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 2)
+        )
+
+        #expect(!ReviewSessionTabView.canReuseLoadedTrackedDiff(
+            loadedTrackedResolvedSHA: "aaa",
+            refreshedRecord: refreshed
+        ))
+        #expect(ReviewSessionTabView.canReuseLoadedTrackedDiff(
+            loadedTrackedResolvedSHA: "bbb",
+            refreshedRecord: refreshed
+        ))
+    }
+
     @Test func rendersLoadedSessionTitleAndSummaryRail() throws {
         let target = ReviewSessionTarget.localChanges(
             worktreeID: "wt-1",

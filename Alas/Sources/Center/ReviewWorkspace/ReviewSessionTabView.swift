@@ -73,6 +73,7 @@ struct ReviewSessionTabView: View {
     @Environment(\.theme) private var theme
     @State private var record: ReviewSessionRecord?
     @State private var loaded: ReviewSessionLoadedContext?
+    @State private var loadedTrackedResolvedSHA: String?
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var selectedFileID: DiffReviewFileID?
@@ -139,6 +140,7 @@ struct ReviewSessionTabView: View {
         self.now = now
         self._record = State(initialValue: record)
         self._loaded = State(initialValue: loaded)
+        self._loadedTrackedResolvedSHA = State(initialValue: Self.trackedResolvedSHA(in: record))
         self._selectedFileID = State(initialValue: record?.selectedFileID ?? tabState.selectedFileID)
         self._focusedDraftCommentID = State(initialValue: record?.focusedCommentID ?? tabState.focusedCommentID)
         if let record {
@@ -613,13 +615,16 @@ struct ReviewSessionTabView: View {
             guard loadCoordinator.canPublish(token) else { return }
             var refreshedRecord = mergeLatestMutableFields(into: resolvedRecord.record, fallback: storedRecord)
             if let loaded,
-               trackedResolvedSHA(in: record) == trackedResolvedSHA(in: refreshedRecord),
-               case .trackedCommit = refreshedRecord.target.payload {
+               Self.canReuseLoadedTrackedDiff(
+                   loadedTrackedResolvedSHA: loadedTrackedResolvedSHA,
+                   refreshedRecord: refreshedRecord
+               ) {
                 if refreshedRecord.target != storedRecord.target {
                     try sessionStore.save(refreshedRecord)
                 }
                 record = refreshedRecord
                 self.loaded = loaded.replacingFeedbackTarget(for: refreshedRecord.target)
+                loadedTrackedResolvedSHA = Self.trackedResolvedSHA(in: refreshedRecord)
                 loadError = refreshError
                 loadDraftCommentController(for: refreshedRecord)
                 isLoading = false
@@ -669,7 +674,7 @@ struct ReviewSessionTabView: View {
         merged.focusedCommentID = latestRecord.focusedCommentID
         merged.handoffs = latestRecord.handoffs
         merged.lastSendError = latestRecord.lastSendError
-        if trackedResolvedSHA(in: latestRecord) == trackedResolvedSHA(in: refreshedRecord) {
+        if Self.trackedResolvedSHA(in: latestRecord) == Self.trackedResolvedSHA(in: refreshedRecord) {
             merged.status = latestRecord.status
             merged.verdict = latestRecord.verdict
             merged.updatedAt = latestRecord.updatedAt
@@ -677,7 +682,15 @@ struct ReviewSessionTabView: View {
         return merged
     }
 
-    private func trackedResolvedSHA(in record: ReviewSessionRecord?) -> String? {
+    static func canReuseLoadedTrackedDiff(
+        loadedTrackedResolvedSHA: String?,
+        refreshedRecord: ReviewSessionRecord
+    ) -> Bool {
+        guard case .trackedCommit = refreshedRecord.target.payload else { return false }
+        return loadedTrackedResolvedSHA == trackedResolvedSHA(in: refreshedRecord)
+    }
+
+    private static func trackedResolvedSHA(in record: ReviewSessionRecord?) -> String? {
         guard case .trackedCommit(let revision) = record?.target.payload else { return nil }
         return revision.resolvedSHA
     }
@@ -729,6 +742,7 @@ struct ReviewSessionTabView: View {
     private func publishInitialLoad(_ publication: ReviewSessionTabLoadPublication) {
         record = publication.record
         loaded = publication.loaded
+        loadedTrackedResolvedSHA = Self.trackedResolvedSHA(in: publication.record)
         selectedFileID = publication.selectedFileID
         focusedDraftCommentID = publication.focusedDraftCommentID
     }
