@@ -212,7 +212,7 @@ final class RemoteProjectGitWatcher {
 
     private func pollUpstreamConfigOutput() async -> String {
         let result = try? await Process.git(
-            ["config", "--get-regexp", #"^branch\..*\.(remote|merge)$"#],
+            ["config", "--get-regexp", #"^(branch\..*\.(remote|merge|pushRemote)|remote\.pushDefault|push\.default)$"#],
             cwd: projectPath
         )
         guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {

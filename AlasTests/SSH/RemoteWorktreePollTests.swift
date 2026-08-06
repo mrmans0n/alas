@@ -151,6 +151,13 @@ struct RemoteWorktreePollTests {
         branch.feature.merge refs/heads/next
         branch.feature.remote origin
         """
+        let pushChanged = """
+        branch.feature.merge refs/heads/main
+        branch.feature.pushRemote fork
+        branch.feature.remote origin
+        push.default current
+        remote.pushDefault origin
+        """
 
         let first = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
@@ -167,9 +174,18 @@ struct RemoteWorktreePollTests {
             upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: changed),
             pseudoRefCommits: [:]
         )
+        let pushed = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: pushChanged),
+            pseudoRefCommits: [:]
+        )
 
         #expect(first == same)
         #expect(first != second)
+        #expect(first != pushed)
         #expect(first.contains("config:branch.feature.merge refs/heads/main"))
+        #expect(pushed.contains("branch.feature.pushRemote fork"))
+        #expect(pushed.contains("remote.pushDefault origin"))
+        #expect(pushed.contains("push.default current"))
     }
 }
