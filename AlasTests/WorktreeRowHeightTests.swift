@@ -28,6 +28,18 @@ struct WorktreeRowHeightTests {
         #expect(WorktreeRowView.pendingStackIndicatorColorToken() == "fg-faint")
     }
 
+    @Test func deletePhasesUsePendingProgressPresentation() {
+        #expect(WorktreeRowView.isPending(operationState: .preparingDelete))
+        #expect(WorktreeRowView.statusText(for: .preparingDelete) == "Preparing deletion…")
+        #expect(WorktreeRowView.showsProgress(operationState: .preparingDelete))
+
+        #expect(WorktreeRowView.isPending(operationState: .deleting))
+        #expect(WorktreeRowView.statusText(for: .deleting) == "Deleting…")
+        #expect(WorktreeRowView.showsProgress(operationState: .deleting))
+
+        #expect(!WorktreeRowView.showsProgress(operationState: .creating))
+    }
+
     @Test func rowHeightIsStableWithAndWithoutBadge() throws {
         let withoutBadge = try renderHeight(harnessSummary: nil)
         let withBadge = try renderHeight(harnessSummary: .init(

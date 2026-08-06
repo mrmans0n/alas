@@ -28,6 +28,8 @@ struct RightPaneSelectionStateResolver {
         guard let wt = findWorktree(by: id) else { return .empty }
         if let op = projectsManager.operationState(for: wt.id) {
             switch op {
+            case .preparingDelete:
+                return .active(wt)
             case .creating:
                 return .creating(wt)
             case .deleting:
