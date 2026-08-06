@@ -48,6 +48,7 @@ struct AppKitDiffReviewRowToken: Equatable {
     let lspManagerIdentity: ObjectIdentifier?
     let inlineFeedbackAvailability: DiffReviewInlineFeedbackActionAvailability?
     let draftCommentAvailability: ReviewDraftCommentActionAvailability?
+    let reviewFeedbackTarget: ReviewFeedbackTarget?
     let hoveredInlineFeedbackID: String?
     let hoveredDraftCommentID: String?
     let focusedFeedbackID: String?
@@ -434,7 +435,10 @@ enum AppKitDiffReviewRowPlanBuilder {
                         }
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
-                        append(&rows, id: threadID, input: input, signature: String(reflecting: thread).hashValue, height: 112) {
+                        append(
+                            &rows, id: threadID, input: input, signature: String(reflecting: thread).hashValue,
+                            height: 112, retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable
+                        ) {
                             AnyView(AppKitDiffReviewThreadRowBody(thread: thread, rows: segment.rows, input: input))
                         }
                     case let .annotation(annotation):
@@ -504,7 +508,8 @@ enum AppKitDiffReviewRowPlanBuilder {
                 id: AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id),
                 input: input,
                 signature: String(reflecting: thread).hashValue,
-                height: 112
+                height: 112,
+                retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable
             ) {
                 AnyView(AppKitDiffReviewImageThreadRowBody(thread: thread, input: input))
             }
@@ -530,7 +535,11 @@ enum AppKitDiffReviewRowPlanBuilder {
     ) {
         let target = DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: input.file.id)
         let id = AppKitDiffReviewRowID.inlineFeedback(target)
-        append(&rows, id: id, input: input, signature: String(reflecting: item).hashValue, height: 96, inlineAvailability: input.state.actionRelay.inlineFeedbackAvailability(for: item, file: input.file.summary)) {
+        append(
+            &rows, id: id, input: input, signature: String(reflecting: item).hashValue, height: 96,
+            retention: input.state.activeInlineFeedbackEditorID == item.id ? .pinned : .recyclable,
+            inlineAvailability: input.state.actionRelay.inlineFeedbackAvailability(for: item, file: input.file.summary)
+        ) {
             AnyView(AppKitDiffReviewInlineFeedbackRowBody(item: item, input: input))
         }
         fallbacks[id] = id
@@ -544,7 +553,12 @@ enum AppKitDiffReviewRowPlanBuilder {
     ) {
         let target = DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: input.file.id)
         let id = AppKitDiffReviewRowID.draftComment(target)
-        append(&rows, id: id, input: input, signature: String(reflecting: comment).hashValue, height: 112, draftAvailability: input.state.actionRelay.draftCommentAvailability(for: comment)) {
+        append(
+            &rows, id: id, input: input, signature: String(reflecting: comment).hashValue, height: 112,
+            retention: input.state.activeDraftCommentEditorID == comment.id ? .pinned : .recyclable,
+            draftAvailability: input.state.actionRelay.draftCommentAvailability(for: comment),
+            reviewFeedbackTarget: input.reviewFeedbackTarget
+        ) {
             AnyView(AppKitDiffReviewDraftCommentRowBody(comment: comment, input: input))
         }
         fallbacks[id] = id
@@ -575,6 +589,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         signature: Int, height: CGFloat, retention: AppKitDiffRowRetention = .recyclable,
         inlineAvailability: DiffReviewInlineFeedbackActionAvailability? = nil,
         draftAvailability: ReviewDraftCommentActionAvailability? = nil,
+        reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
         includesActiveHighlight: Bool = false,
         build: @escaping () -> AnyView
     ) {
@@ -588,6 +603,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             lspLanguage: input.lspContext?.language,
             lspManagerIdentity: input.lspContext.map { ObjectIdentifier($0.lsp) },
             inlineFeedbackAvailability: inlineAvailability, draftCommentAvailability: draftAvailability,
+            reviewFeedbackTarget: reviewFeedbackTarget,
             hoveredInlineFeedbackID: includesActiveHighlight ? input.state.hoveredInlineFeedbackID : nil,
             hoveredDraftCommentID: includesActiveHighlight ? input.state.hoveredDraftCommentID : nil,
             focusedFeedbackID: input.focusedFeedbackID,
@@ -940,6 +956,11 @@ struct AppKitDiffReviewInlineFeedbackRowBody: View {
                 input.state.hoveredInlineFeedbackID = hovering
                     ? item.id
                     : (input.state.hoveredInlineFeedbackID == item.id ? nil : input.state.hoveredInlineFeedbackID)
+            },
+            onEditorActiveChange: { active in
+                input.state.activeInlineFeedbackEditorID = active
+                    ? item.id
+                    : (input.state.activeInlineFeedbackEditorID == item.id ? nil : input.state.activeInlineFeedbackEditorID)
             }
         )
         .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: input.file.id))
@@ -983,6 +1004,11 @@ struct AppKitDiffReviewDraftCommentRowBody: View {
                 input.state.hoveredDraftCommentID = hovering
                     ? comment.id
                     : (input.state.hoveredDraftCommentID == comment.id ? nil : input.state.hoveredDraftCommentID)
+            },
+            onEditorActiveChange: { active in
+                input.state.activeDraftCommentEditorID = active
+                    ? comment.id
+                    : (input.state.activeDraftCommentEditorID == comment.id ? nil : input.state.activeDraftCommentEditorID)
             }
         )
         .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: input.file.id))

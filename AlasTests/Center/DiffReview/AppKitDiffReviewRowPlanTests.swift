@@ -131,6 +131,51 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(state.pendingDraftBody == "survives recycling")
     }
 
+    @Test func activeFeedbackAndDraftEditorsArePinnedWhileTheirBodiesAreUnsaved() throws {
+        let file = textFile()
+        let item = feedback(line: 1)
+        let draft = draftComment(fileID: file.id)
+        let thread = DiffInlineCommentThread(
+            id: "thread", filePath: file.summary.path, newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(
+            file: file, inlineFeedback: [item], draftComments: [draft], threads: [thread], state: state, theme: theme
+        )
+        let feedbackID = AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: item.id, fileID: file.id))
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        let threadID = AppKitDiffReviewRowID.thread(fileID: file.id, threadID: thread.id)
+
+        state.activeInlineFeedbackEditorID = item.id
+        state.activeDraftCommentEditorID = draft.id
+        state.activeThreadID = thread.id
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+
+        #expect(plan.corePlan.rows.first { $0.id == feedbackID }?.retention == .pinned)
+        #expect(plan.corePlan.rows.first { $0.id == draftID }?.retention == .pinned)
+        #expect(plan.corePlan.rows.first { $0.id == threadID }?.retention == .pinned)
+    }
+
+    @Test func draftRowRebuildsWhenItsReviewTargetChanges() throws {
+        let file = textFile()
+        let draft = draftComment(fileID: file.id)
+        let state = AppKitDiffReviewFileState()
+        let local = AppKitDiffReviewRowInput(
+            file: file, draftComments: [draft], state: state, theme: theme,
+            reviewFeedbackTarget: .init(title: "Local changes", repositoryPath: nil, providerDescription: nil, sourceDescription: "Local")
+        )
+        let provider = AppKitDiffReviewRowInput(
+            file: file, draftComments: [draft], state: state, theme: theme,
+            reviewFeedbackTarget: .init(title: "Pull request", repositoryPath: "/repo", providerDescription: "GitHub #980", sourceDescription: "Provider")
+        )
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        let localRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [local]).corePlan.rows.first { $0.id == draftID })
+        let providerRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [provider]).corePlan.rows.first { $0.id == draftID })
+
+        #expect(!localRow.equalityToken.isEqual(to: providerRow.equalityToken))
+    }
+
     @Test func contextFailureRowDisappearsAfterSuccessfulRetry() async throws {
         let attempts = ContextAttempts()
         let provider = DiffReviewContextProvider {

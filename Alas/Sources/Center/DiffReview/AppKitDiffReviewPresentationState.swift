@@ -47,6 +47,8 @@ final class AppKitDiffReviewFileState: ObservableObject {
     @Published var imageState = DiffReviewImageState()
     @Published var hoveredInlineFeedbackID: String? { didSet { structuralDidChange.send() } }
     @Published var hoveredDraftCommentID: String? { didSet { structuralDidChange.send() } }
+    @Published var activeInlineFeedbackEditorID: String? { didSet { structuralDidChange.send() } }
+    @Published var activeDraftCommentEditorID: String? { didSet { structuralDidChange.send() } }
     @Published var activeThreadID: String? { didSet { structuralDidChange.send() } }
     @Published var showFullDiffOverride = false { didSet { structuralDidChange.send() } }
     @Published var isDraftComposerFocused = false { didSet { structuralDidChange.send() } }
@@ -92,6 +94,8 @@ final class AppKitDiffReviewFileState: ObservableObject {
         expandedCollapsedRowIDs = []
         hoveredInlineFeedbackID = nil
         hoveredDraftCommentID = nil
+        activeInlineFeedbackEditorID = nil
+        activeDraftCommentEditorID = nil
         activeThreadID = nil
         showFullDiffOverride = false
         isDraftComposerFocused = false

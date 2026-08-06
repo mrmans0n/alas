@@ -1741,6 +1741,7 @@ struct ReviewDraftCommentCard: View {
     let reviewFeedbackTarget: ReviewFeedbackTarget
     let onSelect: (ReviewDraftComment) -> Void
     var onHoverChange: (Bool) -> Void = { _ in }
+    var onEditorActiveChange: (Bool) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var isEditing = false
@@ -1771,6 +1772,9 @@ struct ReviewDraftCommentCard: View {
         .background(focusedMarker)
         .onHover { hovering in
             onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
+        }
+        .onChange(of: isEditing) { _, isEditing in
+            onEditorActiveChange(isEditing)
         }
     }
 
@@ -2220,6 +2224,7 @@ struct DiffReviewInlineFeedbackCard: View {
     let actions: DiffReviewInlineFeedbackActions
     let onSelect: (DiffReviewInlineFeedback) -> Void
     var onHoverChange: (Bool) -> Void = { _ in }
+    var onEditorActiveChange: (Bool) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
@@ -2254,6 +2259,9 @@ struct DiffReviewInlineFeedbackCard: View {
         .background(focusedMarker)
         .onHover { hovering in
             onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
+        }
+        .onChange(of: replyEditor.isReplying) { _, isReplying in
+            onEditorActiveChange(isReplying)
         }
     }
 
