@@ -84,6 +84,29 @@ struct AppKitDiffScrollerTests {
         #expect(scrollView.scrollY > 0)
     }
 
+    @Test("an unresolved request is consumed after a positive-width reconcile")
+    func unresolvedRequestGenerationDoesNotReplay() {
+        let stack = makeStack()
+        let request = AppKitDiffScrollRequest(
+            targetID: "later", fallbackID: nil, alignment: .top, animated: false, generation: 1
+        )
+        stack.coordinator.update(plan: plan(), scrollRequest: request, onActiveOwnerChange: { _ in })
+        var laterPlan = plan().rows
+        laterPlan.append(
+            AppKitDiffRowSpec(
+                id: "later", ownerID: nil, equalityToken: .init(101), estimatedHeight: 40
+            ) {
+                AnyView(Color.clear.frame(height: 40))
+            }
+        )
+
+        stack.coordinator.update(
+            plan: .init(rows: laterPlan), scrollRequest: request, onActiveOwnerChange: { _ in }
+        )
+
+        #expect(stack.scrollView.scrollY == 0)
+    }
+
     @Test("only user scrolling reports a changed active owner")
     func userScrollingReportsActiveOwner() {
         var owners: [String?] = []

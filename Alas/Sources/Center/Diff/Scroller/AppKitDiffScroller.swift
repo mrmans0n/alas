@@ -77,7 +77,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
 
             guard let scrollRequest,
                   scrollRequest.generation != lastConsumedRequestGeneration,
-                  canResolve(scrollRequest) else { return }
+                  hasUsableLayout else { return }
             lastConsumedRequestGeneration = scrollRequest.generation
             reconciler?.scroll(to: scrollRequest)
         }
@@ -100,10 +100,9 @@ struct AppKitDiffScroller: NSViewRepresentable {
             reconciler?.apply(plan: mostRecentPlan, contentWidth: scrollView.contentWidth)
         }
 
-        private func canResolve(_ request: AppKitDiffScrollRequest) -> Bool {
+        private var hasUsableLayout: Bool {
             guard let scrollView, scrollView.contentWidth > 0, tiling.rowCount > 0 else { return false }
-            return tiling.row(withID: request.targetID) != nil
-                || request.fallbackID.flatMap { tiling.row(withID: $0) } != nil
+            return true
         }
 
         private func userViewportDidChange() {
