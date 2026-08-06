@@ -172,6 +172,24 @@ struct ReviewSessionStoreTests {
         #expect(try store.load(id: final.id) == final)
     }
 
+    @Test func replaceCanAliasSourceToExistingDestination() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = makeRecord(id: "source", worktreeID: "wt-1", updatedAt: 1)
+        var destination = makeRecord(id: "destination", worktreeID: "wt-1", updatedAt: 2)
+        destination.selectedFileID = DiffReviewFileID(namespace: "commit", path: "Merged.swift")
+
+        try store.save(source)
+        try store.save(makeRecord(id: "destination", worktreeID: "wt-1", updatedAt: 1))
+        try store.replace(id: source.id, with: destination)
+
+        #expect(try store.load(id: source.id) == destination)
+        #expect(try store.loadReplacement(for: source.id) == destination)
+        #expect(try store.load(id: destination.id) == destination)
+    }
+
     @Test func replacementLookupStaysAuthoritativeAfterOldIDReuse() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

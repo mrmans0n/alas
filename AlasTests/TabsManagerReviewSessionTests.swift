@@ -55,6 +55,36 @@ struct TabsManagerReviewSessionTests {
         #expect(state.selectedFileID == DiffReviewFileID(namespace: "commit", path: "A.swift"))
     }
 
+    @Test func openOrFocusReviewSessionRefreshesExistingDestinationState() {
+        var manager = TabsManager()
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abc",
+            title: "Review abc"
+        )
+        let initial = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 1)
+        )
+        _ = manager.openOrFocusReviewSession(worktreeId: "wt-1", record: initial)
+
+        var merged = initial
+        merged.selectedFileID = DiffReviewFileID(namespace: "commit", path: "Merged.swift")
+        merged.focusedCommentID = "comment-1"
+        let refreshed = manager.openOrFocusReviewSession(worktreeId: "wt-1", record: merged)
+
+        guard case .reviewSession(let state) = refreshed else {
+            Issue.record("Expected review session tab")
+            return
+        }
+        #expect(state.selectedFileID == DiffReviewFileID(namespace: "commit", path: "Merged.swift"))
+        #expect(state.focusedCommentID == "comment-1")
+        #expect(manager.tabs(forWorktree: "wt-1").count == 1)
+    }
+
     @Test func reviewSessionViewIDSurvivesRetargeting() throws {
         let repositoryPath = URL(fileURLWithPath: "/repo")
         let fixedTarget = ReviewSessionTarget.commit(

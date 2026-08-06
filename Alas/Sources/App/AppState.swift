@@ -3377,17 +3377,19 @@ final class AppState {
               )
         else { return }
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            let merged = mergedReviewSession(existing: existing, source: record)
             do {
                 try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
-                try store.save(mergedReviewSession(existing: existing, source: record))
-                try store.delete(id: record.id)
+                try store.replace(id: record.id, with: merged)
                 invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
                 tabs.close(worktreeId: worktreeID, tabId: tabID)
             } catch {
                 Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
                 return
             }
-            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: existing)
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            bumpReviewSessionRetargetGeneration(sessionID: merged.id)
+            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return
         }
@@ -3404,17 +3406,19 @@ final class AppState {
               )
         else { return }
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            let merged = mergedReviewSession(existing: existing, source: record)
             do {
                 try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
-                try store.save(mergedReviewSession(existing: existing, source: record))
-                try store.delete(id: record.id)
+                try store.replace(id: record.id, with: merged)
                 invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
                 tabs.close(worktreeId: worktreeID, tabId: tabID)
             } catch {
                 Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
                 return
             }
-            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: existing)
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            bumpReviewSessionRetargetGeneration(sessionID: merged.id)
+            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return
         }
