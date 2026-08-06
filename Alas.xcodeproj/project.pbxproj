@@ -1031,6 +1031,7 @@
 		AE179E24A9E308150D1FD1D5 /* CommitPromptStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E40B5F193E3CB5EB5BA945A /* CommitPromptStatusTests.swift */; };
 		AE21069C36D87EB089423687 /* AppKitDiffRowHostingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 741EFB94AD886324DBC73C72 /* AppKitDiffRowHostingView.swift */; };
 		AE5BC95F30EE46ED0DE74F23 /* WorkingTreeChangeGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D32294F9B916DFAFF5E9A6F /* WorkingTreeChangeGroup.swift */; };
+		AE780E8AB5BDB8E7D5BD5146 /* AppKitDiffScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9CEF76FBF31C0DA4B19B692 /* AppKitDiffScroller.swift */; };
 		AEB565CDE2F5AEAE088A1A79 /* ACPChatLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */; };
 		AF071864CA8C882F74753E39 /* ACPToolCallPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D710BC995453481F445E2ECF /* ACPToolCallPresentation.swift */; };
 		AF2263B61D95A8BFF0972E93 /* AgentHookEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */; };
@@ -1342,6 +1343,7 @@
 		DF8CAD5714483408B8BD72F7 /* GitService+Discard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90817EC3BAA727EF6D9FBD97 /* GitService+Discard.swift */; };
 		DF93C8550C7A78C2A03CF56A /* ReviewEvidenceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF257B37B6E9EA4D97C67D4 /* ReviewEvidenceModel.swift */; };
 		DFA62A97A39B75AD9C7D4DC3 /* DragOutActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08FE8C7594DE6CD4038A2113 /* DragOutActivationTests.swift */; };
+		DFCDEE99657971BB74AD9A06 /* AppKitDiffScrollerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7624AEF61C42B615FBC76B71 /* AppKitDiffScrollerTests.swift */; };
 		DFD997286ABB95FBEA6A3AF2 /* ACPWorktreeSessionBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B9DC1F684C319AFDB497B6 /* ACPWorktreeSessionBootstrapper.swift */; };
 		E073EEE9E37052E17CB026A0 /* GGInboxStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C511B229168DDEA87173A41 /* GGInboxStore.swift */; };
 		E099FB5101ED328389233B35 /* MermaidDiagramLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 888112C4BC28BBC55C6804FA /* MermaidDiagramLayoutTests.swift */; };
@@ -2240,6 +2242,7 @@
 		75D19208F2DE728FB5D6F8FF /* ClosedTabHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosedTabHistoryTests.swift; sourceTree = "<group>"; };
 		75DFDC1BD30B1D1CC469D54C /* ZmxEnvTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxEnvTests.swift; sourceTree = "<group>"; };
 		7615FEA1F225EBDE52CF5E14 /* ACPSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManager.swift; sourceTree = "<group>"; };
+		7624AEF61C42B615FBC76B71 /* AppKitDiffScrollerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScrollerTests.swift; sourceTree = "<group>"; };
 		764489A630CC6D79FCE0A26A /* GitService+ReviewLoop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+ReviewLoop.swift"; sourceTree = "<group>"; };
 		768D12909DD5233659AC4E03 /* RepoGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoGroupView.swift; sourceTree = "<group>"; };
 		76942B028C3CBAED16BC4CC1 /* ImageDiffPairResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffPairResolverTests.swift; sourceTree = "<group>"; };
@@ -2814,6 +2817,7 @@
 		D97EF761C70A3AF83C00879A /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
 		D99E47A1F0E3C85A34EABBE6 /* EditorLSPStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLSPStatus.swift; sourceTree = "<group>"; };
 		D9C7B2268F3CE7A5FEDF8580 /* ProjectMCPServerEditorPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMCPServerEditorPolicy.swift; sourceTree = "<group>"; };
+		D9CEF76FBF31C0DA4B19B692 /* AppKitDiffScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScroller.swift; sourceTree = "<group>"; };
 		D9E6D61B213F3378243B4A26 /* AlasField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasField.swift; sourceTree = "<group>"; };
 		DA09B830D18CCEE251D0E10A /* EmptyTabViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyTabViewTests.swift; sourceTree = "<group>"; };
 		DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorRow.swift; sourceTree = "<group>"; };
@@ -4050,6 +4054,7 @@
 				02207D1F1F421F2E19CD90D0 /* AppKitDiffRowHostingPool.swift */,
 				741EFB94AD886324DBC73C72 /* AppKitDiffRowHostingView.swift */,
 				A4E9E696C1C8F5817524752F /* AppKitDiffRowSpec.swift */,
+				D9CEF76FBF31C0DA4B19B692 /* AppKitDiffScroller.swift */,
 				62376559E51E6DAE99840D03 /* AppKitDiffScrollerFlag.swift */,
 				BC2967A37F842D09F43063F3 /* AppKitDiffScrollerReconciler.swift */,
 				C0CD19EC130ED5EFACD84176 /* AppKitDiffScrollView.swift */,
@@ -5471,6 +5476,7 @@
 				CB13AAAE5C140D3A47CEC44F /* AppKitDiffRowHostingPoolTests.swift */,
 				D97D9F58350601898307089A /* AppKitDiffScrollerFlagTests.swift */,
 				3384E5FA341561735906B9EF /* AppKitDiffScrollerReconcilerTests.swift */,
+				7624AEF61C42B615FBC76B71 /* AppKitDiffScrollerTests.swift */,
 				4496D0E5A0243638BBE7A387 /* AppKitDiffTilingControllerTests.swift */,
 			);
 			path = Scroller;
@@ -6099,6 +6105,7 @@
 				AE21069C36D87EB089423687 /* AppKitDiffRowHostingView.swift in Sources */,
 				B9F75C605157BA01FD10DEE5 /* AppKitDiffRowSpec.swift in Sources */,
 				DACFC0DB20E71EB91E74F19D /* AppKitDiffScrollView.swift in Sources */,
+				AE780E8AB5BDB8E7D5BD5146 /* AppKitDiffScroller.swift in Sources */,
 				0808A4FCD6525B4C2BBAF0B5 /* AppKitDiffScrollerFlag.swift in Sources */,
 				A3655FEDF6C5E3C128401DA7 /* AppKitDiffScrollerReconciler.swift in Sources */,
 				A0012CF058E580908B5348BC /* AppKitDiffTilingController.swift in Sources */,
@@ -6901,6 +6908,7 @@
 				3C4FFC880170CDC72FD93BFD /* AppKitDiffRowHostingPoolTests.swift in Sources */,
 				B1DC420E8EEA69070D0701A1 /* AppKitDiffScrollerFlagTests.swift in Sources */,
 				92845FA01F7A57EB8508C2CF /* AppKitDiffScrollerReconcilerTests.swift in Sources */,
+				DFCDEE99657971BB74AD9A06 /* AppKitDiffScrollerTests.swift in Sources */,
 				7AD9F8BC899393522EF92C48 /* AppKitDiffTilingControllerTests.swift in Sources */,
 				A2340CCA2AA5C39B27545EA6 /* AppQuitActionTests.swift in Sources */,
 				A39D44E69D8BEF98C8934DF7 /* AppStateCLIRoutingTests.swift in Sources */,
