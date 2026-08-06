@@ -44,6 +44,13 @@ final class AppKitDiffReviewFileState: ObservableObject {
     private var fileID: DiffReviewFileID?
     private var contextSignature: DiffReviewContextStateSignature?
     private var renderBudgetSignal: Int?
+    private var copyFeedbackCancellable: AnyCancellable?
+
+    init() {
+        copyFeedbackCancellable = copyFeedback.$message.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
 
     func synchronize(file: DiffReviewFileSectionModel, contextSignature: DiffReviewContextStateSignature) {
         if fileID != file.id {
@@ -152,10 +159,50 @@ final class AppKitDiffReviewActionRelay {
         self.onSelectInlineFeedback = onSelectInlineFeedback
     }
 
+    func update(inlineFeedbackActions: DiffReviewInlineFeedbackActions) {
+        self.inlineFeedbackActions = inlineFeedbackActions
+    }
+
+    var inlineFeedbackActionsForRow: DiffReviewInlineFeedbackActions {
+        DiffReviewInlineFeedbackActions(
+            availability: { item, file in self.inlineFeedbackActions.availability(item, file) },
+            openProvider: { item, file in self.inlineFeedbackActions.openProvider(item, file) },
+            copyContext: { item, file in self.inlineFeedbackActions.copyContext(item, file) },
+            sendToAgent: { item, file in self.inlineFeedbackActions.sendToAgent(item, file) },
+            replyProvider: { item, file, body in self.inlineFeedbackActions.replyProvider(item, file, body) },
+            resolveProvider: { item, file in self.inlineFeedbackActions.resolveProvider(item, file) },
+            unresolveProvider: { item, file in self.inlineFeedbackActions.unresolveProvider(item, file) }
+        )
+    }
+
+    var draftCommentActionsForRow: ReviewDraftCommentActions {
+        ReviewDraftCommentActions(
+            availability: { comment in self.draftCommentActions.availability(comment) },
+            canPublishReview: { self.draftCommentActions.canPublishReview() },
+            edit: { comment, body in self.draftCommentActions.edit(comment, body) },
+            delete: { comment in self.draftCommentActions.delete(comment) },
+            resolve: { comment in self.draftCommentActions.resolve(comment) },
+            dismiss: { comment in self.draftCommentActions.dismiss(comment) },
+            copyPrompt: { bundle in self.draftCommentActions.copyPrompt(bundle) },
+            publishProvider: { comment in self.draftCommentActions.publishProvider(comment) },
+            publishReview: { self.draftCommentActions.publishReview() },
+            agent: { target in self.draftCommentActions.agent(target) },
+            agentTargets: { self.draftCommentActions.agentTargets() },
+            sendToAgent: { bundle, target in self.draftCommentActions.sendToAgent(bundle, target) }
+        )
+    }
+
     func selectInlineFeedback(_ item: DiffReviewInlineFeedback) {
         onSelectInlineFeedback(item)
     }
 
+    func selectDraftComment(_ comment: ReviewDraftComment) { onSelectDraftComment(comment) }
     func saveDraftComment(_ anchor: DiffReviewLineAnchor, body: String) { onSaveDraftComment(anchor, body) }
     func contextExpansionActivated() { onContextExpansionActivated() }
+    func reply(to thread: DiffInlineCommentThread, body: String) { onReply(thread, body) }
+    func stageReply(to thread: DiffInlineCommentThread, body: String) { onStageReply(thread, body) }
+    func resolve(_ thread: DiffInlineCommentThread) { onResolve(thread) }
+    func unresolve(_ thread: DiffInlineCommentThread) { onUnresolve(thread) }
+    func edit(_ comment: DiffInlineComment, in thread: DiffInlineCommentThread, body: String) { onEdit(thread, comment, body) }
+    func delete(_ comment: DiffInlineComment, in thread: DiffInlineCommentThread) { onDelete(thread, comment) }
 }

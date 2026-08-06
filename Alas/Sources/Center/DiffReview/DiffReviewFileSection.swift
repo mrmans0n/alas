@@ -232,6 +232,10 @@ struct DiffReviewFileSection: View {
     private func synchronizePresentationState() {
         state.synchronize(file: file, contextSignature: contextStateSignature)
         state.synchronizeRenderBudget(resetSignal: renderBudgetResetSignal)
+        refreshActionRelay()
+    }
+
+    private func refreshActionRelay() {
         state.actionRelay.update(
             inlineFeedbackActions: inlineFeedbackActions,
             onSelectInlineFeedback: onSelectInlineFeedback,
@@ -347,8 +351,9 @@ struct DiffReviewFileSection: View {
     }
 
     private var feedbackDraftCommentActions: ReviewDraftCommentActions {
-        ReviewDraftCommentActions(
+        return ReviewDraftCommentActions(
             availability: draftCommentActions.availability,
+            canPublishReview: draftCommentActions.canPublishReview,
             edit: draftCommentActions.edit,
             delete: draftCommentActions.delete,
             resolve: draftCommentActions.resolve,
@@ -358,6 +363,7 @@ struct DiffReviewFileSection: View {
                 copyFeedback.show("Copied prompt")
             },
             publishProvider: draftCommentActions.publishProvider,
+            publishReview: draftCommentActions.publishReview,
             agent: draftCommentActions.agent,
             agentTargets: draftCommentActions.agentTargets,
             sendToAgent: draftCommentActions.sendToAgent
@@ -438,7 +444,7 @@ struct DiffReviewFileSection: View {
             isFocused: comment.id == focusedDraftCommentID,
             actions: feedbackDraftCommentActions,
             reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-            onSelect: onSelectDraftComment,
+            onSelect: state.actionRelay.selectDraftComment,
             onHoverChange: { isHovered in
                 hoveredDraftCommentID = isHovered ? comment.id : (hoveredDraftCommentID == comment.id ? nil : hoveredDraftCommentID)
             }
@@ -506,11 +512,12 @@ struct DiffReviewFileSection: View {
         _ item: DiffReviewInlineFeedback,
         file: DiffReviewFileSummary
     ) -> some View {
-        DiffReviewInlineFeedbackCard(
+        refreshActionRelay()
+        return DiffReviewInlineFeedbackCard(
             item: item,
             file: file,
             isFocused: item.id == focusedFeedbackID,
-            actions: inlineFeedbackActions,
+            actions: state.actionRelay.inlineFeedbackActionsForRow,
             onSelect: state.actionRelay.selectInlineFeedback,
             onHoverChange: { isHovered in
                 hoveredInlineFeedbackID = isHovered ? item.id : (hoveredInlineFeedbackID == item.id ? nil : hoveredInlineFeedbackID)
@@ -593,7 +600,7 @@ struct DiffReviewFileSection: View {
     func imageProviderThreadPresentation(
         for thread: DiffInlineCommentThread
     ) -> DiffReviewImageProviderThreadPresentation {
-        DiffReviewImageProviderThreadPresentation(
+        return DiffReviewImageProviderThreadPresentation(
             onReply: { body in onReply(thread, body) },
             onStageReply: { body in onStageReply(thread, body) },
             onResolve: { onResolve(thread) },
@@ -949,14 +956,14 @@ struct DiffReviewFileSection: View {
                 onContextExpansion: loadContextAndExpand,
                 threads: threads,
                 annotations: annotations,
-                onReply: onReply,
-                onResolve: onResolve,
-                onUnresolve: onUnresolve,
-                onEdit: onEdit,
-                onDelete: onDelete,
+                onReply: { thread, body in state.actionRelay.reply(to: thread, body: body) },
+                onResolve: { thread in state.actionRelay.resolve(thread) },
+                onUnresolve: { thread in state.actionRelay.unresolve(thread) },
+                onEdit: { thread, comment, body in state.actionRelay.edit(comment, in: thread, body: body) },
+                onDelete: { thread, comment in state.actionRelay.delete(comment, in: thread) },
                 canReply: canReply,
                 canResolve: canResolve,
-                onStageReply: onStageReply,
+                onStageReply: { thread, body in state.actionRelay.stageReply(to: thread, body: body) },
                 canAddToReview: canAddToReview,
                 hunkFusionStates: [fusion],
                 hunkActions: { hunk in
@@ -1009,12 +1016,12 @@ struct DiffReviewFileSection: View {
                     ) {
                         DiffInlineCommentCard(
                             thread: thread,
-                            onReply: { body in onReply(thread, body) },
-                            onStageReply: { body in onStageReply(thread, body) },
-                            onResolve: { onResolve(thread) },
-                            onUnresolve: { onUnresolve(thread) },
-                            onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
-                            onDelete: { comment in onDelete(thread, comment) },
+                            onReply: { body in state.actionRelay.reply(to: thread, body: body) },
+                            onStageReply: { body in state.actionRelay.stageReply(to: thread, body: body) },
+                            onResolve: { state.actionRelay.resolve(thread) },
+                            onUnresolve: { state.actionRelay.unresolve(thread) },
+                            onEdit: { comment, newBody in state.actionRelay.edit(comment, in: thread, body: newBody) },
+                            onDelete: { comment in state.actionRelay.delete(comment, in: thread) },
                             canReply: canReply && thread.viewerCanReply,
                             canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
                             canAddToReview: canAddToReview,
@@ -1217,11 +1224,14 @@ struct DiffReviewFileSection: View {
         .onChange(of: state.isDraftComposerFocused) { _, isFocused in
             draftComposerFocused = isFocused
         }
+        .onAppear {
+            draftComposerFocused = state.isDraftComposerFocused
+        }
     }
 
     @ViewBuilder
     private var focusedComposerMarker: some View {
-        if draftComposerFocused {
+        if state.isDraftComposerFocused {
             DiffReviewAccessibilityMarker(
                 identifier: "diff-review-draft-composer-focused",
                 label: "Draft comment composer focused"

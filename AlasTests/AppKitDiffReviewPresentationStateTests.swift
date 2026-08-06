@@ -91,6 +91,38 @@ struct AppKitDiffReviewPresentationStateTests {
         #expect(calls == ["second"])
     }
 
+    @Test func actionRelayForwardsLatestActionStructForAnExistingRow() {
+        let relay = AppKitDiffReviewActionRelay()
+        let item = inlineFeedbackItem()
+        let file = fileModel().summary
+        let rowActions = relay.inlineFeedbackActionsForRow
+        var calls: [String] = []
+
+        relay.update(inlineFeedbackActions: DiffReviewInlineFeedbackActions(
+            copyContext: { _, _ in calls.append("first") }
+        ))
+        relay.update(inlineFeedbackActions: DiffReviewInlineFeedbackActions(
+            copyContext: { _, _ in calls.append("second") }
+        ))
+
+        rowActions.copyContext(item, file)
+
+        #expect(calls == ["second"])
+    }
+
+    private func inlineFeedbackItem() -> DiffReviewInlineFeedback {
+        DiffReviewInlineFeedback(
+            id: "feedback",
+            providerName: "GitHub",
+            author: nil,
+            bodyPreview: "Note",
+            status: .pending,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/File.swift", line: 1, side: .new),
+            evidenceItemID: "evidence"
+        )
+    }
+
     private func fileModel(path: String = "Sources/File.swift") -> DiffReviewFileSectionModel {
         DiffReviewFileSectionModel(
             summary: DiffReviewFileSummary(
