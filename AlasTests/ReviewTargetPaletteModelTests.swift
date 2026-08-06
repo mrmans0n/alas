@@ -352,4 +352,28 @@ struct ReviewTargetPaletteModelTests {
         await model.loadTargets(environment: env)
         #expect(model.targetRows() == [.message("Could not load commits: boom")])
     }
+
+    @Test func targetRowsShowsFollowedRevisionWhenTargetLoadingFails() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        struct Boom: Error, LocalizedError { var errorDescription: String? { "boom" } }
+        var env = environment()
+        env.loadCommitsAhead = { _ in throw Boom() }
+        await model.loadTargets(environment: env)
+        model.query = "HEAD~3"
+
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows() == [
+            .header("Followed Revision"),
+            .followedRevision(
+                expression: "HEAD~3",
+                resolvedSHA: "resolved-HEAD~3",
+                branch: "feature",
+                headSHA: "resolved-HEAD~3"
+            ),
+            .message("Could not load commits: boom"),
+        ])
+        #expect(model.selectedIndex == 1)
+    }
 }

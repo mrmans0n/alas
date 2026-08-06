@@ -172,11 +172,14 @@ final class ReviewTargetPaletteModel {
     func targetRows() -> [TargetRow] {
         guard case .targets = level else { return [] }
         if isLoadingTargets { return [.message("Loading commits…")] }
-        if let targetsError { return [.message(targetsError)] }
         var rows: [TargetRow] = []
         if let followedRevisionRow {
             rows.append(.header("Followed Revision"))
             rows.append(followedRevisionRow)
+        }
+        if let targetsError {
+            rows.append(.message(targetsError))
+            return rows
         }
         rows.append(.header("Commits"))
         let filteredCommits = ReviewScopeSelection.filteredCommits(commits, query: query)

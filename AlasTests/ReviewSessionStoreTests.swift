@@ -172,6 +172,26 @@ struct ReviewSessionStoreTests {
         #expect(try store.load(id: final.id) == final)
     }
 
+    @Test func replacementLookupStaysAuthoritativeAfterOldIDReuse() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = makeRecord(id: "source", worktreeID: "wt-1", updatedAt: 1)
+        var retargeted = source
+        retargeted.id = ReviewSessionID(rawValue: "retargeted")
+        retargeted.updatedAt = Date(timeIntervalSince1970: 2)
+        var reopened = source
+        reopened.updatedAt = Date(timeIntervalSince1970: 3)
+
+        try store.save(source)
+        try store.replace(id: source.id, with: retargeted)
+        try store.save(reopened)
+
+        #expect(try store.load(id: source.id) == reopened)
+        #expect(try store.loadReplacement(for: source.id) == retargeted)
+    }
+
     private func makeRecord(id: String, worktreeID: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
         let target = ReviewSessionTarget.commit(
             worktreeID: worktreeID,

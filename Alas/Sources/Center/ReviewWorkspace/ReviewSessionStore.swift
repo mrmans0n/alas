@@ -26,6 +26,20 @@ struct ReviewSessionStore {
         return nil
     }
 
+    func loadReplacement(for id: ReviewSessionID) throws -> ReviewSessionRecord? {
+        let snapshot = try readSnapshot()
+        var currentID = id.rawValue
+        var seen: Set<String> = []
+        while let replacementID = snapshot.replacementIDsByOldID[currentID],
+              seen.insert(currentID).inserted {
+            if let record = snapshot.recordsByID[replacementID] {
+                return record
+            }
+            currentID = replacementID
+        }
+        return nil
+    }
+
     func list(worktreeID: String) throws -> [ReviewSessionRecord] {
         let snapshot = try readSnapshot()
         return snapshot.recordsByID.values

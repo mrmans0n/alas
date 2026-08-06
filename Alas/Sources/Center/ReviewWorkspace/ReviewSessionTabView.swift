@@ -1156,7 +1156,9 @@ struct ReviewSessionTabView: View {
 
     private func recordSessionSendFailure(_ error: Error) {
         guard let visibleRecord = record else { return }
-        var current = (try? sessionStore.load(id: visibleRecord.id)) ?? visibleRecord
+        var current = (try? sessionStore.loadReplacement(for: visibleRecord.id))
+            ?? (try? sessionStore.load(id: visibleRecord.id))
+            ?? visibleRecord
         current.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
         current.updatedAt = now()
         record = current
@@ -1281,7 +1283,9 @@ enum ReviewSessionHandoffPersistence {
         }
 
         do {
-            let current = try sessionStore.load(id: handoff.sessionID) ?? currentRecord
+            let current = try sessionStore.loadReplacement(for: handoff.sessionID)
+                ?? sessionStore.load(id: handoff.sessionID)
+                ?? currentRecord
             guard let current else { return nil }
             let updated = current.recording(handoff: handoff)
             try sessionStore.save(updated)
