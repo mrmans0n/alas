@@ -1,0 +1,121 @@
+import Testing
+@testable import Alas
+
+@MainActor
+struct AppKitDiffReviewPresentationStateTests {
+    @Test func storeRetainsStateForTheSameFile() {
+        let store = AppKitDiffReviewPresentationStore()
+        let file = fileModel(path: "Sources/Retained.swift")
+        let state = store.state(for: file)
+        state.pendingDraftBody = "keep me"
+
+        #expect(store.state(for: file) === state)
+        store.prune(keeping: [file.id])
+        #expect(store.state(for: file).pendingDraftBody == "keep me")
+    }
+
+    @Test func storePrunesStateForAbsentFiles() {
+        let store = AppKitDiffReviewPresentationStore()
+        let retained = fileModel(path: "Sources/Retained.swift")
+        let removed = fileModel(path: "Sources/Removed.swift")
+        let removedState = store.state(for: removed)
+
+        store.prune(keeping: [retained.id])
+
+        #expect(store.state(for: removed) !== removedState)
+    }
+
+    @Test func retainedStateKeepsDraftAndExpandedContextAcrossUnmount() {
+        let store = AppKitDiffReviewPresentationStore()
+        let file = fileModel()
+        let state = store.state(for: file)
+        state.pendingDraftBody = "keep me"
+        state.expandedCollapsedRowIDs = ["hunk:1"]
+
+        let remounted = store.state(for: file)
+
+        #expect(remounted.pendingDraftBody == "keep me")
+        #expect(remounted.expandedCollapsedRowIDs == ["hunk:1"])
+    }
+
+    @Test func renderBudgetResetClearsFullDiffOverride() {
+        let state = AppKitDiffReviewFileState()
+        state.showFullDiffOverride = true
+
+        state.resetForRenderBudgetChange()
+
+        #expect(!state.showFullDiffOverride)
+    }
+
+    @Test func changedContextSignatureResetsContextState() {
+        let state = AppKitDiffReviewFileState()
+        let file = fileModel()
+        state.contextLoadError = "old error"
+        state.synchronize(file: file, contextSignature: signature(file: file, providerID: "first"))
+        state.contextLoadError = "new error"
+
+        state.synchronize(file: file, contextSignature: signature(file: file, providerID: "second"))
+
+        #expect(state.contextLoadError == nil)
+    }
+
+    @Test func staleContextGenerationCannotPublish() {
+        let state = AppKitDiffReviewFileState()
+        let file = fileModel()
+        state.synchronize(file: file, contextSignature: signature(file: file, providerID: "provider"))
+        let oldGeneration = state.beginContextLoad(fileID: file.id, signature: signature(file: file, providerID: "provider"))
+        state.resetContextState()
+
+        #expect(!state.acceptsContextResult(fileID: file.id, generation: oldGeneration))
+    }
+
+    @Test func actionRelayUsesLatestCallbackForExistingRow() {
+        let relay = AppKitDiffReviewActionRelay()
+        let item = DiffReviewInlineFeedback(
+            id: "feedback",
+            providerName: "GitHub",
+            author: nil,
+            bodyPreview: "Note",
+            status: .pending,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/File.swift", line: 1, side: .new),
+            evidenceItemID: "evidence"
+        )
+        var calls: [String] = []
+        let existingRowAction = { relay.selectInlineFeedback(item) }
+        relay.update(onSelectInlineFeedback: { _ in calls.append("first") })
+        relay.update(onSelectInlineFeedback: { _ in calls.append("second") })
+
+        existingRowAction()
+
+        #expect(calls == ["second"])
+    }
+
+    private func fileModel(path: String = "Sources/File.swift") -> DiffReviewFileSectionModel {
+        DiffReviewFileSectionModel(
+            summary: DiffReviewFileSummary(
+                path: path,
+                namespace: "working-tree",
+                groupID: nil,
+                groupTitle: nil,
+                status: .modified,
+                additions: 1,
+                deletions: 0,
+                isRenderable: true
+            ),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+    }
+
+    private func signature(file: DiffReviewFileSectionModel, providerID: String) -> DiffReviewContextStateSignature {
+        DiffReviewContextStateSignature(
+            fileID: file.id.rawValue,
+            providerID: providerID,
+            structuralHash: nil
+        )
+    }
+}

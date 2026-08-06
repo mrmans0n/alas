@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-private struct PendingContextExpansion {
+struct PendingContextExpansion {
     let key: DiffContextExpansionKey
     let mode: DiffContextExpansionMode
     let edge: DiffContextExpansionEdge?
@@ -127,26 +127,30 @@ struct DiffReviewFileSection: View {
     #endif
 
     @Environment(\.theme) private var theme
-    @StateObject private var copyFeedback = CopyFeedbackState()
-    @StateObject private var renderContextCache = DiffReviewRenderContextCache()
-    @State private var pendingDraftAnchor: DiffReviewLineAnchor?
-    @State private var pendingDraftBody = ""
-    @State private var draftComposerFocusRequestGeneration = 0
-    @State private var expandedCollapsedRowIDs: Set<String> = []
-    @State private var contextSnapshot: DiffReviewFileContextSnapshot?
-    @State private var contextExpansion = DiffContextExpansionState()
-    @State private var contextLoadTask: Task<Void, Never>?
-    @State private var contextLoadFileID: DiffReviewFileID?
-    @State private var contextLoadSignature: DiffReviewContextStateSignature?
-    @State private var contextLoadGeneration = 0
-    @State private var contextLoadError: String?
-    @State private var pendingContextExpansions: [PendingContextExpansion] = []
-    @State private var imageState = DiffReviewImageState()
-    @State private var hoveredInlineFeedbackID: String?
-    @State private var hoveredDraftCommentID: String?
-    @State private var activeThreadID: String?
-    @State private var showFullDiffOverride = false
+    var presentationState: AppKitDiffReviewFileState? = nil
+    @StateObject private var ownedPresentationState = AppKitDiffReviewFileState()
     @FocusState private var draftComposerFocused: Bool
+
+    private var state: AppKitDiffReviewFileState { presentationState ?? ownedPresentationState }
+    private var copyFeedback: CopyFeedbackState { state.copyFeedback }
+    private var renderContextCache: DiffReviewRenderContextCache { state.renderContextCache }
+    private var pendingDraftAnchor: DiffReviewLineAnchor? { get { state.pendingDraftAnchor } nonmutating set { state.pendingDraftAnchor = newValue } }
+    private var pendingDraftBody: String { get { state.pendingDraftBody } nonmutating set { state.pendingDraftBody = newValue } }
+    private var draftComposerFocusRequestGeneration: Int { get { state.draftComposerFocusRequestGeneration } nonmutating set { state.draftComposerFocusRequestGeneration = newValue } }
+    private var expandedCollapsedRowIDs: Set<String> { get { state.expandedCollapsedRowIDs } nonmutating set { state.expandedCollapsedRowIDs = newValue } }
+    private var contextSnapshot: DiffReviewFileContextSnapshot? { get { state.contextSnapshot } nonmutating set { state.contextSnapshot = newValue } }
+    private var contextExpansion: DiffContextExpansionState { get { state.contextExpansion } nonmutating set { state.contextExpansion = newValue } }
+    private var contextLoadTask: Task<Void, Never>? { get { state.contextLoadTask } nonmutating set { state.contextLoadTask = newValue } }
+    private var contextLoadFileID: DiffReviewFileID? { get { state.contextLoadFileID } nonmutating set { state.contextLoadFileID = newValue } }
+    private var contextLoadSignature: DiffReviewContextStateSignature? { get { state.contextLoadSignature } nonmutating set { state.contextLoadSignature = newValue } }
+    private var contextLoadGeneration: Int { get { state.contextLoadGeneration } nonmutating set { state.contextLoadGeneration = newValue } }
+    private var contextLoadError: String? { get { state.contextLoadError } nonmutating set { state.contextLoadError = newValue } }
+    private var pendingContextExpansions: [PendingContextExpansion] { get { state.pendingContextExpansions } nonmutating set { state.pendingContextExpansions = newValue } }
+    private var imageState: DiffReviewImageState { state.imageState }
+    private var hoveredInlineFeedbackID: String? { get { state.hoveredInlineFeedbackID } nonmutating set { state.hoveredInlineFeedbackID = newValue } }
+    private var hoveredDraftCommentID: String? { get { state.hoveredDraftCommentID } nonmutating set { state.hoveredDraftCommentID = newValue } }
+    private var activeThreadID: String? { get { state.activeThreadID } nonmutating set { state.activeThreadID = newValue } }
+    private var showFullDiffOverride: Bool { get { state.showFullDiffOverride } nonmutating set { state.showFullDiffOverride = newValue } }
 
     private var isOverRenderBudget: Bool {
         guard let displayModel = file.displayModel else { return false }
@@ -162,7 +166,8 @@ struct DiffReviewFileSection: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        synchronizePresentationState()
+        return VStack(spacing: 0) {
             header
             contextLoadErrorRow
             if file.imageProvider != nil {
@@ -197,8 +202,8 @@ struct DiffReviewFileSection: View {
             clearPendingDraft()
         }
         .onChange(of: file.id) { _, _ in
-            showFullDiffOverride = false
-            resetContextState()
+            state.resetForFileIdentityChange()
+            state.synchronize(file: file, contextSignature: contextStateSignature)
         }
         .onChange(of: renderBudgetResetSignal) { _, _ in
             // Re-arm the render budget whenever the same file reloads with new
@@ -206,10 +211,10 @@ struct DiffReviewFileSection: View {
             // captures text-only edits (unlike `structuralHash`); context
             // expansion never mutates `file.displayModel`, so an opened large
             // diff stays open while the reviewer expands context.
-            showFullDiffOverride = false
+            state.resetForRenderBudgetChange()
         }
         .onChange(of: contextStateSignature) { _, _ in
-            resetContextState()
+            state.resetContextState()
         }
         .task(id: file.imageProvider?.id) {
             guard let provider = file.imageProvider else {
@@ -218,6 +223,29 @@ struct DiffReviewFileSection: View {
             }
             await imageState.load(provider: provider)
         }
+        .onAppear {
+            state.synchronize(file: file, contextSignature: contextStateSignature)
+            state.synchronizeRenderBudget(resetSignal: renderBudgetResetSignal)
+        }
+    }
+
+    private func synchronizePresentationState() {
+        state.synchronize(file: file, contextSignature: contextStateSignature)
+        state.synchronizeRenderBudget(resetSignal: renderBudgetResetSignal)
+        state.actionRelay.update(
+            inlineFeedbackActions: inlineFeedbackActions,
+            onSelectInlineFeedback: onSelectInlineFeedback,
+            draftCommentActions: draftCommentActions,
+            onSelectDraftComment: onSelectDraftComment,
+            onSaveDraftComment: onSaveDraftComment,
+            onContextExpansionActivated: onContextExpansionActivated,
+            onReply: onReply,
+            onResolve: onResolve,
+            onUnresolve: onUnresolve,
+            onEdit: onEdit,
+            onDelete: onDelete,
+            onStageReply: onStageReply
+        )
     }
 
     @ViewBuilder
@@ -483,7 +511,7 @@ struct DiffReviewFileSection: View {
             file: file,
             isFocused: item.id == focusedFeedbackID,
             actions: inlineFeedbackActions,
-            onSelect: onSelectInlineFeedback,
+            onSelect: state.actionRelay.selectInlineFeedback,
             onHoverChange: { isHovered in
                 hoveredInlineFeedbackID = isHovered ? item.id : (hoveredInlineFeedbackID == item.id ? nil : hoveredInlineFeedbackID)
             }
@@ -1127,7 +1155,10 @@ struct DiffReviewFileSection: View {
     private var draftComposerBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             ReviewDraftComposerTextEditor(
-                text: $pendingDraftBody,
+                text: Binding(
+                    get: { state.pendingDraftBody },
+                    set: { state.pendingDraftBody = $0 }
+                ),
                 theme: theme,
                 isFocused: $draftComposerFocused,
                 focusRequestGeneration: draftComposerFocusRequestGeneration,
@@ -1180,6 +1211,12 @@ struct DiffReviewFileSection: View {
                 label: "Draft comment composer"
             )
         )
+        .onChange(of: draftComposerFocused) { _, isFocused in
+            state.isDraftComposerFocused = isFocused
+        }
+        .onChange(of: state.isDraftComposerFocused) { _, isFocused in
+            draftComposerFocused = isFocused
+        }
     }
 
     @ViewBuilder
@@ -1208,7 +1245,7 @@ struct DiffReviewFileSection: View {
             return
         }
 
-        onSaveDraftComment(canonicalAnchor, body)
+        state.actionRelay.saveDraftComment(canonicalAnchor, body: body)
         clearPendingDraft()
     }
 
@@ -1265,7 +1302,7 @@ struct DiffReviewFileSection: View {
         edge: DiffContextExpansionEdge?
     ) {
         guard let provider = file.contextProvider else { return }
-        onContextExpansionActivated()
+        state.actionRelay.contextExpansionActivated()
         if contextSnapshot != nil {
             applyContextExpansion(key, mode: mode, edge: edge)
             return
