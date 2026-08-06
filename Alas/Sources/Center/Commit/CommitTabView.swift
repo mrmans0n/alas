@@ -225,6 +225,14 @@ struct CommitTabView: View {
         do {
             let resolved = try await resolvedRevisionForLoad()
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            if resolved.reusesCurrentSnapshot {
+                if let tracked = resolved.trackedRevision {
+                    appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
+                        $0.revision = .following(tracked)
+                    }
+                }
+                return
+            }
             let d = try await git.commitDetails(at: worktreePath, sha: resolved.sha)
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             let loaded = try await loadReviewSession(
@@ -247,19 +255,26 @@ struct CommitTabView: View {
         }
     }
 
-    private func resolvedRevisionForLoad() async throws -> (sha: String, trackedRevision: TrackedRevision?) {
+    private func resolvedRevisionForLoad() async throws -> (
+        sha: String,
+        trackedRevision: TrackedRevision?,
+        reusesCurrentSnapshot: Bool
+    ) {
         guard case .following(let tracked) = tabState.revision else {
-            return (tabState.sha, nil)
+            return (tabState.sha, nil, false)
         }
         let candidate = try await revisionResolver.resolve(at: worktreePath, expression: tracked.expression)
         switch TrackedRevisionPolicy.evaluate(current: tracked, candidate: candidate) {
-        case .unchanged(let revision), .follow(let revision):
-            return (revision.resolvedSHA, revision)
+        case .unchanged(let revision):
+            let canReuseSnapshot = details?.info.sha == revision.resolvedSHA && reviewSession != nil
+            return (revision.resolvedSHA, revision, canReuseSnapshot)
+        case .follow(let revision):
+            return (revision.resolvedSHA, revision, false)
         case .pause(let revision):
             appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
                 $0.revision = .following(revision)
             }
-            return (tracked.resolvedSHA, nil)
+            return (tracked.resolvedSHA, nil, false)
         }
     }
 

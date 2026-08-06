@@ -46,6 +46,7 @@ final class RemoteProjectGitWatcher {
     private var pollTask: Task<Void, Never>?
     private var helperSession: RemoteHelperWatchSession?
     private var lastEntries: [RemoteWorktreePollEntry]?
+    private var lastSharedRefsSignature: String?
     private var tickGate = RemoteProjectGitTickGate()
 
     init(projectPath: URL) {
@@ -130,8 +131,18 @@ final class RemoteProjectGitWatcher {
         if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         guard result.exitCode == 0 else { return true }
 
+        let sharedRefsSignature = await pollSharedRefsSignature()
         let entries = RemoteWorktreePoll.parse(porcelain: result.stdout)
-        defer { lastEntries = entries }
+        defer {
+            lastEntries = entries
+            if let sharedRefsSignature {
+                lastSharedRefsSignature = sharedRefsSignature
+            }
+        }
+        var sharedRefsMoved = false
+        if let sharedRefsSignature {
+            sharedRefsMoved = lastSharedRefsSignature != nil && lastSharedRefsSignature != sharedRefsSignature
+        }
         guard lastEntries != nil else {
             onTopologyChanged?()
             return true
@@ -144,9 +155,18 @@ final class RemoteProjectGitWatcher {
                 (URL(fileURLWithPath: $0.key), $0.value)
             }))
         }
-        if delta.headMoved { onRevisionChanged?() }
+        if delta.headMoved || sharedRefsMoved { onRevisionChanged?() }
         if delta.topologyChanged { onTopologyChanged?() }
         return true
+    }
+
+    private func pollSharedRefsSignature() async -> String? {
+        let result = try? await Process.git(["show-ref", "--head"], cwd: projectPath)
+        guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+            return nil
+        }
+        guard result.exitCode == 0 || result.exitCode == 1 else { return nil }
+        return result.stdout
     }
 
     deinit { pollTask?.cancel() }
