@@ -11,6 +11,7 @@ struct CommitTabView: View {
     @State private var loadingDetails = true
     @State private var detailsError: String?
     @State private var activeDetailsKey: String?
+    @State private var activeDetailsID = UUID()
 
     @State private var reviewSession: DiffReviewLoadedSession?
     @State private var loadingReviewSession = false
@@ -201,8 +202,9 @@ struct CommitTabView: View {
     }
 
     private func loadDetails() async {
-        let requestedKey = loadTaskID
-        activeDetailsKey = requestedKey
+        let requestedToken = CommitReviewLoadToken.next(key: loadTaskID)
+        activeDetailsKey = requestedToken.key
+        activeDetailsID = requestedToken.id
         let isTrackedRefresh = tabState.revision.tracked != nil && details != nil
         loadingDetails = details == nil
         isRefreshingTrackedRevision = isTrackedRefresh
@@ -219,8 +221,10 @@ struct CommitTabView: View {
         loadingReviewSession = false
         headerExpanded = true
         defer {
-            if activeDetailsKey == requestedKey { loadingDetails = false }
-            if activeDetailsKey == requestedKey { isRefreshingTrackedRevision = false }
+            if requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) {
+                loadingDetails = false
+                isRefreshingTrackedRevision = false
+            }
         }
         do {
             let resolved: (
@@ -237,7 +241,7 @@ struct CommitTabView: View {
                 resolved = (tracked.resolvedSHA, nil, false)
                 refreshError = error.localizedDescription
             }
-            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
             if resolved.reusesCurrentSnapshot {
                 if let tracked = resolved.trackedRevision {
                     appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
@@ -247,13 +251,13 @@ struct CommitTabView: View {
                 return
             }
             let d = try await git.commitDetails(at: worktreePath, sha: resolved.sha)
-            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
             let loaded = try await loadReviewSession(
                 details: d,
                 sha: resolved.sha,
                 preservesPublishedSession: isTrackedRefresh
             )
-            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
             self.details = d
             detailsError = refreshError
             publishReviewSession(loaded, preservingSelectionByPathFrom: selectedReviewFileID)
@@ -264,7 +268,7 @@ struct CommitTabView: View {
                 }
             }
         } catch {
-            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
             self.detailsError = (error as NSError).localizedDescription
         }
     }

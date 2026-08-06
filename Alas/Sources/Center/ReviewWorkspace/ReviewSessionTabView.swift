@@ -351,13 +351,22 @@ struct ReviewSessionTabView: View {
         if isLoading {
             stateView(title: "Loading review session...", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
         } else if let loaded, loaded.session.files.isEmpty {
-            stateView(title: "No files to review", detail: "This review session has no file diffs.", color: theme.color("fg-dim"), showsRetry: false)
+            emptyReviewState()
         } else if let loaded {
             reviewSurface(loaded)
         } else if let loadError {
             stateView(title: "Could not load review session", detail: loadError, color: theme.color("del"), showsRetry: loadsOnAppear)
         } else {
             stateView(title: "No review session loaded", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
+        }
+    }
+
+    private func emptyReviewState() -> some View {
+        VStack(spacing: 0) {
+            if let loadError, !loadError.isEmpty {
+                trackedRefreshErrorBanner(loadError)
+            }
+            stateView(title: "No files to review", detail: "This review session has no file diffs.", color: theme.color("fg-dim"), showsRetry: false)
         }
     }
 

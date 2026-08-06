@@ -3166,13 +3166,25 @@ final class AppState {
     }
 
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
+        Task { @MainActor in
+            let resolvedPrefill: String?
+            if let prefill {
+                resolvedPrefill = prefill
+            } else {
+                resolvedPrefill = await suggestedFollowRevisionPrefill(worktreeID: worktreeID, tabID: tabID)
+            }
+            presentFollowRevisionPrompt(worktreeID: worktreeID, tabID: tabID, prefill: resolvedPrefill, isEditing: prefill != nil)
+        }
+    }
+
+    private func presentFollowRevisionPrompt(worktreeID: String, tabID: TabID, prefill: String?, isEditing: Bool) {
         let alert = NSAlert()
-        alert.messageText = prefill == nil ? "Follow Revision" : "Edit Followed Revision"
+        alert.messageText = isEditing ? "Edit Followed Revision" : "Follow Revision"
         alert.informativeText = "Enter a single Git revision expression, such as HEAD~3."
         alert.addButton(withTitle: "Follow")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.stringValue = prefill ?? "HEAD"
+        field.stringValue = prefill ?? ""
         alert.accessoryView = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let expression = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3181,6 +3193,37 @@ final class AppState {
             return
         }
         followRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
+    }
+
+    private func suggestedFollowRevisionPrefill(worktreeID: String, tabID: TabID) async -> String? {
+        guard let worktree = worktree(withId: worktreeID),
+              let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
+        else { return nil }
+        let result = try? await Process.git(
+            ["rev-list", "--first-parent", "--max-count=200", "HEAD"],
+            cwd: worktree.path
+        )
+        guard result?.exitCode == 0 else { return nil }
+        let firstParentSHAs = result?.stdout
+            .split(whereSeparator: \.isNewline)
+            .map(String.init) ?? []
+        return FollowRevisionPrefill.expression(displayedSHA: displayedSHA, firstParentSHAs: firstParentSHAs)
+    }
+
+    private func displayedCommitSHA(worktreeID: String, tabID: TabID) -> String? {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return nil }
+        switch tab {
+        case .commit(let state):
+            return state.sha
+        case .reviewSession(let state):
+            let record = try? ReviewSessionStore().load(id: state.sessionID)
+            if case .commit(let sha) = record?.target.payload {
+                return sha
+            }
+            return nil
+        default:
+            return nil
+        }
     }
 
     func stopFollowingRevision(worktreeID: String, tabID: TabID) {
