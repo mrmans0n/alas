@@ -72,6 +72,22 @@ struct DiffPaneHunkActionPresence: Equatable {
     }
 }
 
+struct DiffPaneLSPContextToken: Equatable {
+    let worktreeId: String
+    let worktreeRoot: URL
+    let relativePath: String
+    let language: String
+    let lspManagerIdentity: ObjectIdentifier
+
+    init(_ context: DiffPaneLSPContext) {
+        worktreeId = context.worktreeId
+        worktreeRoot = context.worktreeRoot
+        relativePath = context.relativePath
+        language = context.language
+        lspManagerIdentity = ObjectIdentifier(context.lsp)
+    }
+}
+
 struct DiffPaneHunkRowToken: Equatable {
     let groupID: String
     let rowsSignature: DiffDisplayRowsSignature
@@ -82,6 +98,7 @@ struct DiffPaneHunkRowToken: Equatable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let theme: Theme
+    let lspContext: DiffPaneLSPContextToken?
     let threadSignatures: [DiffInlineCommentThread]
     let annotations: [DiffInlineAnnotation]
     let activeHighlight: DiffReviewCommentHighlight?
@@ -141,6 +158,7 @@ enum DiffPaneRowPlanBuilder {
                 codeFontFamily: input.codeFontFamily,
                 codeFontSize: input.codeFontSize,
                 theme: input.theme,
+                lspContext: input.lspContext.map(DiffPaneLSPContextToken.init),
                 threadSignatures: hunkThreads,
                 annotations: hunkAnnotations,
                 activeHighlight: input.activeCommentHighlight,

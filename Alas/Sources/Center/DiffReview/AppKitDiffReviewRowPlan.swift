@@ -426,7 +426,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 continue
             }
 
-            append(&rows, id: groupID, input: input, signature: group.displayGroup.header.hashValue, height: 37) {
+            append(&rows, id: groupID, input: input, signature: groupHeaderSignature(group.displayGroup, input: input), height: 37) {
                 AnyView(AppKitDiffReviewGroupHeaderRowBody(group: group.displayGroup, input: input))
             }
             for segment in group.segments {
@@ -663,6 +663,17 @@ enum AppKitDiffReviewRowPlanBuilder {
         hasher.combine(input.file.summary.deletions)
         hasher.combine(input.inlineFeedback.count + input.draftComments.count + input.threads.count)
         hasher.combine(deferred)
+        return hasher.finalize()
+    }
+
+    private static func groupHeaderSignature(_ group: DiffDisplayGroup, input: AppKitDiffReviewRowInput) -> Int {
+        let collapsedRowIDs = DiffCollapsedContextController.collapsedRowIDs(in: group)
+        var hasher = Hasher()
+        hasher.combine(group.header)
+        hasher.combine(collapsedRowIDs)
+        if !collapsedRowIDs.isEmpty {
+            hasher.combine(DiffCollapsedContextController.isExpanded(group, expandedIDs: input.state.expandedCollapsedRowIDs))
+        }
         return hasher.finalize()
     }
 

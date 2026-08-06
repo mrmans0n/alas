@@ -351,6 +351,23 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!withSegment.equalityToken.isEqual(to: withoutSegment.equalityToken))
     }
 
+    @Test func groupHeaderTokenChangesWhenCollapsedContextExpansionChanges() throws {
+        let file = collapsibleTextFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingDraftAnchor = DiffReviewLineAnchor(
+            path: file.summary.path, side: .new, line: 1, rowIndex: 1, selectedText: "let value1 = 1"
+        )
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let group = try #require(file.displayModel?.groups.first)
+        let groupID = AppKitDiffReviewRowID.groupHeader(fileID: file.id, groupID: group.id)
+        let collapsed = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == groupID })
+
+        state.expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(group, expandedIDs: state.expandedCollapsedRowIDs)
+        let expanded = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == groupID })
+
+        #expect(!collapsed.equalityToken.isEqual(to: expanded.equalityToken))
+    }
+
     @Test func rowInputContextExpansionAppliesStateAndNotifies() {
         let snapshot = DiffReviewFileContextSnapshot(
             old: .available(["let a = 0", "let old = 1", "let c = 2"]),
@@ -405,6 +422,28 @@ struct AppKitDiffReviewRowPlanTests {
             language: "swift",
             lsp: lsp,
             openTarget: { _, _, _ in }
+        )
+    }
+
+    private func collapsibleTextFile() -> DiffReviewFileSectionModel {
+        let diff = ParsedDiff(hunks: [
+            .init(
+                header: "@@ -1,15 +1,15 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: (1...15).map {
+                    .init(kind: .context, text: "let value\($0) = \($0)", oldNumber: $0, newNumber: $0)
+                }
+            ),
+        ])
+        let summary = DiffReviewFileSummary(
+            path: "Sources/Example.swift", namespace: "review", groupID: nil, groupTitle: nil,
+            status: .modified, additions: 0, deletions: 0, isRenderable: true
+        )
+        return DiffReviewFileSectionModel(
+            summary: summary, parsedDiff: diff,
+            displayModel: DiffDisplayModelBuilder.build(diff: diff, filePath: summary.path),
+            placeholderMessage: nil, openFile: nil, contextProvider: nil
         )
     }
 

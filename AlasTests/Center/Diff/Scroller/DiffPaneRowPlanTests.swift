@@ -47,6 +47,18 @@ struct DiffPaneRowPlanTests {
         #expect(first.rows[0].equalityToken.isEqual(to: second.rows[0].equalityToken))
     }
 
+    @Test func tokenChangesWhenLSPContextChanges() {
+        let state = DiffPanePresentationState()
+        let baseToken = DiffPaneRowPlanBuilder.build(input: input(), state: state).rows[0].equalityToken
+        let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
+        let lspToken = DiffPaneRowPlanBuilder.build(
+            input: input(lspContext: lspContext(lsp: lsp, relativePath: "Sources/Example.swift")),
+            state: state
+        ).rows[0].equalityToken
+
+        #expect(!baseToken.isEqual(to: lspToken))
+    }
+
     @Test func equalTokenRowsInvokeTheLatestHunkHandler() throws {
         let state = DiffPanePresentationState()
         var calls: [String] = []
@@ -93,6 +105,7 @@ struct DiffPaneRowPlanTests {
         codeFontFamily: String = "SF Mono",
         codeFontSize: CGFloat = 13,
         theme: Theme? = nil,
+        lspContext: DiffPaneLSPContext? = nil,
         actions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions = { _ in .init() }
     ) -> DiffPaneRowPlanInput {
         DiffPaneRowPlanInput(
@@ -104,6 +117,7 @@ struct DiffPaneRowPlanTests {
             codeFontFamily: codeFontFamily,
             codeFontSize: codeFontSize,
             theme: theme ?? (try! ThemeStore().current),
+            lspContext: lspContext,
             hunkActions: actions
         )
     }
@@ -112,6 +126,17 @@ struct DiffPaneRowPlanTests {
         var theme = try! ThemeStore().current
         theme.accentOverrideHex = "#ff00ff"
         return theme
+    }
+
+    private func lspContext(lsp: WorkspaceLSPManager, relativePath: String) -> DiffPaneLSPContext {
+        DiffPaneLSPContext(
+            worktreeId: "wt",
+            worktreeRoot: URL(fileURLWithPath: "/tmp/repo"),
+            relativePath: relativePath,
+            language: "swift",
+            lsp: lsp,
+            openTarget: { _, _, _ in }
+        )
     }
 
     private func model() -> DiffDisplayModel {
