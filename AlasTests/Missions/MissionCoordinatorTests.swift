@@ -3,7 +3,7 @@ import Testing
 @testable import Alas
 
 @MainActor
-@Suite("Mission coordinator")
+@Suite("Mission coordinator", .serialized)
 struct MissionCoordinatorTests {
     private static let primaryDraft = MissionDraft(
         source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
@@ -1376,9 +1376,10 @@ private final class MissionCoordinatorFake {
     }
 
     func waitForWorktreeStarts(count: Int) async {
-        for _ in 0..<200 {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
             if startedLegIDs.count >= count { return }
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
     }
 
