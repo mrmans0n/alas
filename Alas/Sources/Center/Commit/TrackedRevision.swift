@@ -175,18 +175,30 @@ struct TrackedRevisionResolver {
 
     func resolve(at worktreePath: URL, expression: String) async throws -> TrackedRevisionCandidate {
         let expression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let selector = TrackedRevision.timeRelativeReflogSelector(in: expression) {
+            throw TrackedRevisionResolverError.unsupportedTimeRelativeReflogExpression(selector)
+        }
+        let dependsOnWorktreeHEAD = TrackedRevision.usesWorktreeHEADAlias(expression)
         while true {
             let startingBranch = try await branch(worktreePath)
-            let startingHEAD = try await resolve(worktreePath, "HEAD")
+            let startingHEAD: String?
+            do {
+                startingHEAD = try await resolve(worktreePath, "HEAD")
+            } catch {
+                guard !dependsOnWorktreeHEAD else { throw error }
+                startingHEAD = nil
+            }
             let pinnedExpression: String
-            if expression == "HEAD" {
+            if expression == "HEAD", let startingHEAD {
                 pinnedExpression = startingHEAD
             } else if expression.hasPrefix("HEAD"),
+                      let startingHEAD,
                       TrackedRevision.shouldPinHEADSuffix(expression.dropFirst("HEAD".count)) {
                 pinnedExpression = startingHEAD + expression.dropFirst("HEAD".count)
-            } else if expression == "@" {
+            } else if expression == "@", let startingHEAD {
                 pinnedExpression = startingHEAD
             } else if expression.hasPrefix("@"),
+                      let startingHEAD,
                       TrackedRevision.shouldPinHEADSuffix(expression.dropFirst("@".count)) {
                 pinnedExpression = startingHEAD + expression.dropFirst("@".count)
             } else {
@@ -194,11 +206,28 @@ struct TrackedRevisionResolver {
             }
             let resolvedSHA = try await resolve(worktreePath, String(pinnedExpression))
             let endingBranch = try await branch(worktreePath)
-            let endingHEAD = try await resolve(worktreePath, "HEAD")
+            let endingHEAD: String?
+            do {
+                endingHEAD = try await resolve(worktreePath, "HEAD")
+            } catch {
+                guard !dependsOnWorktreeHEAD else { throw error }
+                endingHEAD = nil
+            }
             if startingBranch == endingBranch, startingHEAD == endingHEAD {
-                return TrackedRevisionCandidate(branch: endingBranch, sha: resolvedSHA, headSHA: endingHEAD)
+                return TrackedRevisionCandidate(branch: endingBranch, sha: resolvedSHA, headSHA: endingHEAD ?? "")
             }
             try Task.checkCancellation()
+        }
+    }
+}
+
+enum TrackedRevisionResolverError: LocalizedError, Equatable {
+    case unsupportedTimeRelativeReflogExpression(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedTimeRelativeReflogExpression(let selector):
+            "Time-relative reflog expressions like @{\(selector)} are not supported for followed revisions."
         }
     }
 }
@@ -207,6 +236,35 @@ private extension TrackedRevision {
     static func shouldPinHEADSuffix(_ suffix: Substring) -> Bool {
         guard let first = suffix.first else { return false }
         return first == "~" || first == "^"
+    }
+
+    static func timeRelativeReflogSelector(in expression: String) -> String? {
+        var searchStart = expression.startIndex
+        while let openRange = expression.range(of: "@{", range: searchStart..<expression.endIndex) {
+            guard let closeIndex = expression[openRange.upperBound...].firstIndex(of: "}") else {
+                return nil
+            }
+            let selector = String(expression[openRange.upperBound..<closeIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !isStableReflogSelector(selector) {
+                return selector
+            }
+            searchStart = expression.index(after: closeIndex)
+        }
+        return nil
+    }
+
+    static func isStableReflogSelector(_ selector: String) -> Bool {
+        guard !selector.isEmpty else { return false }
+        let lowercased = selector.lowercased()
+        if lowercased == "upstream" || lowercased == "u" || lowercased == "push" {
+            return true
+        }
+        if selector.allSatisfy(\.isNumber) { return true }
+        if selector.first == "-", selector.dropFirst().allSatisfy(\.isNumber) {
+            return true
+        }
+        return false
     }
 }
 

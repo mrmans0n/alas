@@ -107,6 +107,41 @@ struct CommitTabStateTests {
         #expect(TrackedRevision(expression: " \n ", baselineBranch: "feature", resolvedSHA: "old") == nil)
     }
 
+    @Test func resolverRejectsTimeRelativeReflogExpressions() async throws {
+        let resolver = TrackedRevisionResolver(
+            resolve: { _, _ in
+                Issue.record("time-relative selector should be rejected before resolving")
+                return "unused"
+            },
+            branch: { _ in
+                Issue.record("time-relative selector should be rejected before reading branch")
+                return "unused"
+            }
+        )
+
+        do {
+            _ = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "HEAD@{5 minutes ago}")
+            Issue.record("Expected time-relative reflog selector to throw")
+        } catch let error as TrackedRevisionResolverError {
+            #expect(error == .unsupportedTimeRelativeReflogExpression("5 minutes ago"))
+        }
+    }
+
+    @Test func resolverAllowsHeadIndependentRevisionOnUnbornBranch() async throws {
+        let resolver = TrackedRevisionResolver(
+            resolve: { _, ref in
+                if ref == "HEAD" { throw ResolverTestError.missingHEAD }
+                if ref == "v1.0" { return "tag-sha" }
+                throw ResolverTestError.unexpectedRef(ref)
+            },
+            branch: { _ in "orphan" }
+        )
+
+        let candidate = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "v1.0")
+
+        #expect(candidate == TrackedRevisionCandidate(branch: "orphan", sha: "tag-sha", headSHA: ""))
+    }
+
     @Test func headRelativeRevisionFollowsMovementOnSameBranch() throws {
         let current = try #require(TrackedRevision(
             expression: "HEAD~3", baselineBranch: "feature", resolvedSHA: "old"
@@ -458,4 +493,9 @@ private actor RevisionSnapshotSequence {
     func nextSHA(for ref: String) -> String {
         ref == "HEAD" ? heads.removeFirst() : shas.removeFirst()
     }
+}
+
+private enum ResolverTestError: Error, Equatable {
+    case missingHEAD
+    case unexpectedRef(String)
 }
