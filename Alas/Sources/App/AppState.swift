@@ -35,6 +35,37 @@ private struct MissingMissionRecoveryTarget: Equatable {
     }
 }
 
+enum ReviewSessionConsolidation {
+    static func merge(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
+        var merged = existing
+        if merged.selectedFileID == nil {
+            merged.selectedFileID = source.selectedFileID
+        }
+        if merged.focusedCommentID == nil {
+            merged.focusedCommentID = source.focusedCommentID
+        }
+        if merged.handoffs.isEmpty {
+            merged.handoffs = source.handoffs
+        } else {
+            let existingHandoffIDs = Set(merged.handoffs.map(\.id))
+            merged.handoffs.append(contentsOf: source.handoffs.filter { !existingHandoffIDs.contains($0.id) })
+        }
+        if merged.lastSendError == nil {
+            merged.lastSendError = source.lastSendError
+        }
+        if merged.verdict == nil {
+            merged.verdict = source.verdict
+        }
+        if merged.verdict != nil {
+            merged.status = .reviewed
+        } else if merged.status == .active, source.status != .active {
+            merged.status = source.status
+        }
+        merged.updatedAt = max(merged.updatedAt, source.updatedAt)
+        return merged
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -3441,30 +3472,7 @@ final class AppState {
     }
 
     private func mergedReviewSession(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
-        var merged = existing
-        if merged.selectedFileID == nil {
-            merged.selectedFileID = source.selectedFileID
-        }
-        if merged.focusedCommentID == nil {
-            merged.focusedCommentID = source.focusedCommentID
-        }
-        if merged.handoffs.isEmpty {
-            merged.handoffs = source.handoffs
-        } else {
-            let existingHandoffIDs = Set(merged.handoffs.map(\.id))
-            merged.handoffs.append(contentsOf: source.handoffs.filter { !existingHandoffIDs.contains($0.id) })
-        }
-        if merged.lastSendError == nil {
-            merged.lastSendError = source.lastSendError
-        }
-        if merged.verdict == nil {
-            merged.verdict = source.verdict
-        }
-        if merged.status == .active, source.status != .active {
-            merged.status = source.status
-        }
-        merged.updatedAt = max(merged.updatedAt, source.updatedAt)
-        return merged
+        ReviewSessionConsolidation.merge(existing: existing, source: source)
     }
 
     private func persistReviewRetargeting(

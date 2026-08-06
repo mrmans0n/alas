@@ -108,6 +108,20 @@ struct RemoteWorktreePollTests {
         ))
     }
 
+    @Test func helperGitEventsOnlyRequestAuthoritativeTick() {
+        let event = RemoteHelperWatchEvent(
+            subscriptionId: "sub",
+            root: "/srv/repo",
+            kind: .git,
+            paths: ["/srv/repo/.git/index"]
+        )
+
+        #expect(RemoteProjectGitWatcher.helperEventAction(for: event) == RemoteProjectGitWatcherHelperEventAction(
+            runTick: true,
+            bumpRevisionImmediately: false
+        ))
+    }
+
     @Test func watcherEventsMergeHeadAndSharedRefChanges() {
         let old = RemoteWorktreePoll.parse(porcelain: porcelain)
         var new = old

@@ -4,6 +4,39 @@ import Testing
 
 @Suite("Review session models")
 struct ReviewSessionModelsTests {
+    @Test func consolidationMergesVerdictWithReviewedStatus() {
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abc",
+            title: "Review abc"
+        )
+        let existing = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            status: .sent,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 2)
+        )
+        let source = ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: "source"),
+            target: target,
+            status: .reviewed,
+            verdict: ReviewSessionVerdict(
+                verdict: .approve,
+                summary: "Looks good",
+                reviewedAt: .init(timeIntervalSince1970: 3)
+            ),
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 4)
+        )
+
+        let merged = ReviewSessionConsolidation.merge(existing: existing, source: source)
+
+        #expect(merged.verdict == source.verdict)
+        #expect(merged.status == .reviewed)
+    }
+
     @Test func localChangesTargetDerivesStableIDs() {
         let repositoryPath = URL(fileURLWithPath: "/repo")
         let target = ReviewSessionTarget.localChanges(

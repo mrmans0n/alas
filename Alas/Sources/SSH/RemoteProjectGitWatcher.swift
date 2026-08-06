@@ -64,9 +64,12 @@ final class RemoteProjectGitWatcher {
                 kinds: [.git]
             )
             session.onEvent = { [weak self] event in
-                guard event.kind == .git else { return }
+                let action = Self.helperEventAction(for: event)
+                guard action.runTick else { return }
                 Task { @MainActor in
-                    self?.onRevisionChanged?()
+                    if action.bumpRevisionImmediately {
+                        self?.onRevisionChanged?()
+                    }
                     _ = await self?.runTick()
                 }
             }
@@ -182,6 +185,13 @@ final class RemoteProjectGitWatcher {
             branchLabelsByPath: delta.branchLabelsByPath,
             revisionChanged: delta.headMoved || sharedRefsMoved,
             topologyChanged: delta.topologyChanged
+        )
+    }
+
+    nonisolated static func helperEventAction(for event: RemoteHelperWatchEvent) -> RemoteProjectGitWatcherHelperEventAction {
+        RemoteProjectGitWatcherHelperEventAction(
+            runTick: event.kind == .git,
+            bumpRevisionImmediately: false
         )
     }
 
@@ -556,4 +566,9 @@ struct RemoteProjectGitWatcherEvents: Equatable {
     var branchLabelsByPath: [String: String]
     var revisionChanged: Bool
     var topologyChanged: Bool
+}
+
+struct RemoteProjectGitWatcherHelperEventAction: Equatable {
+    var runTick: Bool
+    var bumpRevisionImmediately: Bool
 }
