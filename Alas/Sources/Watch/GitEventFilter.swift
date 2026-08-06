@@ -123,7 +123,7 @@ enum GitEventFilter {
         guard let contents = try? String(contentsOfFile: eventPath, encoding: .utf8) else {
             return true
         }
-        return contents.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("ref: refs/")
+        return isTopLevelRevisionContent(contents)
     }
 
     private static let nonRevisionTopLevelNames: Set<String> = [
@@ -148,4 +148,16 @@ enum GitEventFilter {
         "TAG_EDITMSG",
         "worktrees",
     ]
+
+    private static func isTopLevelRevisionContent(_ contents: String) -> Bool {
+        let line = contents
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if line.hasPrefix("ref: refs/") {
+            return true
+        }
+        return (line.count == 40 || line.count == 64) && line.allSatisfy(\.isHexDigit)
+    }
 }

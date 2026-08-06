@@ -154,6 +154,30 @@ struct RemoteWorktreePollTests {
         #expect(signature.contains("/srv/wt/feature:ccc refs/bisect/good-abc"))
     }
 
+    @Test func sharedRefsSignatureIncludesCustomTopLevelRefs() {
+        let topLevelRefs = RemoteProjectGitWatcher.topLevelRefsSignature(pathOutputs: [
+            "/srv/repo": "FOO ref: refs/heads/main\nDIRECT 0123456789abcdef0123456789abcdef01234567\n",
+            "/srv/wt/feature": "BAR ref: refs/heads/feature\n",
+        ])
+        let signature = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            customTopLevelRefsOutput: topLevelRefs,
+            pseudoRefCommits: [:]
+        )
+
+        #expect(signature.contains("top-level-refs:/srv/repo:DIRECT 0123456789abcdef0123456789abcdef01234567"))
+        #expect(signature.contains("/srv/repo:FOO ref: refs/heads/main"))
+        #expect(signature.contains("/srv/wt/feature:BAR ref: refs/heads/feature"))
+    }
+
+    @Test func customTopLevelRefsCommandScansAbsoluteGitDir() {
+        let command = RemoteProjectGitWatcher.customTopLevelRefsCommand()
+        #expect(command.contains("git rev-parse --absolute-git-dir"))
+        #expect(command.contains("ref: refs/"))
+        #expect(command.contains("0-9a-fA-F"))
+        #expect(command.contains("packed-refs"))
+    }
+
     @Test func sharedRefsSignatureIncludesSortedUpstreamConfig() {
         let config = """
         branch.feature.merge refs/heads/main

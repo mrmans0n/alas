@@ -149,12 +149,19 @@ struct GitEventFilterTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let symbolicRef = gitDir.appendingPathComponent("FOO")
         try "ref: refs/heads/main\n".write(to: symbolicRef, atomically: true, encoding: .utf8)
+        let directRef = gitDir.appendingPathComponent("DIRECT")
+        try "0123456789abcdef0123456789abcdef01234567\n".write(to: directRef, atomically: true, encoding: .utf8)
         let nonRef = gitDir.appendingPathComponent("BAR")
         try "not a ref\n".write(to: nonRef, atomically: true, encoding: .utf8)
         let deletedSymbolicRef = gitDir.appendingPathComponent("DELETED_FOO")
 
         #expect(GitEventFilter.classify(
             eventPath: symbolicRef.path,
+            gitDir: gitDir,
+            worktreeRoot: tmp
+        ) == .revisionChange)
+        #expect(GitEventFilter.classify(
+            eventPath: directRef.path,
             gitDir: gitDir,
             worktreeRoot: tmp
         ) == .revisionChange)

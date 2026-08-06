@@ -3371,6 +3371,15 @@ final class AppState {
               )
         else { return }
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            do {
+                try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                try store.delete(id: record.id)
+                invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
+                tabs.close(worktreeId: worktreeID, tabId: tabID)
+            } catch {
+                Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
+                return
+            }
             let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: existing)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return
@@ -3388,6 +3397,15 @@ final class AppState {
               )
         else { return }
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            do {
+                try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                try store.delete(id: record.id)
+                invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
+                tabs.close(worktreeId: worktreeID, tabId: tabID)
+            } catch {
+                Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
+                return
+            }
             let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: existing)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return

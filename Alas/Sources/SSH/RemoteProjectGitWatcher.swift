@@ -197,6 +197,7 @@ final class RemoteProjectGitWatcher {
             }
             .sorted { $0.key < $1.key }
         let revisionConfigOutput = await pollRevisionConfigOutput(worktreePaths: worktreePaths)
+        let customTopLevelRefsOutput = await pollCustomTopLevelRefsOutput(worktreePaths: worktreePaths)
         let privateRefsOutput = await pollPrivateRefsOutput(worktreePaths: worktreePaths)
         let reflogSignature = await pollReflogSignature()
         var pseudoRefCommits: [String: String] = [:]
@@ -209,6 +210,7 @@ final class RemoteProjectGitWatcher {
         return Self.sharedRefsSignature(
             showRefOutput: result.stdout,
             revisionConfigOutput: revisionConfigOutput,
+            customTopLevelRefsOutput: customTopLevelRefsOutput,
             privateRefsOutput: privateRefsOutput,
             reflogSignature: reflogSignature,
             pseudoRefCommits: pseudoRefCommits
@@ -229,6 +231,27 @@ final class RemoteProjectGitWatcher {
             pathOutputs[pathKey] = result.stdout
         }
         return Self.revisionConfigSignature(pathOutputs: pathOutputs)
+    }
+
+    private func pollCustomTopLevelRefsOutput(worktreePaths: [(key: String, value: URL)]) async -> String {
+        var pathOutputs: [String: String] = [:]
+        for (pathKey, path) in worktreePaths {
+            if let host {
+                let result = try? await RemoteExec.run(
+                    host: host,
+                    cwd: path.path,
+                    command: Self.customTopLevelRefsCommand()
+                )
+                guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+                    continue
+                }
+                guard result.exitCode == 0 else { continue }
+                pathOutputs[pathKey] = result.stdout
+            } else {
+                pathOutputs[pathKey] = await Self.customTopLevelRefsOutput(at: path)
+            }
+        }
+        return Self.topLevelRefsSignature(pathOutputs: pathOutputs)
     }
 
     private func pollPrivateRefsOutput(worktreePaths: [(key: String, value: URL)]) async -> String {
@@ -307,6 +330,7 @@ final class RemoteProjectGitWatcher {
     nonisolated static func sharedRefsSignature(
         showRefOutput: String,
         revisionConfigOutput: String = "",
+        customTopLevelRefsOutput: String = "",
         privateRefsOutput: String = "",
         reflogSignature: String = "",
         pseudoRefCommits: [String: String]
@@ -314,6 +338,9 @@ final class RemoteProjectGitWatcher {
         var signature = showRefOutput
         if !revisionConfigOutput.isEmpty {
             signature += "\nconfig:\(revisionConfigOutput)"
+        }
+        if !customTopLevelRefsOutput.isEmpty {
+            signature += "\ntop-level-refs:\(customTopLevelRefsOutput)"
         }
         if !privateRefsOutput.isEmpty {
             signature += "\nprivate-refs:\(privateRefsOutput)"
@@ -347,6 +374,19 @@ final class RemoteProjectGitWatcher {
             .joined(separator: "\n")
     }
 
+    nonisolated static func topLevelRefsSignature(pathOutputs: [String: String]) -> String {
+        pathOutputs
+            .flatMap { path, output in
+                output
+                    .split(whereSeparator: \.isNewline)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .map { "\(path):\($0)" }
+            }
+            .sorted()
+            .joined(separator: "\n")
+    }
+
     nonisolated static func privateRefsSignature(pathOutputs: [String: String]) -> String {
         pathOutputs
             .flatMap { path, output in
@@ -362,6 +402,35 @@ final class RemoteProjectGitWatcher {
 
     nonisolated static let revisionConfigPattern =
         #"^(branch\..*\.(remote|merge|pushremote)|remote\.pushdefault|push\.default|remote\..*\.push)$"#
+
+    nonisolated static func customTopLevelRefsOutput(at worktreePath: URL) async -> String {
+        guard let gitDirResult = try? await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: worktreePath
+        ),
+            gitDirResult.exitCode == 0
+        else { return "" }
+        let gitDirPath = gitDirResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !gitDirPath.isEmpty else { return "" }
+        let gitDir = URL(fileURLWithPath: gitDirPath)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: gitDir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        else { return "" }
+        return entries.compactMap { url -> String? in
+            let name = url.lastPathComponent
+            guard !nonRevisionTopLevelRefNames.contains(name),
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                  let contents = try? String(contentsOf: url, encoding: .utf8),
+                  isTopLevelRevisionContent(contents)
+            else { return nil }
+            return "\(name) \(contents.trimmingCharacters(in: .whitespacesAndNewlines))"
+        }
+        .sorted()
+        .joined(separator: "\n")
+    }
 
     nonisolated static func reflogSignature(from output: String) -> String {
         let lines = output
@@ -391,6 +460,60 @@ final class RemoteProjectGitWatcher {
         printf 'entries=%s;sha=%s\\n' "$count" "$digest"
         """
     }
+
+    nonisolated static func customTopLevelRefsCommand() -> String {
+        let ignored = nonRevisionTopLevelRefNames.sorted().joined(separator: "|")
+        return """
+        git_dir=$(git rev-parse --absolute-git-dir) || exit $?
+        [ -d "$git_dir" ] || exit 0
+        find "$git_dir" -maxdepth 1 -type f -print | while IFS= read -r path; do
+          name=${path##*/}
+          case "$name" in
+            \(ignored)) continue ;;
+          esac
+          IFS= read -r line < "$path" || line=
+          case "$line" in
+            "ref: refs/"*) printf '%s %s\\n' "$name" "$line" ;;
+            *) printf '%s' "$line" | grep -Eq '^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$' && printf '%s %s\\n' "$name" "$line" ;;
+          esac
+        done | sort
+        """
+    }
+
+    nonisolated static func isTopLevelRevisionContent(_ contents: String) -> Bool {
+        let line = contents
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if line.hasPrefix("ref: refs/") {
+            return true
+        }
+        return (line.count == 40 || line.count == 64) && line.allSatisfy(\.isHexDigit)
+    }
+
+    nonisolated static let nonRevisionTopLevelRefNames: Set<String> = [
+        "branches",
+        "COMMIT_EDITMSG",
+        "commondir",
+        "config",
+        "config.worktree",
+        "description",
+        "gc.log",
+        "gitdir",
+        "hooks",
+        "index",
+        "info",
+        "logs",
+        "MERGE_MSG",
+        "modules",
+        "objects",
+        "packed-refs",
+        "refs",
+        "SQUASH_MSG",
+        "TAG_EDITMSG",
+        "worktrees",
+    ]
 
     nonisolated static let revisionPseudoRefs = [
         "AUTO_MERGE",

@@ -259,8 +259,15 @@ fn is_top_level_symbolic_revision(path: &Path, relative: &str) -> bool {
         return false;
     }
     std::fs::read_to_string(path)
-        .map(|contents| contents.trim().starts_with("ref: refs/"))
+        .map(|contents| is_top_level_revision_content(&contents))
         .unwrap_or(true)
+}
+
+fn is_top_level_revision_content(contents: &str) -> bool {
+    let line = contents.lines().next().unwrap_or("").trim();
+    line.starts_with("ref: refs/")
+        || ((line.len() == 40 || line.len() == 64)
+            && line.chars().all(|char| char.is_ascii_hexdigit()))
 }
 
 fn is_non_revision_top_level_name(relative: &str) -> bool {
@@ -402,12 +409,15 @@ mod tests {
         std::fs::create_dir_all(&git_dir).expect("git dir");
         let symbolic = git_dir.join("FOO");
         std::fs::write(&symbolic, "ref: refs/heads/main\n").expect("symbolic ref");
+        let direct = git_dir.join("DIRECT");
+        std::fs::write(&direct, "0123456789abcdef0123456789abcdef01234567\n").expect("direct ref");
         let non_ref = git_dir.join("BAR");
         std::fs::write(&non_ref, "not a ref\n").expect("non ref");
         let deleted_symbolic = git_dir.join("DELETED_FOO");
         let info = git_info(&root);
 
         assert!(is_relevant_git_path(&symbolic, &info));
+        assert!(is_relevant_git_path(&direct, &info));
         assert!(!is_relevant_git_path(&non_ref, &info));
         assert!(is_relevant_git_path(&deleted_symbolic, &info));
         let _ = std::fs::remove_dir_all(&root);
