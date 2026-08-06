@@ -218,6 +218,7 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
         || relative == "refs/stash"
         || relative == "shallow"
         || relative == "info/grafts"
+        || relative == "objects/info/alternates"
         || relative == "logs/HEAD"
         || relative.starts_with("logs/refs/")
         || relative.starts_with("refs/")
@@ -378,6 +379,10 @@ mod tests {
         assert!(is_relevant_git_path(&root.join(".git/refs/stash"), &info));
         assert!(is_relevant_git_path(&root.join(".git/shallow"), &info));
         assert!(is_relevant_git_path(&root.join(".git/info/grafts"), &info));
+        assert!(is_relevant_git_path(
+            &root.join(".git/objects/info/alternates"),
+            &info
+        ));
         assert!(is_relevant_git_path(&root.join(".git/logs/HEAD"), &info));
         assert!(is_relevant_git_path(
             &root.join(".git/logs/refs/stash"),

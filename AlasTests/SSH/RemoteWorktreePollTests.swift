@@ -170,7 +170,7 @@ struct RemoteWorktreePollTests {
 
     @Test func sharedRefsSignatureIncludesCustomTopLevelRefs() {
         let topLevelRefs = RemoteProjectGitWatcher.topLevelRefsSignature(pathOutputs: [
-            "/srv/repo": "FOO ref: refs/heads/main\nDIRECT 0123456789abcdef0123456789abcdef01234567\nshallow entries=1;sha=abc\ninfo/grafts entries=1;sha=def\n",
+            "/srv/repo": "FOO ref: refs/heads/main\nDIRECT 0123456789abcdef0123456789abcdef01234567\nshallow entries=1;sha=abc\ninfo/grafts entries=1;sha=def\nobjects/info/alternates entries=1;sha=ghi\n",
             "/srv/wt/feature": "BAR ref: refs/heads/feature\n",
         ])
         let signature = RemoteProjectGitWatcher.sharedRefsSignature(
@@ -183,6 +183,7 @@ struct RemoteWorktreePollTests {
         #expect(signature.contains("/srv/repo:FOO ref: refs/heads/main"))
         #expect(signature.contains("/srv/repo:shallow entries=1;sha=abc"))
         #expect(signature.contains("/srv/repo:info/grafts entries=1;sha=def"))
+        #expect(signature.contains("/srv/repo:objects/info/alternates entries=1;sha=ghi"))
         #expect(signature.contains("/srv/wt/feature:BAR ref: refs/heads/feature"))
     }
 
@@ -194,6 +195,7 @@ struct RemoteWorktreePollTests {
         #expect(command.contains("packed-refs"))
         #expect(command.contains("shallow entries"))
         #expect(command.contains("info/grafts entries"))
+        #expect(command.contains("objects/info/alternates entries"))
     }
 
     @Test func sharedRefsSignatureIncludesOrderedUpstreamConfig() {

@@ -261,9 +261,6 @@ private extension TrackedRevision {
     static func isStableReflogSelector(_ selector: String) -> Bool {
         guard !selector.isEmpty else { return false }
         let lowercased = selector.lowercased()
-        if lowercased == "upstream" || lowercased == "u" {
-            return true
-        }
         if selector.allSatisfy(\.isNumber) { return true }
         if selector.first == "-", selector.dropFirst().allSatisfy(\.isNumber) {
             return true

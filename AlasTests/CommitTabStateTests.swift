@@ -86,7 +86,7 @@ struct CommitTabStateTests {
             expression: "  HEAD~3  ", baselineBranch: "feature", resolvedSHA: "old"
         ))
         let headAlias = try #require(TrackedRevision(
-            expression: " \n@{upstream}", baselineBranch: "feature", resolvedSHA: "old"
+            expression: " \n@{0}", baselineBranch: "feature", resolvedSHA: "old"
         ))
         let namedRef = try #require(TrackedRevision(
             expression: " topic~2 ", baselineBranch: "feature", resolvedSHA: "old"
@@ -127,23 +127,29 @@ struct CommitTabStateTests {
         }
     }
 
-    @Test func resolverRejectsPushReflogSelector() async throws {
+    @Test func resolverRejectsConfigDependentReflogSelectors() async throws {
         let resolver = TrackedRevisionResolver(
             resolve: { _, _ in
-                Issue.record("@{push} should be rejected before resolving")
+                Issue.record("config-dependent selectors should be rejected before resolving")
                 return "unused"
             },
             branch: { _ in
-                Issue.record("@{push} should be rejected before reading branch")
+                Issue.record("config-dependent selectors should be rejected before reading branch")
                 return "unused"
             }
         )
 
-        do {
-            _ = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "@{push}")
-            Issue.record("Expected @{push} selector to throw")
-        } catch let error as TrackedRevisionResolverError {
-            #expect(error == .unsupportedReflogExpression("push"))
+        for (expression, selector) in [
+            ("@{push}", "push"),
+            ("@{upstream}", "upstream"),
+            ("@{u}", "u"),
+        ] {
+            do {
+                _ = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: expression)
+                Issue.record("Expected \(expression) selector to throw")
+            } catch let error as TrackedRevisionResolverError {
+                #expect(error == .unsupportedReflogExpression(selector))
+            }
         }
     }
 

@@ -90,6 +90,9 @@ enum GitEventFilter {
         if rel == "info/grafts" {
             return .revisionChange
         }
+        if rel == "objects/info/alternates" {
+            return .revisionChange
+        }
         if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {
             return .revisionChange
         }

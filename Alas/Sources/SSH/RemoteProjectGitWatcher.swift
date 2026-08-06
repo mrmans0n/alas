@@ -443,6 +443,10 @@ final class RemoteProjectGitWatcher {
         if let grafts = try? String(contentsOf: graftsURL, encoding: .utf8) {
             output.append("info/grafts \(shallowSignature(from: grafts))")
         }
+        let alternatesURL = gitDir.appendingPathComponent("objects").appendingPathComponent("info").appendingPathComponent("alternates")
+        if let alternates = try? String(contentsOf: alternatesURL, encoding: .utf8) {
+            output.append("objects/info/alternates \(shallowSignature(from: alternates))")
+        }
         return output
         .sorted()
         .joined(separator: "\n")
@@ -519,6 +523,19 @@ final class RemoteProjectGitWatcher {
             fi
             count=$(printf '%s\\n' "$out" | sed '/^$/d' | wc -l | awk '{print $1}')
             printf 'info/grafts entries=%s;sha=%s\\n' "$count" "$digest"
+          fi
+          alternates="$git_dir/objects/info/alternates"
+          if [ -f "$alternates" ]; then
+            out=$(cat "$alternates" 2>/dev/null || true)
+            if command -v shasum >/dev/null 2>&1; then
+              digest=$(printf '%s\\n' "$out" | shasum -a 256 | awk '{print $1}')
+            elif command -v sha256sum >/dev/null 2>&1; then
+              digest=$(printf '%s\\n' "$out" | sha256sum | awk '{print $1}')
+            else
+              digest=$(printf '%s\\n' "$out" | cksum | awk '{print $1 ":" $2}')
+            fi
+            count=$(printf '%s\\n' "$out" | sed '/^$/d' | wc -l | awk '{print $1}')
+            printf 'objects/info/alternates entries=%s;sha=%s\\n' "$count" "$digest"
           fi
         } | sort
         """

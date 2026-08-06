@@ -123,6 +123,14 @@ struct GitEventFilterTests {
         ) == .revisionChange)
     }
 
+    @Test func alternateObjectDatabaseUpdateIsRevisionChange() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/objects/info/alternates",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .revisionChange)
+    }
+
     @Test func reflogUpdatesAreRevisionChanges() {
         let cases = [
             "/repo/.git/logs/HEAD",
