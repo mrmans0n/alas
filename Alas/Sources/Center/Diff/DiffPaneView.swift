@@ -465,6 +465,7 @@ struct DiffPaneView: View {
     @Environment(\.theme) private var theme
     @State private var presentationState = DiffPanePresentationState()
     @State private var staticRowsWidth: CGFloat = 0
+    @State private var appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
 
     init(
         model: DiffDisplayModel,
@@ -525,23 +526,54 @@ struct DiffPaneView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if showsToolbar {
-                toolbar
+        Group {
+            VStack(spacing: 0) {
+                if showsToolbar {
+                    toolbar
+                }
+                diffBody
             }
-            diffBody
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: verticalScrollMode == .internalScroll ? .infinity : nil,
+                alignment: .topLeading
+            )
+            .background(theme.color("bg-1"))
         }
-        .frame(
-            maxWidth: .infinity,
-            maxHeight: verticalScrollMode == .internalScroll ? .infinity : nil,
-            alignment: .topLeading
-        )
-        .background(theme.color("bg-1"))
+        .id(appKitScrollerEnabled)
+        .onReceive(
+            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            let flagEnabled = AppKitDiffScrollerFlag.isEnabled
+            guard flagEnabled != appKitScrollerEnabled else { return }
+            presentationState = DiffPanePresentationState()
+            appKitScrollerEnabled = flagEnabled
+        }
+    }
+
+    nonisolated static func usesAppKitScroller(
+        flagEnabled: Bool,
+        verticalScrollMode: DiffPaneVerticalScrollMode
+    ) -> Bool {
+        guard flagEnabled else { return false }
+        if case .internalScroll = verticalScrollMode {
+            return true
+        }
+        return false
     }
 
     @ViewBuilder
     private var diffBody: some View {
-        if verticalScrollMode == .internalScroll {
+        if Self.usesAppKitScroller(
+            flagEnabled: appKitScrollerEnabled,
+            verticalScrollMode: verticalScrollMode
+        ) {
+            AppKitDiffScroller(
+                plan: DiffPaneRowPlanBuilder.build(input: rowPlanInput, state: presentationState),
+                scrollRequest: nil,
+                onActiveOwnerChange: { _ in }
+            )
+        } else if verticalScrollMode == .internalScroll {
             GeometryReader { proxy in
                 ScrollView(.vertical) {
                     lazyRowsStack
