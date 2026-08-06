@@ -163,6 +163,7 @@ struct AppKitDiffReviewScroller: View {
         .onChange(of: draftCommentCommand) { _, command in
             submit(command.map(AppKitDiffReviewScrollRequestResolver.Command.draftComment), using: plan)
         }
+        .copyFeedbackOverlay(message: inputs.lazy.compactMap { $0.state.copyFeedback.message }.first)
     }
 
     private func submitInitialCommand(using plan: AppKitDiffReviewRowPlan) {

@@ -429,7 +429,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     switch block {
                     case let .rows(rowBlock):
                         let blockID = AppKitDiffReviewRowID.segment(fileID: input.file.id, segmentID: segment.id, blockID: rowBlock.id)
-                        append(&rows, id: blockID, input: input, signature: String(reflecting: rowBlock.rowsSignature).hashValue, height: segmentHeight(rowBlock.rows.count, input: input)) {
+                        append(&rows, id: blockID, input: input, signature: String(reflecting: rowBlock.rowsSignature).hashValue, height: segmentHeight(rowBlock.rows.count, input: input), includesActiveHighlight: true) {
                             AnyView(AppKitDiffReviewSegmentRowBody(rows: rowBlock.rows, rowsSignature: rowBlock.rowsSignature, group: group.displayGroup, input: input))
                         }
                     case let .thread(thread):
@@ -575,6 +575,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         signature: Int, height: CGFloat, retention: AppKitDiffRowRetention = .recyclable,
         inlineAvailability: DiffReviewInlineFeedbackActionAvailability? = nil,
         draftAvailability: ReviewDraftCommentActionAvailability? = nil,
+        includesActiveHighlight: Bool = false,
         build: @escaping () -> AnyView
     ) {
         let token = AppKitDiffReviewRowToken(
@@ -587,8 +588,8 @@ enum AppKitDiffReviewRowPlanBuilder {
             lspLanguage: input.lspContext?.language,
             lspManagerIdentity: input.lspContext.map { ObjectIdentifier($0.lsp) },
             inlineFeedbackAvailability: inlineAvailability, draftCommentAvailability: draftAvailability,
-            hoveredInlineFeedbackID: input.state.hoveredInlineFeedbackID,
-            hoveredDraftCommentID: input.state.hoveredDraftCommentID,
+            hoveredInlineFeedbackID: includesActiveHighlight ? input.state.hoveredInlineFeedbackID : nil,
+            hoveredDraftCommentID: includesActiveHighlight ? input.state.hoveredDraftCommentID : nil,
             focusedFeedbackID: input.focusedFeedbackID,
             focusedDraftCommentID: input.focusedDraftCommentID,
             activeThreadID: input.state.activeThreadID,

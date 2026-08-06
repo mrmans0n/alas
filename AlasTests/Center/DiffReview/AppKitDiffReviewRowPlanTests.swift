@@ -181,13 +181,14 @@ struct AppKitDiffReviewRowPlanTests {
 
     @Test func hoverStateChangesRenderedHunkRowToken() throws {
         let file = textFile()
+        let item = feedback(line: 1)
         let state = AppKitDiffReviewFileState()
-        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let input = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: state, theme: theme)
         let first = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first {
-            $0.id.contains(":segment:")
+            $0.id.contains(":group:")
         })
 
-        state.hoveredInlineFeedbackID = "feedback"
+        state.hoveredInlineFeedbackID = item.id
         let hovered = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first {
             $0.id == first.id
         })
@@ -195,18 +196,38 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!first.equalityToken.isEqual(to: hovered.equalityToken))
     }
 
+    @Test func hoverChangesOnlyRowsThatRenderTheActiveHighlight() throws {
+        let file = textFile()
+        let item = feedback(line: 1)
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: state, theme: theme)
+        let initial = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let initialHeader = try #require(initial.corePlan.rows.first { $0.id == AppKitDiffReviewRowID.header(fileID: file.id) })
+        let initialHunk = try #require(initial.corePlan.rows.first { $0.id.contains(":group:") })
+
+        state.hoveredInlineFeedbackID = item.id
+        let hovered = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let hoveredHeader = try #require(hovered.corePlan.rows.first { $0.id == initialHeader.id })
+        let hoveredHunk = try #require(hovered.corePlan.rows.first { $0.id == initialHunk.id })
+
+        #expect(initialHeader.equalityToken.isEqual(to: hoveredHeader.equalityToken))
+        #expect(!initialHunk.equalityToken.isEqual(to: hoveredHunk.equalityToken))
+    }
+
     @Test func themeAndFocusedFeedbackChangeRenderedRowTokens() throws {
         let file = textFile()
+        let item = feedback(line: 1)
         let state = AppKitDiffReviewFileState()
-        let base = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let base = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: state, theme: theme)
         var accentedTheme = theme
         accentedTheme.accentOverrideHex = "#ff00ff"
-        let themed = AppKitDiffReviewRowInput(file: file, state: state, theme: accentedTheme)
+        let themed = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: state, theme: accentedTheme)
         let focused = AppKitDiffReviewRowInput(
-            file: file, state: state, theme: theme, focusedFeedbackID: "feedback", focusedDraftCommentID: "draft"
+            file: file, inlineFeedback: [item], state: state, theme: theme,
+            focusedFeedbackID: item.id, focusedDraftCommentID: "draft"
         )
         let baseRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [base]).corePlan.rows.first {
-            $0.id.contains(":segment:")
+            $0.id.contains(":group:")
         })
         let themedRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [themed]).corePlan.rows.first {
             $0.id == baseRow.id

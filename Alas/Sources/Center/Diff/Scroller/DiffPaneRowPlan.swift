@@ -14,6 +14,10 @@ final class DiffPanePresentationState: ObservableObject {
         )
     }
 
+    func setExpandedCollapsedRowIDs(_ rowIDs: Set<String>) {
+        expandedCollapsedRowIDs = rowIDs
+    }
+
     func setThreadActive(_ threadID: String, active: Bool) {
         activeThreadID = active ? threadID : (activeThreadID == threadID ? nil : activeThreadID)
     }

@@ -39,6 +39,16 @@ struct AppKitDiffReviewPresentationStateTests {
         #expect(remounted.expandedCollapsedRowIDs == ["hunk:1"])
     }
 
+    @Test func fileAndHunkPresentationShareCollapsedContextState() {
+        let state = AppKitDiffReviewFileState()
+
+        state.hunkPresentationState.setExpandedCollapsedRowIDs(["hunk:1"])
+        #expect(state.expandedCollapsedRowIDs == ["hunk:1"])
+
+        state.expandedCollapsedRowIDs = ["hunk:2"]
+        #expect(state.hunkPresentationState.expandedCollapsedRowIDs == ["hunk:2"])
+    }
+
     @Test func renderBudgetResetClearsFullDiffOverride() {
         let state = AppKitDiffReviewFileState()
         state.showFullDiffOverride = true
@@ -58,6 +68,21 @@ struct AppKitDiffReviewPresentationStateTests {
         state.synchronize(file: file, contextSignature: signature(file: file, providerID: "second"))
 
         #expect(state.contextLoadError == nil)
+    }
+
+    @Test func changedStructuralSignatureClearsPendingDraft() {
+        let state = AppKitDiffReviewFileState()
+        let file = fileModel()
+        state.synchronize(file: file, contextSignature: signature(file: file, providerID: "first"))
+        state.pendingDraftAnchor = DiffReviewLineAnchor(
+            path: "Sources/File.swift", side: .new, line: 1, rowIndex: 0, selectedText: "old line"
+        )
+        state.pendingDraftBody = "stale draft"
+
+        state.synchronize(file: file, contextSignature: signature(file: file, providerID: "second"))
+
+        #expect(state.pendingDraftAnchor == nil)
+        #expect(state.pendingDraftBody.isEmpty)
     }
 
     @Test func staleContextGenerationCannotPublish() {
@@ -144,6 +169,18 @@ struct AppKitDiffReviewPresentationStateTests {
             path: "Sources/File.swift", side: .new, line: 1, rowIndex: 0, selectedText: "line"
         )
         #expect(changes == 3)
+        _ = cancellable
+    }
+
+    @Test func presentationStoreForwardsCopyFeedbackChanges() {
+        let store = AppKitDiffReviewPresentationStore()
+        let state = store.state(for: fileModel())
+        var changes = 0
+        let cancellable = store.objectWillChange.sink { changes += 1 }
+
+        state.copyFeedback.show("Copied prompt")
+
+        #expect(changes == 1)
         _ = cancellable
     }
 

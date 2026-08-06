@@ -80,7 +80,7 @@ struct GGSplitPreviewRowPlanTests {
             imageStore: imageStore, presentationStore: presentationStore
         ))
         let state = presentationStore.state(previewID: "remainder", filePath: "Sources/Retained.swift")
-        state.expandedCollapsedRowIDs = ["collapsed"]
+        state.setExpandedCollapsedRowIDs(["collapsed"])
 
         _ = GGSplitPreviewRowPlanBuilder.build(input: input(
             previewID: "remainder", preview: preview, showsResultingImages: false,

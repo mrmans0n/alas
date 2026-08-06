@@ -403,6 +403,24 @@ struct DiffReviewSurface: View {
                 onDelete: onDelete,
                 onStageReply: onStageReply
             )
+            let relayDraftActions = state.actionRelay.draftCommentActionsForRow
+            let appKitDraftActions = ReviewDraftCommentActions(
+                availability: relayDraftActions.availability,
+                canPublishReview: relayDraftActions.canPublishReview,
+                edit: relayDraftActions.edit,
+                delete: relayDraftActions.delete,
+                resolve: relayDraftActions.resolve,
+                dismiss: relayDraftActions.dismiss,
+                copyPrompt: { bundle in
+                    relayDraftActions.copyPrompt(bundle)
+                    state.copyFeedback.show("Copied prompt")
+                },
+                publishProvider: relayDraftActions.publishProvider,
+                publishReview: relayDraftActions.publishReview,
+                agent: relayDraftActions.agent,
+                agentTargets: relayDraftActions.agentTargets,
+                sendToAgent: relayDraftActions.sendToAgent
+            )
             return AppKitDiffReviewRowInput(
                 file: file,
                 inlineFeedback: inlineFeedbackByFileID[file.id] ?? [],
@@ -434,7 +452,7 @@ struct DiffReviewSurface: View {
                 ),
                 lspContext: lspContextForFile(file),
                 reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                draftCommentActions: state.actionRelay.draftCommentActionsForRow,
+                draftCommentActions: appKitDraftActions,
                 onContextExpansionActivated: { contextExpandedFileIDs.insert(file.id) }
             )
         }

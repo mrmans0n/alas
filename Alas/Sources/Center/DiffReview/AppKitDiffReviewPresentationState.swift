@@ -32,7 +32,10 @@ final class AppKitDiffReviewFileState: ObservableObject {
     @Published var pendingDraftAnchor: DiffReviewLineAnchor? { didSet { structuralDidChange.send() } }
     @Published var pendingDraftBody = ""
     @Published var draftComposerFocusRequestGeneration = 0 { didSet { structuralDidChange.send() } }
-    @Published var expandedCollapsedRowIDs: Set<String> = [] { didSet { structuralDidChange.send() } }
+    var expandedCollapsedRowIDs: Set<String> {
+        get { hunkPresentationState.expandedCollapsedRowIDs }
+        set { hunkPresentationState.setExpandedCollapsedRowIDs(newValue) }
+    }
     @Published var contextSnapshot: DiffReviewFileContextSnapshot? { didSet { structuralDidChange.send() } }
     @Published var contextExpansion = DiffContextExpansionState() { didSet { structuralDidChange.send() } }
     @Published var contextLoadTask: Task<Void, Never>?
@@ -52,10 +55,15 @@ final class AppKitDiffReviewFileState: ObservableObject {
     private var contextSignature: DiffReviewContextStateSignature?
     private var renderBudgetSignal: Int?
     private var copyFeedbackCancellable: AnyCancellable?
+    private var hunkPresentationCancellable: AnyCancellable?
 
     init() {
         copyFeedbackCancellable = copyFeedback.$message.sink { [weak self] _ in
             self?.objectWillChange.send()
+            self?.structuralDidChange.send()
+        }
+        hunkPresentationCancellable = hunkPresentationState.$expandedCollapsedRowIDs.sink { [weak self] _ in
+            self?.structuralDidChange.send()
         }
     }
 
@@ -66,6 +74,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
         }
         if self.contextSignature != nil, self.contextSignature != contextSignature {
             resetContextState()
+            clearPendingDraft()
         }
         self.contextSignature = contextSignature
     }
@@ -78,8 +87,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
     }
 
     func resetForFileIdentityChange() {
-        pendingDraftAnchor = nil
-        pendingDraftBody = ""
+        clearPendingDraft()
         draftComposerFocusRequestGeneration = 0
         expandedCollapsedRowIDs = []
         hoveredInlineFeedbackID = nil
@@ -89,6 +97,11 @@ final class AppKitDiffReviewFileState: ObservableObject {
         isDraftComposerFocused = false
         imageState.clear()
         resetContextState()
+    }
+
+    func clearPendingDraft() {
+        pendingDraftAnchor = nil
+        pendingDraftBody = ""
     }
 
     func resetForRenderBudgetChange() {
