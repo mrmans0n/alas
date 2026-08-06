@@ -278,6 +278,44 @@ struct ReviewTargetPaletteModelTests {
         #expect(opened?.payload == .branch(base: "resolved-main", head: "head-sha"))
     }
 
+    @Test func revisionValidationPreservesExistingBranchSelection() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        let env = environment(commits: [], branches: ["main"])
+        await model.loadTargets(environment: env)
+        model.query = "main"
+        #expect(model.targetRows().contains(.branch("main")))
+        #expect(model.selectedIndex == 3)
+
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows()[1] == .followedRevision(
+            expression: "main",
+            resolvedSHA: "resolved-main",
+            branch: "feature"
+        ))
+        #expect(model.selectedIndex == 5)
+        #expect(model.targetRows()[model.selectedIndex] == .branch("main"))
+    }
+
+    @Test func revisionValidationSelectsFollowedRowWhenItIsTheOnlySelectableTarget() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        let env = environment(commits: [], branches: [])
+        await model.loadTargets(environment: env)
+        model.query = "HEAD~3"
+
+        await model.validateRevisionQuery(environment: env)
+
+        #expect(model.targetRows() == [
+            .header("Followed Revision"),
+            .followedRevision(expression: "HEAD~3", resolvedSHA: "resolved-HEAD~3", branch: "feature"),
+            .header("Commits"),
+            .message("No commits ahead of the base branch"),
+        ])
+        #expect(model.selectedIndex == 1)
+    }
+
     @Test func backReturnsToWorktreesAndResetsQueryAndAnchor() {
         let model = ReviewTargetPaletteModel()
         model.open()

@@ -97,4 +97,30 @@ struct RemoteWorktreePollTests {
         #expect(secondBegin)
         #expect(!finalFinishReleases)
     }
+
+    @Test func watcherEventsDispatchSharedRefsWhenWorktreesAreUnchanged() {
+        let entries = RemoteWorktreePoll.parse(porcelain: porcelain)
+        let events = RemoteProjectGitWatcher.events(old: entries, new: entries, sharedRefsMoved: true)
+        #expect(events == RemoteProjectGitWatcherEvents(
+            branchLabelsByPath: [:],
+            revisionChanged: true,
+            topologyChanged: false
+        ))
+    }
+
+    @Test func watcherEventsMergeHeadAndSharedRefChanges() {
+        let old = RemoteWorktreePoll.parse(porcelain: porcelain)
+        var new = old
+        new[1] = RemoteWorktreePollEntry(
+            path: new[1].path,
+            head: "9999999999999999999999999999999999999999",
+            branch: new[1].branch
+        )
+        let events = RemoteProjectGitWatcher.events(old: old, new: new, sharedRefsMoved: true)
+        #expect(events == RemoteProjectGitWatcherEvents(
+            branchLabelsByPath: [:],
+            revisionChanged: true,
+            topologyChanged: true
+        ))
+    }
 }

@@ -378,7 +378,7 @@ enum CommitRevision: Codable, Equatable, Hashable, Sendable {
 }
 
 struct CommitTabState: Codable, Equatable, Identifiable {
-    let id: TabID
+    var id: TabID
     let worktreeId: String
     var revision: CommitRevision
     var title: String
@@ -394,14 +394,14 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     var sha: String { revision.resolvedSHA }
 
     init(worktreeId: String, sha: String, title: String) {
-        self.id = "commit:\(worktreeId):\(sha)"
+        self.id = Self.fixedID(worktreeId: worktreeId, sha: sha)
         self.worktreeId = worktreeId
         self.revision = .fixed(sha: sha)
         self.title = title
     }
 
     init(worktreeId: String, trackedRevision: TrackedRevision, title: String) {
-        self.id = "commit:\(worktreeId):tracked:\(Self.trackedIDDigest(for: trackedRevision.expression))"
+        self.id = Self.trackedID(worktreeId: worktreeId, expression: trackedRevision.expression)
         self.worktreeId = worktreeId
         self.revision = .following(trackedRevision)
         self.title = title
@@ -426,6 +426,24 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         try container.encode(revision, forKey: .revision)
         try container.encode(sha, forKey: .sha)
         try container.encode(title, forKey: .title)
+    }
+
+    mutating func follow(_ revision: TrackedRevision) {
+        id = Self.trackedID(worktreeId: worktreeId, expression: revision.expression)
+        self.revision = .following(revision)
+    }
+
+    mutating func fix(sha: String) {
+        id = Self.fixedID(worktreeId: worktreeId, sha: sha)
+        revision = .fixed(sha: sha)
+    }
+
+    private static func fixedID(worktreeId: String, sha: String) -> String {
+        "commit:\(worktreeId):\(sha)"
+    }
+
+    private static func trackedID(worktreeId: String, expression: String) -> String {
+        "commit:\(worktreeId):tracked:\(trackedIDDigest(for: expression))"
     }
 
     private static func trackedIDDigest(for expression: String) -> String {

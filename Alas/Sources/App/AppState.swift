@@ -3189,7 +3189,7 @@ final class AppState {
             case .commit(let state):
                 guard case .following(let revision) = state.revision else { return }
                 _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
-                    $0.revision = .fixed(sha: revision.resolvedSHA)
+                    $0.fix(sha: revision.resolvedSHA)
                 }
             case .reviewSession(let state):
                 stopFollowingReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
@@ -3242,7 +3242,7 @@ final class AppState {
         switch tab {
         case .commit:
             _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
-                $0.revision = .following(revision)
+                $0.follow(revision)
             }
         case .reviewSession(let state):
             followReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID, revision: revision)

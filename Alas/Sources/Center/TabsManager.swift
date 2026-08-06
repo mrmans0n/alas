@@ -754,6 +754,9 @@ final class TabsManager {
         mutate(&state)
         let tab = Tab.commit(state)
         file.tabs[idx] = tab
+        if file.activeTabId == tabId {
+            file.activeTabId = tab.id
+        }
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab

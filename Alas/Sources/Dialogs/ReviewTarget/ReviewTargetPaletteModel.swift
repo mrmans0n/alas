@@ -437,16 +437,34 @@ final class ReviewTargetPaletteModel {
                   case .targets(let current) = level,
                   current.id == worktree.id
             else { return }
+            let previousSelection = targetRows().indices.contains(selectedIndex) ? targetRows()[selectedIndex] : nil
             followedRevisionRow = .followedRevision(
                 expression: expression,
                 resolvedSHA: candidate.sha,
                 branch: candidate.branch
             )
-            setSelectedIndex(0, selectable: targetRows().map(\.isSelectable))
+            preserveSelectionAfterRevisionValidation(previousSelection: previousSelection)
         } catch {
             guard revisionValidationToken == token else { return }
             revisionValidationError = "Could not resolve \(expression): \(error.localizedDescription)"
         }
+    }
+
+    private func preserveSelectionAfterRevisionValidation(previousSelection: TargetRow?) {
+        let rows = targetRows()
+        let selectable = rows.map(\.isSelectable)
+        let selectableIndexes = selectable.indices.filter { selectable[$0] }
+        if selectableIndexes.count == 1 {
+            setSelectedIndex(selectableIndexes[0], selectable: selectable)
+            return
+        }
+        if let previousSelection,
+           let preservedIndex = rows.firstIndex(of: previousSelection),
+           selectable[preservedIndex] {
+            selectedIndex = preservedIndex
+            return
+        }
+        setSelectedIndex(selectedIndex, selectable: selectable)
     }
 
     private func launchFullRange(

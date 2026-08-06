@@ -893,7 +893,7 @@ struct TabsManagerTests {
         #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "ffffffffffffffffffffffffffffffffffffffff")?.id == descendant.id)
     }
 
-    @Test func trackedCommitUpdatePreservesTabIdentityAndOrder() throws {
+    @Test func trackedCommitUpdateRekeysTabIdentityAndPreservesOrder() throws {
         let worktreeId = "tabs-manager-tracked-commit-update"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
         let manager = TabsManager()
@@ -905,16 +905,23 @@ struct TabsManagerTests {
         ))
 
         let followed = manager.updateCommit(worktreeId: worktreeId, tabId: originalID) {
-            $0.revision = .following(tracked.resolving(.init(branch: "feature", sha: "new")))
+            $0.follow(tracked.resolving(.init(branch: "feature", sha: "new")))
             $0.title = "New subject"
         }
-        let stopped = manager.updateCommit(worktreeId: worktreeId, tabId: originalID) {
-            $0.revision = .fixed(sha: "new")
+        let followedID = try #require(followed?.id)
+        let reopenedOriginal = manager.appendCommit(worktreeId: worktreeId, sha: "old", title: "Old subject")
+        let stopped = manager.updateCommit(worktreeId: worktreeId, tabId: followedID) {
+            $0.fix(sha: "new")
         }
 
-        #expect(followed?.id == originalID)
-        #expect(stopped?.id == originalID)
-        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [originalID, second.id])
+        #expect(followedID != originalID)
+        #expect(reopenedOriginal.id == originalID)
+        #expect(stopped?.id == "commit:\(worktreeId):new")
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [
+            "commit:\(worktreeId):new",
+            second.id,
+            originalID,
+        ])
         guard case .commit(let state) = manager.tabs(forWorktree: worktreeId)[0] else {
             Issue.record("Expected commit tab")
             return

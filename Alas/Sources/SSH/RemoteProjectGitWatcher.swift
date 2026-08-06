@@ -147,17 +147,41 @@ final class RemoteProjectGitWatcher {
             onTopologyChanged?()
             return true
         }
-        guard let old = lastEntries, let delta = RemoteWorktreePoll.classify(old: old, new: entries) else {
-            return true
-        }
-        if !delta.branchLabelsByPath.isEmpty {
-            onHeadChanged?(Dictionary(uniqueKeysWithValues: delta.branchLabelsByPath.map {
+        let events = Self.events(old: lastEntries, new: entries, sharedRefsMoved: sharedRefsMoved)
+        if !events.branchLabelsByPath.isEmpty {
+            onHeadChanged?(Dictionary(uniqueKeysWithValues: events.branchLabelsByPath.map {
                 (URL(fileURLWithPath: $0.key), $0.value)
             }))
         }
-        if delta.headMoved || sharedRefsMoved { onRevisionChanged?() }
-        if delta.topologyChanged { onTopologyChanged?() }
+        if events.revisionChanged { onRevisionChanged?() }
+        if events.topologyChanged { onTopologyChanged?() }
         return true
+    }
+
+    nonisolated static func events(
+        old: [RemoteWorktreePollEntry]?,
+        new: [RemoteWorktreePollEntry],
+        sharedRefsMoved: Bool
+    ) -> RemoteProjectGitWatcherEvents {
+        guard let old else {
+            return RemoteProjectGitWatcherEvents(
+                branchLabelsByPath: [:],
+                revisionChanged: sharedRefsMoved,
+                topologyChanged: true
+            )
+        }
+        guard let delta = RemoteWorktreePoll.classify(old: old, new: new) else {
+            return RemoteProjectGitWatcherEvents(
+                branchLabelsByPath: [:],
+                revisionChanged: sharedRefsMoved,
+                topologyChanged: false
+            )
+        }
+        return RemoteProjectGitWatcherEvents(
+            branchLabelsByPath: delta.branchLabelsByPath,
+            revisionChanged: delta.headMoved || sharedRefsMoved,
+            topologyChanged: delta.topologyChanged
+        )
     }
 
     private func pollSharedRefsSignature() async -> String? {
@@ -170,4 +194,10 @@ final class RemoteProjectGitWatcher {
     }
 
     deinit { pollTask?.cancel() }
+}
+
+struct RemoteProjectGitWatcherEvents: Equatable {
+    var branchLabelsByPath: [String: String]
+    var revisionChanged: Bool
+    var topologyChanged: Bool
 }
