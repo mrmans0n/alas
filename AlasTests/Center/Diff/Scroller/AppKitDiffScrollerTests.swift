@@ -67,6 +67,23 @@ struct AppKitDiffScrollerTests {
         #expect(stack.scrollView.scrollY == 0)
     }
 
+    @Test("a request remains pending until a positive-width plan can resolve it")
+    func zeroWidthDefersScrollRequestConsumption() {
+        let scrollView = AppKitDiffScrollView(frame: .zero)
+        let coordinator = AppKitDiffScroller.Coordinator()
+        coordinator.attach(scrollView: scrollView, onActiveOwnerChange: { _ in })
+        let request = AppKitDiffScrollRequest(
+            targetID: "row-50", fallbackID: nil, alignment: .top, animated: false, generation: 1
+        )
+
+        coordinator.update(plan: plan(), scrollRequest: request, onActiveOwnerChange: { _ in })
+        scrollView.frame = NSRect(x: 0, y: 0, width: 400, height: 240)
+        scrollView.layoutSubtreeIfNeeded()
+        coordinator.update(plan: plan(), scrollRequest: request, onActiveOwnerChange: { _ in })
+
+        #expect(scrollView.scrollY > 0)
+    }
+
     @Test("only user scrolling reports a changed active owner")
     func userScrollingReportsActiveOwner() {
         var owners: [String?] = []
@@ -85,6 +102,35 @@ struct AppKitDiffScrollerTests {
         #expect(owners == ["owner-2"])
     }
 
+    @Test("animated programmatic scrolling does not publish active-owner changes")
+    func animatedScrollingDoesNotReportActiveOwner() async throws {
+        var owners: [String?] = []
+        let stack = makeStack { owners.append($0) }
+        stack.coordinator.update(plan: plan(), scrollRequest: nil, onActiveOwnerChange: { owners.append($0) })
+
+        stack.coordinator.update(
+            plan: plan(),
+            scrollRequest: .init(
+                targetID: "row-50", fallbackID: nil, alignment: .top, animated: true, generation: 1
+            ),
+            onActiveOwnerChange: { owners.append($0) }
+        )
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(owners.isEmpty)
+    }
+
+    @Test("height-only viewport changes relayout without publishing active owner")
+    func heightChangesDoNotReportActiveOwner() {
+        var owners: [String?] = []
+        let stack = makeStack { owners.append($0) }
+        stack.coordinator.update(plan: plan(), scrollRequest: nil, onActiveOwnerChange: { owners.append($0) })
+        stack.scrollView.frame.size.height = 480
+        stack.scrollView.layoutSubtreeIfNeeded()
+
+        #expect(owners.isEmpty)
+    }
+
     @Test("dismantling releases mounted rows and callbacks")
     func dismantleReleasesResources() {
         let stack = makeStack()
@@ -94,7 +140,8 @@ struct AppKitDiffScrollerTests {
         stack.coordinator.dismantle()
 
         #expect(stack.coordinator.mountedRowIDsForTests.isEmpty)
-        #expect(stack.scrollView.onViewportChange == nil)
+        #expect(stack.scrollView.onUserViewportChange == nil)
+        #expect(stack.scrollView.onViewportGeometryChange == nil)
         #expect(stack.scrollView.onContentWidthChange == nil)
     }
 }

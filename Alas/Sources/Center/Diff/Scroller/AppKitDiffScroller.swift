@@ -58,8 +58,11 @@ struct AppKitDiffScroller: NSViewRepresentable {
             scrollView.onContentWidthChange = { [weak self] in
                 self?.applyMostRecentPlan()
             }
-            scrollView.onViewportChange = { [weak self] in
+            scrollView.onUserViewportChange = { [weak self] in
                 self?.userViewportDidChange()
+            }
+            scrollView.onViewportGeometryChange = { [weak self] in
+                self?.reconciler?.layoutVisibleRows()
             }
         }
 
@@ -73,14 +76,16 @@ struct AppKitDiffScroller: NSViewRepresentable {
             applyMostRecentPlan()
 
             guard let scrollRequest,
-                  scrollRequest.generation != lastConsumedRequestGeneration else { return }
+                  scrollRequest.generation != lastConsumedRequestGeneration,
+                  canResolve(scrollRequest) else { return }
             lastConsumedRequestGeneration = scrollRequest.generation
             reconciler?.scroll(to: scrollRequest)
         }
 
         func dismantle() {
             guard let scrollView else { return }
-            scrollView.onViewportChange = nil
+            scrollView.onUserViewportChange = nil
+            scrollView.onViewportGeometryChange = nil
             scrollView.onContentWidthChange = nil
             pool.releaseAll()
             reconciler = nil
@@ -93,6 +98,12 @@ struct AppKitDiffScroller: NSViewRepresentable {
         private func applyMostRecentPlan() {
             guard let mostRecentPlan, let scrollView else { return }
             reconciler?.apply(plan: mostRecentPlan, contentWidth: scrollView.contentWidth)
+        }
+
+        private func canResolve(_ request: AppKitDiffScrollRequest) -> Bool {
+            guard let scrollView, scrollView.contentWidth > 0, tiling.rowCount > 0 else { return false }
+            return tiling.row(withID: request.targetID) != nil
+                || request.fallbackID.flatMap { tiling.row(withID: $0) } != nil
         }
 
         private func userViewportDidChange() {

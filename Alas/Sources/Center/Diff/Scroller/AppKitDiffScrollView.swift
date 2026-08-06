@@ -11,9 +11,11 @@ final class AppKitDiffScrollDocumentView: NSView {
 final class AppKitDiffScrollView: NSScrollView {
     let flippedDocumentView = AppKitDiffScrollDocumentView()
 
-    /// Called for user-driven bounds movement. Programmatic adjustments made
-    /// while reconciling intentionally do not feed back into row ownership.
-    var onViewportChange: (() -> Void)?
+    /// Called only for user-driven bounds movement. Programmatic adjustments
+    /// intentionally do not feed back into row ownership.
+    var onUserViewportChange: (() -> Void)?
+    /// Called when viewport height changes without a content-width change.
+    var onViewportGeometryChange: (() -> Void)?
     /// Called when the first positive usable width arrives or when it changes.
     var onContentWidthChange: (() -> Void)?
 
@@ -21,6 +23,7 @@ final class AppKitDiffScrollView: NSScrollView {
     private var lastReportedContentWidth: CGFloat?
     private var lastReportedViewportHeight: CGFloat?
     private var programmaticAdjustmentDepth = 0
+    private var programmaticAnimationDepth = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -38,8 +41,10 @@ final class AppKitDiffScrollView: NSScrollView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.programmaticAdjustmentDepth == 0 else { return }
-                self.onViewportChange?()
+                guard let self,
+                      self.programmaticAdjustmentDepth == 0,
+                      self.programmaticAnimationDepth == 0 else { return }
+                self.onUserViewportChange?()
             }
         }
     }
@@ -71,7 +76,7 @@ final class AppKitDiffScrollView: NSScrollView {
         if widthChanged, width > 0 {
             onContentWidthChange?()
         } else if heightChanged {
-            onViewportChange?()
+            onViewportGeometryChange?()
         }
     }
 
@@ -94,7 +99,13 @@ final class AppKitDiffScrollView: NSScrollView {
         guard abs(point.y - scrollY) > 0.01 else { return }
         performProgrammatic {
             if animated {
-                contentView.animator().setBoundsOrigin(point)
+                programmaticAnimationDepth += 1
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.25
+                    contentView.animator().setBoundsOrigin(point)
+                } completionHandler: { [weak self] in
+                    self?.programmaticAnimationDidComplete()
+                }
             } else {
                 contentView.setBoundsOrigin(point)
                 reflectScrolledClipView(contentView)
@@ -110,5 +121,9 @@ final class AppKitDiffScrollView: NSScrollView {
         programmaticAdjustmentDepth += 1
         body()
         programmaticAdjustmentDepth -= 1
+    }
+
+    private func programmaticAnimationDidComplete() {
+        programmaticAnimationDepth = max(0, programmaticAnimationDepth - 1)
     }
 }
