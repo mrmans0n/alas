@@ -237,6 +237,26 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
     }
 
+    @Test func nonImagePlanClearsStaleImageState() async {
+        let state = AppKitDiffReviewFileState()
+        let provider = imageProvider {
+            ImageDiffPair(before: .missing, after: .missing, oldPath: nil, kind: .modified)
+        }
+        await state.imageState.load(provider: provider)
+        #expect(state.imageState.pair != nil)
+
+        let input = AppKitDiffReviewRowInput(
+            file: textFile(),
+            state: state,
+            theme: theme
+        )
+
+        _ = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+
+        #expect(state.imageState.pair == nil)
+        #expect(state.imageState.providerID == nil)
+    }
+
     @Test func contextFailureRowDisappearsAfterSuccessfulRetry() async throws {
         let attempts = ContextAttempts()
         let provider = DiffReviewContextProvider {
@@ -499,6 +519,16 @@ struct AppKitDiffReviewRowPlanTests {
                 ),
                 load: { fatalError("The row-plan builder must not load image data") }
             )
+        )
+    }
+
+    private func imageProvider(load: @escaping @MainActor () async -> ImageDiffPair) -> DiffReviewImageProvider {
+        DiffReviewImageProvider(
+            id: .init(
+                source: .commit, repository: "/repo", beforeRevision: "old", afterRevision: "new",
+                beforePath: "Assets/logo.png", afterPath: "Assets/logo.png"
+            ),
+            load: load
         )
     }
 

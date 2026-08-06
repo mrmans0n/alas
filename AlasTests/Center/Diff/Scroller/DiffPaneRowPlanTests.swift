@@ -47,6 +47,28 @@ struct DiffPaneRowPlanTests {
         #expect(first.rows[0].equalityToken.isEqual(to: second.rows[0].equalityToken))
     }
 
+    @Test func tokenChangesWhenReviewCapabilitiesChange() {
+        let thread = DiffInlineCommentThread(
+            id: "thread", filePath: "Sources/Example.swift", newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let base = input(threads: [thread])
+        let state = DiffPanePresentationState()
+        let baseToken = DiffPaneRowPlanBuilder.build(input: base, state: state).rows[0].equalityToken
+
+        let variants = [
+            input(allowsReviewLineSelection: false, threads: [thread]),
+            input(threads: [thread], canReply: true),
+            input(threads: [thread], canResolve: true),
+            input(threads: [thread], canAddToReview: true),
+        ]
+
+        for variant in variants {
+            let token = DiffPaneRowPlanBuilder.build(input: variant, state: state).rows[0].equalityToken
+            #expect(!baseToken.isEqual(to: token))
+        }
+    }
+
     @Test func tokenChangesWhenLSPContextChanges() {
         let state = DiffPanePresentationState()
         let baseToken = DiffPaneRowPlanBuilder.build(input: input(), state: state).rows[0].equalityToken
@@ -121,7 +143,11 @@ struct DiffPaneRowPlanTests {
         codeFontSize: CGFloat = 13,
         theme: Theme? = nil,
         lspContext: DiffPaneLSPContext? = nil,
+        allowsReviewLineSelection: Bool = true,
         threads: [DiffInlineCommentThread] = [],
+        canReply: Bool = false,
+        canResolve: Bool = false,
+        canAddToReview: Bool = false,
         actions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions = { _ in .init() }
     ) -> DiffPaneRowPlanInput {
         DiffPaneRowPlanInput(
@@ -134,7 +160,11 @@ struct DiffPaneRowPlanTests {
             codeFontSize: codeFontSize,
             theme: theme ?? (try! ThemeStore().current),
             lspContext: lspContext,
+            allowsReviewLineSelection: allowsReviewLineSelection,
             threads: threads,
+            canReply: canReply,
+            canResolve: canResolve,
+            canAddToReview: canAddToReview,
             hunkActions: actions
         )
     }

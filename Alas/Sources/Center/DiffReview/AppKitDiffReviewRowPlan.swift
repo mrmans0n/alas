@@ -317,6 +317,9 @@ enum AppKitDiffReviewRowPlanBuilder {
                 stagedMutationActions: input.file.stagedMutationActions,
                 openFile: input.file.openFile
             )
+            if input.file.imageProvider == nil {
+                input.state.imageState.clear()
+            }
             let fileID = input.file.id
             let headerID = AppKitDiffReviewRowID.header(fileID: fileID)
             headerByFileID[fileID] = headerID

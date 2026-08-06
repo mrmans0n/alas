@@ -102,6 +102,10 @@ struct DiffPaneHunkRowToken: Equatable {
     let threadSignatures: [DiffInlineCommentThread]
     let annotations: [DiffInlineAnnotation]
     let activeHighlight: DiffReviewCommentHighlight?
+    let allowsReviewLineSelection: Bool
+    let canReply: Bool
+    let canResolve: Bool
+    let canAddToReview: Bool
     let actionPresence: DiffPaneHunkActionPresence
 }
 
@@ -162,6 +166,10 @@ enum DiffPaneRowPlanBuilder {
                 threadSignatures: hunkThreads,
                 annotations: hunkAnnotations,
                 activeHighlight: input.activeCommentHighlight,
+                allowsReviewLineSelection: input.allowsReviewLineSelection,
+                canReply: input.canReply,
+                canResolve: input.canResolve,
+                canAddToReview: input.canAddToReview,
                 actionPresence: .init(actions)
             )
             return AppKitDiffRowSpec(
