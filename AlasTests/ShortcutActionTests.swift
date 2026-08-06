@@ -34,6 +34,8 @@ struct ShortcutActionTests {
             (.launchAgentChat,      "t",          [.command, .option, .shift]),
             (.openReviewPalette,    "r",          [.command, .shift]),
             (.runScript,            "r",          [.command]),
+            (.selectPreviousTab,    "tab",        [.control, .shift]),
+            (.selectNextTab,        "tab",        [.control]),
             (.increaseFontSize,     "=",          [.command]),
             (.decreaseFontSize,     "-",          [.command]),
             (.resetFontSize,        "0",          [.command]),
@@ -62,7 +64,8 @@ struct ShortcutActionTests {
         let global: Set<ShortcutAction> = [
             .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
             .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
-            .openReviewPalette, .runScript, .focusMainWorktree, .increaseFontSize, .decreaseFontSize, .resetFontSize,
+            .openReviewPalette, .runScript, .selectPreviousTab, .selectNextTab, .focusMainWorktree,
+            .increaseFontSize, .decreaseFontSize, .resetFontSize,
         ]
         let codeEditor: Set<ShortcutAction> = [
             .splitSelectionIntoLines, .toggleMarkdownPreview,

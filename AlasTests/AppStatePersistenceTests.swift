@@ -439,6 +439,28 @@ struct AppStatePersistenceTests {
         #expect(fixture.state.tabs.tabs(forWorktree: fixture.otherWorktree.id) == [terminal])
     }
 
+    @Test func adjacentCenterTabNavigationCrossesOwnershipBoundaries() throws {
+        let fixture = try MissionGlobalNavigationFixture(includeWorktree: true)
+        let terminal = fixture.state.tabs.appendTerminal(
+            worktreeId: fixture.otherWorktree.id,
+            title: "Shell",
+            sessionId: "session-1"
+        )
+        fixture.state.globalTabs.openOrFocusMission(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        )
+
+        #expect(fixture.state.activateAdjacentCenterTab(.next, worktreeId: fixture.otherWorktree.id) == terminal.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+
+        #expect(fixture.state.activateAdjacentCenterTab(.next, worktreeId: fixture.otherWorktree.id) == MissionTabState.fixture.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == .fixture)
+
+        #expect(fixture.state.activateAdjacentCenterTab(.previous, worktreeId: fixture.otherWorktree.id) == terminal.id)
+        #expect(fixture.state.globalTabs.activeMissionTab() == nil)
+    }
+
     @Test func reloadTabsPreservesGlobalMissionWhenWorktreeIsMissing() throws {
         let fixture = try MissionGlobalNavigationFixture(includeWorktree: false)
         fixture.state.globalTabs.openOrFocusMission(

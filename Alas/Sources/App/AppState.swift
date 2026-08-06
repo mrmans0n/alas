@@ -4277,11 +4277,32 @@ final class AppState {
         )
         let index = number - 1
         guard composition.tabs.indices.contains(index) else { return nil }
-        let tabID = composition.tabs[index].id
+        return activateCenterTab(composition.tabs[index].id, worktreeId: worktreeId)
+    }
+
+    @discardableResult
+    func activateAdjacentCenterTab(
+        _ direction: CenterTabNavigationDirection,
+        worktreeId: String?
+    ) -> TabID? {
+        let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
+        let composition = CenterTabComposition(
+            globalTabs: globalTabs.tabs,
+            worktreeTabs: worktreeTabs,
+            activeGlobalMissionTab: globalTabs.activeMissionTab(),
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+        )
+        guard let tabID = composition.adjacentTabID(in: direction) else { return nil }
+        return activateCenterTab(tabID, worktreeId: worktreeId)
+    }
+
+    private func activateCenterTab(_ tabID: TabID, worktreeId: String?) -> TabID? {
         if globalTabs.tabs.contains(where: { $0.id == tabID }) {
             globalTabs.activate(tabId: tabID)
         } else if let worktreeId {
             activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabID)
+        } else {
+            return nil
         }
         return tabID
     }

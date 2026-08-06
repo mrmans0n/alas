@@ -16,7 +16,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
     case searchFiles, switchRepository, findAndReplace, replaceInEditor, toggleSidebar, toggleRightPane,
          createProject, newWorktree, focusMainWorktree, newTerminalTab, launchAgentTerminal, launchAgentChat,
-         openReviewPalette, runScript, increaseFontSize, decreaseFontSize, resetFontSize
+         openReviewPalette, runScript, selectPreviousTab, selectNextTab,
+         increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
     case splitSelectionIntoLines, toggleMarkdownPreview, commitInComposer
     // Terminal
@@ -28,7 +29,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
              .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
-             .openReviewPalette, .runScript, .increaseFontSize, .decreaseFontSize, .resetFontSize:
+             .openReviewPalette, .runScript, .selectPreviousTab, .selectNextTab,
+             .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
         case .splitSelectionIntoLines, .toggleMarkdownPreview:
             return .codeEditor
@@ -57,6 +59,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .launchAgentChat:          return "Launch Agent Chat"
         case .openReviewPalette:        return "Review Worktree"
         case .runScript:                return "Run Script"
+        case .selectPreviousTab:        return "Select Previous Tab"
+        case .selectNextTab:            return "Select Next Tab"
         case .increaseFontSize:         return "Increase Font Size"
         case .decreaseFontSize:         return "Decrease Font Size"
         case .resetFontSize:            return "Reset Font Size"
@@ -120,6 +124,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .launchAgentChat:          return .init(key: "t",          modifiers: [.command, .option, .shift])
         case .openReviewPalette:        return .init(key: "r",          modifiers: [.command, .shift])
         case .runScript:                return .init(key: "r",          modifiers: [.command])
+        case .selectPreviousTab:        return .init(key: "tab",        modifiers: [.control, .shift])
+        case .selectNextTab:            return .init(key: "tab",        modifiers: [.control])
         case .increaseFontSize:         return .init(key: "=",          modifiers: [.command])
         case .decreaseFontSize:         return .init(key: "-",          modifiers: [.command])
         case .resetFontSize:            return .init(key: "0",          modifiers: [.command])

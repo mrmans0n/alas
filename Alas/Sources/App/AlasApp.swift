@@ -281,6 +281,21 @@ struct AlasApp: App {
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(!state.canReopenClosedTab)
             Divider()
+            Button("Select Previous Tab") {
+                NotificationCenter.default.post(
+                    name: .alasActivateAdjacentTab,
+                    object: CenterTabNavigationDirection.previous
+                )
+            }
+            .keyboardShortcut(state.shortcut(for: .selectPreviousTab))
+            Button("Select Next Tab") {
+                NotificationCenter.default.post(
+                    name: .alasActivateAdjacentTab,
+                    object: CenterTabNavigationDirection.next
+                )
+            }
+            .keyboardShortcut(state.shortcut(for: .selectNextTab))
+            Divider()
             Button("Select Tab 1") {
                 NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 1)
             }
