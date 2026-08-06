@@ -401,6 +401,11 @@ struct CommitTabState: Codable, Equatable, Identifiable {
 
     var sha: String { revision.resolvedSHA }
 
+    var fixedSHA: String? {
+        guard case .fixed(let sha) = revision else { return nil }
+        return sha
+    }
+
     init(worktreeId: String, sha: String, title: String) {
         self.id = Self.fixedID(worktreeId: worktreeId, sha: sha)
         self.worktreeId = worktreeId

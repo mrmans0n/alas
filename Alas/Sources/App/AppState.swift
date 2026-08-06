@@ -7419,7 +7419,7 @@ final class AppState {
         }
 
         let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .commit(let state) = tab { return state.sha == commit.sha }
+            if case .commit(let state) = tab { return state.fixedSHA == commit.sha }
             return false
         }
         if let existing {

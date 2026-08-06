@@ -332,7 +332,7 @@ struct RootView: View {
 
     private func openOrFocusCommit(worktree: Worktree, commit: CommitInfo) {
         let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .commit(let s) = tab { return s.sha == commit.sha } else { return false }
+            if case .commit(let s) = tab { return s.fixedSHA == commit.sha } else { return false }
         }
         if let existing {
             state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)

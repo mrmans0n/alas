@@ -48,6 +48,19 @@ struct CommitTabStateTests {
         #expect(decoded == state)
         #expect(decoded.revision == .following(tracked))
         #expect(decoded.sha == "deadbeef")
+        #expect(decoded.fixedSHA == nil)
+    }
+
+    @Test func fixedSHAOnlyMatchesImmutableCommitRevisions() throws {
+        let fixed = CommitTabState(worktreeId: "wt", sha: "deadbeef", title: "Fixed")
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "deadbeef"
+        ))
+        let followed = CommitTabState(worktreeId: "wt", trackedRevision: tracked, title: "Follow")
+
+        #expect(fixed.fixedSHA == "deadbeef")
+        #expect(followed.sha == "deadbeef")
+        #expect(followed.fixedSHA == nil)
     }
 
     @Test func trackedRevisionTrimsExpressionAndClassifiesHEADDependence() throws {
