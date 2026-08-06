@@ -452,7 +452,13 @@ enum AppKitDiffReviewRowPlanBuilder {
             canReply: input.actionPresence.canReply, canResolve: input.actionPresence.canResolve,
             onStageReply: { input.state.actionRelay.stageReply(to: $0, body: $1) },
             canAddToReview: input.actionPresence.canAddToReview,
-            hunkFusionStates: [fusion], hunkActions: { _ in .init() }
+            hunkFusionStates: [fusion],
+            hunkActions: { hunk in
+                let enabled = input.file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
+                return DiffPaneHunkActions(
+                    dropFromCommit: enabled ? { input.file.stagedMutationActions?.unstageHunk?(hunk) } : nil
+                )
+            }
         )
     }
 

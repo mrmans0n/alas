@@ -403,6 +403,39 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func appKitReviewWindowRoutesStagedHunkMutationAction() async throws {
+        let actions = AppKitReviewActionRecorder()
+        let stagedSummary = summary(
+            path: "Sources/StagedHunk.swift",
+            namespace: "staged",
+            groupID: "staged",
+            groupTitle: "Staged"
+        )
+        let stagedFile = fileSection(
+            summary: stagedSummary,
+            displayModel: displayModel(),
+            stagedMutationActions: DiffReviewStagedMutationActions(
+                unstageHunk: { _ in actions.unstagedHunks += 1 },
+                isHunkUnstageEnabled: { _ in true }
+            )
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [stagedFile]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 420
+            )
+            let window = attachWindow(controller, width: 1_000, height: 420)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+
+            #expect(pressButton(withToolTip: "Drop from commit", in: controller.view))
+            #expect(actions.unstagedHunks == 1)
+        }
+    }
+
     @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
         let model = ReviewDraftComposerFocusModel()
         let controller = NSHostingController(
