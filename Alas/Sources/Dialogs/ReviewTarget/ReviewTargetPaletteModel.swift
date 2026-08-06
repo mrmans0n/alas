@@ -24,7 +24,7 @@ final class ReviewTargetPaletteModel {
 
     enum TargetRow: Equatable {
         case header(String)
-        case followedRevision(expression: String, resolvedSHA: String, branch: String)
+        case followedRevision(expression: String, resolvedSHA: String, branch: String, headSHA: String)
         case commit(CommitInfo)
         case branch(String)
         case message(String)
@@ -43,8 +43,8 @@ final class ReviewTargetPaletteModel {
         var stableId: String {
             switch self {
             case .header(let title):  return "header:\(title)"
-            case .followedRevision(let expression, let resolvedSHA, let branch):
-                return "followed:\(expression):\(resolvedSHA):\(branch)"
+            case .followedRevision(let expression, let resolvedSHA, let branch, let headSHA):
+                return "followed:\(expression):\(resolvedSHA):\(branch):\(headSHA)"
             case .commit(let commit): return "commit:\(commit.sha)"
             case .branch(let name):   return "branch:\(name)"
             case .message(let text):  return "message:\(text)"
@@ -404,11 +404,12 @@ final class ReviewTargetPaletteModel {
             let rows = targetRows()
             guard rows.indices.contains(selectedIndex) else { return }
             switch rows[selectedIndex] {
-            case .followedRevision(let expression, let resolvedSHA, let branch):
+            case .followedRevision(let expression, let resolvedSHA, let branch, let headSHA):
                 launchFollowedRevision(
                     expression: expression,
                     resolvedSHA: resolvedSHA,
                     branch: branch,
+                    headSHA: headSHA,
                     worktree: worktree,
                     environment: env
                 )
@@ -441,7 +442,8 @@ final class ReviewTargetPaletteModel {
             followedRevisionRow = .followedRevision(
                 expression: expression,
                 resolvedSHA: candidate.sha,
-                branch: candidate.branch
+                branch: candidate.branch,
+                headSHA: candidate.headSHA
             )
             preserveSelectionAfterRevisionValidation(previousSelection: previousSelection)
         } catch {
@@ -533,12 +535,14 @@ final class ReviewTargetPaletteModel {
         expression: String,
         resolvedSHA: String,
         branch: String,
+        headSHA: String,
         worktree: Worktree,
         environment env: ReviewTargetPaletteEnvironment
     ) {
         guard let revision = TrackedRevision(
             expression: expression,
             baselineBranch: branch,
+            baselineHEAD: headSHA,
             resolvedSHA: resolvedSHA
         ) else { return }
         env.openTarget(

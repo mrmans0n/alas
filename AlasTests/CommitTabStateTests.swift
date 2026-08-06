@@ -96,6 +96,16 @@ struct CommitTabStateTests {
             == .pause(current.withPendingCheckout(candidate)))
     }
 
+    @Test func headRelativeRevisionPausesWhenDetachedHeadChanges() throws {
+        let current = try #require(TrackedRevision(
+            expression: "HEAD~3", baselineBranch: "", baselineHEAD: "detached-old", resolvedSHA: "old"
+        ))
+        let candidate = TrackedRevisionCandidate(branch: "", sha: "new", headSHA: "detached-new")
+
+        #expect(TrackedRevisionPolicy.evaluate(current: current, candidate: candidate)
+            == .pause(current.withPendingCheckout(candidate)))
+    }
+
     @Test func namedRefFollowsAcrossUnrelatedCheckout() throws {
         let current = try #require(TrackedRevision(
             expression: "topic~2", baselineBranch: "feature", resolvedSHA: "old"
@@ -237,7 +247,7 @@ struct CommitTabStateTests {
 
         let candidate = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "HEAD~2")
 
-        #expect(candidate == TrackedRevisionCandidate(branch: "main", sha: "main-sha"))
+        #expect(candidate == TrackedRevisionCandidate(branch: "main", sha: "main-sha", headSHA: "main-head"))
     }
 
     @Test func trackedRevisionResolverPinsHEADRelativeExpressionAcrossTrueABA() async throws {
@@ -249,7 +259,11 @@ struct CommitTabStateTests {
 
         let candidate = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "HEAD~2")
 
-        #expect(candidate == TrackedRevisionCandidate(branch: "feature", sha: "feature-expression-sha"))
+        #expect(candidate == TrackedRevisionCandidate(
+            branch: "feature",
+            sha: "feature-expression-sha",
+            headSHA: "feature-head"
+        ))
         #expect(await sequence.requestedRefs == ["HEAD", "feature-head~2", "HEAD"])
     }
 
@@ -265,7 +279,11 @@ struct CommitTabStateTests {
 
         let candidate = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "  HEAD^  ")
 
-        #expect(candidate == TrackedRevisionCandidate(branch: "feature", sha: "feature-expression-sha"))
+        #expect(candidate == TrackedRevisionCandidate(
+            branch: "feature",
+            sha: "feature-expression-sha",
+            headSHA: "feature-head"
+        ))
         #expect(await sequence.requestedRefs == ["HEAD", "feature-head^", "HEAD"])
     }
 
@@ -281,7 +299,11 @@ struct CommitTabStateTests {
 
         let candidate = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "@~2")
 
-        #expect(candidate == TrackedRevisionCandidate(branch: "feature", sha: "feature-expression-sha"))
+        #expect(candidate == TrackedRevisionCandidate(
+            branch: "feature",
+            sha: "feature-expression-sha",
+            headSHA: "feature-head"
+        ))
         #expect(await sequence.requestedRefs == ["HEAD", "feature-head~2", "HEAD"])
     }
 }

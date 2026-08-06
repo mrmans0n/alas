@@ -99,6 +99,43 @@ struct ReviewSessionStoreTests {
         #expect(try store.findActive(targetID: target.id) == record)
     }
 
+    @Test func findActiveCanExcludeCurrentRetargetedSession() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~2",
+            baselineBranch: "feature",
+            baselineHEAD: "head",
+            resolvedSHA: "sha"
+        ))
+        let target = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: revision,
+            title: "Review HEAD~2"
+        )
+        let existing = ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: "existing"),
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let current = ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: "current"),
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 3),
+            updatedAt: Date(timeIntervalSince1970: 4)
+        )
+        try store.save(existing)
+        try store.save(current)
+
+        #expect(try store.findActive(targetID: target.id, excluding: current.id) == existing)
+        #expect(try store.findActive(targetID: target.id, excluding: existing.id) == current)
+        #expect(try store.findActive(targetID: target.id, excluding: ReviewSessionID(rawValue: "missing")) == current)
+    }
+
     private func makeRecord(id: String, worktreeID: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
         let target = ReviewSessionTarget.commit(
             worktreeID: worktreeID,

@@ -59,7 +59,8 @@ struct ReviewTargetPaletteModelTests {
         #expect(model.targetRows().contains(.followedRevision(
             expression: "HEAD~3",
             resolvedSHA: "resolved-HEAD~3",
-            branch: "feature"
+            branch: "feature",
+            headSHA: "resolved-HEAD~3"
         )))
         await model.activateSelection(environment: env)
         #expect(opened?.kind == .trackedCommit)
@@ -292,7 +293,8 @@ struct ReviewTargetPaletteModelTests {
         #expect(model.targetRows()[1] == .followedRevision(
             expression: "main",
             resolvedSHA: "resolved-main",
-            branch: "feature"
+            branch: "feature",
+            headSHA: "resolved-main"
         ))
         #expect(model.selectedIndex == 5)
         #expect(model.targetRows()[model.selectedIndex] == .branch("main"))
@@ -309,7 +311,12 @@ struct ReviewTargetPaletteModelTests {
 
         #expect(model.targetRows() == [
             .header("Followed Revision"),
-            .followedRevision(expression: "HEAD~3", resolvedSHA: "resolved-HEAD~3", branch: "feature"),
+            .followedRevision(
+                expression: "HEAD~3",
+                resolvedSHA: "resolved-HEAD~3",
+                branch: "feature",
+                headSHA: "resolved-HEAD~3"
+            ),
             .header("Commits"),
             .message("No commits ahead of the base branch"),
         ])

@@ -275,7 +275,7 @@ struct ReviewTargetDialog: View {
                 .padding(.bottom, 3)
         case .message(let text):
             messageRow(text)
-        case .followedRevision(let expression, let resolvedSHA, let branch):
+        case .followedRevision(let expression, let resolvedSHA, let branch, _):
             followedRevisionRow(
                 expression: expression,
                 resolvedSHA: resolvedSHA,

@@ -21,10 +21,15 @@ struct ReviewSessionStore {
             .sorted(by: sortSessions)
     }
 
-    func findActive(targetID: ReviewSessionID) throws -> ReviewSessionRecord? {
+    func findActive(targetID: ReviewSessionID, excluding excludedID: ReviewSessionID? = nil) throws -> ReviewSessionRecord? {
         let snapshot = try readSnapshot()
         return snapshot.recordsByID.values
-            .filter { $0.target.id == targetID && $0.status != .archived && $0.status != .reviewed }
+            .filter {
+                $0.target.id == targetID &&
+                    $0.id != excludedID &&
+                    $0.status != .archived &&
+                    $0.status != .reviewed
+            }
             .sorted(by: sortSessions)
             .first
     }

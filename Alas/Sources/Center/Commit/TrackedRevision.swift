@@ -3,27 +3,54 @@ import Foundation
 struct TrackedRevisionCandidate: Codable, Equatable, Hashable, Sendable {
     let branch: String
     let sha: String
+    let headSHA: String
+
+    private enum CodingKeys: String, CodingKey {
+        case branch
+        case sha
+        case headSHA
+    }
+
+    init(branch: String, sha: String, headSHA: String? = nil) {
+        self.branch = branch
+        self.sha = sha
+        self.headSHA = headSHA ?? sha
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let branch = try container.decode(String.self, forKey: .branch)
+        let sha = try container.decode(String.self, forKey: .sha)
+        self.init(
+            branch: branch,
+            sha: sha,
+            headSHA: try container.decodeIfPresent(String.self, forKey: .headSHA)
+        )
+    }
 }
 
 struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
     let expression: String
     var baselineBranch: String
+    var baselineHEAD: String
     var resolvedSHA: String
     var pendingCheckout: TrackedRevisionCandidate?
 
     private enum CodingKeys: String, CodingKey {
         case expression
         case baselineBranch
+        case baselineHEAD
         case resolvedSHA
         case pendingCheckout
     }
 
-    init?(expression: String, baselineBranch: String, resolvedSHA: String) {
+    init?(expression: String, baselineBranch: String, baselineHEAD: String? = nil, resolvedSHA: String) {
         let expression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !expression.isEmpty else { return nil }
 
         self.expression = expression
         self.baselineBranch = baselineBranch
+        self.baselineHEAD = baselineHEAD ?? resolvedSHA
         self.resolvedSHA = resolvedSHA
         self.pendingCheckout = nil
     }
@@ -32,10 +59,12 @@ struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let expression = try container.decode(String.self, forKey: .expression)
         let baselineBranch = try container.decode(String.self, forKey: .baselineBranch)
+        let baselineHEAD = try container.decodeIfPresent(String.self, forKey: .baselineHEAD)
         let resolvedSHA = try container.decode(String.self, forKey: .resolvedSHA)
         guard var revision = Self(
             expression: expression,
             baselineBranch: baselineBranch,
+            baselineHEAD: baselineHEAD,
             resolvedSHA: resolvedSHA
         ) else {
             throw DecodingError.dataCorruptedError(
@@ -75,6 +104,7 @@ struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
     func resolving(_ candidate: TrackedRevisionCandidate) -> Self {
         var revision = self
         revision.baselineBranch = candidate.branch
+        revision.baselineHEAD = candidate.headSHA
         revision.resolvedSHA = candidate.sha
         revision.pendingCheckout = nil
         return revision
@@ -107,11 +137,21 @@ enum TrackedRevisionPolicy {
             return .unchanged(current.resolving(candidate))
         }
 
-        guard current.dependsOnWorktreeHEAD, candidate.branch != current.baselineBranch else {
+        guard current.dependsOnWorktreeHEAD else {
             return .follow(current.resolving(candidate))
         }
 
-        return .pause(current.withPendingCheckout(candidate))
+        if candidate.branch != current.baselineBranch {
+            return .pause(current.withPendingCheckout(candidate))
+        }
+
+        if current.baselineBranch.isEmpty,
+           candidate.branch.isEmpty,
+           candidate.headSHA != current.baselineHEAD {
+            return .pause(current.withPendingCheckout(candidate))
+        }
+
+        return .follow(current.resolving(candidate))
     }
 }
 
@@ -147,7 +187,7 @@ struct TrackedRevisionResolver {
             let endingBranch = try await branch(worktreePath)
             let endingHEAD = try await resolve(worktreePath, "HEAD")
             if startingBranch == endingBranch, startingHEAD == endingHEAD {
-                return TrackedRevisionCandidate(branch: endingBranch, sha: resolvedSHA)
+                return TrackedRevisionCandidate(branch: endingBranch, sha: resolvedSHA, headSHA: endingHEAD)
             }
             try Task.checkCancellation()
         }

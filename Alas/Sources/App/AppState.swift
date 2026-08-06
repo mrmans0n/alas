@@ -3232,6 +3232,7 @@ final class AppState {
         guard let revision = TrackedRevision(
             expression: expression,
             baselineBranch: candidate.branch,
+            baselineHEAD: candidate.headSHA,
             resolvedSHA: candidate.sha
         ) else {
             Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
@@ -3266,6 +3267,11 @@ final class AppState {
                   now: Date()
               )
         else { return }
+        if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: existing)
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            return
+        }
         persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
     }
 
