@@ -104,9 +104,12 @@ struct AppKitDiffReviewScrollerTests {
         gate.begin(requestGeneration: 1)
         gate.begin(requestGeneration: 2)
 
-        #expect(!gate.consumesCompletion(for: 1))
+        let consumedStaleCompletion = gate.consumesCompletion(for: 1)
         #expect(gate.pendingRequestGeneration == 2)
-        #expect(gate.consumesCompletion(for: 2))
+        let consumedCurrentCompletion = gate.consumesCompletion(for: 2)
+
+        #expect(!consumedStaleCompletion)
+        #expect(consumedCurrentCompletion)
         #expect(gate.pendingRequestGeneration == nil)
     }
 

@@ -7,11 +7,121 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct DiffReviewSurfaceTests {
+    init() {
+        AppKitDiffScrollerFlag.setOverride(false)
+    }
+
     private func theme() -> Theme { try! ThemeStore().current }
 
     @Test func appKitScrollerSwitchMatchesRuntimeFlag() {
         #expect(DiffReviewSurface.usesAppKitScroller(flagEnabled: true))
         #expect(!DiffReviewSurface.usesAppKitScroller(flagEnabled: false))
+    }
+
+    @Test func appKitReviewWindowConnectsViewportAndReviewNavigationCommands() async throws {
+        let files = [
+            summary(path: "Sources/First.swift"),
+            summary(path: "Sources/Second.swift"),
+            summary(path: "Sources/Third.swift"),
+            summary(path: "Sources/Fourth.swift"),
+            summary(path: "Sources/Fifth.swift"),
+        ]
+        let session = loadedSession(summaries: files)
+        let model = AppKitReviewSurfaceWindowModel(session: session)
+        let feedback = DiffReviewInlineFeedback(
+            id: "feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Feedback",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: files[3].path, line: 1, side: .new),
+            evidenceItemID: "feedback"
+        )
+        let draft = draftComment(
+            id: "draft",
+            fileID: files[4].id,
+            path: files[4].path,
+            startLine: 1
+        )
+        model.inlineFeedbackByFileID = [files[3].id: [feedback]]
+        model.draftCommentsByFileID = [files[4].id: [draft]]
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 160
+            )
+            let window = attachWindow(controller, width: 1_000, height: 160)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+
+            scroller.contentView.scroll(to: NSPoint(x: 0, y: 250))
+            scroller.reflectScrolledClipView(scroller.contentView)
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[2].id)
+
+            model.inlineFeedbackCommand = .init(feedbackID: "feedback", fileID: files[3].id, generation: 1)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[3].id)
+
+            model.inlineFeedbackCommand = nil
+            model.draftCommentCommand = .init(commentID: "draft", fileID: files[4].id, generation: 1)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[4].id)
+        }
+    }
+
+    @Test func appKitReviewWindowRetainsSurfaceUpdatesAcrossPreferencesSessionReplacementAndToggle() async throws {
+        let initial = loadedSession(summaries: [
+            summary(path: "Sources/Initial.swift"),
+            summary(path: "Sources/InitialTwo.swift"),
+        ])
+        let replacement = loadedSession(summaries: [
+            summary(path: "Sources/Replacement.swift"),
+            summary(path: "Sources/ReplacementTwo.swift"),
+        ])
+        let model = AppKitReviewSurfaceWindowModel(session: initial)
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 260
+            )
+            let window = attachWindow(controller, width: 1_000, height: 260)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let originalScroller = try #require(appKitReviewScroller(in: controller.view))
+
+            model.layout = .split
+            model.wrap = true
+            model.whitespace = true
+            await drainSwiftUI(controller.view)
+            #expect(appKitReviewScroller(in: controller.view) === originalScroller)
+
+            model.session = replacement
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == replacement.files[0].id)
+            #expect(subview(
+                withAccessibilityIdentifier: "diff-review-rail-row-\(replacement.files[0].id.rawValue)",
+                in: controller.view
+            ) != nil)
+
+            AppKitDiffScrollerFlag.setOverride(false)
+            await drainSwiftUI(controller.view)
+            #expect(appKitReviewScroller(in: controller.view) == nil)
+
+            AppKitDiffScrollerFlag.setOverride(true)
+            await drainSwiftUI(controller.view)
+            let rebuiltScroller = try #require(appKitReviewScroller(in: controller.view))
+            #expect(ObjectIdentifier(rebuiltScroller) != ObjectIdentifier(originalScroller))
+            #expect(rebuiltScroller.scrollY == 0)
+        }
     }
 
     @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
@@ -4163,6 +4273,43 @@ struct DiffReviewSurfaceTests {
         return controller
     }
 
+    private func attachWindow<Content: View>(
+        _ controller: NSHostingController<Content>,
+        width: CGFloat,
+        height: CGFloat
+    ) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        controller.view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: width, height: height)
+        controller.view.layoutSubtreeIfNeeded()
+        return window
+    }
+
+    private func appKitReviewScroller(in view: NSView) -> AppKitDiffScrollView? {
+        allSubviews(of: view).compactMap { $0 as? AppKitDiffScrollView }.first
+    }
+
+    private func withAppKitReviewScroller(
+        _ body: () async throws -> Void
+    ) async rethrows {
+        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
+        defer {
+            if let originalOverride {
+                AppKitDiffScrollerFlag.setOverride(originalOverride)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
+                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
+            }
+        }
+        AppKitDiffScrollerFlag.setOverride(true)
+        try await body()
+    }
+
     private func drainSwiftUI(_ view: NSView) async {
         for _ in 0..<6 {
             view.layoutSubtreeIfNeeded()
@@ -4335,6 +4482,48 @@ private struct ReviewDraftComposerFocusSiblingView: NSViewRepresentable {
 
 private final class FocusSinkView: NSView {
     override var acceptsFirstResponder: Bool { true }
+}
+
+@Observable
+@MainActor
+private final class AppKitReviewSurfaceWindowModel {
+    var session: DiffReviewLoadedSession
+    var selected: DiffReviewFileID?
+    var railCollapsed = false
+    var layout = DiffLayoutMode.stacked
+    var wrap = false
+    var whitespace = false
+    var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
+    var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
+    var inlineFeedbackCommand: DiffReviewInlineFeedbackScrollCommand?
+    var draftCommentCommand: DiffReviewDraftCommentScrollCommand?
+
+    init(session: DiffReviewLoadedSession) {
+        self.session = session
+        selected = session.files.first?.id
+    }
+}
+
+@MainActor
+private struct AppKitReviewSurfaceWindowHarness: View {
+    let model: AppKitReviewSurfaceWindowModel
+
+    var body: some View {
+        DiffReviewSurface(
+            session: model.session,
+            selectedFileID: Binding(get: { model.selected }, set: { model.selected = $0 }),
+            railCollapsed: Binding(get: { model.railCollapsed }, set: { model.railCollapsed = $0 }),
+            layoutMode: Binding(get: { model.layout }, set: { model.layout = $0 }),
+            wrapLines: Binding(get: { model.wrap }, set: { model.wrap = $0 }),
+            showWhitespace: Binding(get: { model.whitespace }, set: { model.whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            inlineFeedbackByFileID: model.inlineFeedbackByFileID,
+            inlineFeedbackScrollCommand: model.inlineFeedbackCommand,
+            draftCommentsByFileID: model.draftCommentsByFileID,
+            draftCommentScrollCommand: model.draftCommentCommand
+        )
+    }
 }
 
 private final class ReviewBundleActionRecorder: @unchecked Sendable {
