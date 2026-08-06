@@ -786,8 +786,8 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         #expect(scroller.distanceFromBottom < 1)
     }
 
-    @Test("AppKit head pagination discards the opposite page")
-    func headPaginationStaysBounded() throws {
+    @Test("AppKit head pagination keeps the opposite edge during a fling")
+    func headPaginationGrowsWithoutResettingTheWindow() throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.replaceTranscriptMessages(messages(200))
         session.transcript.setVisibleWindow(containing: 70)
@@ -799,8 +799,58 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
 
         _ = coordinator // Retain the weak callback owner through the scroll.
         #expect(session.transcript.visibleHead == 40)
-        #expect(session.transcript.visibleTail == 130)
-        #expect(session.transcript.visibleTailBound - session.transcript.visibleHead == ACPTranscript.maxVisibleRows)
+        #expect(session.transcript.visibleTail == 160)
+        #expect(
+            session.transcript.visibleTailBound - session.transcript.visibleHead
+                == ACPTranscript.maxVisibleRows + ACPTranscript.tailWindow
+        )
+    }
+
+    @Test("AppKit tail pagination keeps the opposite edge during a fling")
+    func tailPaginationGrowsWithoutResettingTheWindow() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages(messages(200))
+        session.transcript.setVisibleWindow(containing: 40)
+        session.followsTranscriptTail = false
+        let (coordinator, scroller, _) = try attach(session: session)
+
+        let bottom = max(0, scroller.contentHeight - scroller.viewportHeight)
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom - 1))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom))
+        scroller.reflectScrolledClipView(scroller.contentView)
+
+        _ = coordinator // Retain the weak callback owner through the scroll.
+        #expect(session.transcript.visibleHead == 40)
+        #expect(session.transcript.visibleTail == 160)
+        #expect(
+            session.transcript.visibleTailBound - session.transcript.visibleHead
+                == ACPTranscript.maxVisibleRows + ACPTranscript.tailWindow
+        )
+    }
+
+    @Test("reaching the live tail does not issue a programmatic scroll during rebound")
+    func reachingLiveTailDoesNotScrollProgrammatically() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages(messages(200))
+        session.transcript.resetWindowToTail()
+        session.transcript.freezeVisibleTail()
+        session.followsTranscriptTail = false
+        let (coordinator, scroller, _) = try attach(session: session)
+
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
+        let bottom = max(0, scroller.contentHeight - scroller.viewportHeight)
+        let callsBefore = scroller.scrollToBottomCallCountForTesting
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom - 1))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom))
+        scroller.reflectScrolledClipView(scroller.contentView)
+
+        #expect(session.followsTranscriptTail)
+        #expect(scroller.scrollToBottomCallCountForTesting == callsBefore)
+        _ = coordinator // Retain the weak callback owner through the scroll.
     }
 }
 

@@ -321,11 +321,10 @@ final class ACPTranscriptScrollerReconciler {
     /// behavior — streaming content accumulates below the viewport while the
     /// "go to newest" affordance stays hidden, because it keys off
     /// `session.followsTranscriptTail` which nothing has paused. The
-    /// suppression is therefore scoped to an ACTIVE GESTURE: the viewport
-    /// must be off the tail AND the user must have moved it within
-    /// `userScrollSuppressionWindow`. Once the gesture ends, an update
-    /// re-pins exactly as it always did, so the inconsistent state cannot
-    /// outlive the gesture that caused it.
+    /// suppression is therefore scoped to an ACTIVE GESTURE. This includes
+    /// elastic overrun at the bottom: `distanceFromBottom` is clamped to zero
+    /// there, but re-pinning would fight AppKit's rebound. Once the gesture
+    /// ends, an update re-pins exactly as it always did.
     ///
     /// "The user moved it" is `noteUserScroll()`, driven by the scroller's own
     /// programmatic/non-programmatic split, not by `NSApp.currentEvent` —
@@ -355,9 +354,6 @@ final class ACPTranscriptScrollerReconciler {
     private func repinsToTail(followsTail: Bool, wasFollowingTail: Bool) -> Bool {
         guard followsTail else { return false }
         if !wasFollowingTail { return true }
-        guard scroller.distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance else {
-            return true
-        }
         return !isUserScrollInFlight()
     }
 

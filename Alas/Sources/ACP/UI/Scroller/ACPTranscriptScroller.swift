@@ -751,7 +751,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // queues several steps that land together as a single
                 // 60-150 row insertion measured in one synchronous pass.
                 pendingHeadStep = true
-                host.transcript.stepHeadBack()
+                host.transcript.stepHeadBack(boundTail: false)
             }
             if ACPTranscriptScroller.shouldStepTailForward(
                 visibleTail: host.transcript.visibleTailBound,
@@ -760,7 +760,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 threshold: threshold,
                 previousScrollY: previousY, newScrollY: newY
             ) {
-                host.transcript.stepTailForward(preserving: nil)
+                host.transcript.stepTailForward(preserving: nil, boundHead: false)
             }
 
             if !host.session.followsTranscriptTail {
@@ -915,7 +915,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             reconciler?.setFollowsTail(true)
             host.transcript.resetWindowToTail()
             host.onRememberScrollAnchor(nil, nil, true)
-            scroller?.scrollToBottom()
         }
 
         private func rememberCurrentAnchor() {
