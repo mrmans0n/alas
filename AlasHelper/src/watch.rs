@@ -226,7 +226,9 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     if let Some(rest) = relative.strip_prefix("worktrees/") {
         let parts: Vec<_> = rest.split('/').filter(|part| !part.is_empty()).collect();
         return parts.len() == 1
+            || (parts.len() == 2 && parts[1] == "config.worktree")
             || (parts.len() == 2 && (parts[1] == "HEAD" || is_revision_pseudo_ref(parts[1])))
+            || (parts.len() >= 3 && parts[1] == "logs")
             || (parts.len() >= 2 && (parts[1] == "rebase-merge" || parts[1] == "rebase-apply"));
     }
     false
@@ -361,6 +363,18 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/worktrees/feature/FETCH_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/config.worktree"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/logs/HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/logs/refs/heads/topic"),
             &info
         ));
         assert!(is_relevant_git_path(

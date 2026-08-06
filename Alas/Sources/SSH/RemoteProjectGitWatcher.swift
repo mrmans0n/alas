@@ -226,7 +226,7 @@ final class RemoteProjectGitWatcher {
 
     private func pollReflogOutput() async -> String {
         let result = try? await Process.git(
-            ["reflog", "show", "--all", "--format=%H %gD"],
+            ["reflog", "show", "--all", "--max-count=256", "--format=%H %gD"],
             cwd: projectPath
         )
         guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {

@@ -64,6 +64,12 @@ enum GitEventFilter {
             if parts.count == 3 && Self.revisionPseudoRefs.contains(parts[2]) {
                 return .revisionChange
             }
+            if parts.count == 3 && parts[2] == "config.worktree" {
+                return .revisionChange
+            }
+            if parts.count >= 4 && parts[2] == "logs" {
+                return .revisionChange
+            }
             return .other
         }
 
