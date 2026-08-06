@@ -599,24 +599,38 @@ struct ReviewSessionTabView: View {
                 refreshError = error.localizedDescription
             }
             guard loadCoordinator.canPublish(token) else { return }
-            if resolvedRecord.paused, resolvedRecord.record.target != storedRecord.target {
-                try sessionStore.save(resolvedRecord.record)
+            var refreshedRecord = mergeLatestMutableFields(into: resolvedRecord.record, fallback: storedRecord)
+            if let loaded,
+               trackedResolvedSHA(in: record) == trackedResolvedSHA(in: refreshedRecord),
+               case .trackedCommit = refreshedRecord.target.payload {
+                if refreshedRecord.target != storedRecord.target {
+                    try sessionStore.save(refreshedRecord)
+                }
+                record = refreshedRecord
+                loadError = refreshError
+                isLoading = false
+                loadCoordinator.finish(token)
+                return
+            }
+            if resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
+                try sessionStore.save(refreshedRecord)
             }
 
-            let loadedContext = try await loader.load(target: resolvedRecord.record.target)
+            let loadedContext = try await loader.load(target: refreshedRecord.target)
             guard loadCoordinator.canPublish(token) else { return }
-            if !resolvedRecord.paused, resolvedRecord.record.target != storedRecord.target {
-                try sessionStore.save(resolvedRecord.record)
+            refreshedRecord = mergeLatestMutableFields(into: refreshedRecord, fallback: storedRecord)
+            if !resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
+                try sessionStore.save(refreshedRecord)
             }
 
             publishInitialLoad(
                 ReviewSessionTabLoadPublication.initial(
-                    record: resolvedRecord.record,
+                    record: refreshedRecord,
                     loaded: loadedContext
                 )
             )
             loadError = refreshError
-            loadDraftCommentController(for: resolvedRecord.record)
+            loadDraftCommentController(for: refreshedRecord)
             isLoading = false
             loadCoordinator.finish(token)
         } catch is CancellationError {
@@ -629,6 +643,24 @@ struct ReviewSessionTabView: View {
             isLoading = false
             loadCoordinator.finish(token)
         }
+    }
+
+    private func mergeLatestMutableFields(
+        into refreshedRecord: ReviewSessionRecord,
+        fallback: ReviewSessionRecord
+    ) -> ReviewSessionRecord {
+        let latestRecord = (try? sessionStore.load(id: refreshedRecord.id)) ?? fallback
+        var merged = refreshedRecord
+        merged.selectedFileID = latestRecord.selectedFileID
+        merged.focusedCommentID = latestRecord.focusedCommentID
+        merged.handoffs = latestRecord.handoffs
+        merged.lastSendError = latestRecord.lastSendError
+        return merged
+    }
+
+    private func trackedResolvedSHA(in record: ReviewSessionRecord?) -> String? {
+        guard case .trackedCommit(let revision) = record?.target.payload else { return nil }
+        return revision.resolvedSHA
     }
 
     private func resolveTrackedRecordForLoad(
