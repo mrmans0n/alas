@@ -98,6 +98,16 @@ struct CommitHeaderViewTests {
         #expect(size.height <= CommitHeaderView.maxExpandedHeight + 40)
     }
 
+    @Test func expandedHeaderOnlyMakesOverflowingDetailsScrollable() {
+        let shortController = hostExpandedHeader(body: "Short body")
+        let longBody = Array(repeating: "A long commit message line", count: 100)
+            .joined(separator: "\n")
+        let longController = hostExpandedHeader(body: longBody)
+
+        #expect(shortController.view.descendantScrollViews().isEmpty)
+        #expect(longController.view.descendantScrollViews().count == 1)
+    }
+
     @Test func headerRowHasButtonAccessibilityTrait() {
         let details = makeDetails(body: "Body")
         var expanded = false
@@ -107,5 +117,24 @@ struct CommitHeaderViewTests {
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    private func hostExpandedHeader(body: String) -> NSHostingController<some View> {
+        let view = CommitHeaderView(details: makeDetails(body: body), expanded: .constant(true))
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+        return controller
+    }
+}
+
+private extension NSView {
+    func descendantScrollViews() -> [NSScrollView] {
+        var result = [self].compactMap { $0 as? NSScrollView }
+        for subview in subviews {
+            result.append(contentsOf: subview.descendantScrollViews())
+        }
+        return result
     }
 }
