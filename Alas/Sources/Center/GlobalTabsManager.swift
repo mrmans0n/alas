@@ -132,12 +132,17 @@ final class GlobalTabsManager {
         return state
     }
 
-    func loadAndMigrate(worktreeTabs: TabsManager, selectedWorktreeID: String? = nil) throws {
+    func loadPersistedTabs() throws {
         let file = try store.readIfExists(GlobalTabsFile.self, from: fileURL) ?? GlobalTabsFile()
         tabs = Self.deduplicated(file.tabs)
         activeTabId = tabs.contains(where: { $0.id == file.activeTabId }) ? file.activeTabId : nil
         migrationVersion = file.migrationVersion
+    }
 
+    func migrateLegacyMissionTabs(
+        worktreeTabs: TabsManager,
+        selectedWorktreeID: String? = nil
+    ) throws {
         guard migrationVersion < 1 else { return }
 
         worktreeTabs.loadAllPersisted()
@@ -153,6 +158,14 @@ final class GlobalTabsManager {
         merge(try worktreeTabs.extractMissionTabs())
         migrationVersion = 1
         try persist()
+    }
+
+    func loadAndMigrate(worktreeTabs: TabsManager, selectedWorktreeID: String? = nil) throws {
+        try loadPersistedTabs()
+        try migrateLegacyMissionTabs(
+            worktreeTabs: worktreeTabs,
+            selectedWorktreeID: selectedWorktreeID
+        )
     }
 
     private func merge(_ states: [MissionTabState]) {

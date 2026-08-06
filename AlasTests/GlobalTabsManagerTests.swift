@@ -71,6 +71,37 @@ struct GlobalTabsManagerTests {
         #expect(restored.activeTabId == "mission:mission-1")
     }
 
+    @Test("persisted global tabs restore before legacy worktree-tab migration")
+    func restoresPersistedTabsBeforeMigration() throws {
+        let harness = try GlobalTabsHarness(worktreeTabs: ["app": [.mission(.fixture)]])
+        _ = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-2"), title: "Persisted Mission"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+
+        try restored.loadPersistedTabs()
+
+        #expect(restored.activeMissionTab()?.missionID == MissionID(rawValue: "mission-2"))
+        #expect(harness.tabs.tabs(forWorktree: "app") == [.mission(.fixture)])
+    }
+
+    @Test("legacy migration merges into an already restored global-tab state")
+    func migrationMergesAfterEarlyRestore() throws {
+        let harness = try GlobalTabsHarness(worktreeTabs: ["app": [.mission(.fixture)]])
+        _ = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-2"), title: "Persisted Mission"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try restored.loadPersistedTabs()
+        restored.activate(tabId: "mission:mission-2")
+
+        try restored.migrateLegacyMissionTabs(worktreeTabs: harness.tabs)
+
+        #expect(restored.tabs.map(\.id) == ["mission:mission-2", "mission:mission-1"])
+        #expect(restored.activeTabId == "mission:mission-2")
+        #expect(harness.tabs.tabs(forWorktree: "app").isEmpty)
+    }
+
     @Test("opening one Mission twice keeps one global tab")
     func openOrFocusKeepsMissionIDsStable() throws {
         let harness = try GlobalTabsHarness()
