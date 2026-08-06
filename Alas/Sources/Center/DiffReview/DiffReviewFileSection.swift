@@ -129,28 +129,53 @@ struct DiffReviewFileSection: View {
     @Environment(\.theme) private var theme
     var presentationState: AppKitDiffReviewFileState? = nil
     @StateObject private var ownedPresentationState = AppKitDiffReviewFileState()
-    @FocusState private var draftComposerFocused: Bool
 
     private var state: AppKitDiffReviewFileState { presentationState ?? ownedPresentationState }
     private var copyFeedback: CopyFeedbackState { state.copyFeedback }
     private var renderContextCache: DiffReviewRenderContextCache { state.renderContextCache }
     private var pendingDraftAnchor: DiffReviewLineAnchor? { get { state.pendingDraftAnchor } nonmutating set { state.pendingDraftAnchor = newValue } }
-    private var pendingDraftBody: String { get { state.pendingDraftBody } nonmutating set { state.pendingDraftBody = newValue } }
-    private var draftComposerFocusRequestGeneration: Int { get { state.draftComposerFocusRequestGeneration } nonmutating set { state.draftComposerFocusRequestGeneration = newValue } }
-    private var expandedCollapsedRowIDs: Set<String> { get { state.expandedCollapsedRowIDs } nonmutating set { state.expandedCollapsedRowIDs = newValue } }
     private var contextSnapshot: DiffReviewFileContextSnapshot? { get { state.contextSnapshot } nonmutating set { state.contextSnapshot = newValue } }
     private var contextExpansion: DiffContextExpansionState { get { state.contextExpansion } nonmutating set { state.contextExpansion = newValue } }
-    private var contextLoadTask: Task<Void, Never>? { get { state.contextLoadTask } nonmutating set { state.contextLoadTask = newValue } }
-    private var contextLoadFileID: DiffReviewFileID? { get { state.contextLoadFileID } nonmutating set { state.contextLoadFileID = newValue } }
-    private var contextLoadSignature: DiffReviewContextStateSignature? { get { state.contextLoadSignature } nonmutating set { state.contextLoadSignature = newValue } }
-    private var contextLoadGeneration: Int { get { state.contextLoadGeneration } nonmutating set { state.contextLoadGeneration = newValue } }
     private var contextLoadError: String? { get { state.contextLoadError } nonmutating set { state.contextLoadError = newValue } }
-    private var pendingContextExpansions: [PendingContextExpansion] { get { state.pendingContextExpansions } nonmutating set { state.pendingContextExpansions = newValue } }
     private var imageState: DiffReviewImageState { state.imageState }
     private var hoveredInlineFeedbackID: String? { get { state.hoveredInlineFeedbackID } nonmutating set { state.hoveredInlineFeedbackID = newValue } }
     private var hoveredDraftCommentID: String? { get { state.hoveredDraftCommentID } nonmutating set { state.hoveredDraftCommentID = newValue } }
     private var activeThreadID: String? { get { state.activeThreadID } nonmutating set { state.activeThreadID = newValue } }
     private var showFullDiffOverride: Bool { get { state.showFullDiffOverride } nonmutating set { state.showFullDiffOverride = newValue } }
+
+    private var focusedRowInput: AppKitDiffReviewRowInput {
+        AppKitDiffReviewRowInput(
+            file: file,
+            inlineFeedback: inlineFeedback,
+            draftComments: draftComments,
+            threads: threads,
+            annotations: annotations,
+            state: state,
+            theme: theme,
+            layoutMode: layoutMode,
+            wrapLines: wrapLines,
+            showWhitespace: showWhitespace,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            showsSourceBadge: showsSourceBadge,
+            automaticallyRendersDiff: automaticallyRendersDiff,
+            focusedFeedbackID: focusedFeedbackID,
+            focusedDraftCommentID: focusedDraftCommentID,
+            allowsDraftCommentCreation: allowsDraftCommentCreation,
+            actionPresence: .init(
+                canOpenFile: file.openFile != nil,
+                canUnstageFile: file.stagedMutationActions?.unstageFile != nil,
+                canCreateDraftComment: allowsDraftCommentCreation,
+                canReply: canReply,
+                canResolve: canResolve,
+                canAddToReview: canAddToReview
+            ),
+            lspContext: lspContext,
+            reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+            draftCommentActions: feedbackDraftCommentActions,
+            onContextExpansionActivated: onContextExpansionActivated
+        )
+    }
 
     private var isOverRenderBudget: Bool {
         guard let displayModel = file.displayModel else { return false }
@@ -199,7 +224,7 @@ struct DiffReviewFileSection: View {
         )
         .background(copyFeedbackMarker)
         .onChange(of: draftCommentDisplaySignature) { _, _ in
-            clearPendingDraft()
+            focusedRowInput.clearPendingDraft()
         }
         .onChange(of: file.id) { _, _ in
             state.resetForFileIdentityChange()
@@ -262,81 +287,7 @@ struct DiffReviewFileSection: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text(file.summary.status.glyph)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundColor(statusColor(file.summary.status))
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(file.summary.path)
-                    .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let originalPath = file.summary.originalPath {
-                    Text("from \(originalPath)")
-                        .font(.system(size: 10.5))
-                        .foregroundColor(theme.color("fg-faint"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            sourceBadge
-            Spacer(minLength: 12)
-            if shouldShowChangeSummary(additions: file.summary.additions, deletions: file.summary.deletions) {
-                HStack(spacing: 9) {
-                    Text("+\(file.summary.additions)")
-                        .foregroundColor(theme.color("add"))
-                    Text("-\(file.summary.deletions)")
-                        .foregroundColor(theme.color("del"))
-                }
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-            }
-            if let pair = displayedImagePair {
-                ImageDiffControls(pair: pair, state: imageState.presentation)
-                    .background(
-                        DiffReviewAccessibilityMarker(
-                            identifier: "diff-review-image-header-\(file.id.rawValue)",
-                            label: "Image diff controls"
-                        )
-                    )
-            }
-            if let openFile = file.openFile,
-               let openFileTitle = DiffReviewFileSectionActions.openFileButtonTitle(for: file) {
-                Button(action: openFile) {
-                    Text(openFileTitle)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.color("fg-muted"))
-                        .padding(.horizontal, 8)
-                        .frame(height: 24)
-                        .background(theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-                .help(openFileTitle)
-                .accessibilityIdentifier("diff-review-open-file-\(file.id.rawValue)")
-                .accessibilityLabel(openFileTitle)
-            }
-            if let unstageFile = file.stagedMutationActions?.unstageFile {
-                Button("Unstage") {
-                    unstageFile()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(theme.color("fg-muted"))
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .accessibilityIdentifier("diff-review-unstage-file-\(file.id.rawValue)")
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(theme.color("bg-2"))
-        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-    }
+    private var header: some View { AppKitDiffReviewHeaderRowBody(input: focusedRowInput) }
 
     private var effectiveReviewFeedbackTarget: ReviewFeedbackTarget {
         if let reviewFeedbackTarget {
@@ -403,15 +354,11 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private func fullWidthDraftCommentStack(_ comments: [ReviewDraftComment]) -> some View {
         if !comments.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(comments) { comment in
-                    draftCommentCard(comment)
+                    AppKitDiffReviewDraftCommentRowBody(comment: comment, input: focusedRowInput)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(theme.color("bg-1"))
-            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
     }
 
@@ -421,37 +368,14 @@ struct DiffReviewFileSection: View {
         rows: [DiffDisplayRow]
     ) -> some View {
         if !comments.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(comments) { comment in
-                    DiffFeedbackLaneView(
-                        lane: DiffFeedbackLaneResolver.lane(for: comment),
-                        layoutMode: layoutMode,
-                        rows: rows
-                    ) {
-                        draftCommentCard(comment)
-                            .padding(.horizontal, 14)
-                    }
+                    AppKitDiffReviewDraftCommentRowBody(
+                        comment: comment, input: focusedRowInput, rows: rows
+                    )
                 }
             }
-            .padding(.vertical, 10)
-            .background(theme.color("bg-1"))
-            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
-    }
-
-    private func draftCommentCard(_ comment: ReviewDraftComment) -> some View {
-        ReviewDraftCommentCard(
-            comment: comment,
-            file: file.summary,
-            isFocused: comment.id == focusedDraftCommentID,
-            actions: feedbackDraftCommentActions,
-            reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-            onSelect: state.actionRelay.selectDraftComment,
-            onHoverChange: { isHovered in
-                hoveredDraftCommentID = isHovered ? comment.id : (hoveredDraftCommentID == comment.id ? nil : hoveredDraftCommentID)
-            }
-        )
-        .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
     }
 
     @ViewBuilder
@@ -474,58 +398,28 @@ struct DiffReviewFileSection: View {
                 includingRequiredIDs: requiredInlineFeedbackIDs
             )
             if let rows {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(display.visibleItems) { item in
-                        DiffFeedbackLaneView(
-                            lane: DiffFeedbackLaneResolver.lane(for: item),
-                            layoutMode: layoutMode,
-                            rows: rows
-                        ) {
-                            inlineFeedbackCard(item, file: file)
-                                .padding(.horizontal, 14)
-                        }
+                        AppKitDiffReviewInlineFeedbackRowBody(
+                            item: item, input: focusedRowInput, rows: rows
+                        )
                     }
                     if display.hiddenCount > 0 {
                         DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
                             .padding(.horizontal, 14)
                     }
                 }
-                .padding(.vertical, 10)
-                .background(theme.color("bg-1"))
-                .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
             } else {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(display.visibleItems) { item in
-                        inlineFeedbackCard(item, file: file)
+                        AppKitDiffReviewInlineFeedbackRowBody(item: item, input: focusedRowInput)
                     }
                     if display.hiddenCount > 0 {
                         DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(theme.color("bg-1"))
-                .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
             }
         }
-    }
-
-    private func inlineFeedbackCard(
-        _ item: DiffReviewInlineFeedback,
-        file: DiffReviewFileSummary
-    ) -> some View {
-        refreshActionRelay()
-        return DiffReviewInlineFeedbackCard(
-            item: item,
-            file: file,
-            isFocused: item.id == focusedFeedbackID,
-            actions: state.actionRelay.inlineFeedbackActionsForRow,
-            onSelect: state.actionRelay.selectInlineFeedback,
-            onHoverChange: { isHovered in
-                hoveredInlineFeedbackID = isHovered ? item.id : (hoveredInlineFeedbackID == item.id ? nil : hoveredInlineFeedbackID)
-            }
-        )
-        .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
     }
 
     private var requiredInlineFeedbackIDs: Set<String> {
@@ -637,64 +531,9 @@ struct DiffReviewFileSection: View {
         renderContext?.groups.map(\.displayGroup)
     }
 
-    /// Review annotations that the placeholder hides while the diff is deferred.
-    /// Computed from the cheap input arrays so it never forces a `renderContext` build.
-    private var hiddenReviewItemCount: Int {
-        draftComments.count + inlineFeedback.count + threads.count
-    }
-
     private var renderBudgetPlaceholder: some View {
-        let changedLines = file.summary.additions + file.summary.deletions
-        let hiddenItems = hiddenReviewItemCount
-        let title = isDeferredByAggregateBudget
-            ? "Large review diff deferred for performance"
-            : "Large diff hidden for performance"
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(theme.color("fg"))
-            Text("\(changedLines.formatted()) changed lines. Rendering may be slow.")
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg-dim"))
-            if hiddenItems > 0 {
-                Text("^[\(hiddenItems) comment](inflect: true) hidden — show the full diff to view.")
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-dim"))
-                    .accessibilityIdentifier("diff-review-render-budget-hidden-comments-\(file.id.rawValue)")
-            }
-            Button {
-                showFullDiffOverride = true
-            } label: {
-                Text("Show full diff")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background(theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("diff-review-show-full-diff-\(file.id.rawValue)")
-            .background(
-                ReviewDraftCommentActionPressMarker(
-                    identifier: "diff-review-show-full-diff-\(file.id.rawValue)",
-                    label: "Show full diff"
-                ) {
-                    showFullDiffOverride = true
-                }
-            )
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 18)
-        .background(theme.color("bg-1"))
+        AppKitDiffReviewPlaceholderRowBody(input: focusedRowInput, isDeferred: true)
         .background(renderBudgetScrollAnchors)
-        .background(
-            DiffReviewAccessibilityMarker(
-                identifier: "diff-review-render-budget-\(file.id.rawValue)",
-                label: title
-            )
-        )
         .background {
             if isDeferredByAggregateBudget {
                 DiffReviewAccessibilityMarker(
@@ -726,83 +565,7 @@ struct DiffReviewFileSection: View {
         .accessibilityHidden(true)
     }
 
-    /// The pair from this section's own load, or — right after the review
-    /// stream's `LazyVStack` re-realizes this section (which resets
-    /// `imageState`) — the session-cached pair for the same provider. Reading
-    /// the cache directly here keeps the first body pass at full image height;
-    /// rendering empty/spinner for even one pass flips the section height and
-    /// destabilizes the lazy container's estimates (see
-    /// `DiffReviewImagePairCache`). The `.task` then re-populates `imageState`
-    /// from the same cache entry.
-    private var displayedImagePair: ImageDiffPair? {
-        imageState.pair ?? file.imageProvider.flatMap { DiffReviewImagePairCache.shared.pair(for: $0.id) }
-    }
-
-    @ViewBuilder
-    private var imageContent: some View {
-        if imageState.isLoading {
-            ProgressView()
-                .controlSize(.small)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    DiffReviewAccessibilityMarker(
-                        identifier: "diff-review-image-loading-\(file.id.rawValue)",
-                        label: "Loading image diff"
-                    )
-                )
-        }
-        if let pair = displayedImagePair {
-            ImageDiffComparisonContent(
-                pair: pair,
-                state: imageState.presentation,
-                boundedHeight: 360
-            )
-            if let failureMessage = imageLoadFailureMessage(in: pair) {
-                HStack(spacing: 10) {
-                    Text(failureMessage)
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.color("warn"))
-                    Spacer()
-                    Button("Retry") {
-                        Task { await imageState.retry() }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .accessibilityIdentifier("diff-review-image-retry-\(file.id.rawValue)")
-                    .background(
-                        DiffReviewAccessibilityMarker(
-                            identifier: "diff-review-image-retry-\(file.id.rawValue)",
-                            label: "Retry image diff"
-                        )
-                    )
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(theme.color("bg-1"))
-                .background(
-                    DiffReviewAccessibilityMarker(
-                        identifier: "diff-review-image-failure-\(file.id.rawValue)",
-                        label: failureMessage
-                    )
-                )
-            }
-        }
-    }
-
-    private func imageLoadFailureMessage(in pair: ImageDiffPair) -> String? {
-        switch (pair.before, pair.after) {
-        case (.failed(let failure), _), (_, .failed(let failure)):
-            failure.message
-        default:
-            nil
-        }
-    }
+    private var imageContent: some View { AppKitDiffReviewImageRowBody(input: focusedRowInput) }
 
     @ViewBuilder
     private func content(renderContext: DiffReviewRenderContext?) -> some View {
@@ -839,20 +602,7 @@ struct DiffReviewFileSection: View {
                 lazyGroupStack(renderableGroups, displayModel: displayModel)
             }
         } else {
-            let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg-dim"))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 18)
-                .background(theme.color("bg-1"))
-                .background(
-                    DiffReviewAccessibilityMarker(
-                        identifier: "diff-review-placeholder-\(file.id.rawValue)",
-                        label: message
-                    )
-                )
+            AppKitDiffReviewPlaceholderRowBody(input: focusedRowInput, isDeferred: false)
         }
     }
 
@@ -937,8 +687,8 @@ struct DiffReviewFileSection: View {
                 lspContext: lspContext,
                 activeCommentHighlight: activeHighlight(for: displayGroup.rows),
                 allowsReviewLineSelection: allowsDraftCommentCreation,
-                onReviewLineSelected: beginPendingDraft,
-                onContextExpansion: loadContextAndExpand,
+                onReviewLineSelected: focusedRowInput.beginPendingDraft,
+                onContextExpansion: focusedRowInput.loadContextAndExpand,
                 threads: threads,
                 annotations: annotations,
                 onReply: { thread, body in state.actionRelay.reply(to: thread, body: body) },
@@ -970,61 +720,20 @@ struct DiffReviewFileSection: View {
             ForEach(segment.blocks) { block in
                 switch block {
                 case .rows(let rowSeg):
-                    DiffPaneTextDocumentView(
-                        group: DiffDisplayGroup(
-                            id: "\(segment.id)-\(rowSeg.id)",
-                            header: displayGroup.header,
-                            sourceHunk: displayGroup.sourceHunk,
-                            rows: rowSeg.rows,
-                            rowsSignature: rowSeg.rowsSignature
-                        ),
-                        expandedCollapsedRowIDs: expandedCollapsedRowIDs,
-                        layoutMode: layoutMode,
-                        wrapLines: wrapLines,
-                        showWhitespace: showWhitespace,
-                        fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                        codeFontFamily: codeFontFamily,
-                        codeFontSize: codeFontSize,
-                        theme: theme,
-                        lspContext: lspContext,
-                        activeCommentHighlight: activeHighlight(for: rowSeg.rows),
-                        allowsReviewLineSelection: allowsDraftCommentCreation,
-                        onReviewLineSelected: beginPendingDraft,
-                        onContextExpansion: loadContextAndExpand
+                    AppKitDiffReviewSegmentRowBody(
+                        rows: rowSeg.rows,
+                        rowsSignature: rowSeg.rowsSignature,
+                        group: displayGroup,
+                        input: focusedRowInput
                     )
-                    .fixedSize(horizontal: false, vertical: true)
                 case .thread(let thread):
-                    DiffFeedbackLaneView(
-                        lane: DiffFeedbackLaneResolver.lane(for: thread),
-                        layoutMode: layoutMode,
-                        rows: segment.rows
-                    ) {
-                        DiffInlineCommentCard(
-                            thread: thread,
-                            onReply: { body in state.actionRelay.reply(to: thread, body: body) },
-                            onStageReply: { body in state.actionRelay.stageReply(to: thread, body: body) },
-                            onResolve: { state.actionRelay.resolve(thread) },
-                            onUnresolve: { state.actionRelay.unresolve(thread) },
-                            onEdit: { comment, newBody in state.actionRelay.edit(comment, in: thread, body: newBody) },
-                            onDelete: { comment in state.actionRelay.delete(comment, in: thread) },
-                            canReply: canReply && thread.viewerCanReply,
-                            canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
-                            canAddToReview: canAddToReview,
-                            onActiveChange: { active in
-                                activeThreadID = active ? thread.id : (activeThreadID == thread.id ? nil : activeThreadID)
-                            }
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    AppKitDiffReviewThreadRowBody(
+                        thread: thread, rows: segment.rows, input: focusedRowInput
+                    )
                 case .annotation(let annotation):
-                    DiffFeedbackLaneView(
-                        lane: DiffFeedbackLaneResolver.lane(for: annotation),
-                        layoutMode: layoutMode,
-                        rows: segment.rows
-                    ) {
-                        DiffInlineAnnotationCard(annotation: annotation)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    AppKitDiffReviewAnnotationRowBody(
+                        annotation: annotation, rows: segment.rows, input: focusedRowInput
+                    )
                 }
             }
         }
@@ -1101,164 +810,14 @@ struct DiffReviewFileSection: View {
     }
 
     private func segmentedHunkHeader(_ group: DiffDisplayGroup) -> some View {
-        HStack(spacing: 8) {
-            Text(group.header)
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
-                .foregroundColor(theme.color("fg-muted"))
-                .lineLimit(1)
-            Spacer(minLength: 12)
-            if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
-                let expanded = DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedCollapsedRowIDs)
-                Button {
-                    expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
-                        group,
-                        expandedIDs: expandedCollapsedRowIDs
-                    )
-                } label: {
-                    Image(systemName: expanded ? "minus.square" : "plus.square")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(theme.color("fg-muted"))
-                        .frame(width: 22, height: 20)
-                }
-                .buttonStyle(.plain)
-                .help(expanded ? "Collapse context" : "Expand context")
-            }
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 8)
-        .background(theme.color("bg-2"))
-        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        AppKitDiffReviewGroupHeaderRowBody(group: group, input: focusedRowInput)
     }
 
     @ViewBuilder
     private func draftComposer(rows: [DiffDisplayRow]) -> some View {
         if allowsDraftCommentCreation, let pendingDraftAnchor {
-            DiffFeedbackLaneView(
-                lane: DiffFeedbackLaneResolver.lane(for: pendingDraftAnchor),
-                layoutMode: layoutMode,
-                rows: rows
-            ) {
-                draftComposerBody
-            }
+            AppKitDiffReviewComposerRowBody(rows: rows, input: focusedRowInput)
         }
-    }
-
-    @ViewBuilder
-    private var draftComposerBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ReviewDraftComposerTextEditor(
-                text: Binding(
-                    get: { state.pendingDraftBody },
-                    set: { state.pendingDraftBody = $0 }
-                ),
-                theme: theme,
-                isFocused: $draftComposerFocused,
-                focusRequestGeneration: draftComposerFocusRequestGeneration,
-                onSave: savePendingDraft,
-                onCancel: clearPendingDraft
-            )
-            .frame(minHeight: 76, maxHeight: 104)
-            .background(focusedComposerMarker)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(theme.color("accent").opacity(0.65), lineWidth: 0.75)
-            )
-            .accessibilityIdentifier("diff-review-draft-composer")
-
-            HStack(spacing: 6) {
-                Spacer(minLength: 0)
-                Button("Cancel") {
-                    clearPendingDraft()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(theme.color("fg-muted"))
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .accessibilityIdentifier("diff-review-draft-composer-cancel")
-
-                Button("Save") {
-                    savePendingDraft()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(theme.color("bg-1"))
-                .padding(.horizontal, 9)
-                .frame(height: 24)
-                .background(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .accessibilityIdentifier("diff-review-draft-composer-save")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(theme.color("bg-1"))
-        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-        .background(
-            DiffReviewAccessibilityMarker(
-                identifier: "diff-review-draft-composer-marker",
-                label: "Draft comment composer"
-            )
-        )
-        .onChange(of: draftComposerFocused) { _, isFocused in
-            state.isDraftComposerFocused = isFocused
-        }
-        .onChange(of: state.isDraftComposerFocused) { _, isFocused in
-            draftComposerFocused = isFocused
-        }
-        .onAppear {
-            draftComposerFocused = state.isDraftComposerFocused
-        }
-    }
-
-    @ViewBuilder
-    private var focusedComposerMarker: some View {
-        if state.isDraftComposerFocused {
-            DiffReviewAccessibilityMarker(
-                identifier: "diff-review-draft-composer-focused",
-                label: "Draft comment composer focused"
-            )
-        }
-    }
-
-    private func savePendingDraft() {
-        guard let pendingDraftAnchor else { return }
-        let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(
-            pendingDraftAnchor,
-            in: currentDisplayGroups ?? []
-        )
-        let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
-        guard currentDraftRowKeys.contains(ReviewDraftCommentPlacement.RowKey(
-            side: canonicalAnchor.side,
-            line: canonicalAnchor.draftPlacementLine
-        )) else {
-            clearPendingDraft()
-            return
-        }
-
-        state.actionRelay.saveDraftComment(canonicalAnchor, body: body)
-        clearPendingDraft()
-    }
-
-    private func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
-        pendingDraftAnchor = anchor
-        pendingDraftBody = ""
-        draftComposerFocusRequestGeneration &+= 1
-    }
-
-    private func clearPendingDraft() {
-        pendingDraftAnchor = nil
-        pendingDraftBody = ""
-        draftComposerFocused = false
-    }
-
-    private var currentDraftRowKeys: Set<ReviewDraftCommentPlacement.RowKey> {
-        guard let groups = currentDisplayGroups else { return [] }
-        return Set(groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
     }
 
     /// Coarse structural fingerprint of the current display model, read in O(1)
@@ -1289,136 +848,6 @@ struct DiffReviewFileSection: View {
             providerID: file.contextProvider?.id.uuidString ?? "no-context-provider",
             structuralHash: displayStructuralHash
         )
-    }
-
-    private func loadContextAndExpand(
-        _ key: DiffContextExpansionKey,
-        mode: DiffContextExpansionMode,
-        edge: DiffContextExpansionEdge?
-    ) {
-        guard let provider = file.contextProvider else { return }
-        state.actionRelay.contextExpansionActivated()
-        if contextSnapshot != nil {
-            applyContextExpansion(key, mode: mode, edge: edge)
-            return
-        }
-        pendingContextExpansions.append(PendingContextExpansion(key: key, mode: mode, edge: edge))
-        guard contextLoadTask == nil else { return }
-        let fileID = file.id
-        let loadSignature = contextStateSignature
-        contextLoadGeneration += 1
-        let loadGeneration = contextLoadGeneration
-        contextLoadError = nil
-        contextLoadFileID = fileID
-        contextLoadSignature = loadSignature
-        contextLoadTask = Task {
-            do {
-                let snapshot = try await provider.snapshot()
-                try Task.checkCancellation()
-                await MainActor.run {
-                    guard contextLoadGeneration == loadGeneration,
-                          contextLoadFileID == fileID,
-                          contextLoadSignature == loadSignature
-                    else { return }
-                    contextSnapshot = snapshot
-                    contextLoadTask = nil
-                    contextLoadFileID = nil
-                    contextLoadSignature = nil
-                    let pendingExpansions = pendingContextExpansions
-                    pendingContextExpansions = []
-                    for expansion in pendingExpansions {
-                        applyContextExpansion(expansion.key, mode: expansion.mode, edge: expansion.edge)
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    guard contextLoadGeneration == loadGeneration,
-                          contextLoadFileID == fileID,
-                          contextLoadSignature == loadSignature
-                    else { return }
-                    contextLoadError = error.localizedDescription
-                    contextLoadTask = nil
-                    contextLoadFileID = nil
-                    contextLoadSignature = nil
-                    pendingContextExpansions = []
-                }
-            }
-        }
-    }
-
-    private func applyContextExpansion(
-        _ key: DiffContextExpansionKey,
-        mode: DiffContextExpansionMode,
-        edge: DiffContextExpansionEdge?
-    ) {
-        guard let displayModel = file.displayModel else { return }
-        let available = DiffContextExpandedDisplayBuilder.availableLineCount(
-            key: key,
-            groups: displayModel.groups,
-            snapshot: contextSnapshot
-        )
-        if let edge {
-            contextExpansion.expand(key, available: available, mode: mode, edge: edge)
-        } else {
-            contextExpansion.expand(key, available: available, mode: mode)
-        }
-    }
-
-    private func resetContextState() {
-        contextLoadTask?.cancel()
-        contextLoadGeneration += 1
-        contextSnapshot = nil
-        contextExpansion = DiffContextExpansionState()
-        contextLoadTask = nil
-        contextLoadFileID = nil
-        contextLoadSignature = nil
-        contextLoadError = nil
-        pendingContextExpansions = []
-    }
-
-    @ViewBuilder
-    private var sourceBadge: some View {
-        if showsSourceBadge, let title = file.summary.groupTitle {
-            Text(title.uppercased())
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundColor(sourceColor)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(sourceColor.opacity(0.16))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .background(
-                    DiffReviewAccessibilityMarker(
-                        identifier: "diff-review-source-badge-\(file.id.rawValue)",
-                        label: title.uppercased()
-                    )
-                )
-        }
-    }
-
-    private var sourceColor: Color {
-        switch file.summary.groupID ?? file.summary.namespace {
-        case "unstaged":
-            theme.color("warn")
-        case "staged":
-            theme.color("info")
-        default:
-            theme.color("accent")
-        }
-    }
-
-    private func statusColor(_ status: DiffReviewFileStatus) -> Color {
-        switch status {
-        case .added:
-            theme.color("add")
-        case .deleted:
-            theme.color("del")
-        case .renamed, .copied:
-            theme.color("accent")
-        case .conflicted:
-            theme.color("warn")
-        case .modified, .unknown:
-            theme.color("fg-dim")
-        }
     }
 }
 
@@ -2747,7 +2176,7 @@ struct ReviewDraftCommentCard: View {
     }
 }
 
-private extension DiffReviewLineAnchor {
+extension DiffReviewLineAnchor {
     var draftPlacementLine: Int {
         endLine ?? line
     }

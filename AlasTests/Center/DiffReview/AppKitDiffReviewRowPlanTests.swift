@@ -107,9 +107,54 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(plan.corePlan.rows.contains { $0.id.contains(":segment:") })
     }
 
+    @Test func accessorySegmentRowsTrackLSPContextInTheirEqualityToken() throws {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingDraftAnchor = DiffReviewLineAnchor(
+            path: file.summary.path, side: .new, line: 1, rowIndex: 1, selectedText: "let new = 1"
+        )
+        let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
+        let withLSP = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, state: state, theme: theme, lspContext: lspContext(lsp: lsp, relativePath: file.summary.path)),
+        ])
+        let withoutLSP = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, state: state, theme: theme),
+        ])
+        let withSegment = try #require(withLSP.corePlan.rows.first { $0.id.contains(":segment:") })
+        let withoutSegment = try #require(withoutLSP.corePlan.rows.first { $0.id == withSegment.id })
+
+        #expect(!withSegment.equalityToken.isEqual(to: withoutSegment.equalityToken))
+    }
+
+    @Test func rowInputContextExpansionAppliesStateAndNotifies() {
+        let snapshot = DiffReviewFileContextSnapshot(
+            old: .available(["let a = 0", "let old = 1", "let c = 2"]),
+            new: .available(["let a = 0", "let new = 1", "let c = 2"])
+        )
+        let file = textFile(contextProvider: DiffReviewContextProvider { snapshot })
+        let state = AppKitDiffReviewFileState()
+        state.contextSnapshot = snapshot
+        var activationCount = 0
+        let input = AppKitDiffReviewRowInput(
+            file: file,
+            state: state,
+            theme: theme,
+            onContextExpansionActivated: { activationCount += 1 }
+        )
+        let key = DiffContextExpansionKey(groupID: file.displayModel!.groups[0].id, boundary: .below)
+
+        input.loadContextAndExpand(key, mode: .chunk(size: 1), edge: nil)
+
+        #expect(activationCount == 1)
+        #expect(state.contextExpansion.expandedLineCount(for: key) == 1)
+    }
+
     private var theme: Theme { try! ThemeStore().current }
 
-    private func textFile(path: String = "Sources/Example.swift") -> DiffReviewFileSectionModel {
+    private func textFile(
+        path: String = "Sources/Example.swift",
+        contextProvider: DiffReviewContextProvider? = nil
+    ) -> DiffReviewFileSectionModel {
         let diff = ParsedDiff(hunks: [
             .init(header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: [
                 .init(kind: .delete, text: "let old = 1", oldNumber: 1, newNumber: nil),
@@ -123,7 +168,18 @@ struct AppKitDiffReviewRowPlanTests {
         return DiffReviewFileSectionModel(
             summary: summary, parsedDiff: diff,
             displayModel: DiffDisplayModelBuilder.build(diff: diff, filePath: summary.path),
-            placeholderMessage: nil, openFile: nil, contextProvider: nil
+            placeholderMessage: nil, openFile: nil, contextProvider: contextProvider
+        )
+    }
+
+    private func lspContext(lsp: WorkspaceLSPManager, relativePath: String) -> DiffPaneLSPContext {
+        DiffPaneLSPContext(
+            worktreeId: "wt",
+            worktreeRoot: URL(fileURLWithPath: "/tmp/repo"),
+            relativePath: relativePath,
+            language: "swift",
+            lsp: lsp,
+            openTarget: { _, _, _ in }
         )
     }
 
