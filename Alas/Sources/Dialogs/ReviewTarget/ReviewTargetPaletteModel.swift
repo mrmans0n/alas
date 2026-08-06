@@ -410,12 +410,9 @@ final class ReviewTargetPaletteModel {
             let rows = targetRows()
             guard rows.indices.contains(selectedIndex) else { return }
             switch rows[selectedIndex] {
-            case .followedRevision(let expression, let resolvedSHA, let branch, let headSHA):
-                launchFollowedRevision(
+            case .followedRevision(let expression, _, _, _):
+                await launchFollowedRevision(
                     expression: expression,
-                    resolvedSHA: resolvedSHA,
-                    branch: branch,
-                    headSHA: headSHA,
                     worktree: worktree,
                     environment: env
                 )
@@ -539,17 +536,21 @@ final class ReviewTargetPaletteModel {
 
     private func launchFollowedRevision(
         expression: String,
-        resolvedSHA: String,
-        branch: String,
-        headSHA: String,
         worktree: Worktree,
         environment env: ReviewTargetPaletteEnvironment
-    ) {
+    ) async {
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await env.resolveTrackedRevision(worktree, expression)
+        } catch {
+            launchError = "Could not resolve \(expression): \(error.localizedDescription)"
+            return
+        }
         guard let revision = TrackedRevision(
             expression: expression,
-            baselineBranch: branch,
-            baselineHEAD: headSHA,
-            resolvedSHA: resolvedSHA
+            baselineBranch: candidate.branch,
+            baselineHEAD: candidate.headSHA,
+            resolvedSHA: candidate.sha
         ) else { return }
         env.openTarget(
             ReviewSessionTarget.trackedCommit(

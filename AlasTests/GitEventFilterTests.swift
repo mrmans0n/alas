@@ -151,6 +151,7 @@ struct GitEventFilterTests {
         try "ref: refs/heads/main\n".write(to: symbolicRef, atomically: true, encoding: .utf8)
         let nonRef = gitDir.appendingPathComponent("BAR")
         try "not a ref\n".write(to: nonRef, atomically: true, encoding: .utf8)
+        let deletedSymbolicRef = gitDir.appendingPathComponent("DELETED_FOO")
 
         #expect(GitEventFilter.classify(
             eventPath: symbolicRef.path,
@@ -159,6 +160,16 @@ struct GitEventFilterTests {
         ) == .revisionChange)
         #expect(GitEventFilter.classify(
             eventPath: nonRef.path,
+            gitDir: gitDir,
+            worktreeRoot: tmp
+        ) == .other)
+        #expect(GitEventFilter.classify(
+            eventPath: deletedSymbolicRef.path,
+            gitDir: gitDir,
+            worktreeRoot: tmp
+        ) == .revisionChange)
+        #expect(GitEventFilter.classify(
+            eventPath: gitDir.appendingPathComponent("index").path,
             gitDir: gitDir,
             worktreeRoot: tmp
         ) == .other)

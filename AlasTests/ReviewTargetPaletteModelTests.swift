@@ -67,6 +67,32 @@ struct ReviewTargetPaletteModelTests {
         #expect(opened?.revisionDescription == "HEAD~3 -> resolved-HEAD~3")
     }
 
+    @Test func revisionActivationReResolvesCachedFollowedRow() async throws {
+        let model = ReviewTargetPaletteModel()
+        let w = worktree("feature")
+        var opened: ReviewSessionTarget?
+        var resolution = TrackedRevisionCandidate(branch: "feature", sha: "old-head", headSHA: "old-head")
+        var env = environment(worktrees: [w], branches: [], onOpen: { target, _ in opened = target })
+        env.resolveTrackedRevision = { _, _ in resolution }
+        model.open(prefill: w)
+        await model.loadTargets(environment: env)
+
+        model.query = "HEAD"
+        await model.validateRevisionQuery(environment: env)
+        resolution = TrackedRevisionCandidate(branch: "other", sha: "new-head", headSHA: "new-head")
+
+        await model.activateSelection(environment: env)
+
+        #expect(opened?.kind == .trackedCommit)
+        #expect(opened?.revisionDescription == "HEAD -> new-head")
+        #expect(opened?.payload == .trackedCommit(try #require(TrackedRevision(
+            expression: "HEAD",
+            baselineBranch: "other",
+            baselineHEAD: "new-head",
+            resolvedSHA: "new-head"
+        ))))
+    }
+
     @Test func worktreeEntriesPutCurrentFirstThenAlpha() {
         let model = ReviewTargetPaletteModel()
         model.open()

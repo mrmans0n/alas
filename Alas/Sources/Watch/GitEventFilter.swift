@@ -115,9 +115,37 @@ enum GitEventFilter {
 
     private static func isTopLevelSymbolicRevision(eventPath: String, relativePath: String) -> Bool {
         guard !relativePath.isEmpty,
-              !relativePath.contains("/"),
-              let contents = try? String(contentsOfFile: eventPath, encoding: .utf8)
+              !relativePath.contains("/")
         else { return false }
+        if nonRevisionTopLevelNames.contains(relativePath) {
+            return false
+        }
+        guard let contents = try? String(contentsOfFile: eventPath, encoding: .utf8) else {
+            return true
+        }
         return contents.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("ref: refs/")
     }
+
+    private static let nonRevisionTopLevelNames: Set<String> = [
+        "branches",
+        "COMMIT_EDITMSG",
+        "commondir",
+        "config",
+        "config.worktree",
+        "description",
+        "gc.log",
+        "gitdir",
+        "hooks",
+        "index",
+        "info",
+        "logs",
+        "MERGE_MSG",
+        "modules",
+        "objects",
+        "packed-refs",
+        "refs",
+        "SQUASH_MSG",
+        "TAG_EDITMSG",
+        "worktrees",
+    ]
 }

@@ -255,9 +255,38 @@ fn is_top_level_symbolic_revision(path: &Path, relative: &str) -> bool {
     if relative.is_empty() || relative.contains('/') {
         return false;
     }
+    if is_non_revision_top_level_name(relative) {
+        return false;
+    }
     std::fs::read_to_string(path)
         .map(|contents| contents.trim().starts_with("ref: refs/"))
-        .unwrap_or(false)
+        .unwrap_or(true)
+}
+
+fn is_non_revision_top_level_name(relative: &str) -> bool {
+    matches!(
+        relative,
+        "branches"
+            | "COMMIT_EDITMSG"
+            | "commondir"
+            | "config"
+            | "config.worktree"
+            | "description"
+            | "gc.log"
+            | "gitdir"
+            | "hooks"
+            | "index"
+            | "info"
+            | "logs"
+            | "MERGE_MSG"
+            | "modules"
+            | "objects"
+            | "packed-refs"
+            | "refs"
+            | "SQUASH_MSG"
+            | "TAG_EDITMSG"
+            | "worktrees"
+    )
 }
 
 #[cfg(test)]
@@ -375,10 +404,12 @@ mod tests {
         std::fs::write(&symbolic, "ref: refs/heads/main\n").expect("symbolic ref");
         let non_ref = git_dir.join("BAR");
         std::fs::write(&non_ref, "not a ref\n").expect("non ref");
+        let deleted_symbolic = git_dir.join("DELETED_FOO");
         let info = git_info(&root);
 
         assert!(is_relevant_git_path(&symbolic, &info));
         assert!(!is_relevant_git_path(&non_ref, &info));
+        assert!(is_relevant_git_path(&deleted_symbolic, &info));
         let _ = std::fs::remove_dir_all(&root);
     }
 
