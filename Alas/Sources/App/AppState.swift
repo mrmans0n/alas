@@ -3408,7 +3408,7 @@ final class AppState {
               )
         else { return }
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
-            let merged = mergedReviewSession(existing: existing, source: record)
+            let merged = mergedReviewSession(existing: existing, source: result.record)
             do {
                 let draftStore = ReviewDraftCommentStore()
                 let draftSnapshot = try draftStore.snapshot()
@@ -3444,7 +3444,7 @@ final class AppState {
               )
         else { return }
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
-            let merged = mergedReviewSession(existing: existing, source: record)
+            let merged = mergedReviewSession(existing: existing, source: result.record)
             do {
                 let draftStore = ReviewDraftCommentStore()
                 let draftSnapshot = try draftStore.snapshot()

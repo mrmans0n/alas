@@ -297,4 +297,57 @@ struct ReviewSessionModelsTests {
         #expect(unchanged.status == .reviewed)
         #expect(unchanged.verdict == reviewed.verdict)
     }
+
+    @Test func consolidationUsesRetargetedRecordStateAfterRevisionMoves() throws {
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let sourceTarget = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            sha: "aaa",
+            title: "Review aaa"
+        )
+        let movedRevision = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            resolvedSHA: "bbb"
+        ))
+        let destinationTarget = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            revision: movedRevision,
+            title: "Review HEAD~3"
+        )
+        let source = ReviewSessionRecord(
+            id: sourceTarget.id,
+            target: sourceTarget,
+            status: .reviewed,
+            verdict: ReviewSessionVerdict(
+                verdict: .approve,
+                summary: "Old bytes were good",
+                reviewedAt: Date(timeIntervalSince1970: 40)
+            ),
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 40)
+        )
+        let existing = ReviewSessionRecord(
+            id: destinationTarget.id,
+            target: destinationTarget,
+            status: .sent,
+            createdAt: Date(timeIntervalSince1970: 20),
+            updatedAt: Date(timeIntervalSince1970: 30)
+        )
+        let result = try #require(TrackedRevisionRetargeter.follow(
+            record: source,
+            revision: movedRevision,
+            title: "Review HEAD~3",
+            now: Date(timeIntervalSince1970: 50)
+        ))
+
+        let merged = ReviewSessionConsolidation.merge(existing: existing, source: result.record)
+
+        #expect(result.record.verdict == nil)
+        #expect(result.record.status == .active)
+        #expect(merged.verdict == nil)
+        #expect(merged.status == .sent)
+    }
 }
