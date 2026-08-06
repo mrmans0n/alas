@@ -3758,6 +3758,24 @@ let second = true
         #expect(helpTexts.contains("Discard hunk"))
     }
 
+    @Test func extractedHunkPresentationStateExpandsCollapsedContext() throws {
+        let group = try #require(collapsedContextModel().groups.first)
+        let state = DiffPanePresentationState()
+        let collapsedRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs
+        )
+
+        state.toggleCollapsedContext(in: group)
+        let expandedRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs
+        )
+
+        #expect(expandedRows.count > collapsedRows.count)
+        #expect(DiffCollapsedContextController.isExpanded(group, expandedIDs: state.expandedCollapsedRowIDs))
+    }
+
     @Test func visibleWhitespacePreservesInlineBackgrounds() {
         let rendered = DiffCodeText.attributedString(
             text: "\tlet b = 3",

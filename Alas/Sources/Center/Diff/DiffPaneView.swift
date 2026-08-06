@@ -463,8 +463,7 @@ struct DiffPaneView: View {
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
-    @State private var expandedCollapsedRowIDs: Set<String> = []
-    @State private var activeThreadID: String?
+    @State private var presentationState = DiffPanePresentationState()
     @State private var staticRowsWidth: CGFloat = 0
 
     init(
@@ -577,7 +576,7 @@ struct DiffPaneView: View {
         DiffPaneStaticHeightEstimator.estimatedHeight(
             for: model,
             layoutMode: layoutMode,
-            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+            expandedCollapsedRowIDs: presentationState.expandedCollapsedRowIDs,
             codeFont: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             headerFont: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize - 1),
             wrapLines: wrapLines,
@@ -709,108 +708,42 @@ struct DiffPaneView: View {
     }
 
     private func hunk(_ group: DiffDisplayGroup, fusion: DiffPaneHunkFusionState) -> some View {
-        let visibleRowsSnapshot = DiffPaneRowProjection.visibleRowsSnapshot(
-            in: group,
-            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        DiffPaneHunkRow(
+            group: group,
+            fusion: fusion,
+            input: rowPlanInput,
+            state: presentationState
         )
-        let visibleRows = visibleRowsSnapshot.rows
-        let hunkThreads = threadsForVisibleRows(visibleRows)
-        let hunkAnnotations = annotationsForVisibleRows(visibleRows)
-        let blocks = DiffInlineCommentLayout.blocks(
-            visibleRows: visibleRowsSnapshot,
-            threads: hunkThreads,
-            annotations: hunkAnnotations
-        )
-
-        return VStack(alignment: .leading, spacing: 0) {
-            hunkHeader(group)
-            ForEach(blocks) { block in
-                switch block {
-                case .rows(let segment):
-                    DiffPaneSegmentView(
-                        rows: segment.rows,
-                        rowsSignature: segment.rowsSignature,
-                        layoutMode: layoutMode,
-                        wrapLines: wrapLines,
-                        showWhitespace: showWhitespace,
-                        fileExtension: fileExtension,
-                        codeFontFamily: codeFontFamily,
-                        codeFontSize: codeFontSize,
-                        theme: theme,
-                        lspContext: lspContext,
-                        activeCommentHighlight: activeHighlight(for: segment.rows),
-                        allowsReviewLineSelection: allowsReviewLineSelection,
-                        onReviewLineSelected: onReviewLineSelected,
-                        onContextExpansion: onContextExpansion
-                    )
-                    .fixedSize(horizontal: false, vertical: true)
-                case .thread(let t):
-                    DiffFeedbackLaneView(
-                        lane: DiffFeedbackLaneResolver.lane(for: t),
-                        layoutMode: layoutMode,
-                        rows: visibleRows
-                    ) {
-                        DiffInlineCommentCard(
-                            thread: t,
-                            onReply: { body in onReply(t, body) },
-                            onStageReply: { body in onStageReply(t, body) },
-                            onResolve: { onResolve(t) },
-                            onUnresolve: { onUnresolve(t) },
-                            onEdit: { comment, newBody in onEdit(t, comment, newBody) },
-                            onDelete: { comment in onDelete(t, comment) },
-                            canReply: canReply && t.viewerCanReply,
-                            canResolve: canResolve && (t.viewerCanResolve || t.viewerCanUnresolve),
-                            canAddToReview: canAddToReview,
-                            onActiveChange: { active in
-                                activeThreadID = active ? t.id : (activeThreadID == t.id ? nil : activeThreadID)
-                            }
-                        )
-                    }
-                case .annotation(let a):
-                    DiffFeedbackLaneView(
-                        lane: DiffFeedbackLaneResolver.lane(for: a),
-                        layoutMode: layoutMode,
-                        rows: visibleRows
-                    ) {
-                        DiffInlineAnnotationCard(annotation: a)
-                    }
-                }
-            }
-        }
-        .background(theme.color("bg-1"))
-        .clipShape(DiffPaneHunkCardShape(fusion: fusion))
-        .overlay(
-            DiffPaneHunkCardShape(fusion: fusion)
-                .stroke(theme.color("line"), lineWidth: 0.75)
-        )
-        .padding(.bottom, fusion.bottomPadding)
     }
 
-    private func threadsForVisibleRows(_ visibleRows: [DiffDisplayRow]) -> [DiffInlineCommentThread] {
-        guard !threads.isEmpty else { return [] }
-        let oldLines = Set(visibleRows.compactMap { $0.old?.anchor.oldLine })
-        let newLines = Set(visibleRows.compactMap { $0.new?.anchor.newLine })
-        return threads.filter { t in
-            if t.isOldSide {
-                return oldLines.contains(where: { t.lineRange.contains($0) })
-            } else {
-                return newLines.contains(where: { t.lineRange.contains($0) })
-            }
-        }
-    }
-
-    private func annotationsForVisibleRows(_ visibleRows: [DiffDisplayRow]) -> [DiffInlineAnnotation] {
-        guard !annotations.isEmpty else { return [] }
-        let newLines = Set(visibleRows.compactMap { $0.new?.anchor.newLine })
-        return annotations.filter { newLines.contains($0.newLine) }
-    }
-
-    private func activeHighlight(for rows: [DiffDisplayRow]) -> DiffReviewCommentHighlight? {
-        DiffPaneActiveHighlightResolver.activeHighlight(
-            parentHighlight: activeCommentHighlight,
+    private var rowPlanInput: DiffPaneRowPlanInput {
+        DiffPaneRowPlanInput(
+            model: model,
+            fileExtension: fileExtension,
+            layoutMode: layoutMode,
+            wrapLines: wrapLines,
+            showWhitespace: showWhitespace,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            theme: theme,
+            lspContext: lspContext,
+            activeCommentHighlight: activeCommentHighlight,
+            allowsReviewLineSelection: allowsReviewLineSelection,
+            onReviewLineSelected: onReviewLineSelected,
+            onContextExpansion: onContextExpansion,
             threads: threads,
-            activeThreadID: activeThreadID,
-            rows: rows
+            annotations: annotations,
+            onReply: onReply,
+            onResolve: onResolve,
+            onUnresolve: onUnresolve,
+            onEdit: onEdit,
+            onDelete: onDelete,
+            canReply: canReply,
+            canResolve: canResolve,
+            onStageReply: onStageReply,
+            canAddToReview: canAddToReview,
+            hunkFusionStates: hunkFusionStates,
+            hunkActions: hunkActions
         )
     }
 }
@@ -869,53 +802,6 @@ enum DiffPaneActiveHighlightResolver {
     }
 }
 
-extension DiffPaneView {
-    private func hunkHeader(_ group: DiffDisplayGroup) -> some View {
-        let actions = hunkActions(group.sourceHunk)
-        return HStack(spacing: 8) {
-            Text(group.header)
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
-                .foregroundColor(theme.color("fg-muted"))
-                .lineLimit(1)
-            Spacer(minLength: 12)
-            if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
-                let expanded = DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedCollapsedRowIDs)
-                hunkActionButton(
-                    systemName: expanded ? "minus.square" : "plus.square",
-                    tooltip: expanded ? "Collapse context" : "Expand context"
-                ) {
-                    expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
-                        group,
-                        expandedIDs: expandedCollapsedRowIDs
-                    )
-                }
-            }
-            if let stage = actions.stage {
-                hunkActionButton(systemName: "plus.square", tooltip: "Stage hunk", action: stage)
-            }
-            if let discard = actions.discard {
-                hunkActionButton(systemName: "trash", tooltip: "Discard hunk", action: discard)
-            }
-            if let dropFromCommit = actions.dropFromCommit {
-                hunkActionButton(systemName: "minus.circle", tooltip: "Drop from commit", action: dropFromCommit)
-            }
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 8)
-        .background(theme.color("bg-2"))
-        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-    }
-
-    private func hunkActionButton(
-        systemName: String,
-        tooltip: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        DiffPaneActionButton(systemName: systemName, tooltip: tooltip, action: action)
-            .frame(width: 22, height: 20)
-    }
-}
-
 private struct DiffPaneToolbarMarker: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -924,52 +810,4 @@ private struct DiffPaneToolbarMarker: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-private struct DiffPaneActionButton: NSViewRepresentable {
-    let systemName: String
-    let tooltip: String
-    let action: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(action: action)
-    }
-
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(
-            image: image(),
-            target: context.coordinator,
-            action: #selector(Coordinator.fire)
-        )
-        button.bezelStyle = .accessoryBar
-        button.isBordered = false
-        button.imagePosition = .imageOnly
-        button.contentTintColor = .secondaryLabelColor
-        button.toolTip = tooltip
-        button.setAccessibilityLabel(tooltip)
-        return button
-    }
-
-    func updateNSView(_ button: NSButton, context: Context) {
-        context.coordinator.action = action
-        button.image = image()
-        button.toolTip = tooltip
-        button.setAccessibilityLabel(tooltip)
-    }
-
-    private func image() -> NSImage {
-        NSImage(systemSymbolName: systemName, accessibilityDescription: tooltip) ?? NSImage()
-    }
-
-    final class Coordinator: NSObject {
-        var action: () -> Void
-
-        init(action: @escaping () -> Void) {
-            self.action = action
-        }
-
-        @objc func fire() {
-            action()
-        }
-    }
 }
