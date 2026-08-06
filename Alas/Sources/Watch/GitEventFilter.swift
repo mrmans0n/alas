@@ -75,6 +75,9 @@ enum GitEventFilter {
         if rel == "config" {
             return .revisionChange
         }
+        if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {
+            return .revisionChange
+        }
         if Self.revisionPseudoRefs.contains(rel) {
             return .revisionChange
         }

@@ -188,4 +188,21 @@ struct RemoteWorktreePollTests {
         #expect(pushed.contains("remote.pushDefault origin"))
         #expect(pushed.contains("push.default current"))
     }
+
+    @Test func sharedRefsSignatureIncludesReflogOutput() {
+        let first = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            reflogOutput: "abc HEAD@{0}\ndef HEAD@{1}\n",
+            pseudoRefCommits: [:]
+        )
+        let second = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            reflogOutput: "abc HEAD@{0}\n",
+            pseudoRefCommits: [:]
+        )
+
+        #expect(first != second)
+        #expect(first.contains("reflog:abc HEAD@{0}"))
+        #expect(first.contains("def HEAD@{1}"))
+    }
 }

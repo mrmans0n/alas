@@ -191,6 +191,7 @@ final class RemoteProjectGitWatcher {
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return nil }
         let upstreamConfigOutput = await pollUpstreamConfigOutput()
+        let reflogOutput = await pollReflogOutput()
         var pseudoRefCommits: [String: String] = [:]
         let worktreePaths = ([projectPath] + entries.map { URL(fileURLWithPath: $0.path) })
             .reduce(into: [String: URL]()) { pathsByKey, path in
@@ -206,6 +207,7 @@ final class RemoteProjectGitWatcher {
         return Self.sharedRefsSignature(
             showRefOutput: result.stdout,
             upstreamConfigOutput: upstreamConfigOutput,
+            reflogOutput: reflogOutput,
             pseudoRefCommits: pseudoRefCommits
         )
     }
@@ -220,6 +222,18 @@ final class RemoteProjectGitWatcher {
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return "" }
         return Self.upstreamConfigSignature(from: result.stdout)
+    }
+
+    private func pollReflogOutput() async -> String {
+        let result = try? await Process.git(
+            ["reflog", "show", "--all", "--format=%H %gD"],
+            cwd: projectPath
+        )
+        guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+            return ""
+        }
+        guard result.exitCode == 0 || result.exitCode == 1 else { return "" }
+        return result.stdout
     }
 
     private func pollPseudoRefCommits(at path: URL) async -> [String: String]? {
@@ -252,11 +266,15 @@ final class RemoteProjectGitWatcher {
     nonisolated static func sharedRefsSignature(
         showRefOutput: String,
         upstreamConfigOutput: String = "",
+        reflogOutput: String = "",
         pseudoRefCommits: [String: String]
     ) -> String {
         var signature = showRefOutput
         if !upstreamConfigOutput.isEmpty {
             signature += "\nconfig:\(upstreamConfigOutput)"
+        }
+        if !reflogOutput.isEmpty {
+            signature += "\nreflog:\(reflogOutput)"
         }
         for key in pseudoRefCommits.keys.sorted() {
             signature += "\n\(key):\(pseudoRefCommits[key] ?? "")"

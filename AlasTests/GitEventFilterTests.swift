@@ -102,6 +102,21 @@ struct GitEventFilterTests {
         ) == .revisionChange)
     }
 
+    @Test func reflogUpdatesAreRevisionChanges() {
+        let cases = [
+            "/repo/.git/logs/HEAD",
+            "/repo/.git/logs/refs/heads/main",
+            "/repo/.git/logs/refs/tags/v1",
+        ]
+        for path in cases {
+            #expect(GitEventFilter.classify(
+                eventPath: path,
+                gitDir: gitDir,
+                worktreeRoot: worktreeRoot
+            ) == .revisionChange)
+        }
+    }
+
     @Test func pseudoRefsAcceptedByRevisionResolverAreRevisionChanges() {
         let cases = [
             "FETCH_HEAD",
