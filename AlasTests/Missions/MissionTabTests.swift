@@ -753,6 +753,25 @@ struct MissionTabTests {
         #expect(presentation.actions.recoverWorktree)
     }
 
+    @Test func loadedStartupReconciliationCreatesActionableRecoveryTab() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: false)
+        #expect(fixture.state.switchToSpace(id: "mission-space"))
+        await fixture.state.missions.load()
+
+        await fixture.state.reconcileLoadedMissionsForStartup()
+
+        let aggregate = try #require(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id))
+        let primaryLeg = try #require(aggregate.primaryLeg)
+        #expect(primaryLeg.state == .needsAttention)
+        #expect(primaryLeg.setupCheckpoint == .running)
+        #expect(primaryLeg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage)
+        #expect(fixture.state.missingMissionTab == MissionTabState(
+            missionID: fixture.aggregate.mission.id,
+            title: fixture.aggregate.mission.title
+        ))
+        #expect(fixture.state.globalTabs.activeMissionTab()?.missionID == fixture.aggregate.mission.id)
+    }
+
     @Test func startupMissingMissionDoesNotReplaceRestoredGlobalTab() async throws {
         let fixture = try MissionNavigationFixture(
             hidden: false,
@@ -825,6 +844,41 @@ struct MissionTabTests {
         #expect(subview(withAccessibilityIdentifier: "mission-header-captured-at", in: host.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "mission-leg-base", in: host.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "mission-leg-destination", in: host.view) != nil)
+    }
+
+    // Break caught: an unopened Mission must present a loading state instead
+    // of being indistinguishable from a loaded but unavailable record.
+    @Test func missionTabShowsLoadingBeforeMissionSnapshotLoads() throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+
+        #expect(fixture.state.missions.aggregate(id: fixture.aggregate.mission.id) == nil)
+        #expect(fixture.state.missions.loadState == .loading)
+    }
+
+    // Break caught: a loaded missing record and a failed Mission read must both
+    // stop loading, with the persistence error visible only for the failure.
+    @Test func unavailableMissionShowsLoadErrorOnlyAfterFailedSnapshotLoad() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+
+        #expect(fixture.state.missions.aggregate(id: MissionID(rawValue: "missing-mission")) == nil)
+        #expect(fixture.state.missions.loadState == .loaded)
+
+        let failedState = AppState(
+            store: MissionNavigationStore(
+                projectsFile: ProjectsFile(projects: []),
+                spacesFile: SpacesFile(activeSpaceId: "default", spaces: [])
+            ),
+            missionPersistence: MissionPersistence(path: "/dev/null/missions.sqlite"),
+            globalTabs: GlobalTabsManager(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mission-failed-load-tabs-\(UUID().uuidString).json")
+            )
+        )
+        await failedState.missions.load()
+        let error = try #require(failedState.missions.loadError)
+
+        #expect(failedState.missions.loadState == .failed(error))
     }
 
     @Test func controllerOpensExactlyOnceAfterWorktreeSuccessBeforeACPFailure() async throws {

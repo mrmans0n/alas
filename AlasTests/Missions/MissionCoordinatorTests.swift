@@ -3,7 +3,7 @@ import Testing
 @testable import Alas
 
 @MainActor
-@Suite("Mission coordinator")
+@Suite("Mission coordinator", .serialized)
 struct MissionCoordinatorTests {
     private static let primaryDraft = MissionDraft(
         source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
@@ -1056,7 +1056,32 @@ struct MissionCoordinatorTests {
             MissionID(rawValue: "newer"),
             MissionID(rawValue: "older"),
         ])
+        #expect(controller.loadState == .loaded)
         #expect(controller.loadError == nil)
+    }
+
+    // Break caught: a failed persistence read must resolve startup loading
+    // rather than leaving the Mission pane in an indefinite loading state.
+    @Test("Mission load publishes a failed state without aggregates")
+    func loadFailurePublishesFailedState() async {
+        let persistence = MissionPersistence(path: "/dev/null/missions.sqlite")
+        let controller = MissionController(environment: .init(
+            persistence: persistence,
+            now: Date.init,
+            makeID: { UUID().uuidString },
+            worktreeAtDestination: { _, _ in nil },
+            createWorktree: { _ in .failure(.init(message: "unused")) },
+            startACP: { _, _ in .failure(.init(message: "unused")) },
+            notifyChanged: { _ in }
+        ))
+
+        await controller.load()
+
+        #expect(controller.aggregates.isEmpty)
+        if case .failed = controller.loadState {
+        } else {
+            Issue.record("Expected a failed Mission load state")
+        }
     }
 
     @Test("observers receive every durable success checkpoint")
@@ -1351,9 +1376,10 @@ private final class MissionCoordinatorFake {
     }
 
     func waitForWorktreeStarts(count: Int) async {
-        for _ in 0..<200 {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
             if startedLegIDs.count >= count { return }
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
     }
 

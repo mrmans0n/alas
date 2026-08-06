@@ -12,8 +12,12 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
 }
 
 enum RootWorkspaceVisibilityPolicy {
-    static func showsWorkspace(hasProjects: Bool, hasMissions: Bool) -> Bool {
-        hasProjects || hasMissions
+    static func showsWorkspace(
+        hasProjects: Bool,
+        hasMissions: Bool,
+        hasActiveMissionTab: Bool
+    ) -> Bool {
+        hasProjects || hasMissions || hasActiveMissionTab
     }
 }
 
@@ -75,11 +79,15 @@ struct RootView: View {
             }
             .task {
                 state.startHarness()
-                _ = await state.refreshAllProjectTopologies()
+                state.restoreGlobalTabsForStartup()
+                async let topologyRefresh: Bool = state.refreshAllProjectTopologies()
+                async let missionLoad: Void = state.missions.load()
+
+                _ = await topologyRefresh
+                guard !Task.isCancelled else { return }
                 // Worktrees now exist — load any persisted tab files for them. Init
                 // can't do this because refreshAll runs async after init.
                 state.reloadTabs()
-                await state.reconcileMissionsForStartup()
                 if state.selectedWorktreeId == nil {
                     state.selectInitialWorktree(
                         id: state.resolvedSelectionForActiveSpaceForStartup()
@@ -87,6 +95,10 @@ struct RootView: View {
                 }
                 state.startAllProjectGitWatchers()
                 state.rescanAgents()
+
+                await missionLoad
+                guard !Task.isCancelled else { return }
+                await state.reconcileLoadedMissionsForStartup()
             }
     }
 
@@ -105,7 +117,8 @@ struct RootView: View {
     private var mainContent: some View {
         if !RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: !state.projects.isEmpty,
-            hasMissions: !state.missions.aggregates.isEmpty
+            hasMissions: !state.missions.aggregates.isEmpty,
+            hasActiveMissionTab: state.globalTabs.activeMissionTab() != nil
         ) {
             EmptyState(
                 canCreateWorktree: false,

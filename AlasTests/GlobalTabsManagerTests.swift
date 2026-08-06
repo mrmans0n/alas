@@ -71,6 +71,88 @@ struct GlobalTabsManagerTests {
         #expect(restored.activeTabId == "mission:mission-1")
     }
 
+    @Test("persisted global tabs restore before legacy worktree-tab migration")
+    func restoresPersistedTabsBeforeMigration() throws {
+        let harness = try GlobalTabsHarness(worktreeTabs: ["app": [.mission(.fixture)]])
+        _ = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-2"), title: "Persisted Mission"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+
+        try restored.loadPersistedTabs()
+
+        #expect(restored.activeMissionTab()?.missionID == MissionID(rawValue: "mission-2"))
+        #expect(harness.tabs.tabs(forWorktree: "app") == [.mission(.fixture)])
+    }
+
+    @Test("legacy migration merges into an already restored global-tab state")
+    func migrationMergesAfterEarlyRestore() throws {
+        let harness = try GlobalTabsHarness(worktreeTabs: ["app": [.mission(.fixture)]])
+        _ = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-2"), title: "Persisted Mission"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try restored.loadPersistedTabs()
+        restored.activate(tabId: "mission:mission-2")
+
+        try restored.migrateLegacyMissionTabs(worktreeTabs: harness.tabs)
+
+        #expect(restored.tabs.map(\.id) == ["mission:mission-2", "mission:mission-1"])
+        #expect(restored.activeTabId == "mission:mission-2")
+        #expect(harness.tabs.tabs(forWorktree: "app").isEmpty)
+    }
+
+    @Test("legacy migration preserves a closed early-restored Mission tab")
+    func migrationPreservesClosedEarlyRestoredMissionTab() throws {
+        let harness = try GlobalTabsHarness(worktreeTabs: ["app": [.mission(.fixture)]])
+        let opened = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-1"), title: "Fix offline sync conflicts"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try restored.loadPersistedTabs()
+
+        restored.close(tabId: opened.id)
+
+        let resumed = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try resumed.loadAndMigrate(worktreeTabs: harness.tabs)
+
+        #expect(resumed.tabs.isEmpty)
+        #expect(resumed.activeTabId == nil)
+        #expect(harness.tabs.tabs(forWorktree: "app").isEmpty)
+
+        let persisted = try PersistenceStore().read(GlobalTabsFile.self, from: harness.globalTabsFile)
+        #expect(persisted.migrationVersion == 1)
+        #expect(persisted.suppressedLegacyMissionTabIds.isEmpty)
+        #expect(!persisted.suppressesLegacyMissionActivation)
+    }
+
+    @Test("legacy migration preserves a cleared early-restored Mission selection")
+    func migrationPreservesClearedEarlyRestoredMissionSelection() throws {
+        let harness = try GlobalTabsHarness(
+            worktreeTabs: ["app": [.mission(.fixture)]],
+            activeTabIDs: ["app": "mission:mission-1"]
+        )
+        let opened = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-1"), title: "Fix offline sync conflicts"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try restored.loadPersistedTabs()
+
+        restored.clearActiveTab()
+
+        let resumed = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try resumed.loadAndMigrate(worktreeTabs: harness.tabs, selectedWorktreeID: "app")
+
+        #expect(resumed.tabs == [.mission(.fixture)])
+        #expect(resumed.tabs.map(\.id) == [opened.id])
+        #expect(resumed.activeTabId == nil)
+        #expect(harness.tabs.tabs(forWorktree: "app").isEmpty)
+
+        let persisted = try PersistenceStore().read(GlobalTabsFile.self, from: harness.globalTabsFile)
+        #expect(persisted.migrationVersion == 1)
+        #expect(!persisted.suppressesLegacyMissionActivation)
+    }
+
     @Test("opening one Mission twice keeps one global tab")
     func openOrFocusKeepsMissionIDsStable() throws {
         let harness = try GlobalTabsHarness()

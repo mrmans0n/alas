@@ -896,8 +896,20 @@ final class AppState {
         })
     }
 
+    func restoreGlobalTabsForStartup() {
+        do {
+            try globalTabs.loadPersistedTabs()
+        } catch {
+            persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
+        }
+    }
+
     func reconcileMissionsForStartup() async {
         await missions.load()
+        await reconcileLoadedMissionsForStartup()
+    }
+
+    func reconcileLoadedMissionsForStartup() async {
         await refreshRenamedMissionRepositories()
         await missions.resolveLegacyBaseRemoteNames { [weak self] projectID, baseRef in
             await self?.resolveLegacyMissionBaseRemoteName(projectID: projectID, baseRef: baseRef)
@@ -1844,7 +1856,7 @@ final class AppState {
         tabs.loadAll(worktreeIds: allWorktreeIds)
         do {
             let migrationWorktreeID = selectedWorktreeId ?? resolvedSelectionForActiveSpaceForStartup()
-            try globalTabs.loadAndMigrate(worktreeTabs: tabs, selectedWorktreeID: migrationWorktreeID)
+            try globalTabs.migrateLegacyMissionTabs(worktreeTabs: tabs, selectedWorktreeID: migrationWorktreeID)
         } catch {
             persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
         }
