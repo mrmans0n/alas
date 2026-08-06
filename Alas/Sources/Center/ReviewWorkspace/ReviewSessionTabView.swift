@@ -608,6 +608,7 @@ struct ReviewSessionTabView: View {
                 }
                 record = refreshedRecord
                 loadError = refreshError
+                loadDraftCommentController(for: refreshedRecord)
                 isLoading = false
                 loadCoordinator.finish(token)
                 return
@@ -655,6 +656,11 @@ struct ReviewSessionTabView: View {
         merged.focusedCommentID = latestRecord.focusedCommentID
         merged.handoffs = latestRecord.handoffs
         merged.lastSendError = latestRecord.lastSendError
+        if trackedResolvedSHA(in: latestRecord) == trackedResolvedSHA(in: refreshedRecord) {
+            merged.status = latestRecord.status
+            merged.verdict = latestRecord.verdict
+            merged.updatedAt = latestRecord.updatedAt
+        }
         return merged
     }
 

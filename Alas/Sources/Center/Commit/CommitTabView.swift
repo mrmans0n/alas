@@ -223,7 +223,20 @@ struct CommitTabView: View {
             if activeDetailsKey == requestedKey { isRefreshingTrackedRevision = false }
         }
         do {
-            let resolved = try await resolvedRevisionForLoad()
+            let resolved: (
+                sha: String,
+                trackedRevision: TrackedRevision?,
+                reusesCurrentSnapshot: Bool
+            )
+            let refreshError: String?
+            do {
+                resolved = try await resolvedRevisionForLoad()
+                refreshError = nil
+            } catch {
+                guard case .following(let tracked) = tabState.revision else { throw error }
+                resolved = (tracked.resolvedSHA, nil, false)
+                refreshError = error.localizedDescription
+            }
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             if resolved.reusesCurrentSnapshot {
                 if let tracked = resolved.trackedRevision {
@@ -242,6 +255,7 @@ struct CommitTabView: View {
             )
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.details = d
+            detailsError = refreshError
             publishReviewSession(loaded, preservingSelectionByPathFrom: selectedReviewFileID)
             if let tracked = resolved.trackedRevision {
                 appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
