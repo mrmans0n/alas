@@ -69,6 +69,9 @@ enum GitEventFilter {
         if rel == "packed-refs" {
             return .revisionChange
         }
+        if Self.revisionPseudoRefs.contains(rel) {
+            return .revisionChange
+        }
         if rel.hasPrefix("refs/heads/") {
             return .revisionAndTopologyChange
         }
@@ -78,4 +81,14 @@ enum GitEventFilter {
 
         return .other
     }
+
+    private static let revisionPseudoRefs: Set<String> = [
+        "AUTO_MERGE",
+        "CHERRY_PICK_HEAD",
+        "FETCH_HEAD",
+        "MERGE_HEAD",
+        "ORIG_HEAD",
+        "REBASE_HEAD",
+        "REVERT_HEAD",
+    ]
 }

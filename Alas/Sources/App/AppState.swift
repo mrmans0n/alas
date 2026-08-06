@@ -3247,7 +3247,7 @@ final class AppState {
         switch tab {
         case .commit(let state):
             guard case .following(let revision) = state.revision,
-                  let accepted = revision.acceptingPendingCheckout()
+                  let accepted = revision.preparingPendingCheckoutAcceptance()
             else { return }
             _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
                 $0.revision = .following(accepted)
@@ -3327,6 +3327,11 @@ final class AppState {
                   now: Date()
               )
         else { return }
+        if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
+            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: existing)
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            return
+        }
         persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
     }
 
@@ -3334,7 +3339,7 @@ final class AppState {
         let store = ReviewSessionStore()
         guard let record = try? store.load(id: sessionID),
               case .trackedCommit(let revision) = record.target.payload,
-              let accepted = revision.acceptingPendingCheckout(),
+              let accepted = revision.preparingPendingCheckoutAcceptance(),
               let result = TrackedRevisionRetargeter.follow(
                   record: record,
                   revision: accepted,

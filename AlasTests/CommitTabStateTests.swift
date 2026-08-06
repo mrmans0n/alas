@@ -138,6 +138,23 @@ struct CommitTabStateTests {
         #expect(current.acceptingPendingCheckout() == nil)
     }
 
+    @Test func preparingPendingCheckoutAcceptancePreservesDisplayedSHA() throws {
+        let current = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            baselineHEAD: "feature-head",
+            resolvedSHA: "old"
+        ))
+        let candidate = TrackedRevisionCandidate(branch: "main", sha: "new", headSHA: "main-head")
+
+        let prepared = try #require(current.withPendingCheckout(candidate).preparingPendingCheckoutAcceptance())
+
+        #expect(prepared.baselineBranch == "main")
+        #expect(prepared.baselineHEAD == "main-head")
+        #expect(prepared.resolvedSHA == "old")
+        #expect(prepared.pendingCheckout == nil)
+    }
+
     @Test func trackedRevisionRetargeterFollowsAndStopsReviewRecords() throws {
         let fixedTarget = ReviewSessionTarget.commit(
             worktreeID: "wt",

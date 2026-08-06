@@ -120,6 +120,15 @@ struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
         guard let pendingCheckout else { return nil }
         return resolving(pendingCheckout)
     }
+
+    func preparingPendingCheckoutAcceptance() -> Self? {
+        guard let pendingCheckout else { return nil }
+        var revision = self
+        revision.baselineBranch = pendingCheckout.branch
+        revision.baselineHEAD = pendingCheckout.headSHA
+        revision.pendingCheckout = nil
+        return revision
+    }
 }
 
 enum TrackedRevisionTransition: Equatable {

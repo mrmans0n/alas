@@ -95,6 +95,25 @@ struct GitEventFilterTests {
         ) == .revisionChange)
     }
 
+    @Test func pseudoRefsAcceptedByRevisionResolverAreRevisionChanges() {
+        let cases = [
+            "FETCH_HEAD",
+            "REBASE_HEAD",
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "ORIG_HEAD",
+            "AUTO_MERGE",
+        ]
+        for ref in cases {
+            #expect(GitEventFilter.classify(
+                eventPath: "/repo/.git/\(ref)",
+                gitDir: gitDir,
+                worktreeRoot: worktreeRoot
+            ) == .revisionChange)
+        }
+    }
+
     @Test func refsTagsAreRevisionChangesOnly() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/refs/tags/v1",
