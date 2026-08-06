@@ -17,7 +17,8 @@ struct GGWorktreeMenuModel: Equatable {
         isEffectiveActive = context.isActive
         showsStatusIndicator = context.isActive && !hasStackSummary
         let contextIsRemote = context == .inactive(reason: .remoteProject)
-        isVisible = !isRemoteWorktree && !contextIsRemote
+        let isGloballyDisabled = context == .inactive(reason: .masterDisabled)
+        isVisible = !isRemoteWorktree && !contextIsRemote && !isGloballyDisabled
 
         guard !isRemoteWorktree else {
             inactiveExplanation = nil
