@@ -105,7 +105,12 @@ enum DiffPaneRowPlanBuilder {
                 id: "diff-hunk-\(group.id)",
                 ownerID: group.id,
                 equalityToken: .init(token),
-                estimatedHeight: estimatedHeight(for: group, input: input, fusion: fusion)
+                estimatedHeight: estimatedHeight(
+                    for: group,
+                    input: input,
+                    fusion: fusion,
+                    expandedCollapsedRowIDs: state.expandedCollapsedRowIDs
+                )
             ) {
                 AnyView(DiffPaneHunkRow(group: group, fusion: fusion, input: input, state: state))
             }
@@ -123,12 +128,13 @@ enum DiffPaneRowPlanBuilder {
     private static func estimatedHeight(
         for group: DiffDisplayGroup,
         input: DiffPaneRowPlanInput,
-        fusion: DiffPaneHunkFusionState
+        fusion: DiffPaneHunkFusionState,
+        expandedCollapsedRowIDs: Set<String>
     ) -> CGFloat {
         DiffPaneStaticHeightEstimator.estimatedHeight(
             for: .init(filePath: input.model.filePath, groups: [group]),
             layoutMode: input.layoutMode,
-            expandedCollapsedRowIDs: [],
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
             codeFont: CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize),
             headerFont: CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize - 1),
             wrapLines: input.wrapLines,

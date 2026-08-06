@@ -3758,22 +3758,38 @@ let second = true
         #expect(helpTexts.contains("Discard hunk"))
     }
 
-    @Test func extractedHunkPresentationStateExpandsCollapsedContext() throws {
-        let group = try #require(collapsedContextModel().groups.first)
-        let state = DiffPanePresentationState()
-        let collapsedRows = DiffPaneRowProjection.visibleRows(
-            in: group,
-            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs
+    @Test func extractedHunkRowExpandsCollapsedContextInMountedLegacyPane() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: collapsedContextModel(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() },
         )
+        .environment(\.theme, theme())
 
-        state.toggleCollapsedContext(in: group)
-        let expandedRows = DiffPaneRowProjection.visibleRows(
-            in: group,
-            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs
-        )
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
 
-        #expect(expandedRows.count > collapsedRows.count)
-        #expect(DiffCollapsedContextController.isExpanded(group, expandedIDs: state.expandedCollapsedRowIDs))
+        #expect(visibleCodeTextViews(in: controller.view).count == 2)
+        let expandButton = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSButton }.first {
+            $0.toolTip == "Expand context"
+        })
+        expandButton.performClick(nil)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let buttons = allSubviews(of: controller.view).compactMap { $0 as? NSButton }
+        let helpTexts = buttons.compactMap { $0.toolTip }
+        #expect(helpTexts.contains("Collapse context"))
     }
 
     @Test func visibleWhitespacePreservesInlineBackgrounds() {

@@ -50,12 +50,21 @@ struct DiffPaneRowPlanTests {
         let input = input(model: collapsibleModel())
         let state = DiffPanePresentationState()
         let group = try #require(input.model.groups.first)
-        let collapsed = try #require(DiffPaneRowPlanBuilder.build(input: input, state: state).rows.first)
 
         state.toggleCollapsedContext(in: group)
         let expanded = try #require(DiffPaneRowPlanBuilder.build(input: input, state: state).rows.first)
+        let expected = DiffPaneStaticHeightEstimator.estimatedHeight(
+            for: .init(filePath: input.model.filePath, groups: [group]),
+            layoutMode: input.layoutMode,
+            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs,
+            codeFont: CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize),
+            headerFont: CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize - 1),
+            wrapLines: input.wrapLines,
+            showWhitespace: input.showWhitespace,
+            fusionStates: [DiffPaneHunkFusionResolver.states(for: input.model.groups)[0]]
+        )
 
-        #expect(expanded.estimatedHeight > collapsed.estimatedHeight)
+        #expect(expanded.estimatedHeight == expected)
     }
 
     private func input(
