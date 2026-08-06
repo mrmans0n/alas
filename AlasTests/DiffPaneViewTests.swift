@@ -3779,17 +3779,29 @@ let second = true
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
         controller.view.layoutSubtreeIfNeeded()
 
-        #expect(visibleCodeTextViews(in: controller.view).count == 2)
+        let collapsedCodeViews = visibleCodeTextViews(in: controller.view)
+        #expect(collapsedCodeViews.count == 2)
+        let collapsedRowCounts = collapsedCodeViews.map(\.lineMetadata.count)
         let expandButton = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSButton }.first {
             $0.toolTip == "Expand context"
         })
         expandButton.performClick(nil)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
-        controller.view.layoutSubtreeIfNeeded()
+
+        let renderDeadline = Date(timeIntervalSinceNow: 1)
+        var expandedRowCounts: [Int] = []
+        repeat {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+            controller.view.layoutSubtreeIfNeeded()
+            expandedRowCounts = visibleCodeTextViews(in: controller.view).map(\.lineMetadata.count)
+        } while Date() < renderDeadline && expandedRowCounts == collapsedRowCounts
 
         let buttons = allSubviews(of: controller.view).compactMap { $0 as? NSButton }
         let helpTexts = buttons.compactMap { $0.toolTip }
         #expect(helpTexts.contains("Collapse context"))
+        #expect(expandedRowCounts.count == 2)
+        #expect(zip(expandedRowCounts, collapsedRowCounts).allSatisfy { expanded, collapsed in
+            expanded > collapsed
+        })
     }
 
     @Test func visibleWhitespacePreservesInlineBackgrounds() {
