@@ -190,6 +190,7 @@ final class RemoteProjectGitWatcher {
             return nil
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return nil }
+        let upstreamConfigOutput = await pollUpstreamConfigOutput()
         var pseudoRefCommits: [String: String] = [:]
         let worktreePaths = ([projectPath] + entries.map { URL(fileURLWithPath: $0.path) })
             .reduce(into: [String: URL]()) { pathsByKey, path in
@@ -202,7 +203,23 @@ final class RemoteProjectGitWatcher {
                 pseudoRefCommits["\(pathKey):\(ref)"] = commit
             }
         }
-        return Self.sharedRefsSignature(showRefOutput: result.stdout, pseudoRefCommits: pseudoRefCommits)
+        return Self.sharedRefsSignature(
+            showRefOutput: result.stdout,
+            upstreamConfigOutput: upstreamConfigOutput,
+            pseudoRefCommits: pseudoRefCommits
+        )
+    }
+
+    private func pollUpstreamConfigOutput() async -> String {
+        let result = try? await Process.git(
+            ["config", "--get-regexp", #"^branch\..*\.(remote|merge)$"#],
+            cwd: projectPath
+        )
+        guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+            return ""
+        }
+        guard result.exitCode == 0 || result.exitCode == 1 else { return "" }
+        return Self.upstreamConfigSignature(from: result.stdout)
     }
 
     private func pollPseudoRefCommits(at path: URL) async -> [String: String]? {
@@ -234,13 +251,26 @@ final class RemoteProjectGitWatcher {
 
     nonisolated static func sharedRefsSignature(
         showRefOutput: String,
+        upstreamConfigOutput: String = "",
         pseudoRefCommits: [String: String]
     ) -> String {
         var signature = showRefOutput
+        if !upstreamConfigOutput.isEmpty {
+            signature += "\nconfig:\(upstreamConfigOutput)"
+        }
         for key in pseudoRefCommits.keys.sorted() {
             signature += "\n\(key):\(pseudoRefCommits[key] ?? "")"
         }
         return signature
+    }
+
+    nonisolated static func upstreamConfigSignature(from output: String) -> String {
+        output
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+            .joined(separator: "\n")
     }
 
     nonisolated static let revisionPseudoRefs = [

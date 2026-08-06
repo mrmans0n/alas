@@ -137,4 +137,39 @@ struct RemoteWorktreePollTests {
         #expect(signature.contains("/repo:FETCH_HEAD:fetch-sha"))
         #expect(signature.contains("/repo/worktrees/feat:REBASE_HEAD:rebase-sha"))
     }
+
+    @Test func sharedRefsSignatureIncludesSortedUpstreamConfig() {
+        let config = """
+        branch.feature.merge refs/heads/main
+        branch.feature.remote origin
+        """
+        let reordered = """
+        branch.feature.remote origin
+        branch.feature.merge refs/heads/main
+        """
+        let changed = """
+        branch.feature.merge refs/heads/next
+        branch.feature.remote origin
+        """
+
+        let first = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: config),
+            pseudoRefCommits: [:]
+        )
+        let same = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: reordered),
+            pseudoRefCommits: [:]
+        )
+        let second = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: changed),
+            pseudoRefCommits: [:]
+        )
+
+        #expect(first == same)
+        #expect(first != second)
+        #expect(first.contains("config:branch.feature.merge refs/heads/main"))
+    }
 }

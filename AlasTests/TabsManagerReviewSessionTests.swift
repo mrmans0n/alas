@@ -54,4 +54,56 @@ struct TabsManagerReviewSessionTests {
         }
         #expect(state.selectedFileID == DiffReviewFileID(namespace: "commit", path: "A.swift"))
     }
+
+    @Test func retargetingReviewSessionCoalescesExistingDestinationTab() throws {
+        var manager = TabsManager()
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let fixedTarget = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            sha: "old",
+            title: "Review old"
+        )
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "new"
+        ))
+        let trackedTarget = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            revision: tracked,
+            title: "Review HEAD~2"
+        )
+        let existing = manager.openOrFocusReviewSession(
+            worktreeId: "wt-1",
+            record: ReviewSessionRecord(
+                id: trackedTarget.id,
+                target: trackedTarget,
+                status: .reviewed,
+                createdAt: .init(timeIntervalSince1970: 1),
+                updatedAt: .init(timeIntervalSince1970: 2)
+            )
+        )
+        let source = manager.openOrFocusReviewSession(
+            worktreeId: "wt-1",
+            record: ReviewSessionRecord(
+                id: fixedTarget.id,
+                target: fixedTarget,
+                createdAt: .init(timeIntervalSince1970: 3),
+                updatedAt: .init(timeIntervalSince1970: 4)
+            )
+        )
+
+        let result = manager.updateReviewSession(worktreeId: "wt-1", tabId: source.id) { state in
+            state.retarget(to: ReviewSessionRecord(
+                id: trackedTarget.id,
+                target: trackedTarget,
+                createdAt: .init(timeIntervalSince1970: 3),
+                updatedAt: .init(timeIntervalSince1970: 5)
+            ))
+        }
+
+        #expect(result?.id == existing.id)
+        #expect(manager.tabs(forWorktree: "wt-1").map(\.id) == [existing.id])
+        #expect(manager.activeTabId(forWorktree: "wt-1") == existing.id)
+    }
 }

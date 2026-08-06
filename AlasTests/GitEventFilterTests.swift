@@ -65,7 +65,6 @@ struct GitEventFilterTests {
     @Test func ignoresUnrelatedPathsUnderGitDir() {
         let cases = [
             "/repo/.git/objects/pack/pack-abc.pack",
-            "/repo/.git/config",
             "/repo/.git/worktrees/feat/locked",
         ]
         for path in cases {
@@ -90,6 +89,14 @@ struct GitEventFilterTests {
     @Test func packedRefsUpdateIsRevisionChange() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/packed-refs",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .revisionChange)
+    }
+
+    @Test func configUpdateIsRevisionChange() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/config",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
         ) == .revisionChange)

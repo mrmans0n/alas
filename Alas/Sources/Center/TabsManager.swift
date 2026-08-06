@@ -1058,6 +1058,15 @@ final class TabsManager {
         else { return nil }
         mutate(&state)
         let tab = Tab.reviewSession(state)
+        if tab.id != tabId,
+           let existingIdx = file.tabs.firstIndex(where: { $0.id == tab.id && $0.id != tabId }) {
+            let existing = file.tabs[existingIdx]
+            file.tabs.remove(at: idx)
+            file.activeTabId = existing.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return existing
+        }
         file.tabs[idx] = tab
         if file.activeTabId == tabId {
             file.activeTabId = tab.id

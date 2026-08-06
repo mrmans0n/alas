@@ -72,6 +72,9 @@ enum GitEventFilter {
         if rel == "packed-refs" {
             return .revisionChange
         }
+        if rel == "config" {
+            return .revisionChange
+        }
         if Self.revisionPseudoRefs.contains(rel) {
             return .revisionChange
         }
