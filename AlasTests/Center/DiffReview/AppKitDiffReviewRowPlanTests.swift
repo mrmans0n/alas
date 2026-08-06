@@ -219,6 +219,29 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!baseRow.equalityToken.isEqual(to: focusedRow.equalityToken))
     }
 
+    @Test func providerThreadChangesInvalidateFlattenedHunkRow() throws {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        let initialThread = DiffInlineCommentThread(
+            id: "thread", filePath: file.summary.path, newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let resolvedThread = DiffInlineCommentThread(
+            id: "thread", filePath: file.summary.path, newLine: 1, isOldSide: false,
+            isResolved: true, isOutdated: false, comments: []
+        )
+        let initial = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, threads: [initialThread], state: state, theme: theme),
+        ])
+        let resolved = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, threads: [resolvedThread], state: state, theme: theme),
+        ])
+        let initialRow = try #require(initial.corePlan.rows.first { $0.id.contains(":group:") })
+        let resolvedRow = try #require(resolved.corePlan.rows.first { $0.id == initialRow.id })
+
+        #expect(!initialRow.equalityToken.isEqual(to: resolvedRow.equalityToken))
+    }
+
     @Test func accessorySegmentRowsTrackLSPContextInTheirEqualityToken() throws {
         let file = textFile()
         let state = AppKitDiffReviewFileState()

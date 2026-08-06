@@ -410,9 +410,14 @@ enum AppKitDiffReviewRowPlanBuilder {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
                 guard let hunk = hunkPlan.rows.first else { continue }
-                append(&rows, id: groupID, input: input, signature: String(reflecting: group.displayGroup.rowsSignature).hashValue, height: hunk.estimatedHeight) {
+                rows.append(.init(
+                    id: groupID,
+                    ownerID: input.file.id.rawValue,
+                    equalityToken: hunk.equalityToken,
+                    estimatedHeight: hunk.estimatedHeight
+                ) {
                     hunk.build()
-                }
+                })
                 continue
             }
 
