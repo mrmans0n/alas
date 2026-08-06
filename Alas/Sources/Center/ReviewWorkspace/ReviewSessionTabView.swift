@@ -203,6 +203,9 @@ struct ReviewSessionTabView: View {
                 record = refreshed
             }
         }
+        .onChange(of: tabState.sessionID) { _, _ in
+            rekeyDraftControllerForCurrentSession()
+        }
     }
 
     private var loadTaskID: String {
@@ -744,6 +747,14 @@ struct ReviewSessionTabView: View {
         } catch {
             // Draft comment load failures stay non-blocking; the controller keeps the error.
         }
+    }
+
+    private func rekeyDraftControllerForCurrentSession() {
+        guard persistsState,
+              let refreshed = try? sessionStore.load(id: tabState.sessionID)
+        else { return }
+        record = refreshed
+        loadDraftCommentController(for: refreshed)
     }
 
     private func draftCommentActions(for loaded: ReviewSessionLoadedContext) -> ReviewDraftCommentActions {

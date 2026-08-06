@@ -211,6 +211,7 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     let relative = relative.to_string_lossy();
     let relative = relative.trim_matches('/');
     if relative == "config"
+        || relative == "config.worktree"
         || relative == "packed-refs"
         || relative == "refs/stash"
         || relative == "logs/HEAD"
@@ -315,6 +316,10 @@ mod tests {
         assert!(is_relevant_git_path(&root.join(".git/ORIG_HEAD"), &info));
         assert!(is_relevant_git_path(&root.join(".git/AUTO_MERGE"), &info));
         assert!(is_relevant_git_path(&root.join(".git/config"), &info));
+        assert!(is_relevant_git_path(
+            &root.join(".git/config.worktree"),
+            &info
+        ));
         assert!(is_relevant_git_path(
             &root.join(".git/refs/remotes/origin/main"),
             &info
