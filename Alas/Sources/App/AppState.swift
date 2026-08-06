@@ -5115,6 +5115,7 @@ final class AppState {
             if case .acpSession(let s) = tab {
                 cleanupACPSession(worktreeId: worktreeId, sessionId: s.sessionId)
             }
+            invalidateFollowRevisionRequests(for: [tab])
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
@@ -5174,6 +5175,22 @@ final class AppState {
         }
     }
 
+    private func invalidateFollowRevisionRequests(for tabs: [Tab]) {
+        for tab in tabs {
+            switch tab {
+            case .commit, .reviewSession:
+                _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
+            default:
+                continue
+            }
+        }
+    }
+
+    private func invalidateFollowRevisionRequests(allTabs: [Tab], closedIds: [TabID]) {
+        let closedSet = Set(closedIds)
+        invalidateFollowRevisionRequests(for: allTabs.filter { closedSet.contains($0.id) })
+    }
+
     /// Detach a single ACP session's runner and remove it from the
     /// worktree's manager. Different from `disposeACPManager`, which
     /// tears down the whole worktree's manager — this leaves the
@@ -5227,6 +5244,7 @@ final class AppState {
     func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
@@ -5242,6 +5260,7 @@ final class AppState {
 
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = allTabs.map(\.id).filter(ids.contains)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         for id in closed {
             tabs.close(worktreeId: worktreeId, tabId: id)
         }
@@ -5386,6 +5405,7 @@ final class AppState {
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
@@ -5398,6 +5418,7 @@ final class AppState {
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
@@ -5406,6 +5427,7 @@ final class AppState {
     func closeTabsToRight(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
+        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
