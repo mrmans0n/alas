@@ -747,12 +747,17 @@ struct ReviewSessionTabView: View {
     }
 
     private func draftCommentActions(for loaded: ReviewSessionLoadedContext) -> ReviewDraftCommentActions {
+        let handoffOriginRecordID = record?.id
         var actions = ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
             sender: feedbackSender,
             sessionID: tabState.sessionID,
-            recordHandoff: recordSessionHandoff,
-            recordSendFailure: recordSessionSendFailure,
+            recordHandoff: { handoff in
+                recordSessionHandoff(handoff, originRecordID: handoffOriginRecordID)
+            },
+            recordSendFailure: { error in
+                recordSessionSendFailure(error, originRecordID: handoffOriginRecordID)
+            },
             worktreeID: persistsState ? tabState.worktreeId : nil,
             now: now,
             sessionStore: { sessionStore }
@@ -1144,30 +1149,27 @@ struct ReviewSessionTabView: View {
         )
     }
 
-    private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff) {
+    private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff, originRecordID: ReviewSessionID?) {
         record = ReviewSessionHandoffPersistence.record(
             handoff,
             currentRecord: record,
+            originRecordID: originRecordID,
             sessionStore: sessionStore,
             persistsState: persistsState,
             now: now
         )
     }
 
-    private func recordSessionSendFailure(_ error: Error) {
+    private func recordSessionSendFailure(_ error: Error, originRecordID: ReviewSessionID?) {
         guard let visibleRecord = record else { return }
-        var current = (try? sessionStore.loadReplacement(for: visibleRecord.id))
-            ?? (try? sessionStore.load(id: visibleRecord.id))
-            ?? visibleRecord
-        current.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
-        current.updatedAt = now()
-        record = current
-        guard persistsState else { return }
-        do {
-            try sessionStore.save(current)
-        } catch {
-            // Visible send failure state is already set; failure to persist that state is non-blocking.
-        }
+        record = ReviewSessionHandoffPersistence.recordSendFailure(
+            error,
+            currentRecord: visibleRecord,
+            originRecordID: originRecordID,
+            sessionStore: sessionStore,
+            persistsState: persistsState,
+            now: now
+        )
     }
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {
@@ -1274,6 +1276,7 @@ enum ReviewSessionHandoffPersistence {
     static func record(
         _ handoff: ReviewFeedbackHandoff,
         currentRecord: ReviewSessionRecord?,
+        originRecordID: ReviewSessionID? = nil,
         sessionStore: ReviewSessionStore,
         persistsState: Bool,
         now: () -> Date
@@ -1283,9 +1286,12 @@ enum ReviewSessionHandoffPersistence {
         }
 
         do {
-            let current = try sessionStore.loadReplacement(for: handoff.sessionID)
-                ?? sessionStore.load(id: handoff.sessionID)
-                ?? currentRecord
+            let current = try operationRecord(
+                sessionID: handoff.sessionID,
+                currentRecord: currentRecord,
+                originRecordID: originRecordID,
+                sessionStore: sessionStore
+            )
             guard let current else { return nil }
             let updated = current.recording(handoff: handoff)
             try sessionStore.save(updated)
@@ -1296,6 +1302,53 @@ enum ReviewSessionHandoffPersistence {
             visibleRecord.updatedAt = now()
             return visibleRecord
         }
+    }
+
+    @MainActor
+    static func recordSendFailure(
+        _ error: Error,
+        currentRecord: ReviewSessionRecord,
+        originRecordID: ReviewSessionID? = nil,
+        sessionStore: ReviewSessionStore,
+        persistsState: Bool,
+        now: () -> Date
+    ) -> ReviewSessionRecord {
+        let sessionID = originRecordID ?? currentRecord.id
+        let current = (try? operationRecord(
+            sessionID: sessionID,
+            currentRecord: currentRecord,
+            originRecordID: originRecordID,
+            sessionStore: sessionStore
+        )) ?? currentRecord
+        var updated = current
+        updated.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
+        updated.updatedAt = now()
+        guard persistsState else { return updated }
+        do {
+            try sessionStore.save(updated)
+        } catch {
+            // Visible send failure state is already set; failure to persist that state is non-blocking.
+        }
+        return updated
+    }
+
+    private static func operationRecord(
+        sessionID: ReviewSessionID,
+        currentRecord: ReviewSessionRecord?,
+        originRecordID: ReviewSessionID?,
+        sessionStore: ReviewSessionStore
+    ) throws -> ReviewSessionRecord? {
+        let direct = try sessionStore.load(id: sessionID)
+        let replacement = try sessionStore.loadReplacement(for: sessionID)
+        if let currentRecord {
+            if currentRecord.id == originRecordID || currentRecord.id == sessionID {
+                return direct ?? currentRecord
+            }
+            if currentRecord.id == replacement?.id {
+                return replacement
+            }
+        }
+        return replacement ?? direct ?? currentRecord
     }
 }
 

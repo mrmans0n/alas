@@ -153,10 +153,11 @@ struct RemoteWorktreePollTests {
         """
         let pushChanged = """
         branch.feature.merge refs/heads/main
-        branch.feature.pushRemote fork
+        branch.feature.pushremote fork
         branch.feature.remote origin
         push.default current
-        remote.pushDefault origin
+        remote.fork.push refs/heads/feature:refs/heads/feature
+        remote.pushdefault origin
         """
 
         let first = RemoteProjectGitWatcher.sharedRefsSignature(
@@ -184,9 +185,19 @@ struct RemoteWorktreePollTests {
         #expect(first != second)
         #expect(first != pushed)
         #expect(first.contains("config:/srv/repo:branch.feature.merge refs/heads/main"))
-        #expect(pushed.contains("branch.feature.pushRemote fork"))
-        #expect(pushed.contains("remote.pushDefault origin"))
+        #expect(pushed.contains("branch.feature.pushremote fork"))
+        #expect(pushed.contains("remote.fork.push refs/heads/feature:refs/heads/feature"))
+        #expect(pushed.contains("remote.pushdefault origin"))
         #expect(pushed.contains("push.default current"))
+    }
+
+    @Test func revisionConfigPatternMatchesGitCanonicalPushKeys() throws {
+        let regex = try Regex(RemoteProjectGitWatcher.revisionConfigPattern)
+        #expect("branch.feature.pushremote".wholeMatch(of: regex) != nil)
+        #expect("remote.pushdefault".wholeMatch(of: regex) != nil)
+        #expect("remote.fork.push".wholeMatch(of: regex) != nil)
+        #expect("branch.feature.pushRemote".wholeMatch(of: regex) == nil)
+        #expect("remote.pushDefault".wholeMatch(of: regex) == nil)
     }
 
     @Test func revisionConfigSignatureQualifiesEachWorktreePath() {

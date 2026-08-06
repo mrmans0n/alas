@@ -223,6 +223,103 @@ struct ReviewSessionTabViewTests {
         #expect(recursiveDescription(host).contains("Sent to agent, but failed to save handoff record: save failed"))
     }
 
+    @Test func handoffFromReopenedSessionDoesNotFollowStaleReplacementAlias() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = Self.record(id: "source", sha: "source", updatedAt: 1)
+        var retargeted = source
+        retargeted.id = ReviewSessionID(rawValue: "retargeted")
+        retargeted.target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "retargeted",
+            title: "Review retargeted"
+        )
+        retargeted.updatedAt = Date(timeIntervalSince1970: 2)
+        var reopened = source
+        reopened.updatedAt = Date(timeIntervalSince1970: 3)
+        let handoff = Self.handoff(sessionID: source.id)
+
+        try store.save(source)
+        try store.replace(id: source.id, with: retargeted)
+        try store.save(reopened)
+
+        let updated = ReviewSessionHandoffPersistence.record(
+            handoff,
+            currentRecord: reopened,
+            originRecordID: source.id,
+            sessionStore: store,
+            persistsState: true,
+            now: { Date(timeIntervalSince1970: 4) }
+        )
+
+        #expect(updated?.id == source.id)
+        #expect(try store.load(id: source.id)?.handoffs == [handoff])
+        #expect(try store.loadReplacement(for: source.id)?.handoffs.isEmpty == true)
+    }
+
+    @Test func handoffStartedBeforeRetargetStillFollowsReplacementAlias() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = Self.record(id: "source", sha: "source", updatedAt: 1)
+        var retargeted = source
+        retargeted.id = ReviewSessionID(rawValue: "retargeted")
+        retargeted.updatedAt = Date(timeIntervalSince1970: 2)
+        var reopened = source
+        reopened.updatedAt = Date(timeIntervalSince1970: 3)
+        let handoff = Self.handoff(sessionID: source.id)
+
+        try store.save(source)
+        try store.replace(id: source.id, with: retargeted)
+        try store.save(reopened)
+
+        let updated = ReviewSessionHandoffPersistence.record(
+            handoff,
+            currentRecord: retargeted,
+            originRecordID: source.id,
+            sessionStore: store,
+            persistsState: true,
+            now: { Date(timeIntervalSince1970: 4) }
+        )
+
+        #expect(updated?.id == retargeted.id)
+        #expect(try store.loadReplacement(for: source.id)?.handoffs == [handoff])
+        #expect(try store.load(id: source.id)?.handoffs.isEmpty == true)
+    }
+
+    @Test func sendFailureFromReopenedSessionDoesNotFollowStaleReplacementAlias() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = Self.record(id: "source", sha: "source", updatedAt: 1)
+        var retargeted = source
+        retargeted.id = ReviewSessionID(rawValue: "retargeted")
+        var reopened = source
+        reopened.updatedAt = Date(timeIntervalSince1970: 3)
+
+        try store.save(source)
+        try store.replace(id: source.id, with: retargeted)
+        try store.save(reopened)
+
+        let updated = ReviewSessionHandoffPersistence.recordSendFailure(
+            TestPersistenceError(),
+            currentRecord: reopened,
+            originRecordID: source.id,
+            sessionStore: store,
+            persistsState: true,
+            now: { Date(timeIntervalSince1970: 4) }
+        )
+
+        #expect(updated.id == source.id)
+        #expect(try store.load(id: source.id)?.lastSendError == "Failed to send to agent: save failed")
+        #expect(try store.loadReplacement(for: source.id)?.lastSendError == nil)
+    }
+
     @Test func providerMutationControllerPublishesDraftsAndMarksResults() async throws {
         let sessionID = ReviewDraftSessionID.reviewRequest(
             worktreeID: "wt",
@@ -1776,6 +1873,33 @@ struct ReviewSessionTabViewTests {
                 warnings: mutationWarnings
             )
         }
+    }
+
+    private static func record(id: String, sha: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: sha,
+            title: "Review \(sha)"
+        )
+        return ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: id),
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: updatedAt)
+        )
+    }
+
+    private static func handoff(sessionID: ReviewSessionID) -> ReviewFeedbackHandoff {
+        ReviewFeedbackHandoff(
+            id: "handoff-1",
+            sessionID: sessionID,
+            commentIDs: ["draft-1"],
+            target: .existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex"),
+            createdAt: Date(timeIntervalSince1970: 30),
+            promptRevision: "revision-1",
+            status: .sent
+        )
     }
 
     private struct TestPersistenceError: LocalizedError {

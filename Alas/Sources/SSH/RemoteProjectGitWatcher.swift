@@ -217,7 +217,7 @@ final class RemoteProjectGitWatcher {
         var pathOutputs: [String: String] = [:]
         for (pathKey, path) in worktreePaths {
             let result = try? await Process.git(
-                ["config", "--get-regexp", #"^(branch\..*\.(remote|merge|pushRemote)|remote\.pushDefault|push\.default)$"#],
+                ["config", "--get-regexp", Self.revisionConfigPattern],
                 cwd: path
             )
             guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
@@ -318,6 +318,9 @@ final class RemoteProjectGitWatcher {
             .sorted()
             .joined(separator: "\n")
     }
+
+    nonisolated static let revisionConfigPattern =
+        #"^(branch\..*\.(remote|merge|pushremote)|remote\.pushdefault|push\.default|remote\..*\.push)$"#
 
     nonisolated static func reflogSignature(from output: String) -> String {
         let lines = output
