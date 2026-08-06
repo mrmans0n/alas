@@ -333,7 +333,7 @@ func reconcileLoadedMissionsForStartup() async {
 
 In `reloadTabs()`, keep its worktree-tab load and terminal cleanup behavior, but replace `globalTabs.loadAndMigrate(...)` with `globalTabs.migrateLegacyMissionTabs(...)`.
 
-Replace the root task sequence with concurrent Mission loading and topology refresh. The three `guard !Task.isCancelled` checks prevent a disappearing root view from applying a later startup phase:
+Replace the root task sequence with concurrent Mission loading and topology refresh. The two `guard !Task.isCancelled` checks prevent a disappearing root view from applying a later startup phase:
 
 ```swift
 .task {
