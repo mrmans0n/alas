@@ -34,6 +34,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
         private var reconciler: AppKitDiffScrollerReconciler?
         private weak var scrollView: AppKitDiffScrollView?
         private var mostRecentPlan: AppKitDiffRowPlan?
+        private var pendingScrollRequest: AppKitDiffScrollRequest?
         private var lastConsumedRequestGeneration: Int?
         private var latestActiveOwner: String?
         private var onActiveOwnerChange: ((String?) -> Void)?
@@ -57,6 +58,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
             )
             scrollView.onContentWidthChange = { [weak self] in
                 self?.applyMostRecentPlan()
+                self?.processPendingScrollRequest()
             }
             scrollView.onUserViewportChange = { [weak self] in
                 self?.userViewportDidChange()
@@ -73,13 +75,12 @@ struct AppKitDiffScroller: NSViewRepresentable {
         ) {
             mostRecentPlan = plan
             self.onActiveOwnerChange = onActiveOwnerChange
+            if let scrollRequest,
+               scrollRequest.generation != lastConsumedRequestGeneration {
+                pendingScrollRequest = scrollRequest
+            }
             applyMostRecentPlan()
-
-            guard let scrollRequest,
-                  scrollRequest.generation != lastConsumedRequestGeneration,
-                  hasUsableLayout else { return }
-            lastConsumedRequestGeneration = scrollRequest.generation
-            reconciler?.scroll(to: scrollRequest)
+            processPendingScrollRequest()
         }
 
         func dismantle() {
@@ -91,6 +92,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
             reconciler = nil
             self.scrollView = nil
             mostRecentPlan = nil
+            pendingScrollRequest = nil
             onActiveOwnerChange = nil
             latestActiveOwner = nil
         }
@@ -102,6 +104,13 @@ struct AppKitDiffScroller: NSViewRepresentable {
 
         private var hasUsableLayout: Bool {
             (scrollView?.contentWidth ?? 0) > 0
+        }
+
+        private func processPendingScrollRequest() {
+            guard let pendingScrollRequest, hasUsableLayout else { return }
+            lastConsumedRequestGeneration = pendingScrollRequest.generation
+            self.pendingScrollRequest = nil
+            reconciler?.scroll(to: pendingScrollRequest)
         }
 
         private func userViewportDidChange() {

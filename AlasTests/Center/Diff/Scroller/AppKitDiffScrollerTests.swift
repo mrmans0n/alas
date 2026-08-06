@@ -67,19 +67,18 @@ struct AppKitDiffScrollerTests {
         #expect(stack.scrollView.scrollY == 0)
     }
 
-    @Test("a request remains pending until a positive-width plan can resolve it")
-    func zeroWidthDefersScrollRequestConsumption() {
+    @Test("a request automatically retries when the native view gains width")
+    func zeroWidthRequestRetriesAfterLayout() {
         let scrollView = AppKitDiffScrollView(frame: .zero)
         let coordinator = AppKitDiffScroller.Coordinator()
         coordinator.attach(scrollView: scrollView, onActiveOwnerChange: { _ in })
         let request = AppKitDiffScrollRequest(
-            targetID: "row-50", fallbackID: nil, alignment: .top, animated: false, generation: 1
+            targetID: "missing", fallbackID: "row-50", alignment: .top, animated: false, generation: 1
         )
 
         coordinator.update(plan: plan(), scrollRequest: request, onActiveOwnerChange: { _ in })
         scrollView.frame = NSRect(x: 0, y: 0, width: 400, height: 240)
         scrollView.layoutSubtreeIfNeeded()
-        coordinator.update(plan: plan(), scrollRequest: request, onActiveOwnerChange: { _ in })
 
         #expect(scrollView.scrollY > 0)
     }
