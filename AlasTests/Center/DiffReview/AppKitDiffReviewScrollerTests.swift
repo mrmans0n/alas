@@ -76,6 +76,40 @@ struct AppKitDiffReviewScrollerTests {
         #expect(request?.fallbackID == AppKitDiffReviewRowID.header(fileID: fileID))
     }
 
+    @Test func newestCommandWinsAcrossKinds() {
+        let firstFileID = fileID()
+        let secondFileID = DiffReviewFileID(namespace: "review", path: "Sources/Second.swift")
+        let plan = plan(fileID: firstFileID, headerID: "first-header")
+        var coordinator = AppKitDiffReviewScrollRequestCoordinator()
+
+        let feedbackRequest = coordinator.request(
+            for: .inlineFeedback(.init(feedbackID: "feedback", fileID: firstFileID, generation: 1)),
+            plan: plan
+        )
+        let fileRequest = coordinator.request(
+            for: .file(.init(id: secondFileID, generation: 1)),
+            plan: plan
+        )
+
+        #expect(feedbackRequest.targetID == AppKitDiffReviewRowID.inlineFeedback(
+            .targetID(feedbackID: "feedback", fileID: firstFileID)
+        ))
+        #expect(fileRequest.targetID == AppKitDiffReviewRowID.header(fileID: secondFileID))
+        #expect(fileRequest.generation > feedbackRequest.generation)
+    }
+
+    @Test func completionOnlyReleasesTheNewestAppKitNavigationRequest() {
+        var gate = AppKitDiffReviewScrollCompletionGate()
+
+        gate.begin(requestGeneration: 1)
+        gate.begin(requestGeneration: 2)
+
+        #expect(!gate.consumesCompletion(for: 1))
+        #expect(gate.pendingRequestGeneration == 2)
+        #expect(gate.consumesCompletion(for: 2))
+        #expect(gate.pendingRequestGeneration == nil)
+    }
+
     private func fileID() -> DiffReviewFileID {
         DiffReviewFileID(namespace: "review", path: "Sources/Example.swift")
     }

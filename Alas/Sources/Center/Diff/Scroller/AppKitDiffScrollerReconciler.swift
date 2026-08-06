@@ -99,7 +99,7 @@ final class AppKitDiffScrollerReconciler {
         layoutMountedRows()
     }
 
-    func scroll(to request: AppKitDiffScrollRequest) {
+    func scroll(to request: AppKitDiffScrollRequest, completion: (() -> Void)? = nil) {
         let targetID: String?
         if tiling.row(withID: request.targetID) != nil {
             targetID = request.targetID
@@ -111,8 +111,11 @@ final class AppKitDiffScrollerReconciler {
                 id: targetID,
                 alignment: request.alignment,
                 viewportHeight: scrollView.viewportHeight
-              ) else { return }
-        scrollView.setScrollY(offset, animated: request.animated)
+              ) else {
+            completion?()
+            return
+        }
+        scrollView.setScrollY(offset, animated: request.animated, completion: completion)
         layoutVisibleRows()
     }
 

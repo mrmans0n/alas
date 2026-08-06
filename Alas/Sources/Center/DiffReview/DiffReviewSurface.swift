@@ -90,6 +90,8 @@ struct DiffReviewSurface: View {
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
+    @State private var appKitProgrammaticScroll: AppKitDiffReviewProgrammaticScroll?
+    @State private var appKitScrollCompletionGate = AppKitDiffReviewScrollCompletionGate()
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
     @State private var appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
@@ -370,7 +372,8 @@ struct DiffReviewSurface: View {
             inlineFeedbackCommand: inlineFeedbackScrollCommand,
             draftCommentCommand: draftCommentScrollCommand,
             onNavigationFile: selectAppKitNavigationFile,
-            onActiveFileChange: updateSelectedFileFromAppKitViewport
+            onActiveFileChange: updateSelectedFileFromAppKitViewport,
+            onProgrammaticScrollCompletion: finishAppKitProgrammaticScroll
         )
         .background(theme.color("bg-1"))
     }
@@ -647,14 +650,12 @@ struct DiffReviewSurface: View {
     }
 
     private func queueProgrammaticFileScroll(to id: DiffReviewFileID) {
-        let token = programmaticScroll.beginProgrammaticScroll(to: id)
         scrollSpyActiveFileID = id
         scrollCommand = scrollCommandController.command(to: id)
 
-        guard !appKitScrollerEnabled else {
-            programmaticScroll.finishProgrammaticScroll(token)
-            return
-        }
+        guard !appKitScrollerEnabled else { return }
+
+        let token = programmaticScroll.beginProgrammaticScroll(to: id)
 
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -668,15 +669,29 @@ struct DiffReviewSurface: View {
         scrollSpyActiveFileID = fileID
     }
 
-    private func selectAppKitNavigationFile(_ fileID: DiffReviewFileID) {
+    private func selectAppKitNavigationFile(_ fileID: DiffReviewFileID, requestGeneration: Int) {
         selectedFileID = fileID
         scrollSpyActiveFileID = fileID
+        let token = programmaticScroll.beginProgrammaticScroll(to: fileID)
+        appKitProgrammaticScroll = .init(requestGeneration: requestGeneration, token: token)
+        appKitScrollCompletionGate.begin(requestGeneration: requestGeneration)
+    }
+
+    private func finishAppKitProgrammaticScroll(requestGeneration: Int) {
+        guard appKitScrollCompletionGate.consumesCompletion(for: requestGeneration),
+              let appKitProgrammaticScroll,
+              appKitProgrammaticScroll.requestGeneration == requestGeneration
+        else { return }
+        programmaticScroll.finishProgrammaticScroll(appKitProgrammaticScroll.token)
+        self.appKitProgrammaticScroll = nil
     }
 
     private func resetScrollCommandBookkeeping() {
         scrollCommand = nil
         scrollCommandController.reset()
         programmaticScroll = DiffReviewProgrammaticScrollController()
+        appKitProgrammaticScroll = nil
+        appKitScrollCompletionGate = AppKitDiffReviewScrollCompletionGate()
         scrollSpyActiveFileID = nil
     }
 
@@ -693,6 +708,11 @@ struct DiffReviewSurface: View {
             includeFileLevel: false
         )
     }
+}
+
+private struct AppKitDiffReviewProgrammaticScroll {
+    let requestGeneration: Int
+    let token: DiffReviewProgrammaticScrollController.Token
 }
 
 extension DiffReviewSurface {

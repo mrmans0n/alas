@@ -165,6 +165,26 @@ struct AppKitDiffScrollerTests {
         #expect(owners.isEmpty)
     }
 
+    @Test("animated requests report completion only after the native scroll finishes")
+    func animatedRequestReportsCompletion() async throws {
+        var completedGenerations: [Int] = []
+        let stack = makeStack()
+        stack.coordinator.update(plan: plan(), scrollRequest: nil, onActiveOwnerChange: { _ in })
+
+        stack.coordinator.update(
+            plan: plan(),
+            scrollRequest: .init(
+                targetID: "row-50", fallbackID: nil, alignment: .top, animated: true, generation: 73
+            ),
+            onActiveOwnerChange: { _ in },
+            onScrollRequestCompletion: { completedGenerations.append($0) }
+        )
+
+        #expect(completedGenerations.isEmpty)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(completedGenerations == [73])
+    }
+
     @Test("height-only viewport changes relayout without publishing active owner")
     func heightChangesDoNotReportActiveOwner() {
         var owners: [String?] = []

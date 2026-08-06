@@ -571,7 +571,8 @@ struct DiffPaneView: View {
             AppKitDiffScroller(
                 plan: DiffPaneRowPlanBuilder.build(input: rowPlanInput, state: presentationState),
                 scrollRequest: nil,
-                onActiveOwnerChange: { _ in }
+                onActiveOwnerChange: { _ in },
+                onScrollRequestCompletion: { _ in }
             )
         } else if verticalScrollMode == .internalScroll {
             GeometryReader { proxy in

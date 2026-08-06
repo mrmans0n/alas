@@ -94,9 +94,12 @@ final class AppKitDiffScrollView: NSScrollView {
         }
     }
 
-    func setScrollY(_ y: CGFloat, animated: Bool) {
+    func setScrollY(_ y: CGFloat, animated: Bool, completion: (() -> Void)? = nil) {
         let point = NSPoint(x: contentView.bounds.origin.x, y: clampedScrollY(y))
-        guard abs(point.y - scrollY) > 0.01 else { return }
+        guard abs(point.y - scrollY) > 0.01 else {
+            completion?()
+            return
+        }
         performProgrammatic {
             if animated {
                 programmaticAnimationDepth += 1
@@ -105,10 +108,12 @@ final class AppKitDiffScrollView: NSScrollView {
                     contentView.animator().setBoundsOrigin(point)
                 } completionHandler: { [weak self] in
                     self?.programmaticAnimationDidComplete()
+                    completion?()
                 }
             } else {
                 contentView.setBoundsOrigin(point)
                 reflectScrolledClipView(contentView)
+                completion?()
             }
         }
     }
