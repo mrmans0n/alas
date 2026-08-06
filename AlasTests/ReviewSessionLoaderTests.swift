@@ -135,6 +135,49 @@ struct ReviewSessionLoaderTests {
         #expect(loaded.feedbackTarget.revisionDescription == "HEAD~3 -> bbb")
     }
 
+    @Test func loadedContextCanRefreshTargetDependentFeedbackMetadata() throws {
+        let original = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: try #require(TrackedRevision(
+                expression: "HEAD~3",
+                baselineBranch: "main",
+                resolvedSHA: "bbb"
+            )),
+            title: "Review HEAD~3"
+        )
+        let edited = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            revision: try #require(TrackedRevision(
+                expression: "main~2",
+                baselineBranch: "main",
+                resolvedSHA: "bbb"
+            )),
+            title: "Review main~2"
+        )
+        let session = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
+        let loaded = ReviewSessionLoadedContext(
+            session: session,
+            feedbackTarget: ReviewFeedbackTarget(
+                title: original.title,
+                repositoryPath: original.repositoryPath.path,
+                providerDescription: original.providerDescription,
+                sourceDescription: original.sourceDescription,
+                revisionDescription: original.revisionDescription
+            ),
+            providerContext: nil
+        )
+
+        let refreshed = loaded.replacingFeedbackTarget(for: edited)
+
+        #expect(refreshed.session.files.count == loaded.session.files.count)
+        #expect(refreshed.session.summary.fileCount == loaded.session.summary.fileCount)
+        #expect(refreshed.feedbackTarget.title == "Review main~2")
+        #expect(refreshed.feedbackTarget.sourceDescription == "Commit main~2 -> bbb")
+        #expect(refreshed.feedbackTarget.revisionDescription == "main~2 -> bbb")
+    }
+
     @MainActor
     @Test func productionLoaderPassesResolvedSHAForTrackedCommit() async throws {
         let repo = FileManager.default.temporaryDirectory

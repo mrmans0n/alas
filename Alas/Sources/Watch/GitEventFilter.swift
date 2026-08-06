@@ -90,6 +90,9 @@ enum GitEventFilter {
         if Self.revisionPseudoRefs.contains(rel) {
             return .revisionChange
         }
+        if isTopLevelSymbolicRevision(eventPath: eventPath, relativePath: rel) {
+            return .revisionChange
+        }
         if rel.hasPrefix("refs/heads/") {
             return .revisionAndTopologyChange
         }
@@ -109,4 +112,12 @@ enum GitEventFilter {
         "REBASE_HEAD",
         "REVERT_HEAD",
     ]
+
+    private static func isTopLevelSymbolicRevision(eventPath: String, relativePath: String) -> Bool {
+        guard !relativePath.isEmpty,
+              !relativePath.contains("/"),
+              let contents = try? String(contentsOfFile: eventPath, encoding: .utf8)
+        else { return false }
+        return contents.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("ref: refs/")
+    }
 }

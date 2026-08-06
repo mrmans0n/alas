@@ -141,6 +141,29 @@ struct GitEventFilterTests {
         }
     }
 
+    @Test func topLevelSymbolicRevisionIsRevisionChange() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-symbolic-ref-\(UUID().uuidString)")
+        let gitDir = tmp.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let symbolicRef = gitDir.appendingPathComponent("FOO")
+        try "ref: refs/heads/main\n".write(to: symbolicRef, atomically: true, encoding: .utf8)
+        let nonRef = gitDir.appendingPathComponent("BAR")
+        try "not a ref\n".write(to: nonRef, atomically: true, encoding: .utf8)
+
+        #expect(GitEventFilter.classify(
+            eventPath: symbolicRef.path,
+            gitDir: gitDir,
+            worktreeRoot: tmp
+        ) == .revisionChange)
+        #expect(GitEventFilter.classify(
+            eventPath: nonRef.path,
+            gitDir: gitDir,
+            worktreeRoot: tmp
+        ) == .other)
+    }
+
     @Test func linkedWorktreePseudoRefsAreRevisionChanges() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/worktrees/feat/REBASE_HEAD",

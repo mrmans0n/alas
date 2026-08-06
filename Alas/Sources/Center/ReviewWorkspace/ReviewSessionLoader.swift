@@ -14,6 +14,22 @@ struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
     let providerContext: ReviewSessionProviderContext?
+
+    func replacingFeedbackTarget(for target: ReviewSessionTarget) -> ReviewSessionLoadedContext {
+        ReviewSessionLoadedContext(
+            session: session,
+            feedbackTarget: ReviewFeedbackTarget(
+                title: target.title,
+                repositoryPath: target.repositoryPath.path,
+                providerDescription: target.providerDescription,
+                sourceDescription: target.sourceDescription,
+                sessionDescription: "Review session: \(target.title)",
+                revisionDescription: target.revisionDescription,
+                priorHandoffDescription: nil
+            ),
+            providerContext: providerContext
+        )
+    }
 }
 
 enum ReviewSessionLauncher {

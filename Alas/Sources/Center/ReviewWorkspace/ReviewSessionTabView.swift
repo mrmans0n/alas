@@ -619,6 +619,7 @@ struct ReviewSessionTabView: View {
                     try sessionStore.save(refreshedRecord)
                 }
                 record = refreshedRecord
+                self.loaded = loaded.replacingFeedbackTarget(for: refreshedRecord.target)
                 loadError = refreshError
                 loadDraftCommentController(for: refreshedRecord)
                 isLoading = false

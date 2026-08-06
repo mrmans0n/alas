@@ -197,6 +197,7 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
         let relative = relative.trim_matches('/');
         if matches!(relative, "HEAD" | "index")
             || is_revision_pseudo_ref(relative)
+            || is_top_level_symbolic_revision(path, relative)
             || relative.starts_with("refs/")
             || relative == "rebase-merge"
             || relative.starts_with("rebase-merge/")
@@ -248,6 +249,15 @@ fn is_revision_pseudo_ref(relative: &str) -> bool {
             | "REBASE_HEAD"
             | "REVERT_HEAD"
     )
+}
+
+fn is_top_level_symbolic_revision(path: &Path, relative: &str) -> bool {
+    if relative.is_empty() || relative.contains('/') {
+        return false;
+    }
+    std::fs::read_to_string(path)
+        .map(|contents| contents.trim().starts_with("ref: refs/"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -346,6 +356,30 @@ mod tests {
         assert!(is_relevant_git_path(&root.join(".git/MERGE_HEAD"), &info));
         assert!(!is_relevant_git_path(&root.join(".git/index.lock"), &info));
         assert!(!is_relevant_git_path(&root.join("src/main.rs"), &info));
+    }
+
+    #[test]
+    fn top_level_symbolic_refs_are_git_events() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-symbolic-ref-{}-{nonce}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).expect("git dir");
+        let symbolic = git_dir.join("FOO");
+        std::fs::write(&symbolic, "ref: refs/heads/main\n").expect("symbolic ref");
+        let non_ref = git_dir.join("BAR");
+        std::fs::write(&non_ref, "not a ref\n").expect("non ref");
+        let info = git_info(&root);
+
+        assert!(is_relevant_git_path(&symbolic, &info));
+        assert!(!is_relevant_git_path(&non_ref, &info));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
