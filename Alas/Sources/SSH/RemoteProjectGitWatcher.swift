@@ -197,6 +197,7 @@ final class RemoteProjectGitWatcher {
             }
             .sorted { $0.key < $1.key }
         let revisionConfigOutput = await pollRevisionConfigOutput(worktreePaths: worktreePaths)
+        let privateRefsOutput = await pollPrivateRefsOutput(worktreePaths: worktreePaths)
         let reflogSignature = await pollReflogSignature()
         var pseudoRefCommits: [String: String] = [:]
         for (pathKey, path) in worktreePaths {
@@ -208,6 +209,7 @@ final class RemoteProjectGitWatcher {
         return Self.sharedRefsSignature(
             showRefOutput: result.stdout,
             revisionConfigOutput: revisionConfigOutput,
+            privateRefsOutput: privateRefsOutput,
             reflogSignature: reflogSignature,
             pseudoRefCommits: pseudoRefCommits
         )
@@ -227,6 +229,28 @@ final class RemoteProjectGitWatcher {
             pathOutputs[pathKey] = result.stdout
         }
         return Self.revisionConfigSignature(pathOutputs: pathOutputs)
+    }
+
+    private func pollPrivateRefsOutput(worktreePaths: [(key: String, value: URL)]) async -> String {
+        var pathOutputs: [String: String] = [:]
+        for (pathKey, path) in worktreePaths {
+            let result = try? await Process.git(
+                [
+                    "for-each-ref",
+                    "--format=%(objectname) %(refname)",
+                    "refs/worktree",
+                    "refs/bisect",
+                    "refs/rewritten",
+                ],
+                cwd: path
+            )
+            guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+                continue
+            }
+            guard result.exitCode == 0 else { continue }
+            pathOutputs[pathKey] = result.stdout
+        }
+        return Self.privateRefsSignature(pathOutputs: pathOutputs)
     }
 
     private func pollReflogSignature() async -> String {
@@ -283,12 +307,16 @@ final class RemoteProjectGitWatcher {
     nonisolated static func sharedRefsSignature(
         showRefOutput: String,
         revisionConfigOutput: String = "",
+        privateRefsOutput: String = "",
         reflogSignature: String = "",
         pseudoRefCommits: [String: String]
     ) -> String {
         var signature = showRefOutput
         if !revisionConfigOutput.isEmpty {
             signature += "\nconfig:\(revisionConfigOutput)"
+        }
+        if !privateRefsOutput.isEmpty {
+            signature += "\nprivate-refs:\(privateRefsOutput)"
         }
         if !reflogSignature.isEmpty {
             signature += "\nreflog:\(reflogSignature)"
@@ -313,6 +341,19 @@ final class RemoteProjectGitWatcher {
             .flatMap { path, output in
                 upstreamConfigSignature(from: output)
                     .split(whereSeparator: \.isNewline)
+                    .map { "\(path):\($0)" }
+            }
+            .sorted()
+            .joined(separator: "\n")
+    }
+
+    nonisolated static func privateRefsSignature(pathOutputs: [String: String]) -> String {
+        pathOutputs
+            .flatMap { path, output in
+                output
+                    .split(whereSeparator: \.isNewline)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
                     .map { "\(path):\($0)" }
             }
             .sorted()

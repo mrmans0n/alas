@@ -197,6 +197,7 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
         let relative = relative.trim_matches('/');
         if matches!(relative, "HEAD" | "index")
             || is_revision_pseudo_ref(relative)
+            || relative.starts_with("refs/")
             || relative == "rebase-merge"
             || relative.starts_with("rebase-merge/")
             || relative == "rebase-apply"
@@ -230,6 +231,7 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
             || (parts.len() == 2 && parts[1] == "config.worktree")
             || (parts.len() == 2 && (parts[1] == "HEAD" || is_revision_pseudo_ref(parts[1])))
             || (parts.len() >= 3 && parts[1] == "logs")
+            || (parts.len() >= 3 && parts[1] == "refs")
             || (parts.len() >= 2 && (parts[1] == "rebase-merge" || parts[1] == "rebase-apply"));
     }
     false
@@ -380,6 +382,18 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/worktrees/feature/logs/refs/heads/topic"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/refs/worktree/follow"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/refs/bisect/good-abc"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/refs/rewritten/main"),
             &info
         ));
         assert!(is_relevant_git_path(

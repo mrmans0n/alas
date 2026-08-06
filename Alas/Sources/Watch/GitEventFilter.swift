@@ -70,6 +70,9 @@ enum GitEventFilter {
             if parts.count >= 4 && parts[2] == "logs" {
                 return .revisionChange
             }
+            if parts.count >= 4 && parts[2] == "refs" {
+                return .revisionChange
+            }
             return .other
         }
 

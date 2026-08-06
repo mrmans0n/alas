@@ -138,6 +138,22 @@ struct RemoteWorktreePollTests {
         #expect(signature.contains("/repo/worktrees/feat:REBASE_HEAD:rebase-sha"))
     }
 
+    @Test func sharedRefsSignatureIncludesSortedPrivateWorktreeRefs() {
+        let privateRefs = RemoteProjectGitWatcher.privateRefsSignature(pathOutputs: [
+            "/srv/repo": "bbb refs/worktree/follow\n",
+            "/srv/wt/feature": "aaa refs/rewritten/main\nccc refs/bisect/good-abc\n",
+        ])
+        let signature = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            privateRefsOutput: privateRefs,
+            pseudoRefCommits: [:]
+        )
+
+        #expect(signature.contains("private-refs:/srv/repo:bbb refs/worktree/follow"))
+        #expect(signature.contains("/srv/wt/feature:aaa refs/rewritten/main"))
+        #expect(signature.contains("/srv/wt/feature:ccc refs/bisect/good-abc"))
+    }
+
     @Test func sharedRefsSignatureIncludesSortedUpstreamConfig() {
         let config = """
         branch.feature.merge refs/heads/main
