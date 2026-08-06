@@ -525,6 +525,20 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.contentHeight == tiling.documentHeight)
     }
 
+    @Test("remeasureRow does not clamp the bottom while a user scroll is settling")
+    func remeasureRowDoesNotRepinDuringUserScrollSettle() {
+        let (reconciler, scroller, _, _) = makeStackWithPool()
+        let specs = (0..<10).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: true)
+        #expect(scroller.distanceFromBottom < 1)
+        let callsBefore = scroller.scrollToBottomCallCountForTesting
+
+        reconciler.noteUserScroll()
+        reconciler.remeasureRow(id: "r9")
+
+        #expect(scroller.scrollToBottomCallCountForTesting == callsBefore)
+    }
+
     @Test("remeasureRow does not re-pin once tail-follow is paused, even before the next apply")
     func remeasureRowDoesNotRepinAfterTailFollowPaused() {
         // The window this closes: a user scrolls up, the scroll handler

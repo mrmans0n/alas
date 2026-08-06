@@ -97,6 +97,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// has been reconciled into the AppKit tiling map.
         private var pendingLogicalTargetId: String?
         private var isPendingLogicalResolutionScheduled = false
+        private let scrollSettleTimer: DebounceTimer
         /// Memoizes the window-sliced row list + its id → message-index
         /// lookup, keyed on (messages generation, window bounds) — the same
         /// cache the legacy list uses. `rememberCurrentAnchor` runs on every
@@ -108,6 +109,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private let visibleRowsCache = ACPVisibleRowsCache()
 
         static let composerSpacerHeight: CGFloat = 220
+
+        init() {
+            scrollSettleTimer = DebounceTimer(
+                interval: ACPTranscriptScrollerReconciler.userScrollSuppressionWindow
+            )
+            scrollSettleTimer.onFire = { [weak self] in
+                self?.settleUserScroll()
+            }
+        }
 
         func attach(scroller: ACPTranscriptScrollerView, host: ACPTranscriptScroller) {
             self.scroller = scroller
@@ -663,6 +673,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // `repinsToTail(followsTail:wasFollowingTail:)`).
             reconciler.invalidatePendingAnchorRestore()
             reconciler.noteUserScroll()
+            scrollSettleTimer.poke()
 
             let event = NSApp.currentEvent
             let eventIsFresh = ACPUserScrollEvent.isFresh(
@@ -751,7 +762,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // queues several steps that land together as a single
                 // 60-150 row insertion measured in one synchronous pass.
                 pendingHeadStep = true
-                host.transcript.stepHeadBack()
+                host.transcript.stepHeadBack(boundTail: false)
             }
             if ACPTranscriptScroller.shouldStepTailForward(
                 visibleTail: host.transcript.visibleTailBound,
@@ -760,7 +771,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 threshold: threshold,
                 previousScrollY: previousY, newScrollY: newY
             ) {
-                host.transcript.stepTailForward(preserving: nil)
+                host.transcript.stepTailForward(preserving: nil, boundHead: false)
             }
 
             if !host.session.followsTranscriptTail {
@@ -915,7 +926,29 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             reconciler?.setFollowsTail(true)
             host.transcript.resetWindowToTail()
             host.onRememberScrollAnchor(nil, nil, true)
-            scroller?.scrollToBottom()
+        }
+
+        /// Once a fling has stopped moving, restore the bounded render window
+        /// around the row being read. While it is active we deliberately keep
+        /// both edges so AppKit never has to reconcile a moving viewport with
+        /// rows disappearing behind it.
+        private func settleUserScroll() {
+            guard let host, let scroller else { return }
+            guard !scroller.isUserScrollActive else {
+                scrollSettleTimer.poke()
+                return
+            }
+            if host.session.followsTranscriptTail {
+                update(host: host)
+                return
+            }
+            guard host.transcript.visibleTailBound - host.transcript.visibleHead
+                    > ACPTranscript.maxVisibleRows,
+                  let globalIndex = currentTopGlobalMessageIndex(),
+                  let localIndex = host.transcript.localIndex(forGlobalIndex: globalIndex)
+            else { return }
+            host.transcript.setVisibleWindow(around: localIndex)
+            update(host: host)
         }
 
         private func rememberCurrentAnchor() {

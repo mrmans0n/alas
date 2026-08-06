@@ -91,6 +91,9 @@ final class ACPTranscriptScrollerView: NSScrollView {
 
     private var lastReportedY: CGFloat?
     private var programmaticAdjustmentDepth = 0
+    #if DEBUG
+    private(set) var scrollToBottomCallCountForTesting = 0
+    #endif
     private var boundsObserver: NSObjectProtocol?
     private var liveScrollObservers: [NSObjectProtocol] = []
 
@@ -322,6 +325,9 @@ final class ACPTranscriptScrollerView: NSScrollView {
     }
 
     func scrollToBottom() {
+        #if DEBUG
+        scrollToBottomCallCountForTesting += 1
+        #endif
         setScrollY(max(0, contentHeight - viewportHeight))
     }
 

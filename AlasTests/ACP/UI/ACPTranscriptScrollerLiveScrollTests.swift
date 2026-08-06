@@ -123,6 +123,20 @@ struct ACPTranscriptScrollerLiveScrollTests {
         withExtendedLifetime(coordinator) {}
     }
 
+    @Test("a settled history fling compacts the temporary grow-only window")
+    func settledHistoryFlingCompactsWindow() async throws {
+        let (host, scroller, coordinator) = tailFollowingHost()
+        liveScroll(scroller, to: max(0, scroller.contentHeight - scroller.viewportHeight - 470))
+
+        try await Task.sleep(for: .milliseconds(600))
+
+        #expect(
+            host.transcript.visibleTailBound - host.transcript.visibleHead
+                <= ACPTranscript.maxVisibleRows
+        )
+        withExtendedLifetime(coordinator) {}
+    }
+
     @Test("live-scroll activity lapses after the gesture settles")
     func userScrollActivityLapses() {
         let (_, scroller, coordinator) = tailFollowingHost()
