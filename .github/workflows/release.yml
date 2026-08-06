@@ -332,6 +332,7 @@ jobs:
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: v${{ env.VERSION }}
           body_path: ${{ runner.temp }}/release-notes.md
           files: |
             release-artifacts/**/Alas-*.app.zip
