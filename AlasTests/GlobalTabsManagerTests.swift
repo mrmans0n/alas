@@ -102,6 +102,29 @@ struct GlobalTabsManagerTests {
         #expect(harness.tabs.tabs(forWorktree: "app").isEmpty)
     }
 
+    @Test("legacy migration preserves a closed early-restored Mission tab")
+    func migrationPreservesClosedEarlyRestoredMissionTab() throws {
+        let harness = try GlobalTabsHarness(worktreeTabs: ["app": [.mission(.fixture)]])
+        let opened = harness.global.openOrFocusMission(
+            missionID: MissionID(rawValue: "mission-1"), title: "Fix offline sync conflicts"
+        )
+        let restored = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try restored.loadPersistedTabs()
+
+        restored.close(tabId: opened.id)
+
+        let resumed = GlobalTabsManager(fileURL: harness.globalTabsFile)
+        try resumed.loadAndMigrate(worktreeTabs: harness.tabs)
+
+        #expect(resumed.tabs.isEmpty)
+        #expect(resumed.activeTabId == nil)
+        #expect(harness.tabs.tabs(forWorktree: "app").isEmpty)
+
+        let persisted = try PersistenceStore().read(GlobalTabsFile.self, from: harness.globalTabsFile)
+        #expect(persisted.migrationVersion == 1)
+        #expect(persisted.suppressedLegacyMissionTabIds.isEmpty)
+    }
+
     @Test("opening one Mission twice keeps one global tab")
     func openOrFocusKeepsMissionIDsStable() throws {
         let harness = try GlobalTabsHarness()

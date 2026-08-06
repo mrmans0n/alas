@@ -16,17 +16,20 @@ struct GlobalTabsFile: Codable {
     var migrationVersion: Int = 0
     var tabs: [GlobalTab]
     var activeTabId: TabID?
+    var suppressedLegacyMissionTabIds: Set<TabID>
 
     init(
         version: Int = 1,
         migrationVersion: Int = 0,
         tabs: [GlobalTab] = [],
-        activeTabId: TabID? = nil
+        activeTabId: TabID? = nil,
+        suppressedLegacyMissionTabIds: Set<TabID> = []
     ) {
         self.version = version
         self.migrationVersion = migrationVersion
         self.tabs = tabs
         self.activeTabId = activeTabId
+        self.suppressedLegacyMissionTabIds = suppressedLegacyMissionTabIds
     }
 }
 
@@ -36,6 +39,8 @@ extension GlobalTabsFile {
         version = (try? container.decode(Int.self, forKey: .version)) ?? 1
         migrationVersion = (try? container.decode(Int.self, forKey: .migrationVersion)) ?? 0
         activeTabId = try? container.decode(TabID.self, forKey: .activeTabId)
+        suppressedLegacyMissionTabIds =
+            (try? container.decode(Set<TabID>.self, forKey: .suppressedLegacyMissionTabIds)) ?? []
         tabs = ((try? container.decode([FailableGlobalTab].self, forKey: .tabs)) ?? []).compactMap(\.value)
     }
 
@@ -56,6 +61,7 @@ final class GlobalTabsManager {
     private(set) var tabs: [GlobalTab] = []
     private(set) var activeTabId: TabID?
     private var migrationVersion = 0
+    private var suppressedLegacyMissionTabIds: Set<TabID> = []
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -74,6 +80,7 @@ final class GlobalTabsManager {
         } else {
             tabs.append(tab)
         }
+        suppressedLegacyMissionTabIds.remove(tab.id)
         activeTabId = tab.id
         try? persist()
         return tab
@@ -81,8 +88,12 @@ final class GlobalTabsManager {
 
     func close(tabId: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == tabId }) else { return }
+        let tab = tabs[index]
         let wasActive = activeTabId == tabId
         tabs.remove(at: index)
+        if migrationVersion < 1, case .mission = tab {
+            suppressedLegacyMissionTabIds.insert(tabId)
+        }
         if wasActive {
             activeTabId = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
         }
@@ -104,6 +115,7 @@ final class GlobalTabsManager {
             tabs.insert(tab, at: index)
             activeTabId = tab.id
         }
+        suppressedLegacyMissionTabIds.remove(tab.id)
         try? persist()
         return tab.id
     }
@@ -137,6 +149,7 @@ final class GlobalTabsManager {
         tabs = Self.deduplicated(file.tabs)
         activeTabId = tabs.contains(where: { $0.id == file.activeTabId }) ? file.activeTabId : nil
         migrationVersion = file.migrationVersion
+        suppressedLegacyMissionTabIds = file.suppressedLegacyMissionTabIds
     }
 
     func migrateLegacyMissionTabs(
@@ -148,6 +161,7 @@ final class GlobalTabsManager {
         worktreeTabs.loadAllPersisted()
 
         let activeLegacyMission = worktreeTabs.activeMissionTab(preferredWorktreeID: selectedWorktreeID)
+            .flatMap { suppressedLegacyMissionTabIds.contains($0.id) ? nil : $0 }
         merge(worktreeTabs.missionTabs())
         if activeTabId == nil, let activeLegacyMission {
             activeTabId = activeLegacyMission.id
@@ -157,6 +171,7 @@ final class GlobalTabsManager {
         try persist()
         merge(try worktreeTabs.extractMissionTabs())
         migrationVersion = 1
+        suppressedLegacyMissionTabIds.removeAll()
         try persist()
     }
 
@@ -169,7 +184,8 @@ final class GlobalTabsManager {
     }
 
     private func merge(_ states: [MissionTabState]) {
-        for state in states where !tabs.contains(where: { $0.id == state.id }) {
+        for state in states where !suppressedLegacyMissionTabIds.contains(state.id)
+            && !tabs.contains(where: { $0.id == state.id }) {
             tabs.append(.mission(state))
         }
     }
@@ -179,7 +195,8 @@ final class GlobalTabsManager {
             GlobalTabsFile(
                 migrationVersion: migrationVersion,
                 tabs: tabs,
-                activeTabId: activeTabId
+                activeTabId: activeTabId,
+                suppressedLegacyMissionTabIds: suppressedLegacyMissionTabIds
             ),
             to: fileURL
         )
