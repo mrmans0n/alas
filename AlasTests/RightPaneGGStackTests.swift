@@ -1329,6 +1329,127 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
+    @Test func cancelledSameKeyReloadRestoresPreviousStableStack() async throws {
+        let worktree = makeWorktree()
+        defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
+        let result = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let cancelledResult = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture.replacingOccurrences(
+                of: "agent-inbox",
+                with: "cancelled-response"
+            ),
+            stderr: ""
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [("agent-inbox", result), ("cancelled-response", cancelledResult)],
+            suspendedCalls: [2]
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "q", count: 40), stackShaped: true),
+        ]
+
+        await state.refreshGGStack()
+        let stableKey = try #require(state.ggStackCommitsKey)
+        let stableSummary = try #require(GGStackSummaryStore.shared.summaries[worktree.path.path])
+
+        let refresh = Task { @MainActor in
+            await state.refreshGGStack(forceRemote: true)
+        }
+        await runner.waitUntilCall(2)
+        #expect(state.ggStackLoadState == .loading)
+
+        refresh.cancel()
+        await runner.complete(call: 2)
+        await refresh.value
+
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStack?.name != "cancelled-response")
+        #expect(state.ggStackCommitsKey == stableKey)
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == stableSummary)
+    }
+
+    @Test func cancelledRefreshWithChangedLiveKeyDoesNotRestorePreviousStack() async {
+        let worktree = makeWorktree()
+        defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
+        let result = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [("agent-inbox", result), ("agent-inbox", result)],
+            suspendedCalls: [2]
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.currentBranch = "nacho/old-stack"
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "s", count: 40), stackShaped: true),
+        ]
+        await state.refreshGGStack()
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] != nil)
+
+        let refresh = Task { @MainActor in
+            await state.refreshGGStack(forceRemote: true)
+        }
+        await runner.waitUntilCall(2)
+        state.currentBranch = "nacho/new-stack"
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "t", count: 40), stackShaped: true),
+        ]
+
+        refresh.cancel()
+        await runner.complete(call: 2)
+        await refresh.value
+
+        #expect(state.ggStackLoadState == .failed("Stack refresh was interrupted. Retry to load it again."))
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
+    }
+
+    @Test func cancelledFirstStackLoadBecomesRetryableFailure() async {
+        let worktree = makeWorktree()
+        let result = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [("agent-inbox", result)],
+            suspendedCalls: [1]
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "r", count: 40), stackShaped: true),
+        ]
+
+        let refresh = Task { @MainActor in await state.refreshGGStack() }
+        await runner.waitUntilCall(1)
+        #expect(state.ggStackLoadState == .loading)
+
+        refresh.cancel()
+        await runner.complete(call: 1)
+        await refresh.value
+
+        #expect(state.ggStackLoadState == .failed("Stack refresh was interrupted. Retry to load it again."))
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+    }
+
     @Test func changedKeyLoadingInvalidatesOldCacheAndSuspendsUndoUntilReconciled() async throws {
         let worktree = makeWorktree()
         try FileManager.default.createDirectory(
