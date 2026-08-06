@@ -77,6 +77,7 @@ struct DiffPaneHunkRowToken: Equatable {
     let showWhitespace: Bool
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let theme: Theme
     let threadSignatures: [DiffInlineCommentThread]
     let annotations: [DiffInlineAnnotation]
     let activeHighlight: DiffReviewCommentHighlight?
@@ -135,6 +136,7 @@ enum DiffPaneRowPlanBuilder {
                 showWhitespace: input.showWhitespace,
                 codeFontFamily: input.codeFontFamily,
                 codeFontSize: input.codeFontSize,
+                theme: input.theme,
                 threadSignatures: hunkThreads,
                 annotations: hunkAnnotations,
                 activeHighlight: input.activeCommentHighlight,

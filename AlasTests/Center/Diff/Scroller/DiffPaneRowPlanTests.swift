@@ -29,6 +29,7 @@ struct DiffPaneRowPlanTests {
             input(showWhitespace: true),
             input(codeFontFamily: "Menlo"),
             input(codeFontSize: 15),
+            input(theme: accentedTheme()),
             input(model: changedModel()),
         ]
 
@@ -91,6 +92,7 @@ struct DiffPaneRowPlanTests {
         showWhitespace: Bool = false,
         codeFontFamily: String = "SF Mono",
         codeFontSize: CGFloat = 13,
+        theme: Theme? = nil,
         actions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions = { _ in .init() }
     ) -> DiffPaneRowPlanInput {
         DiffPaneRowPlanInput(
@@ -101,9 +103,15 @@ struct DiffPaneRowPlanTests {
             showWhitespace: showWhitespace,
             codeFontFamily: codeFontFamily,
             codeFontSize: codeFontSize,
-            theme: try! ThemeStore().current,
+            theme: theme ?? (try! ThemeStore().current),
             hunkActions: actions
         )
+    }
+
+    private func accentedTheme() -> Theme {
+        var theme = try! ThemeStore().current
+        theme.accentOverrideHex = "#ff00ff"
+        return theme
     }
 
     private func model() -> DiffDisplayModel {

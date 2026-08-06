@@ -99,6 +99,7 @@ private struct GGSplitPreviewHeaderToken: Equatable {
     let path: String
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let theme: Theme
 }
 
 private struct GGSplitPreviewImageToken: Equatable {
@@ -106,6 +107,7 @@ private struct GGSplitPreviewImageToken: Equatable {
     let key: GGSplitPreviewImageKey
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let theme: Theme
 }
 
 @MainActor
@@ -123,7 +125,8 @@ enum GGSplitPreviewRowPlanBuilder {
                     previewID: input.previewID,
                     path: file.path,
                     codeFontFamily: input.codeFontFamily,
-                    codeFontSize: input.codeFontSize
+                    codeFontSize: input.codeFontSize,
+                    theme: input.theme
                 )),
                 estimatedHeight: 35
             ) {
@@ -189,7 +192,8 @@ enum GGSplitPreviewRowPlanBuilder {
                         previewID: input.previewID,
                         key: key,
                         codeFontFamily: input.codeFontFamily,
-                        codeFontSize: input.codeFontSize
+                        codeFontSize: input.codeFontSize,
+                        theme: input.theme
                     )),
                     estimatedHeight: 255
                 ) {
@@ -213,7 +217,8 @@ enum GGSplitPreviewRowPlanBuilder {
                     previewID: input.previewID,
                     path: path,
                     codeFontFamily: input.codeFontFamily,
-                    codeFontSize: input.codeFontSize
+                    codeFontSize: input.codeFontSize,
+                    theme: input.theme
                 )),
                 estimatedHeight: 43
             ) {

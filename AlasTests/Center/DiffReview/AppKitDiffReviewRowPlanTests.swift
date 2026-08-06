@@ -195,6 +195,30 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!first.equalityToken.isEqual(to: hovered.equalityToken))
     }
 
+    @Test func themeAndFocusedFeedbackChangeRenderedRowTokens() throws {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        let base = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        var accentedTheme = theme
+        accentedTheme.accentOverrideHex = "#ff00ff"
+        let themed = AppKitDiffReviewRowInput(file: file, state: state, theme: accentedTheme)
+        let focused = AppKitDiffReviewRowInput(
+            file: file, state: state, theme: theme, focusedFeedbackID: "feedback", focusedDraftCommentID: "draft"
+        )
+        let baseRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [base]).corePlan.rows.first {
+            $0.id.contains(":segment:")
+        })
+        let themedRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [themed]).corePlan.rows.first {
+            $0.id == baseRow.id
+        })
+        let focusedRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [focused]).corePlan.rows.first {
+            $0.id == baseRow.id
+        })
+
+        #expect(!baseRow.equalityToken.isEqual(to: themedRow.equalityToken))
+        #expect(!baseRow.equalityToken.isEqual(to: focusedRow.equalityToken))
+    }
+
     @Test func accessorySegmentRowsTrackLSPContextInTheirEqualityToken() throws {
         let file = textFile()
         let state = AppKitDiffReviewFileState()

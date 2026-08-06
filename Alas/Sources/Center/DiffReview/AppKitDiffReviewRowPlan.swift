@@ -41,6 +41,7 @@ struct AppKitDiffReviewRowToken: Equatable {
     let showWhitespace: Bool
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let theme: Theme
     let lspWorktreeID: String?
     let lspRelativePath: String?
     let lspLanguage: String?
@@ -49,6 +50,8 @@ struct AppKitDiffReviewRowToken: Equatable {
     let draftCommentAvailability: ReviewDraftCommentActionAvailability?
     let hoveredInlineFeedbackID: String?
     let hoveredDraftCommentID: String?
+    let focusedFeedbackID: String?
+    let focusedDraftCommentID: String?
     let activeThreadID: String?
     let draftComposerFocused: Bool
     let actionPresence: AppKitDiffReviewActionPresence
@@ -573,6 +576,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             rowID: id, contentSignature: signature, layoutMode: input.layoutMode,
             wrapLines: input.wrapLines, showWhitespace: input.showWhitespace,
             codeFontFamily: input.codeFontFamily, codeFontSize: input.codeFontSize,
+            theme: input.theme,
             lspWorktreeID: input.lspContext?.worktreeId,
             lspRelativePath: input.lspContext?.relativePath,
             lspLanguage: input.lspContext?.language,
@@ -580,6 +584,8 @@ enum AppKitDiffReviewRowPlanBuilder {
             inlineFeedbackAvailability: inlineAvailability, draftCommentAvailability: draftAvailability,
             hoveredInlineFeedbackID: input.state.hoveredInlineFeedbackID,
             hoveredDraftCommentID: input.state.hoveredDraftCommentID,
+            focusedFeedbackID: input.focusedFeedbackID,
+            focusedDraftCommentID: input.focusedDraftCommentID,
             activeThreadID: input.state.activeThreadID,
             draftComposerFocused: input.state.isDraftComposerFocused,
             actionPresence: input.actionPresence
