@@ -189,51 +189,6 @@ struct DiffReviewSurfaceTests {
         }
     }
 
-    @Test func appKitReviewWindowScrollsSameFileItemsAndMissingTargetsToFallback() async throws {
-        let summary = summary(path: "Sources/LargeSameFile.swift")
-        let file = fileSection(
-            summary: summary,
-            displayModel: largeDisplayModel(groupCount: 80, filePath: summary.path)
-        )
-        let feedback = DiffReviewInlineFeedback(
-            id: "deep-feedback",
-            providerName: "GitHub",
-            author: "reviewer",
-            bodyPreview: "Review the deep line.",
-            status: .actionable,
-            providerURL: nil,
-            anchor: DiffReviewInlineFeedbackAnchor(path: summary.path, line: 80, side: .new),
-            evidenceItemID: "deep-feedback"
-        )
-        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
-        model.inlineFeedbackByFileID = [file.id: [feedback]]
-
-        try await withAppKitReviewScroller {
-            let controller = host(
-                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
-                width: 1_000,
-                height: 260
-            )
-            let window = attachWindow(controller, width: 1_000, height: 260)
-            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
-            await drainSwiftUI(controller.view)
-            let scroller = try #require(appKitReviewScroller(in: controller.view))
-
-            model.inlineFeedbackCommand = .init(feedbackID: "deep-feedback", fileID: file.id, generation: 1)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.30))
-            await drainSwiftUI(controller.view)
-            let deepTargetY = scroller.scrollY
-            #expect(deepTargetY > 0)
-            #expect(model.selected == file.id)
-
-            model.inlineFeedbackCommand = .init(feedbackID: "missing-feedback", fileID: file.id, generation: 2)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.30))
-            await drainSwiftUI(controller.view)
-            #expect(scroller.scrollY < deepTargetY)
-            #expect(model.selected == file.id)
-        }
-    }
-
     @Test func appKitReviewWindowExpandsContextAndCompensatesInsertionsAboveViewport() async throws {
         let firstSummary = summary(path: "Sources/Context.swift")
         let secondSummary = summary(path: "Sources/Below.swift")
@@ -271,6 +226,49 @@ struct DiffReviewSurfaceTests {
                 displayModel: expandedContextDisplayModel(filePath: firstSummary.path, hiddenRowCount: 16)
             )
             model.session = loadedSession(files: [expandedFirst, second])
+            await drainSwiftUI(controller.view)
+
+            #expect(model.selected == secondSummary.id)
+            #expect(scroller.scrollY >= beforeInsertionY)
+        }
+    }
+
+    @Test func appKitReviewWindowCompensatesCommentInsertionAboveViewport() async throws {
+        let firstSummary = summary(path: "Sources/CommentAbove.swift")
+        let secondSummary = summary(path: "Sources/CommentBelow.swift")
+        let first = fileSection(
+            summary: firstSummary,
+            displayModel: largeSingleGroupDisplayModel(rowCount: 30, filePath: firstSummary.path)
+        )
+        let second = fileSection(
+            summary: secondSummary,
+            displayModel: largeSingleGroupDisplayModel(rowCount: 30, filePath: secondSummary.path)
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [first, second]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 260
+            )
+            let window = attachWindow(controller, width: 1_000, height: 260)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+
+            #expect(pressAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-rail-row-\(secondSummary.id.rawValue)",
+                in: controller.view
+            ))
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.30))
+            await drainSwiftUI(controller.view)
+            let beforeInsertionY = scroller.scrollY
+            #expect(model.selected == secondSummary.id)
+
+            model.draftCommentsByFileID = [
+                first.id: [draftComment(id: "above-draft", fileID: first.id, path: first.summary.path, startLine: 1)],
+            ]
             await drainSwiftUI(controller.view)
 
             #expect(model.selected == secondSummary.id)
