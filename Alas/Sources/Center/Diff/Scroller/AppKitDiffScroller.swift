@@ -101,8 +101,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
         }
 
         private var hasUsableLayout: Bool {
-            guard let scrollView, scrollView.contentWidth > 0, tiling.rowCount > 0 else { return false }
-            return true
+            (scrollView?.contentWidth ?? 0) > 0
         }
 
         private func userViewportDidChange() {
