@@ -3279,6 +3279,8 @@ final class AppState {
         do {
             candidate = try await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression)
         } catch {
+            guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
+            else { return }
             Self.showWarningAlert(
                 title: "Invalid Revision",
                 message: (error as NSError).localizedDescription
@@ -3291,12 +3293,16 @@ final class AppState {
             baselineHEAD: candidate.headSHA,
             resolvedSHA: candidate.sha
         ) else {
+            guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
+            else { return }
             Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
             return
         }
-        guard followRevisionRequestGenerations[requestKey] == requestGeneration,
-              let tab = tabs.tabs(forWorktree: worktreeID).first(where: { followRevisionRequestKey(for: $0) == requestKey })
-        else { return }
+        guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration),
+              let tab = followRevisionRequestTab(worktreeID: worktreeID, requestKey: requestKey)
+        else {
+            return
+        }
 
         switch tab {
         case .commit:
@@ -3314,6 +3320,19 @@ final class AppState {
         let next = followRevisionRequestGenerations[key, default: 0] + 1
         followRevisionRequestGenerations[key] = next
         return next
+    }
+
+    private func isCurrentFollowRevisionRequest(
+        worktreeID: String,
+        requestKey: String,
+        requestGeneration: Int
+    ) -> Bool {
+        followRevisionRequestGenerations[requestKey] == requestGeneration &&
+            followRevisionRequestTab(worktreeID: worktreeID, requestKey: requestKey) != nil
+    }
+
+    private func followRevisionRequestTab(worktreeID: String, requestKey: String) -> Tab? {
+        tabs.tabs(forWorktree: worktreeID).first { followRevisionRequestKey(for: $0) == requestKey }
     }
 
     private func followRevisionRequestKey(worktreeID: String, tabID: TabID) -> String {

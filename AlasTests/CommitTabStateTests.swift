@@ -123,7 +123,27 @@ struct CommitTabStateTests {
             _ = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "HEAD@{5 minutes ago}")
             Issue.record("Expected time-relative reflog selector to throw")
         } catch let error as TrackedRevisionResolverError {
-            #expect(error == .unsupportedTimeRelativeReflogExpression("5 minutes ago"))
+            #expect(error == .unsupportedReflogExpression("5 minutes ago"))
+        }
+    }
+
+    @Test func resolverRejectsPushReflogSelector() async throws {
+        let resolver = TrackedRevisionResolver(
+            resolve: { _, _ in
+                Issue.record("@{push} should be rejected before resolving")
+                return "unused"
+            },
+            branch: { _ in
+                Issue.record("@{push} should be rejected before reading branch")
+                return "unused"
+            }
+        )
+
+        do {
+            _ = try await resolver.resolve(at: URL(fileURLWithPath: "/repo"), expression: "@{push}")
+            Issue.record("Expected @{push} selector to throw")
+        } catch let error as TrackedRevisionResolverError {
+            #expect(error == .unsupportedReflogExpression("push"))
         }
     }
 

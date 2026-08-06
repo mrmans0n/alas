@@ -175,8 +175,8 @@ struct TrackedRevisionResolver {
 
     func resolve(at worktreePath: URL, expression: String) async throws -> TrackedRevisionCandidate {
         let expression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let selector = TrackedRevision.timeRelativeReflogSelector(in: expression) {
-            throw TrackedRevisionResolverError.unsupportedTimeRelativeReflogExpression(selector)
+        if let selector = TrackedRevision.unsupportedReflogSelector(in: expression) {
+            throw TrackedRevisionResolverError.unsupportedReflogExpression(selector)
         }
         let dependsOnWorktreeHEAD = TrackedRevision.usesWorktreeHEADAlias(expression)
         while true {
@@ -222,12 +222,16 @@ struct TrackedRevisionResolver {
 }
 
 enum TrackedRevisionResolverError: LocalizedError, Equatable {
-    case unsupportedTimeRelativeReflogExpression(String)
+    case unsupportedReflogExpression(String)
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedTimeRelativeReflogExpression(let selector):
-            "Time-relative reflog expressions like @{\(selector)} are not supported for followed revisions."
+        case .unsupportedReflogExpression(let selector):
+            if selector.lowercased() == "push" {
+                "Followed revisions do not support @{push}; use an explicit remote-tracking ref instead."
+            } else {
+                "Time-relative reflog expressions like @{\(selector)} are not supported for followed revisions."
+            }
         }
     }
 }
@@ -238,7 +242,7 @@ private extension TrackedRevision {
         return first == "~" || first == "^"
     }
 
-    static func timeRelativeReflogSelector(in expression: String) -> String? {
+    static func unsupportedReflogSelector(in expression: String) -> String? {
         var searchStart = expression.startIndex
         while let openRange = expression.range(of: "@{", range: searchStart..<expression.endIndex) {
             guard let closeIndex = expression[openRange.upperBound...].firstIndex(of: "}") else {
@@ -257,7 +261,7 @@ private extension TrackedRevision {
     static func isStableReflogSelector(_ selector: String) -> Bool {
         guard !selector.isEmpty else { return false }
         let lowercased = selector.lowercased()
-        if lowercased == "upstream" || lowercased == "u" || lowercased == "push" {
+        if lowercased == "upstream" || lowercased == "u" {
             return true
         }
         if selector.allSatisfy(\.isNumber) { return true }
