@@ -6,6 +6,12 @@ on:
       - "v*"
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to build, without the leading v"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -34,6 +40,7 @@ jobs:
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
           submodules: recursive
 
       - name: Configure headless git for package resolution
@@ -75,8 +82,13 @@ jobs:
           restore-keys: |
             ghostty-${{ runner.os }}-${{ matrix.arch }}-
 
-      - name: Compute version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Compute version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
 
       - name: Stamp release version
         run: |
@@ -288,9 +300,16 @@ jobs:
     steps:
       - name: Checkout (for CHANGELOG.md)
         uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
 
-      - name: Compute version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Compute version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
@@ -325,10 +344,15 @@ jobs:
     # Skip prereleases — those should ship a DMG for manual testing but
     # must not bump the cask that brew users follow. Tag-push releases are
     # stable by construction.
-    if: github.event_name == 'push' || github.event.release.prerelease == false
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     steps:
-      - name: Get version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Get version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
 
       - name: Download DMGs and compute checksums
         run: |
@@ -348,7 +372,7 @@ jobs:
         # Pull the helper from this repo at the exact released tag so the
         # cask body is reproducible from the release ref alone.
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/mrmans0n/alas/${{ github.ref_name }}/.github/workflows/update-cask.py" -o update-cask.py
+          curl -fsSL "https://raw.githubusercontent.com/mrmans0n/alas/v${VERSION}/.github/workflows/update-cask.py" -o update-cask.py
 
       - name: Update cask
         working-directory: homebrew-tap
@@ -387,10 +411,15 @@ jobs:
     name: Verify Homebrew Cask
     runs-on: macos-26
     needs: update-homebrew
-    if: github.event_name == 'push' || github.event.release.prerelease == false
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     steps:
-      - name: Get version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Get version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
 
       - name: Tap and validate published cask
         run: |
