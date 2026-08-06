@@ -386,7 +386,7 @@ struct ReviewFeedbackHandoff: Codable, Equatable, Identifiable, Sendable {
 }
 
 struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
-    let id: ReviewSessionID
+    var id: ReviewSessionID
     var target: ReviewSessionTarget
     var selectedFileID: DiffReviewFileID?
     var focusedCommentID: String?
@@ -474,6 +474,9 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
         now: Date
     ) -> ReviewSessionRecord {
         var record = self
+        if target.id != self.target.id {
+            record.id = Self.retargetedID(sourceID: id, targetID: target.id)
+        }
         record.target = target
         if resolvedSHAChanged {
             record.status = .active
@@ -481,5 +484,9 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
         }
         record.updatedAt = now
         return record
+    }
+
+    private static func retargetedID(sourceID: ReviewSessionID, targetID: ReviewSessionID) -> ReviewSessionID {
+        ReviewSessionID(rawValue: "\(targetID.rawValue)\u{1f}retargeted\u{1f}\(sourceID.rawValue)")
     }
 }

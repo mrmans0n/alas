@@ -190,10 +190,42 @@ final class RemoteProjectGitWatcher {
             return nil
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return nil }
-        return result.stdout
+        var pseudoRefCommits: [String: String] = [:]
+        for ref in Self.revisionPseudoRefs {
+            let probe = try? await Process.git(
+                ["rev-parse", "--verify", "-q", "\(ref)^{commit}"],
+                cwd: projectPath
+            )
+            guard let probe, !RemoteExec.isConnectionFailure(exitCode: probe.exitCode) else {
+                return nil
+            }
+            pseudoRefCommits[ref] = probe.exitCode == 0 ? probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        }
+        return Self.sharedRefsSignature(showRefOutput: result.stdout, pseudoRefCommits: pseudoRefCommits)
     }
 
     deinit { pollTask?.cancel() }
+
+    nonisolated static func sharedRefsSignature(
+        showRefOutput: String,
+        pseudoRefCommits: [String: String]
+    ) -> String {
+        var signature = showRefOutput
+        for ref in revisionPseudoRefs {
+            signature += "\n\(ref):\(pseudoRefCommits[ref] ?? "")"
+        }
+        return signature
+    }
+
+    nonisolated static let revisionPseudoRefs = [
+        "AUTO_MERGE",
+        "CHERRY_PICK_HEAD",
+        "FETCH_HEAD",
+        "MERGE_HEAD",
+        "ORIG_HEAD",
+        "REBASE_HEAD",
+        "REVERT_HEAD",
+    ]
 }
 
 struct RemoteProjectGitWatcherEvents: Equatable {

@@ -40,6 +40,21 @@ struct ReviewSessionStore {
         try store.write(snapshot, to: url)
     }
 
+    func replace(id oldID: ReviewSessionID, with record: ReviewSessionRecord) throws {
+        var snapshot = try readSnapshot()
+        if oldID != record.id {
+            snapshot.recordsByID[oldID.rawValue] = nil
+        }
+        snapshot.recordsByID[record.id.rawValue] = record
+        try store.write(snapshot, to: url)
+    }
+
+    func delete(id: ReviewSessionID) throws {
+        var snapshot = try readSnapshot()
+        snapshot.recordsByID[id.rawValue] = nil
+        try store.write(snapshot, to: url)
+    }
+
     private func readSnapshot() throws -> Snapshot {
         try store.readIfExists(Snapshot.self, from: url) ?? Snapshot(recordsByID: [:])
     }

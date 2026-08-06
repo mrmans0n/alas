@@ -281,9 +281,9 @@ struct FileHistoryTabState: Codable, Equatable, Identifiable {
 }
 
 struct ReviewSessionTabState: Codable, Equatable, Identifiable {
-    let id: TabID
+    var id: TabID
     let worktreeId: String
-    let sessionID: ReviewSessionID
+    var sessionID: ReviewSessionID
     var title: String
     var selectedFileID: DiffReviewFileID?
     var focusedCommentID: String?
@@ -295,6 +295,14 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         self.title = record.target.title
         self.selectedFileID = record.selectedFileID
         self.focusedCommentID = record.focusedCommentID
+    }
+
+    mutating func retarget(to record: ReviewSessionRecord) {
+        id = "review-session:\(record.id.rawValue)"
+        sessionID = record.id
+        title = record.target.title
+        selectedFileID = record.selectedFileID
+        focusedCommentID = record.focusedCommentID
     }
 }
 

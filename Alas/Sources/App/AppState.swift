@@ -3357,20 +3357,28 @@ final class AppState {
     ) {
         let sessionStore = ReviewSessionStore()
         var savedRecord = false
-        let previousRecord = try? sessionStore.load(id: result.record.id)
+        let previousOldRecord = try? sessionStore.load(id: result.oldRecordID)
+        let previousNewRecord = try? sessionStore.load(id: result.record.id)
         do {
-            try sessionStore.save(result.record)
+            try sessionStore.replace(id: result.oldRecordID, with: result.record)
             savedRecord = true
             try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
             _ = tabs.updateReviewSession(worktreeId: worktreeID, tabId: tabID) {
-                $0.title = result.record.target.title
-                $0.selectedFileID = result.record.selectedFileID
-                $0.focusedCommentID = result.record.focusedCommentID
+                $0.retarget(to: result.record)
             }
             bumpReviewSessionRetargetGeneration(sessionID: result.record.id)
         } catch {
-            if savedRecord, let previousRecord {
-                try? sessionStore.save(previousRecord)
+            if savedRecord {
+                if let previousOldRecord {
+                    try? sessionStore.save(previousOldRecord)
+                }
+                if result.record.id != result.oldRecordID {
+                    if let previousNewRecord {
+                        try? sessionStore.save(previousNewRecord)
+                    } else {
+                        try? sessionStore.delete(id: result.record.id)
+                    }
+                }
             }
             Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
         }

@@ -212,6 +212,7 @@ private extension TrackedRevision {
 
 struct TrackedRevisionRetargetingResult {
     let record: ReviewSessionRecord
+    let oldRecordID: ReviewSessionID
     let oldDraftSessionID: ReviewDraftSessionID
     let newDraftSessionID: ReviewDraftSessionID
 }
@@ -233,6 +234,7 @@ enum TrackedRevisionRetargeter {
                     resolvedSHAChanged: oldRevision.resolvedSHA != revision.resolvedSHA,
                     now: now
                 ),
+                oldRecordID: record.id,
                 oldDraftSessionID: oldDraftSessionID,
                 newDraftSessionID: target.draftSessionID
             )
@@ -249,6 +251,7 @@ enum TrackedRevisionRetargeter {
                 resolvedSHAChanged: oldSHA != revision.resolvedSHA,
                 now: now
             ),
+            oldRecordID: record.id,
             oldDraftSessionID: record.target.draftSessionID,
             newDraftSessionID: target.draftSessionID
         )
@@ -262,6 +265,7 @@ enum TrackedRevisionRetargeter {
         guard let target = record.target.freezingTrackedRevision(title: title) else { return nil }
         return TrackedRevisionRetargetingResult(
             record: record.retargetingCommit(to: target, resolvedSHAChanged: false, now: now),
+            oldRecordID: record.id,
             oldDraftSessionID: record.target.draftSessionID,
             newDraftSessionID: target.draftSessionID
         )

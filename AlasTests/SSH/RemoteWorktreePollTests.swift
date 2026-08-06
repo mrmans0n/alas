@@ -123,4 +123,18 @@ struct RemoteWorktreePollTests {
             topologyChanged: true
         ))
     }
+
+    @Test func sharedRefsSignatureIncludesPseudoRefs() {
+        let signature = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            pseudoRefCommits: [
+                "FETCH_HEAD": "fetch-sha",
+                "REBASE_HEAD": "rebase-sha",
+            ]
+        )
+
+        #expect(signature.contains("abc refs/heads/main"))
+        #expect(signature.contains("FETCH_HEAD:fetch-sha"))
+        #expect(signature.contains("REBASE_HEAD:rebase-sha"))
+    }
 }

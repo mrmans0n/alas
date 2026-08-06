@@ -229,6 +229,37 @@ struct CommitTabStateTests {
         #expect(retargeted.record.verdict == record.verdict)
     }
 
+    @Test func trackedRevisionRetargeterRekeysRecordsWhenTargetChanges() throws {
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "source",
+            title: "Source"
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~2",
+            baselineBranch: "feature",
+            resolvedSHA: "tracked"
+        ))
+
+        let retargeted = try #require(TrackedRevisionRetargeter.follow(
+            record: record,
+            revision: revision,
+            title: "Review HEAD~2",
+            now: Date(timeIntervalSince1970: 2)
+        ))
+
+        #expect(retargeted.oldRecordID == record.id)
+        #expect(retargeted.record.id != record.id)
+        #expect(retargeted.record.id.rawValue.contains(retargeted.record.target.id.rawValue))
+    }
+
     @Test func trackedRevisionDecodingNormalizesExpressionAndPreservesPendingCheckout() throws {
         let json = """
         {

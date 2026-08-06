@@ -136,6 +136,22 @@ struct ReviewSessionStoreTests {
         #expect(try store.findActive(targetID: target.id, excluding: ReviewSessionID(rawValue: "missing")) == current)
     }
 
+    @Test func replaceRemovesOldRecordIDWhenRetargetingRekeys() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let source = makeRecord(id: "source", worktreeID: "wt-1", updatedAt: 1)
+        var retargeted = source
+        retargeted.id = ReviewSessionID(rawValue: "retargeted")
+
+        try store.save(source)
+        try store.replace(id: source.id, with: retargeted)
+
+        #expect(try store.load(id: source.id) == nil)
+        #expect(try store.load(id: retargeted.id) == retargeted)
+    }
+
     private func makeRecord(id: String, worktreeID: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
         let target = ReviewSessionTarget.commit(
             worktreeID: worktreeID,
