@@ -55,12 +55,13 @@ struct GGWorktreeMenuModelTests {
         #expect(model.inactiveExplanation == "gg is not installed.")
     }
 
-    @Test func globalDisableHasUsefulExplanation() {
+    @Test func globalDisableHidesMenuAndHasUsefulExplanation() {
         let model = menuModel(
             selectedMode: .on,
             context: .inactive(reason: .masterDisabled)
         )
 
+        #expect(!model.isVisible)
         #expect(model.inactiveExplanation == "Stacked diffs are disabled in Settings.")
     }
 
