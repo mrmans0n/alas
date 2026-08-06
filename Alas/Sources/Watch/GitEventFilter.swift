@@ -61,6 +61,9 @@ enum GitEventFilter {
                 let worktreeRoot = URL(fileURLWithPath: gitlink).deletingLastPathComponent()
                 return .headChange(worktreeRoot.standardizedFileURL)
             }
+            if parts.count == 3 && Self.revisionPseudoRefs.contains(parts[2]) {
+                return .revisionChange
+            }
             return .other
         }
 

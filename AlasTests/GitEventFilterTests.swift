@@ -114,6 +114,19 @@ struct GitEventFilterTests {
         }
     }
 
+    @Test func linkedWorktreePseudoRefsAreRevisionChanges() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/worktrees/feat/REBASE_HEAD",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .revisionChange)
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/worktrees/feat/FETCH_HEAD",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .revisionChange)
+    }
+
     @Test func refsTagsAreRevisionChangesOnly() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/refs/tags/v1",
