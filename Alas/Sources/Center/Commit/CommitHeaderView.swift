@@ -13,6 +13,7 @@ struct CommitHeaderView: View {
     var onEditRevision: (() -> Void)?
     var onStopFollowingRevision: (() -> Void)?
     var onAcceptPendingCheckout: (() -> Void)?
+    var onRetryRevision: (() -> Void)?
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -138,6 +139,12 @@ struct CommitHeaderView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .accessibilityIdentifier("commit-revision-error")
+                if let onRetryRevision {
+                    Button("Retry", action: onRetryRevision)
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("commit-revision-error-retry")
+                }
             }
 
             Spacer(minLength: 8)

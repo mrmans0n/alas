@@ -74,34 +74,33 @@ struct GitEventFilterTests {
         }
     }
 
-    @Test func branchRefUpdateIsTopology() {
+    @Test func branchRefUpdateIsRevisionAndTopology() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/refs/heads/main",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
-        ) == .topologyChange)
+        ) == .revisionAndTopologyChange)
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/refs/heads/feature/foo",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
-        ) == .topologyChange)
+        ) == .revisionAndTopologyChange)
     }
 
-    @Test func packedRefsUpdateIsTopology() {
+    @Test func packedRefsUpdateIsRevisionChange() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/packed-refs",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
-        ) == .topologyChange)
+        ) == .revisionChange)
     }
 
-    @Test func refsTagsAreNotTopology() {
-        // Tag refs aren't activity signals for the worktree sort.
+    @Test func refsTagsAreRevisionChangesOnly() {
         #expect(GitEventFilter.classify(
             eventPath: "/repo/.git/refs/tags/v1",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
-        ) == .other)
+        ) == .revisionChange)
     }
 
     @Test func ignoresPathsOutsideGitDir() {

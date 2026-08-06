@@ -77,7 +77,8 @@ struct CommitTabView: View {
                     onFollowRevision: { appState.promptFollowRevision(worktreeID: worktreeId, tabID: tabState.id) },
                     onEditRevision: editFollowedRevision,
                     onStopFollowingRevision: stopFollowingRevision,
-                    onAcceptPendingCheckout: acceptPendingCheckout
+                    onAcceptPendingCheckout: acceptPendingCheckout,
+                    onRetryRevision: retryRevisionRefresh
                 )
                 commitReviewContent(details: details)
             } else if loadingDetails {
@@ -377,6 +378,10 @@ struct CommitTabView: View {
     @MainActor
     private func acceptPendingCheckout() {
         appState.acceptTrackedRevisionCheckout(worktreeID: worktreeId, tabID: tabState.id)
+    }
+
+    private func retryRevisionRefresh() {
+        Task { await loadDetails() }
     }
 }
 
