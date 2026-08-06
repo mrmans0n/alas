@@ -79,6 +79,15 @@ struct BehindChip: View {
 }
 
 struct CommitsSectionView: View {
+    struct CommitRowBatch: Identifiable {
+        let range: Range<Int>
+        let id: [String]
+    }
+
+    /// Keep the pinned outer stack's child count low without eagerly building
+    /// an entire long history when a batch enters the viewport.
+    static let rowBatchSize = 8
+
     let commits: [CommitInfo]
     let olderCommits: [CommitInfo]
     let comparisonRef: String?
@@ -161,6 +170,19 @@ struct CommitsSectionView: View {
         ggStack?.name ?? "Commits"
     }
 
+    static func rowBatches(count: Int) -> [Range<Int>] {
+        guard count > 0 else { return [] }
+        return stride(from: 0, to: count, by: rowBatchSize).map { start in
+            start ..< min(start + rowBatchSize, count)
+        }
+    }
+
+    static func rowBatches(for commits: [CommitInfo]) -> [CommitRowBatch] {
+        rowBatches(count: commits.count).map { range in
+            CommitRowBatch(range: range, id: commits[range].map(\.sha))
+        }
+    }
+
     static func ggRowMutationsEnabled(
         inFlightAction: GGStackActionKind?,
         mergeOperation: MergeOperation?,
@@ -182,26 +204,30 @@ struct CommitsSectionView: View {
     private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
         if !commits.isEmpty {
-                ForEach(Array(commits.enumerated()), id: \.element.id) { idx, commit in
-                CommitRow(
-                    commit: commit,
-                    isLast: idx == commits.count - 1 && olderCommits.isEmpty,
-                    onSelect: { onSelect(commit) },
-                    onCopySHA: { onCopySHA(commit) },
-                    onCopyMessage: { Clipboard.copy(commit.fullMessage) },
-                    onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
-                    onEdit: { onEdit(commit) },
-                    onReview: { onReview(commit) },
-                    onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-                    onRevert: { rps.runRevert(sha: commit.sha) },
-                    ggMenu: ggMenu(for: commit),
-                    onGGAction: { action in onGGAction(action, commit) },
-                    onGGOpenPR: ggOpenReviewRequestAction(for: commit).map { action in
-                        { onGGAction(action, commit) }
-                    },
-                    stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
-                    codeHostKind: stackCodeHostKind
-                )
+            ForEach(Self.rowBatches(for: commits)) { batch in
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(commits[batch.range]) { commit in
+                        CommitRow(
+                            commit: commit,
+                            isLast: commit.id == commits.last?.id && olderCommits.isEmpty,
+                            onSelect: { onSelect(commit) },
+                            onCopySHA: { onCopySHA(commit) },
+                            onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+                            onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
+                            onEdit: { onEdit(commit) },
+                            onReview: { onReview(commit) },
+                            onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
+                            onRevert: { rps.runRevert(sha: commit.sha) },
+                            ggMenu: ggMenu(for: commit),
+                            onGGAction: { action in onGGAction(action, commit) },
+                            onGGOpenPR: ggOpenReviewRequestAction(for: commit).map { action in
+                                { onGGAction(action, commit) }
+                            },
+                            stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
+                            codeHostKind: stackCodeHostKind
+                        )
+                    }
+                }
             }
         } else if olderCommits.isEmpty {
             emptyPlaceholder
@@ -215,19 +241,23 @@ struct CommitsSectionView: View {
 
         // 3. Older commits — dimmed when comparisonRef exists, plain when not.
         if !olderCommits.isEmpty {
-                ForEach(Array(olderCommits.enumerated()), id: \.element.id) { idx, commit in
-                CommitRow(
-                    commit: commit,
-                    isLast: idx == olderCommits.count - 1,
-                    isHistorical: comparisonRef != nil,
-                    onSelect: { onSelect(commit) },
-                    onCopySHA: { onCopySHA(commit) },
-                    onCopyMessage: { Clipboard.copy(commit.fullMessage) },
-                    onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
-                    onReview: { onReview(commit) },
-                    onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-                    onRevert: { rps.runRevert(sha: commit.sha) }
-                )
+            ForEach(Self.rowBatches(for: olderCommits)) { batch in
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(olderCommits[batch.range]) { commit in
+                        CommitRow(
+                            commit: commit,
+                            isLast: commit.id == olderCommits.last?.id,
+                            isHistorical: comparisonRef != nil,
+                            onSelect: { onSelect(commit) },
+                            onCopySHA: { onCopySHA(commit) },
+                            onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+                            onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
+                            onReview: { onReview(commit) },
+                            onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
+                            onRevert: { rps.runRevert(sha: commit.sha) }
+                        )
+                    }
+                }
             }
         }
 
