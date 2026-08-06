@@ -65,8 +65,11 @@ final class GGSplitPreviewPresentationStore {
         return state
     }
 
-    func prune(keeping keys: Set<String>) {
-        states = states.filter { keys.contains($0.key) }
+    func prune(previewID: String, keeping keys: Set<String>) {
+        let prefix = "\(previewID):"
+        states = states.filter { key, _ in
+            !key.hasPrefix(prefix) || keys.contains(key)
+        }
     }
 
     #if DEBUG
@@ -110,7 +113,7 @@ enum GGSplitPreviewRowPlanBuilder {
     static func build(input: GGSplitPreviewRowPlanInput) -> AppKitDiffRowPlan {
         var rows: [AppKitDiffRowSpec] = []
         let presentationKeys = Set(input.preview.files.map { "\(input.previewID):\($0.path)" })
-        input.presentationStore.prune(keeping: presentationKeys)
+        input.presentationStore.prune(previewID: input.previewID, keeping: presentationKeys)
         for file in input.preview.files {
             let prefix = "gg-preview:\(input.previewID):file:\(file.path)"
             rows.append(.init(

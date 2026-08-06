@@ -90,10 +90,16 @@ struct GGSplitPreviewRowPlanTests {
         #expect(state.expandedCollapsedRowIDs == ["collapsed"])
 
         _ = GGSplitPreviewRowPlanBuilder.build(input: input(
+            previewID: "first-commit", preview: .init(files: [previewFile(path: "Sources/First.swift")], nonTextualFiles: []),
+            showsResultingImages: false, imageStore: imageStore, presentationStore: presentationStore
+        ))
+        #expect(presentationStore.state(previewID: "remainder", filePath: "Sources/Retained.swift") === state)
+
+        _ = GGSplitPreviewRowPlanBuilder.build(input: input(
             previewID: "remainder", preview: .init(files: [], nonTextualFiles: []), showsResultingImages: false,
             imageStore: imageStore, presentationStore: presentationStore
         ))
-        #expect(presentationStore.keysForTests.isEmpty)
+        #expect(presentationStore.keysForTests == ["first-commit:Sources/First.swift"])
     }
 
     private func input(
