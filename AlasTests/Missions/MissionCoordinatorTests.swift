@@ -1056,7 +1056,32 @@ struct MissionCoordinatorTests {
             MissionID(rawValue: "newer"),
             MissionID(rawValue: "older"),
         ])
+        #expect(controller.loadState == .loaded)
         #expect(controller.loadError == nil)
+    }
+
+    // Break caught: a failed persistence read must resolve startup loading
+    // rather than leaving the Mission pane in an indefinite loading state.
+    @Test("Mission load publishes a failed state without aggregates")
+    func loadFailurePublishesFailedState() async {
+        let persistence = MissionPersistence(path: "/dev/null/missions.sqlite")
+        let controller = MissionController(environment: .init(
+            persistence: persistence,
+            now: Date.init,
+            makeID: { UUID().uuidString },
+            worktreeAtDestination: { _, _ in nil },
+            createWorktree: { _ in .failure(.init(message: "unused")) },
+            startACP: { _, _ in .failure(.init(message: "unused")) },
+            notifyChanged: { _ in }
+        ))
+
+        await controller.load()
+
+        #expect(controller.aggregates.isEmpty)
+        if case .failed = controller.loadState {
+        } else {
+            Issue.record("Expected a failed Mission load state")
+        }
     }
 
     @Test("observers receive every durable success checkpoint")

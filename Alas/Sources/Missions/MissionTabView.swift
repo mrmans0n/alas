@@ -431,11 +431,15 @@ struct MissionTabView: View {
             if let aggregate = state.missions.aggregate(id: tabState.missionID) {
                 missionContent(aggregate)
             } else {
-                ContentUnavailableView(
-                    "Mission unavailable",
-                    systemImage: "scope",
-                    description: Text("The Mission record could not be loaded.")
-                )
+                switch state.missions.loadState {
+                case .loading:
+                    ProgressView("Loading Mission…")
+                        .accessibilityIdentifier("mission-loading")
+                case .loaded:
+                    unavailableMissionView()
+                case .failed(let message):
+                    unavailableMissionView(description: message)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -500,6 +504,14 @@ struct MissionTabView: View {
             )
             .environment(\.theme, theme)
         }
+    }
+
+    private func unavailableMissionView(description: String = "The Mission record could not be loaded.") -> some View {
+        ContentUnavailableView(
+            "Mission unavailable",
+            systemImage: "scope",
+            description: Text(description)
+        )
     }
 
     private func missionContent(_ aggregate: MissionAggregate) -> some View {

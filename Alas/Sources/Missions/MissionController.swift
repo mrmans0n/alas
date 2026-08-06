@@ -62,11 +62,18 @@ struct MissionSourceRefreshProposal: Equatable, Sendable {
     let snapshot: MissionSourceSnapshot
 }
 
+enum MissionLoadState: Equatable {
+    case loading
+    case loaded
+    case failed(String)
+}
+
 @Observable
 @MainActor
 final class MissionController {
     private(set) var aggregates: [MissionAggregate] = []
     private(set) var loadError: String?
+    private(set) var loadState: MissionLoadState = .loading
 
     @ObservationIgnored
     private let persistence: MissionPersistence
@@ -158,11 +165,18 @@ final class MissionController {
     }
 
     func load() async {
+        loadState = .loading
+        loadError = nil
         do {
-            aggregates = Self.sorted(try await persistence.list(includeCompleted: true))
-            loadError = nil
+            let loaded = try await persistence.list(includeCompleted: true)
+            guard !Task.isCancelled else { return }
+            aggregates = Self.sorted(loaded)
+            loadState = .loaded
         } catch {
-            loadError = error.localizedDescription
+            guard !Task.isCancelled else { return }
+            let message = error.localizedDescription
+            loadError = message
+            loadState = .failed(message)
         }
     }
 
