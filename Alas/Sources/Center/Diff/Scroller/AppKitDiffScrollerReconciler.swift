@@ -115,7 +115,14 @@ final class AppKitDiffScrollerReconciler {
             completion?()
             return
         }
-        scrollView.setScrollY(offset, animated: request.animated, completion: completion)
+        scrollView.setScrollY(offset, animated: request.animated) { [weak self] in
+            // Bounds notifications remain suppressed for programmatic animation
+            // so active-owner feedback cannot fight navigation. Re-tile at the
+            // final native offset before announcing completion, however, or a
+            // long jump can leave only the source viewport mounted.
+            self?.layoutVisibleRows()
+            completion?()
+        }
         layoutVisibleRows()
     }
 

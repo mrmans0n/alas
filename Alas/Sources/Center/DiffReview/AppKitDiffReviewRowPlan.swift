@@ -4,6 +4,7 @@ enum AppKitDiffReviewRowID {
     static func header(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):header" }
     static func placeholder(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):placeholder" }
     static func image(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):image" }
+    static func contextError(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):context-error" }
     static func groupHeader(fileID: DiffReviewFileID, groupID: String) -> String { "file:\(fileID.rawValue):group:\(groupID):header" }
     static func segment(fileID: DiffReviewFileID, segmentID: String, blockID: String) -> String { "file:\(fileID.rawValue):segment:\(segmentID):rows:\(blockID)" }
     static func composer(fileID: DiffReviewFileID, segmentID: String) -> String { "file:\(fileID.rawValue):composer:\(segmentID)" }
@@ -28,6 +29,8 @@ struct AppKitDiffReviewActionPresence: Equatable {
     var canReply = false
     var canResolve = false
     var canAddToReview = false
+    var canUnstageHunk = false
+    var hunkUnstageEnabled = false
 }
 
 struct AppKitDiffReviewRowToken: Equatable {
@@ -75,8 +78,6 @@ struct AppKitDiffReviewRowInput {
     var lspContext: DiffPaneLSPContext?
     var reviewFeedbackTarget: ReviewFeedbackTarget?
     var draftCommentActions: ReviewDraftCommentActions?
-    private let contextExpansionActivated: () -> Void
-
     init(
         file: DiffReviewFileSectionModel,
         inlineFeedback: [DiffReviewInlineFeedback] = [],
@@ -124,8 +125,9 @@ struct AppKitDiffReviewRowInput {
         self.lspContext = lspContext
         self.reviewFeedbackTarget = reviewFeedbackTarget
         self.draftCommentActions = draftCommentActions
-        self.contextExpansionActivated = onContextExpansionActivated
-            ?? { state.actionRelay.contextExpansionActivated() }
+        if let onContextExpansionActivated {
+            state.actionRelay.update(onContextExpansionActivated: onContextExpansionActivated)
+        }
     }
 
     func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
@@ -164,7 +166,7 @@ struct AppKitDiffReviewRowInput {
         edge: DiffContextExpansionEdge?
     ) {
         guard let provider = file.contextProvider else { return }
-        contextExpansionActivated()
+        state.actionRelay.contextExpansionActivated()
         if state.contextSnapshot != nil {
             applyContextExpansion(key, mode: mode, edge: edge)
             return
@@ -300,11 +302,30 @@ enum AppKitDiffReviewRowPlanBuilder {
         )
 
         for (index, input) in inputs.enumerated() {
+            input.state.actionRelay.update(
+                stagedMutationActions: input.file.stagedMutationActions,
+                openFile: input.file.openFile
+            )
             let fileID = input.file.id
             let headerID = AppKitDiffReviewRowID.header(fileID: fileID)
             headerByFileID[fileID] = headerID
             append(&rows, id: headerID, input: input, signature: headerSignature(input), height: 45) {
                 AnyView(AppKitDiffReviewHeaderRowBody(input: input))
+            }
+            if let contextLoadError = input.state.contextLoadError {
+                append(
+                    &rows,
+                    id: AppKitDiffReviewRowID.contextError(fileID: fileID),
+                    input: input,
+                    signature: contextLoadError.hashValue,
+                    height: 34
+                ) {
+                    AnyView(DiffReviewContextErrorRowBody(
+                        fileID: fileID,
+                        message: contextLoadError,
+                        theme: input.theme
+                    ))
+                }
             }
 
             let individuallyDeferred = input.file.displayModel.map(DiffReviewRenderBudget.isOverBudget) ?? false
@@ -319,6 +340,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 mapTargets(input, to: placeholderID, into: &fallbackByTargetID)
             } else if input.file.imageProvider != nil {
                 appendFileAccessories(input, context: nil, rows: &rows, fallbacks: &fallbackByTargetID)
+                appendImageFeedback(input, rows: &rows)
                 let imageID = AppKitDiffReviewRowID.image(fileID: fileID)
                 append(&rows, id: imageID, input: input, signature: input.file.imageProvider?.id.hashValue ?? 0, height: 360) {
                     AnyView(AppKitDiffReviewImageRowBody(input: input, loadsImage: true))
@@ -417,7 +439,14 @@ enum AppKitDiffReviewRowPlanBuilder {
                 for comment in segment.draftComments { appendDraft(comment, input: input, rows: &rows, fallbacks: &fallbacks) }
                 if segment.showsComposer {
                     let composerID = AppKitDiffReviewRowID.composer(fileID: input.file.id, segmentID: segment.id)
-                    append(&rows, id: composerID, input: input, signature: input.state.draftComposerFocusRequestGeneration, height: 132, retention: .pinned) {
+                    append(
+                        &rows,
+                        id: composerID,
+                        input: input,
+                        signature: input.state.draftComposerFocusRequestGeneration,
+                        height: 132,
+                        retention: input.state.isDraftComposerFocused ? .pinned : .recyclable
+                    ) {
                         AnyView(AppKitDiffReviewComposerRowBody(rows: segment.rows, input: input))
                     }
                 }
@@ -453,13 +482,36 @@ enum AppKitDiffReviewRowPlanBuilder {
             onStageReply: { input.state.actionRelay.stageReply(to: $0, body: $1) },
             canAddToReview: input.actionPresence.canAddToReview,
             hunkFusionStates: [fusion],
-            hunkActions: { hunk in
-                let enabled = input.file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
-                return DiffPaneHunkActions(
-                    dropFromCommit: enabled ? { input.file.stagedMutationActions?.unstageHunk?(hunk) } : nil
-                )
-            }
+            hunkActions: input.state.actionRelay.hunkActions
         )
+    }
+
+    private static func appendImageFeedback(
+        _ input: AppKitDiffReviewRowInput,
+        rows: inout [AppKitDiffRowSpec]
+    ) {
+        for thread in input.threads {
+            append(
+                &rows,
+                id: AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id),
+                input: input,
+                signature: String(reflecting: thread).hashValue,
+                height: 112
+            ) {
+                AnyView(AppKitDiffReviewImageThreadRowBody(thread: thread, input: input))
+            }
+        }
+        for annotation in input.annotations {
+            append(
+                &rows,
+                id: AppKitDiffReviewRowID.annotation(fileID: input.file.id, annotationID: annotation.id),
+                input: input,
+                signature: String(reflecting: annotation).hashValue,
+                height: 52
+            ) {
+                AnyView(AppKitDiffReviewImageAnnotationRowBody(annotation: annotation, input: input))
+            }
+        }
     }
 
     private static func appendFeedback(
@@ -526,8 +578,8 @@ enum AppKitDiffReviewRowPlanBuilder {
             lspLanguage: input.lspContext?.language,
             lspManagerIdentity: input.lspContext.map { ObjectIdentifier($0.lsp) },
             inlineFeedbackAvailability: inlineAvailability, draftCommentAvailability: draftAvailability,
-            hoveredInlineFeedbackID: input.state.hoveredInlineFeedbackID,
-            hoveredDraftCommentID: input.state.hoveredDraftCommentID,
+            hoveredInlineFeedbackID: nil,
+            hoveredDraftCommentID: nil,
             activeThreadID: input.state.activeThreadID,
             draftComposerFocused: input.state.isDraftComposerFocused,
             actionPresence: input.actionPresence
@@ -609,9 +661,9 @@ struct AppKitDiffReviewHeaderRowBody: View {
                         label: "Image diff controls"
                     ))
             }
-            if let openFile = input.file.openFile,
+            if input.file.openFile != nil,
                let title = DiffReviewFileSectionActions.openFileButtonTitle(for: input.file) {
-                Button(action: openFile) {
+                Button(action: input.state.actionRelay.openCurrentFile) {
                     Text(title).font(.system(size: 11, weight: .semibold))
                         .foregroundColor(input.theme.color("fg-muted"))
                         .padding(.horizontal, 8).frame(height: 24)
@@ -622,8 +674,8 @@ struct AppKitDiffReviewHeaderRowBody: View {
                 .accessibilityIdentifier("diff-review-open-file-\(input.file.id.rawValue)")
                 .accessibilityLabel(title)
             }
-            if let unstage = input.file.stagedMutationActions?.unstageFile {
-                Button("Unstage", action: unstage)
+            if input.file.stagedMutationActions?.unstageFile != nil {
+                Button("Unstage", action: input.state.actionRelay.unstageFile)
                     .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
                     .foregroundColor(input.theme.color("fg-muted"))
                     .padding(.horizontal, 8).frame(height: 24)
@@ -634,7 +686,7 @@ struct AppKitDiffReviewHeaderRowBody: View {
                         identifier: "diff-review-unstage-file-\(input.file.id.rawValue)",
                         label: "Unstage \(input.file.summary.path)"
                     ) {
-                        unstage()
+                        input.state.actionRelay.unstageFile()
                     })
             }
         }
@@ -774,6 +826,73 @@ struct AppKitDiffReviewImageRowBody: View {
         case (.failed(let failure), _), (_, .failed(let failure)): failure.message
         default: nil
         }
+    }
+}
+
+struct DiffReviewContextErrorRowBody: View {
+    let fileID: DiffReviewFileID
+    let message: String
+    let theme: Theme
+
+    var body: some View {
+        Text("Could not load surrounding context: \(message)")
+            .font(.system(size: 11))
+            .foregroundColor(theme.color("warn"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(theme.color("bg-2"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+            .background(DiffReviewAccessibilityMarker(
+                identifier: "diff-review-context-error-\(fileID.rawValue)",
+                label: "Could not load surrounding context: \(message)"
+            ))
+    }
+}
+
+struct AppKitDiffReviewImageThreadRowBody: View {
+    let thread: DiffInlineCommentThread
+    let input: AppKitDiffReviewRowInput
+
+    var body: some View {
+        DiffInlineCommentCard(
+            thread: thread,
+            onReply: { input.state.actionRelay.reply(to: thread, body: $0) },
+            onStageReply: { input.state.actionRelay.stageReply(to: thread, body: $0) },
+            onResolve: { input.state.actionRelay.resolve(thread) },
+            onUnresolve: { input.state.actionRelay.unresolve(thread) },
+            onEdit: { input.state.actionRelay.edit($0, in: thread, body: $1) },
+            onDelete: { input.state.actionRelay.delete($0, in: thread) },
+            canReply: input.actionPresence.canReply && thread.viewerCanReply,
+            canResolve: input.actionPresence.canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+            canAddToReview: input.actionPresence.canAddToReview,
+            onActiveChange: { active in
+                input.state.activeThreadID = active
+                    ? thread.id
+                    : (input.state.activeThreadID == thread.id ? nil : input.state.activeThreadID)
+            }
+        )
+        .background(DiffReviewAccessibilityMarker(
+            identifier: "diff-review-image-thread-\(thread.id)",
+            label: "Image review thread"
+        ))
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(input.theme.color("bg-1"))
+    }
+}
+
+struct AppKitDiffReviewImageAnnotationRowBody: View {
+    let annotation: DiffInlineAnnotation
+    let input: AppKitDiffReviewRowInput
+
+    var body: some View {
+        DiffInlineAnnotationCard(annotation: annotation)
+            .background(DiffReviewAccessibilityMarker(
+                identifier: "diff-review-image-annotation-\(annotation.id)",
+                label: annotation.message
+            ))
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(input.theme.color("bg-1"))
     }
 }
 

@@ -4,7 +4,7 @@ import Testing
 @testable import Alas
 
 @MainActor
-@Suite("AppKit diff scroller SwiftUI bridge")
+@Suite(.serialized)
 struct AppKitDiffScrollerTests {
     private typealias Stack = (
         window: NSWindow,
@@ -12,12 +12,16 @@ struct AppKitDiffScrollerTests {
         coordinator: AppKitDiffScroller.Coordinator
     )
 
-    private func makeStack(onActiveOwnerChange: @escaping (String?) -> Void = { _ in }) -> Stack {
+    private func makeStack(
+        onActiveOwnerChange: @escaping (String?) -> Void = { _ in },
+        animatedScrollExecutorForTests: AppKitDiffScrollView.AnimatedScrollExecutorForTests? = nil
+    ) -> Stack {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 240),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         let scrollView = AppKitDiffScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 240))
+        scrollView.animatedScrollExecutorForTests = animatedScrollExecutorForTests
         let coordinator = AppKitDiffScroller.Coordinator()
         coordinator.attach(scrollView: scrollView, onActiveOwnerChange: onActiveOwnerChange)
         window.contentView = scrollView
@@ -150,7 +154,13 @@ struct AppKitDiffScrollerTests {
     @Test("animated programmatic scrolling does not publish active-owner changes")
     func animatedScrollingDoesNotReportActiveOwner() async throws {
         var owners: [String?] = []
-        let stack = makeStack { owners.append($0) }
+        let stack = makeStack(
+            onActiveOwnerChange: { owners.append($0) },
+            animatedScrollExecutorForTests: { scrollView, point, completion in
+                scrollView.contentView.setBoundsOrigin(point)
+                completion()
+            }
+        )
         stack.coordinator.update(plan: plan(), scrollRequest: nil, onActiveOwnerChange: { owners.append($0) })
 
         stack.coordinator.update(
@@ -160,7 +170,6 @@ struct AppKitDiffScrollerTests {
             ),
             onActiveOwnerChange: { owners.append($0) }
         )
-        try await Task.sleep(for: .milliseconds(500))
 
         #expect(owners.isEmpty)
     }
@@ -168,7 +177,13 @@ struct AppKitDiffScrollerTests {
     @Test("animated requests report completion only after the native scroll finishes")
     func animatedRequestReportsCompletion() async throws {
         var completedGenerations: [Int] = []
-        let stack = makeStack()
+        var finishAnimation: (() -> Void)?
+        let stack = makeStack(
+            animatedScrollExecutorForTests: { scrollView, point, completion in
+                scrollView.contentView.setBoundsOrigin(point)
+                finishAnimation = completion
+            }
+        )
         stack.coordinator.update(plan: plan(), scrollRequest: nil, onActiveOwnerChange: { _ in })
 
         stack.coordinator.update(
@@ -181,8 +196,35 @@ struct AppKitDiffScrollerTests {
         )
 
         #expect(completedGenerations.isEmpty)
-        try await Task.sleep(for: .milliseconds(500))
+        finishAnimation?()
         #expect(completedGenerations == [73])
+    }
+
+    @Test("long animated navigation mounts the destination before completion")
+    func animatedNavigationMountsDestination() async throws {
+        var mountedAtCompletion = false
+        let stack = makeStack(
+            animatedScrollExecutorForTests: { scrollView, point, completion in
+                scrollView.contentView.setBoundsOrigin(point)
+                completion()
+            }
+        )
+        stack.coordinator.update(plan: plan(count: 2_000), scrollRequest: nil, onActiveOwnerChange: { _ in })
+
+        stack.coordinator.update(
+            plan: plan(count: 2_000),
+            scrollRequest: .init(
+                targetID: "row-1900", fallbackID: nil, alignment: .top, animated: true, generation: 91
+            ),
+            onActiveOwnerChange: { _ in },
+            onScrollRequestCompletion: { _ in
+                mountedAtCompletion = stack.coordinator.mountedRowIDsForTests.contains("row-1900")
+            }
+        )
+
+        #expect(mountedAtCompletion)
+        #expect(stack.coordinator.mountedRowIDsForTests.contains("row-1900"))
+        #expect(stack.scrollView.scrollY > 70_000)
     }
 
     @Test("height-only viewport changes relayout without publishing active owner")

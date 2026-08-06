@@ -9,6 +9,11 @@ final class AppKitDiffScrollDocumentView: NSView {
 /// Native scrolling primitive for virtualized diff rows.
 @MainActor
 final class AppKitDiffScrollView: NSScrollView {
+    #if DEBUG
+    typealias AnimatedScrollExecutorForTests = (AppKitDiffScrollView, NSPoint, @escaping () -> Void) -> Void
+    var animatedScrollExecutorForTests: AnimatedScrollExecutorForTests?
+    #endif
+
     let flippedDocumentView = AppKitDiffScrollDocumentView()
 
     /// Called only for user-driven bounds movement. Programmatic adjustments
@@ -103,6 +108,15 @@ final class AppKitDiffScrollView: NSScrollView {
         performProgrammatic {
             if animated {
                 programmaticAnimationDepth += 1
+                #if DEBUG
+                if let animatedScrollExecutorForTests {
+                    animatedScrollExecutorForTests(self, point) { [weak self] in
+                        self?.programmaticAnimationDidComplete()
+                        completion?()
+                    }
+                    return
+                }
+                #endif
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.25
                     contentView.animator().setBoundsOrigin(point)

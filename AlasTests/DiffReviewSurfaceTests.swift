@@ -7,10 +7,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct DiffReviewSurfaceTests {
-    init() {
-        AppKitDiffScrollerFlag.setOverride(false)
-    }
-
     private func theme() -> Theme { try! ThemeStore().current }
 
     @Test func appKitScrollerSwitchMatchesRuntimeFlag() {
@@ -947,49 +943,33 @@ struct DiffReviewSurfaceTests {
             openFile: nil,
             contextProvider: nil
         )
-        var layout = DiffLayoutMode.stacked
-        var wrap = false
-        var whitespace = false
-        let view = DiffReviewFileSection(
+        let presentationState = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(
             file: file,
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            showsSourceBadge: false
+            state: presentationState,
+            theme: theme()
         )
-        .environment(\.theme, theme())
 
-        let controller = NSHostingController(rootView: view)
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 520),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let firstAnchor = DiffReviewLineAnchor(
+            path: file.summary.path,
+            side: .new,
+            line: 1,
+            rowIndex: 0,
+            selectedText: "let old = 1"
         )
-        window.contentViewController = controller
-        controller.view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 900, height: 520)
-        controller.view.layoutSubtreeIfNeeded()
-        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+        input.beginPendingDraft(at: firstAnchor)
+        let firstGeneration = presentationState.draftComposerFocusRequestGeneration
 
-        await drainSwiftUI(controller.view)
-        try selectReviewLine(selectionIndex: 0, in: controller.view)
-        await drainSwiftUI(controller.view)
-
-        let firstComposer = try #require(draftComposerTextView(in: controller.view))
-        #expect(window.firstResponder === firstComposer)
-
-        let sink = FocusSinkView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
-        controller.view.addSubview(sink)
-        #expect(window.makeFirstResponder(sink))
-        #expect(window.firstResponder !== firstComposer)
-
-        try selectReviewLine(selectionIndex: 1, in: controller.view)
-        await drainSwiftUI(controller.view)
-
-        let relocatedComposer = try #require(draftComposerTextView(in: controller.view))
-        #expect(window.firstResponder === relocatedComposer)
+        let relocatedAnchor = DiffReviewLineAnchor(
+            path: file.summary.path,
+            side: .new,
+            line: 2,
+            rowIndex: 1,
+            selectedText: "let new = 2"
+        )
+        input.beginPendingDraft(at: relocatedAnchor)
+        #expect(presentationState.pendingDraftAnchor == relocatedAnchor)
+        #expect(presentationState.draftComposerFocusRequestGeneration > firstGeneration)
     }
 
     @Test func stackedFileSectionBoundsHunkMaterializationToScrollViewport() throws {

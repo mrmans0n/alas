@@ -19,6 +19,8 @@ struct GGSplitCommitTabView: View {
     @State private var layoutMode: DiffLayoutMode = .stacked
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var appKitPreviewScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
+    @State private var previewImageStore = GGSplitPreviewImageStore()
 
     init(
         tabState: GGSplitCommitTabState,
@@ -71,6 +73,11 @@ struct GGSplitCommitTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .task(id: tabState.id) { await load() }
+        .onReceive(
+            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            appKitPreviewScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
+        }
     }
 
     private var availableContent: some View {
@@ -236,7 +243,6 @@ struct GGSplitCommitTabView: View {
         preview: GGSplitPreview,
         showsResultingImages: Bool = false
     ) -> some View {
-        let partition = GGResultingImagePreview.partition(preview.nonTextualFiles)
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(title)
@@ -255,34 +261,82 @@ struct GGSplitCommitTabView: View {
                     .foregroundStyle(theme.color("fg-dim"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(preview.files) { file in
-                            splitPreviewFile(file)
-                        }
-                        if showsResultingImages, let targetSHA = model.targetSHA {
-                            ForEach(partition.imagePaths, id: \.self) { path in
-                                GGSplitResultingImagePreview(
-                                    path: path,
-                                    worktreePath: worktreePath,
-                                    revision: targetSHA,
-                                    codeFontFamily: codeFontFamily,
-                                    codeFontSize: codeFontSize
-                                )
-                            }
-                        }
-                        ForEach(partition.otherPaths, id: \.self) { path in
-                            Label(path, systemImage: "doc")
-                                .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
-                                .foregroundStyle(theme.color("fg-dim"))
-                                .padding(12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
+                previewScrollSubtree(
+                    previewID: title,
+                    preview: preview,
+                    showsResultingImages: showsResultingImages
+                )
+                .id(appKitPreviewScrollerEnabled)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    nonisolated static func usesAppKitPreviewScroller(flagEnabled: Bool) -> Bool {
+        flagEnabled
+    }
+
+    @ViewBuilder
+    private func previewScrollSubtree(
+        previewID: String,
+        preview: GGSplitPreview,
+        showsResultingImages: Bool
+    ) -> some View {
+        if Self.usesAppKitPreviewScroller(flagEnabled: appKitPreviewScrollerEnabled) {
+            AppKitDiffScroller(
+                plan: GGSplitPreviewRowPlanBuilder.build(input: .init(
+                    previewID: previewID,
+                    preview: preview,
+                    showsResultingImages: showsResultingImages,
+                    worktreePath: worktreePath,
+                    revision: model.targetSHA,
+                    layoutMode: layoutMode,
+                    wrapLines: wrapLines,
+                    showWhitespace: showWhitespace,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    theme: theme,
+                    imageStore: previewImageStore
+                )),
+                scrollRequest: nil,
+                onActiveOwnerChange: { _ in },
+                onScrollRequestCompletion: { _ in }
+            )
+        } else {
+            legacyPreviewScroll(preview: preview, showsResultingImages: showsResultingImages)
+        }
+    }
+
+    private func legacyPreviewScroll(
+        preview: GGSplitPreview,
+        showsResultingImages: Bool
+    ) -> some View {
+        let partition = GGResultingImagePreview.partition(preview.nonTextualFiles)
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(preview.files) { file in splitPreviewFile(file) }
+                if showsResultingImages, let targetSHA = model.targetSHA {
+                    ForEach(partition.imagePaths, id: \.self) { path in
+                        let key = GGSplitPreviewImageKey(
+                            worktreePath: worktreePath, revision: targetSHA, relativePath: path
+                        )
+                        GGSplitResultingImagePreview(
+                            key: key,
+                            state: previewImageStore.state(for: key),
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize
+                        )
+                    }
+                }
+                ForEach(partition.otherPaths, id: \.self) { path in
+                    Label(path, systemImage: "doc")
+                        .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
+                        .foregroundStyle(theme.color("fg-dim"))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
     }
 
     private func splitPreviewFile(_ file: GGSplitPreviewFile) -> some View {
@@ -406,53 +460,5 @@ enum GGResultingImagePreview {
             imagePaths: paths.filter(ImageFileType.isSupported(relativePath:)),
             otherPaths: paths.filter { !ImageFileType.isSupported(relativePath: $0) }
         )
-    }
-}
-
-private struct GGSplitResultingImagePreview: View {
-    let path: String
-    let worktreePath: URL
-    let revision: String
-    let codeFontFamily: String
-    let codeFontSize: CGFloat
-
-    @State private var imageSide: ImageDiffSide?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(path)
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            ZStack {
-                ImageCheckerboardBackground()
-                if let image = imageSide?.image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.none)
-                        .aspectRatio(contentMode: .fit)
-                        .padding(8)
-                } else if imageSide == nil {
-                    Spinner()
-                        .frame(width: 20, height: 20)
-                } else {
-                    Label("Could not load image", systemImage: "photo")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 220)
-        }
-        .task(id: "\(worktreePath.path):\(revision):\(path)") {
-            imageSide = await GitService().imageSide(
-                worktreePath: worktreePath,
-                revision: revision,
-                path: path
-            )
-        }
     }
 }

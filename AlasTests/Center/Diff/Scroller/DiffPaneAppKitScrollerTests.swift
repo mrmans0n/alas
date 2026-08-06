@@ -147,6 +147,16 @@ struct DiffPaneAppKitScrollerTests {
 
     @Test("mounted AppKit pane retains standalone diff interactions")
     func mountedPaneInteractions() throws {
+        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
+        defer {
+            if let originalOverride {
+                AppKitDiffScrollerFlag.setOverride(originalOverride)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
+                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
+            }
+        }
+        AppKitDiffScrollerFlag.setOverride(true)
         let state = DiffPaneHarnessState(layout: .split, wrap: false, whitespace: false)
         var selectedAnchor: DiffReviewLineAnchor?
         let mounted = mount(DiffPaneHarness(
@@ -188,6 +198,7 @@ struct DiffPaneAppKitScrollerTests {
         state.layout = .stacked
         state.wrap = true
         state.whitespace = true
+        AppKitDiffScrollerFlag.setOverride(true)
         settle(mounted.1.view)
 
         #expect(appKitScroller(in: mounted.1.view) != nil)

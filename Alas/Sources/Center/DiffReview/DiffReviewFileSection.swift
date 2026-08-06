@@ -168,7 +168,9 @@ struct DiffReviewFileSection: View {
                 canCreateDraftComment: allowsDraftCommentCreation,
                 canReply: canReply,
                 canResolve: canResolve,
-                canAddToReview: canAddToReview
+                canAddToReview: canAddToReview,
+                canUnstageHunk: file.stagedMutationActions?.unstageHunk != nil,
+                hunkUnstageEnabled: file.stagedMutationActions?.unstageEnabledBase ?? false
             ),
             lspContext: lspContext,
             reviewFeedbackTarget: effectiveReviewFeedbackTarget,
@@ -275,6 +277,10 @@ struct DiffReviewFileSection: View {
             onDelete: onDelete,
             onStageReply: onStageReply
         )
+        state.actionRelay.update(
+            stagedMutationActions: file.stagedMutationActions,
+            openFile: file.openFile
+        )
     }
 
     @ViewBuilder
@@ -326,20 +332,7 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private var contextLoadErrorRow: some View {
         if let contextLoadError {
-            Text("Could not load surrounding context: \(contextLoadError)")
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("warn"))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(theme.color("bg-2"))
-                .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-                .background(
-                    DiffReviewAccessibilityMarker(
-                        identifier: "diff-review-context-error-\(file.id.rawValue)",
-                        label: "Could not load surrounding context: \(contextLoadError)"
-                    )
-                )
+            DiffReviewContextErrorRowBody(fileID: file.id, message: contextLoadError, theme: theme)
         }
     }
 

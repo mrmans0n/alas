@@ -428,7 +428,9 @@ struct DiffReviewSurface: View {
                     canCreateDraftComment: allowsDraftCommentCreation,
                     canReply: canReply,
                     canResolve: canResolve,
-                    canAddToReview: canAddToReview
+                    canAddToReview: canAddToReview,
+                    canUnstageHunk: file.stagedMutationActions?.unstageHunk != nil,
+                    hunkUnstageEnabled: file.stagedMutationActions?.unstageEnabledBase ?? false
                 ),
                 lspContext: lspContextForFile(file),
                 reviewFeedbackTarget: effectiveReviewFeedbackTarget,

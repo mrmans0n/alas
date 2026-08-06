@@ -46,6 +46,23 @@ struct DiffPaneRowPlanTests {
         #expect(first.rows[0].equalityToken.isEqual(to: second.rows[0].equalityToken))
     }
 
+    @Test func equalTokenRowsInvokeTheLatestHunkHandler() throws {
+        let state = DiffPanePresentationState()
+        var calls: [String] = []
+        let first = DiffPaneRowPlanBuilder.build(
+            input: input(actions: { _ in .init(stage: { calls.append("first") }) }), state: state
+        )
+        let second = DiffPaneRowPlanBuilder.build(
+            input: input(actions: { _ in .init(stage: { calls.append("second") }) }), state: state
+        )
+
+        #expect(first.rows[0].equalityToken.isEqual(to: second.rows[0].equalityToken))
+        let latestActions = state.actionRelay.hunkActions(for: model().groups[0].sourceHunk)
+        let stage = try #require(latestActions.stage)
+        stage()
+        #expect(calls == ["second"])
+    }
+
     @Test func expandedContextUpdatesTheRowEstimate() throws {
         let input = input(model: collapsibleModel())
         let state = DiffPanePresentationState()

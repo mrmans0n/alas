@@ -34,11 +34,20 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(plan.fallbackByTargetID[AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: feedback.id, fileID: input.file.id))] == placeholderID)
     }
 
-    @Test func imageFilesEmitAccessoriesAndImageWithoutTextHunksOrSpacing() {
+    @Test func imageFilesEmitAllLegacyAccessoriesAndImageWithoutTextHunksOrSpacing() {
         let file = imageFile()
         let feedback = feedback(path: file.summary.path, line: nil)
+        let thread = DiffInlineCommentThread(
+            id: "thread", filePath: file.summary.path, newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let annotation = DiffInlineAnnotation(
+            id: "annotation", checkName: "Check", newLine: 1, level: .warning,
+            message: "Warning", rawDetails: nil
+        )
         let input = AppKitDiffReviewRowInput(
-            file: file, inlineFeedback: [feedback], state: AppKitDiffReviewFileState(), theme: theme
+            file: file, inlineFeedback: [feedback], threads: [thread], annotations: [annotation],
+            state: AppKitDiffReviewFileState(), theme: theme
         )
 
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
@@ -47,6 +56,8 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids == [
             AppKitDiffReviewRowID.header(fileID: file.id),
             AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: feedback.id, fileID: file.id)),
+            AppKitDiffReviewRowID.thread(fileID: file.id, threadID: thread.id),
+            AppKitDiffReviewRowID.annotation(fileID: file.id, annotationID: annotation.id),
             AppKitDiffReviewRowID.image(fileID: file.id),
         ])
         #expect(!ids.contains { $0.contains(":group:") || $0.contains(":segment:") })
@@ -83,7 +94,7 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(secondState.renderContextCache.missCountForTests == 0)
     }
 
-    @Test func renderedTargetsAreDirectRowsAndComposerIsPinned() throws {
+    @Test func renderedTargetsAreDirectRowsAndComposerIsPinnedOnlyWhileFocused() throws {
         let file = textFile()
         let feedback = feedback(line: 1)
         let draft = draftComment(fileID: file.id)
@@ -103,8 +114,69 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(plan.fallbackByTargetID[feedbackID] == feedbackID)
         #expect(plan.fallbackByTargetID[draftID] == draftID)
         #expect(plan.corePlan.rows.first { $0.id == draftID }?.retention == .recyclable)
-        #expect(composer.retention == .pinned)
+        #expect(composer.retention == .recyclable)
         #expect(plan.corePlan.rows.contains { $0.id.contains(":segment:") })
+
+        state.pendingDraftBody = "survives recycling"
+        state.isDraftComposerFocused = true
+        let focused = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first {
+            $0.id == composer.id
+        })
+        #expect(focused.retention == .pinned)
+        state.isDraftComposerFocused = false
+        let blurred = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first {
+            $0.id == composer.id
+        })
+        #expect(blurred.retention == .recyclable)
+        #expect(state.pendingDraftBody == "survives recycling")
+    }
+
+    @Test func contextFailureRowDisappearsAfterSuccessfulRetry() async throws {
+        let attempts = ContextAttempts()
+        let provider = DiffReviewContextProvider {
+            try await attempts.snapshot()
+        }
+        let file = textFile(contextProvider: provider)
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let key = DiffContextExpansionKey(groupID: file.displayModel!.groups[0].id, boundary: .below)
+
+        input.loadContextAndExpand(key, mode: .chunk(size: 1), edge: nil)
+        await state.contextLoadTask?.value
+        #expect(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.contains {
+            $0.id == AppKitDiffReviewRowID.contextError(fileID: file.id)
+        })
+
+        input.loadContextAndExpand(key, mode: .chunk(size: 1), edge: nil)
+        await state.contextLoadTask?.value
+        #expect(state.contextLoadError == nil)
+        #expect(!AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.contains {
+            $0.id == AppKitDiffReviewRowID.contextError(fileID: file.id)
+        })
+    }
+
+    @Test func hunkBusyStateChangesTheOuterRowToken() throws {
+        var available = textFile()
+        available.stagedMutationActions = .init(
+            unstageHunk: { _ in }, isHunkUnstageEnabled: { _ in true }, unstageEnabledBase: true
+        )
+        var busy = textFile()
+        busy.stagedMutationActions = .init(
+            unstageHunk: { _ in }, isHunkUnstageEnabled: { _ in false }, unstageEnabledBase: false
+        )
+        let state = AppKitDiffReviewFileState()
+        let availableRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: available, state: state, theme: theme, actionPresence: .init(
+                canUnstageHunk: true, hunkUnstageEnabled: true
+            )),
+        ]).corePlan.rows.first { $0.id.contains(":group:") })
+        let busyRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: busy, state: state, theme: theme, actionPresence: .init(
+                canUnstageHunk: true, hunkUnstageEnabled: false
+            )),
+        ]).corePlan.rows.first { $0.id == availableRow.id })
+
+        #expect(!availableRow.equalityToken.isEqual(to: busyRow.equalityToken))
     }
 
     @Test func accessorySegmentRowsTrackLSPContextInTheirEqualityToken() throws {
@@ -229,4 +301,16 @@ struct AppKitDiffReviewRowPlanTests {
             state: .active, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2)
         )
     }
+
+    private actor ContextAttempts {
+        private var count = 0
+
+        func snapshot() throws -> DiffReviewFileContextSnapshot {
+            count += 1
+            if count == 1 { throw ContextError.failed }
+            return .init(old: .available(["old"]), new: .available(["new"]))
+        }
+    }
+
+    private enum ContextError: Error { case failed }
 }

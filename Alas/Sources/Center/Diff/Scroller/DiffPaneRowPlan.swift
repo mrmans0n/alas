@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 final class DiffPanePresentationState: ObservableObject {
+    let actionRelay = DiffPaneActionRelay()
     @Published private(set) var expandedCollapsedRowIDs: Set<String> = []
     @Published private(set) var activeThreadID: String?
 
@@ -16,6 +17,43 @@ final class DiffPanePresentationState: ObservableObject {
     func setThreadActive(_ threadID: String, active: Bool) {
         activeThreadID = active ? threadID : (activeThreadID == threadID ? nil : activeThreadID)
     }
+}
+
+@MainActor
+final class DiffPaneActionRelay {
+    private var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    private var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
+    private var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    private var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    private var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    private var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    private var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    private var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    private var hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions = { _ in .init() }
+
+    func update(from input: DiffPaneRowPlanInput) {
+        onReviewLineSelected = input.onReviewLineSelected
+        onContextExpansion = input.onContextExpansion
+        onReply = input.onReply
+        onResolve = input.onResolve
+        onUnresolve = input.onUnresolve
+        onEdit = input.onEdit
+        onDelete = input.onDelete
+        onStageReply = input.onStageReply
+        hunkActions = input.hunkActions
+    }
+
+    func reviewLineSelected(_ anchor: DiffReviewLineAnchor) { onReviewLineSelected(anchor) }
+    func expandContext(_ key: DiffContextExpansionKey, _ mode: DiffContextExpansionMode, _ edge: DiffContextExpansionEdge?) {
+        onContextExpansion(key, mode, edge)
+    }
+    func reply(to thread: DiffInlineCommentThread, body: String) { onReply(thread, body) }
+    func resolve(_ thread: DiffInlineCommentThread) { onResolve(thread) }
+    func unresolve(_ thread: DiffInlineCommentThread) { onUnresolve(thread) }
+    func edit(_ thread: DiffInlineCommentThread, _ comment: DiffInlineComment, body: String) { onEdit(thread, comment, body) }
+    func delete(_ thread: DiffInlineCommentThread, _ comment: DiffInlineComment) { onDelete(thread, comment) }
+    func stageReply(to thread: DiffInlineCommentThread, body: String) { onStageReply(thread, body) }
+    func hunkActions(for hunk: ParsedDiff.Hunk) -> DiffPaneHunkActions { hunkActions(hunk) }
 }
 
 struct DiffPaneHunkActionPresence: Equatable {
@@ -77,6 +115,7 @@ struct DiffPaneRowPlanInput {
 enum DiffPaneRowPlanBuilder {
     @MainActor
     static func build(input: DiffPaneRowPlanInput, state: DiffPanePresentationState) -> AppKitDiffRowPlan {
+        state.actionRelay.update(from: input)
         let fusions = resolvedFusions(for: input)
         let rows = input.model.groups.enumerated().map { index, group in
             let fusion = fusions[index]
@@ -86,7 +125,7 @@ enum DiffPaneRowPlanBuilder {
             )
             let hunkThreads = threads(for: visibleRows.rows, from: input.threads)
             let hunkAnnotations = annotations(for: visibleRows.rows, from: input.annotations)
-            let actions = input.hunkActions(group.sourceHunk)
+            let actions = state.actionRelay.hunkActions(for: group.sourceHunk)
             let token = DiffPaneHunkRowToken(
                 groupID: group.id,
                 rowsSignature: visibleRows.signature,
@@ -197,8 +236,8 @@ struct DiffPaneHunkRow: View {
                         lspContext: input.lspContext,
                         activeCommentHighlight: activeHighlight(for: segment.rows),
                         allowsReviewLineSelection: input.allowsReviewLineSelection,
-                        onReviewLineSelected: input.onReviewLineSelected,
-                        onContextExpansion: input.onContextExpansion
+                        onReviewLineSelected: state.actionRelay.reviewLineSelected,
+                        onContextExpansion: state.actionRelay.expandContext
                     )
                     .fixedSize(horizontal: false, vertical: true)
                 case .thread(let thread):
@@ -209,12 +248,12 @@ struct DiffPaneHunkRow: View {
                     ) {
                         DiffInlineCommentCard(
                             thread: thread,
-                            onReply: { input.onReply(thread, $0) },
-                            onStageReply: { input.onStageReply(thread, $0) },
-                            onResolve: { input.onResolve(thread) },
-                            onUnresolve: { input.onUnresolve(thread) },
-                            onEdit: { comment, body in input.onEdit(thread, comment, body) },
-                            onDelete: { input.onDelete(thread, $0) },
+                            onReply: { state.actionRelay.reply(to: thread, body: $0) },
+                            onStageReply: { state.actionRelay.stageReply(to: thread, body: $0) },
+                            onResolve: { state.actionRelay.resolve(thread) },
+                            onUnresolve: { state.actionRelay.unresolve(thread) },
+                            onEdit: { comment, body in state.actionRelay.edit(thread, comment, body: body) },
+                            onDelete: { state.actionRelay.delete(thread, $0) },
                             canReply: input.canReply && thread.viewerCanReply,
                             canResolve: input.canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
                             canAddToReview: input.canAddToReview,
@@ -239,7 +278,7 @@ struct DiffPaneHunkRow: View {
     }
 
     private var hunkHeader: some View {
-        let actions = input.hunkActions(group.sourceHunk)
+        let actions = state.actionRelay.hunkActions(for: group.sourceHunk)
         return HStack(spacing: 8) {
             Text(group.header)
                 .font(CenterTypography.codeFont(family: input.codeFontFamily, size: input.codeFontSize - 1))

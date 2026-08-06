@@ -564,12 +564,13 @@ struct DiffPaneView: View {
 
     @ViewBuilder
     private var diffBody: some View {
+        let input = synchronizedRowPlanInput()
         if Self.usesAppKitScroller(
             flagEnabled: appKitScrollerEnabled,
             verticalScrollMode: verticalScrollMode
         ) {
             AppKitDiffScroller(
-                plan: DiffPaneRowPlanBuilder.build(input: rowPlanInput, state: presentationState),
+                plan: DiffPaneRowPlanBuilder.build(input: input, state: presentationState),
                 scrollRequest: nil,
                 onActiveOwnerChange: { _ in },
                 onScrollRequestCompletion: { _ in }
@@ -605,6 +606,12 @@ struct DiffPaneView: View {
         }
     }
 
+    private func synchronizedRowPlanInput() -> DiffPaneRowPlanInput {
+        let input = rowPlanInput
+        presentationState.actionRelay.update(from: input)
+        return input
+    }
+
     private var staticRowsEstimatedHeight: CGFloat {
         DiffPaneStaticHeightEstimator.estimatedHeight(
             for: model,
@@ -624,7 +631,7 @@ struct DiffPaneView: View {
         let fusionStates = resolvedHunkFusionStates
         return LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(indexedGroups, id: \.element.id) { index, group in
-                hunk(group, fusion: fusionStates[index])
+                hunk(group, fusion: fusionStates[index], input: synchronizedRowPlanInput())
             }
         }
         .padding(.horizontal, 10)
@@ -637,7 +644,7 @@ struct DiffPaneView: View {
         let fusionStates = resolvedHunkFusionStates
         return LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(indexedGroups, id: \.element.id) { index, group in
-                hunk(group, fusion: fusionStates[index])
+                hunk(group, fusion: fusionStates[index], input: synchronizedRowPlanInput())
             }
         }
         .padding(.horizontal, 10)
@@ -740,11 +747,15 @@ struct DiffPaneView: View {
         .help(tooltip)
     }
 
-    private func hunk(_ group: DiffDisplayGroup, fusion: DiffPaneHunkFusionState) -> some View {
+    private func hunk(
+        _ group: DiffDisplayGroup,
+        fusion: DiffPaneHunkFusionState,
+        input: DiffPaneRowPlanInput
+    ) -> some View {
         DiffPaneHunkRow(
             group: group,
             fusion: fusion,
-            input: rowPlanInput,
+            input: input,
             state: presentationState
         )
     }

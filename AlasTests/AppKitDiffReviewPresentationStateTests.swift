@@ -1,3 +1,4 @@
+import Combine
 import Testing
 @testable import Alas
 
@@ -124,6 +125,41 @@ struct AppKitDiffReviewPresentationStateTests {
 
         rowActions.publishReview()
 
+        #expect(calls == ["second"])
+    }
+
+    @Test func presentationStoreIgnoresComposerTypingAndHoverButForwardsStructuralChanges() {
+        let store = AppKitDiffReviewPresentationStore()
+        let state = store.state(for: fileModel())
+        var changes = 0
+        let cancellable = store.objectWillChange.sink { changes += 1 }
+
+        state.pendingDraftBody = "a"
+        state.hoveredInlineFeedbackID = "feedback"
+        state.hoveredDraftCommentID = "draft"
+        #expect(changes == 0)
+
+        state.pendingDraftAnchor = DiffReviewLineAnchor(
+            path: "Sources/File.swift", side: .new, line: 1, rowIndex: 0, selectedText: "line"
+        )
+        #expect(changes == 1)
+        _ = cancellable
+    }
+
+    @Test func actionRelayUsesLatestHunkCallbackForAnExistingRow() throws {
+        let relay = AppKitDiffReviewActionRelay()
+        let hunk = ParsedDiff.Hunk(header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: [])
+        var calls: [String] = []
+        relay.update(stagedMutationActions: .init(
+            unstageHunk: { _ in calls.append("first") }, isHunkUnstageEnabled: { _ in true }
+        ))
+        relay.update(stagedMutationActions: .init(
+            unstageHunk: { _ in calls.append("second") }, isHunkUnstageEnabled: { _ in true }
+        ))
+
+        let latestActions = relay.hunkActions(for: hunk)
+        let dropFromCommit = try #require(latestActions.dropFromCommit)
+        dropFromCommit()
         #expect(calls == ["second"])
     }
 

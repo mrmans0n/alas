@@ -10,7 +10,7 @@ final class AppKitDiffReviewPresentationStore: ObservableObject {
         if let state = states[file.id] { return state }
         let state = AppKitDiffReviewFileState()
         states[file.id] = state
-        stateCancellables[file.id] = state.objectWillChange.sink { [weak self] _ in
+        stateCancellables[file.id] = state.structuralDidChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
         return state
@@ -24,28 +24,29 @@ final class AppKitDiffReviewPresentationStore: ObservableObject {
 
 @MainActor
 final class AppKitDiffReviewFileState: ObservableObject {
+    let structuralDidChange = PassthroughSubject<Void, Never>()
     let copyFeedback = CopyFeedbackState()
     let renderContextCache = DiffReviewRenderContextCache()
     let actionRelay = AppKitDiffReviewActionRelay()
     let hunkPresentationState = DiffPanePresentationState()
-    @Published var pendingDraftAnchor: DiffReviewLineAnchor?
+    @Published var pendingDraftAnchor: DiffReviewLineAnchor? { didSet { structuralDidChange.send() } }
     @Published var pendingDraftBody = ""
-    @Published var draftComposerFocusRequestGeneration = 0
-    @Published var expandedCollapsedRowIDs: Set<String> = []
-    @Published var contextSnapshot: DiffReviewFileContextSnapshot?
-    @Published var contextExpansion = DiffContextExpansionState()
+    @Published var draftComposerFocusRequestGeneration = 0 { didSet { structuralDidChange.send() } }
+    @Published var expandedCollapsedRowIDs: Set<String> = [] { didSet { structuralDidChange.send() } }
+    @Published var contextSnapshot: DiffReviewFileContextSnapshot? { didSet { structuralDidChange.send() } }
+    @Published var contextExpansion = DiffContextExpansionState() { didSet { structuralDidChange.send() } }
     @Published var contextLoadTask: Task<Void, Never>?
     @Published var contextLoadFileID: DiffReviewFileID?
     @Published var contextLoadSignature: DiffReviewContextStateSignature?
     @Published var contextLoadGeneration = 0
-    @Published var contextLoadError: String?
+    @Published var contextLoadError: String? { didSet { structuralDidChange.send() } }
     @Published var pendingContextExpansions: [PendingContextExpansion] = []
     @Published var imageState = DiffReviewImageState()
     @Published var hoveredInlineFeedbackID: String?
     @Published var hoveredDraftCommentID: String?
-    @Published var activeThreadID: String?
-    @Published var showFullDiffOverride = false
-    @Published var isDraftComposerFocused = false
+    @Published var activeThreadID: String? { didSet { structuralDidChange.send() } }
+    @Published var showFullDiffOverride = false { didSet { structuralDidChange.send() } }
+    @Published var isDraftComposerFocused = false { didSet { structuralDidChange.send() } }
 
     private var fileID: DiffReviewFileID?
     private var contextSignature: DiffReviewContextStateSignature?
@@ -132,6 +133,8 @@ final class AppKitDiffReviewActionRelay {
     private var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
     private var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
     private var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    private var stagedMutationActions: DiffReviewStagedMutationActions?
+    private var openFile: (() -> Void)?
 
     func update(
         inlineFeedbackActions: DiffReviewInlineFeedbackActions,
@@ -171,6 +174,15 @@ final class AppKitDiffReviewActionRelay {
 
     func update(draftCommentActions: ReviewDraftCommentActions) {
         self.draftCommentActions = draftCommentActions
+    }
+
+    func update(stagedMutationActions: DiffReviewStagedMutationActions?, openFile: (() -> Void)? = nil) {
+        self.stagedMutationActions = stagedMutationActions
+        self.openFile = openFile
+    }
+
+    func update(onContextExpansionActivated: @escaping () -> Void) {
+        self.onContextExpansionActivated = onContextExpansionActivated
     }
 
     var inlineFeedbackActionsForRow: DiffReviewInlineFeedbackActions {
@@ -226,4 +238,10 @@ final class AppKitDiffReviewActionRelay {
     func unresolve(_ thread: DiffInlineCommentThread) { onUnresolve(thread) }
     func edit(_ comment: DiffInlineComment, in thread: DiffInlineCommentThread, body: String) { onEdit(thread, comment, body) }
     func delete(_ comment: DiffInlineComment, in thread: DiffInlineCommentThread) { onDelete(thread, comment) }
+    func openCurrentFile() { openFile?() }
+    func unstageFile() { stagedMutationActions?.unstageFile?() }
+    func hunkActions(for hunk: ParsedDiff.Hunk) -> DiffPaneHunkActions {
+        let enabled = stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
+        return .init(dropFromCommit: enabled ? { self.stagedMutationActions?.unstageHunk?(hunk) } : nil)
+    }
 }
