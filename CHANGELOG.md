@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-08-06
+
+### ✨ Features
+
+- Add sticky commit review revisions (#971).
+- Show worktree deletion progress (#977).
+
+### 🐛 Fixes
+
+- Keep short commit details non-scrollable (#973).
+- Stage changes optimistically (#974).
+- Avoid blocking app startup on Mission loading (#975).
+- Smooth ACP transcript fling rebound (#976).
+- Hide the Stacked Diffs Mode menu when `gg` is globally disabled (#978).
+
+### ⚡ Performance
+
+- Smooth long commit list scrolling (#972).
+
 ## [0.14.2] - 2026-08-06
 
 ### ✨ Features
