@@ -78,7 +78,7 @@ enum GitEventFilter {
         if rel == "packed-refs" {
             return .revisionChange
         }
-        if rel == "config" {
+        if rel == "config" || rel == "config.worktree" {
             return .revisionChange
         }
         if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {

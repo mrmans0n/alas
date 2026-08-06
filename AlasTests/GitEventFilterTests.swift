@@ -100,6 +100,11 @@ struct GitEventFilterTests {
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
         ) == .revisionChange)
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/config.worktree",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .revisionChange)
     }
 
     @Test func reflogUpdatesAreRevisionChanges() {
