@@ -22,6 +22,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
     let copyFeedback = CopyFeedbackState()
     let renderContextCache = DiffReviewRenderContextCache()
     let actionRelay = AppKitDiffReviewActionRelay()
+    let hunkPresentationState = DiffPanePresentationState()
     @Published var pendingDraftAnchor: DiffReviewLineAnchor?
     @Published var pendingDraftBody = ""
     @Published var draftComposerFocusRequestGeneration = 0
@@ -194,6 +195,17 @@ final class AppKitDiffReviewActionRelay {
             agentTargets: { self.draftCommentActions.agentTargets() },
             sendToAgent: { bundle, target in self.draftCommentActions.sendToAgent(bundle, target) }
         )
+    }
+
+    func inlineFeedbackAvailability(
+        for item: DiffReviewInlineFeedback,
+        file: DiffReviewFileSummary
+    ) -> DiffReviewInlineFeedbackActionAvailability {
+        inlineFeedbackActions.availability(item, file)
+    }
+
+    func draftCommentAvailability(for comment: ReviewDraftComment) -> ReviewDraftCommentActionAvailability {
+        draftCommentActions.availability(comment)
     }
 
     func selectInlineFeedback(_ item: DiffReviewInlineFeedback) {

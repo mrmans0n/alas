@@ -617,37 +617,20 @@ struct DiffReviewFileSection: View {
 
     private var renderContext: DiffReviewRenderContext? {
         guard let displayModel = file.displayModel else { return nil }
-        let key = DiffReviewRenderContextKey(
-            fileID: file.id,
-            displayModel: displayModel,
-            contextSnapshot: contextSnapshot,
-            contextProviderAvailable: file.contextProvider != nil,
-            contextExpansion: contextExpansion,
-            inlineFeedback: inlineFeedback,
-            draftComments: draftComments,
-            pendingDraftAnchor: pendingDraftAnchor,
-            canCreateDraftComment: allowsDraftCommentCreation,
-            threads: threads,
-            annotations: annotations
+        #if DEBUG
+        let misses = renderContextCache.missCountForTests
+        #endif
+        let context = renderContextCache.reviewContext(
+            fileID: file.id, displayModel: displayModel, contextSnapshot: contextSnapshot,
+            contextProviderAvailable: file.contextProvider != nil, contextExpansion: contextExpansion,
+            inlineFeedback: inlineFeedback, draftComments: draftComments,
+            pendingDraftAnchor: pendingDraftAnchor, canCreateDraftComment: allowsDraftCommentCreation,
+            threads: threads, annotations: annotations
         )
-        return renderContextCache.context(key: key) {
-            #if DEBUG
-            onRenderContextCacheMissForTesting?()
-            #endif
-            return DiffReviewRenderContextBuilder.build(
-                fileID: file.id,
-                displayModel: displayModel,
-                contextSnapshot: contextSnapshot,
-                contextProviderAvailable: file.contextProvider != nil,
-                contextExpansion: contextExpansion,
-                inlineFeedback: inlineFeedback,
-                draftComments: draftComments,
-                pendingDraftAnchor: pendingDraftAnchor,
-                canCreateDraftComment: allowsDraftCommentCreation,
-                threads: threads,
-                annotations: annotations
-            )
-        }
+        #if DEBUG
+        if renderContextCache.missCountForTests != misses { onRenderContextCacheMissForTesting?() }
+        #endif
+        return context
     }
 
     private var currentDisplayGroups: [DiffDisplayGroup]? {
