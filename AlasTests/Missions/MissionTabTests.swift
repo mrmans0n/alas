@@ -868,7 +868,7 @@ struct MissionTabTests {
         unavailableHost.view.layoutSubtreeIfNeeded()
 
         #expect(renderedText(in: unavailableHost.view).contains("Mission unavailable"))
-        #expect(!renderedText(in: unavailableHost.view).contains("could not be loaded"))
+        #expect(renderedText(in: unavailableHost.view).contains("The Mission record could not be loaded."))
 
         let failedState = AppState(
             store: MissionNavigationStore(
