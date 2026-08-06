@@ -163,6 +163,10 @@ final class AppKitDiffReviewActionRelay {
         self.inlineFeedbackActions = inlineFeedbackActions
     }
 
+    func update(draftCommentActions: ReviewDraftCommentActions) {
+        self.draftCommentActions = draftCommentActions
+    }
+
     var inlineFeedbackActionsForRow: DiffReviewInlineFeedbackActions {
         DiffReviewInlineFeedbackActions(
             availability: { item, file in self.inlineFeedbackActions.availability(item, file) },

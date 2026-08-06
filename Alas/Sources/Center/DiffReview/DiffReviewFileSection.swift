@@ -351,22 +351,24 @@ struct DiffReviewFileSection: View {
     }
 
     private var feedbackDraftCommentActions: ReviewDraftCommentActions {
+        refreshActionRelay()
+        let relayActions = state.actionRelay.draftCommentActionsForRow
         return ReviewDraftCommentActions(
-            availability: draftCommentActions.availability,
-            canPublishReview: draftCommentActions.canPublishReview,
-            edit: draftCommentActions.edit,
-            delete: draftCommentActions.delete,
-            resolve: draftCommentActions.resolve,
-            dismiss: draftCommentActions.dismiss,
+            availability: relayActions.availability,
+            canPublishReview: relayActions.canPublishReview,
+            edit: relayActions.edit,
+            delete: relayActions.delete,
+            resolve: relayActions.resolve,
+            dismiss: relayActions.dismiss,
             copyPrompt: { bundle in
-                draftCommentActions.copyPrompt(bundle)
+                relayActions.copyPrompt(bundle)
                 copyFeedback.show("Copied prompt")
             },
-            publishProvider: draftCommentActions.publishProvider,
-            publishReview: draftCommentActions.publishReview,
-            agent: draftCommentActions.agent,
-            agentTargets: draftCommentActions.agentTargets,
-            sendToAgent: draftCommentActions.sendToAgent
+            publishProvider: relayActions.publishProvider,
+            publishReview: relayActions.publishReview,
+            agent: relayActions.agent,
+            agentTargets: relayActions.agentTargets,
+            sendToAgent: relayActions.sendToAgent
         )
     }
 

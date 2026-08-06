@@ -110,6 +110,23 @@ struct AppKitDiffReviewPresentationStateTests {
         #expect(calls == ["second"])
     }
 
+    @Test func actionRelayForwardsLatestDraftActionStructForAnExistingRow() {
+        let relay = AppKitDiffReviewActionRelay()
+        let rowActions = relay.draftCommentActionsForRow
+        var calls: [String] = []
+
+        relay.update(draftCommentActions: ReviewDraftCommentActions(
+            publishReview: { calls.append("first") }
+        ))
+        relay.update(draftCommentActions: ReviewDraftCommentActions(
+            publishReview: { calls.append("second") }
+        ))
+
+        rowActions.publishReview()
+
+        #expect(calls == ["second"])
+    }
+
     private func inlineFeedbackItem() -> DiffReviewInlineFeedback {
         DiffReviewInlineFeedback(
             id: "feedback",
