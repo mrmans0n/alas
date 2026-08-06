@@ -13,7 +13,7 @@ struct ChangesTabView: View {
     }
 
     private var nonConflictChanges: [ChangedFile] {
-        rps.changes.filter { $0.conflict == nil }
+        rps.displayChanges.filter { $0.conflict == nil }
     }
 
     private var preparationModel: ChangesPreparationModel {

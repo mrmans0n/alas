@@ -312,4 +312,14 @@ struct RightPaneStateBaseBranchTests {
         #expect(state.sidebarError != nil)
         #expect(state.displayChanges.isEmpty)
     }
+
+    @Test func refreshReportsFailureWhenSnapshotDoesNotPublish() async {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-worktree-\(UUID().uuidString)")
+        let state = RightPaneState(worktree: makeWorktree(at: tmp, branch: "main"), baseBranch: "main")
+
+        let refreshed = await state.refresh()
+
+        #expect(!refreshed)
+    }
 }

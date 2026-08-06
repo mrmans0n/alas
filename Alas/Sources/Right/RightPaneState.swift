@@ -35,6 +35,15 @@ private struct SyncFetchTarget: Hashable {
     let branch: String
 }
 
+private struct PendingStageMutation: Identifiable {
+    let id = UUID()
+    let paths: Set<String>
+    let gitPaths: [String]
+    let target: ChangeStage
+    var hasAppliedGitMutation = false
+    var minimumRefreshGeneration = 0
+}
+
 @Observable
 @MainActor
 final class RightPaneState: GGSplitCommitServicing {
@@ -55,8 +64,13 @@ final class RightPaneState: GGSplitCommitServicing {
     private(set) var stashOperationInFlight: Bool = false
     private(set) var hasLoadedSnapshot: Bool = false
     var displayChanges: [ChangedFile] {
-        hasLoadedSnapshot ? changes : []
+        guard hasLoadedSnapshot else { return [] }
+        return Self.applyingStageMutations(
+            pendingStageMutations.map { (paths: $0.paths, target: $0.target) },
+            to: changes
+        )
     }
+    private var pendingStageMutations: [PendingStageMutation] = []
     /// Increments whenever `refresh()` publishes a new change list. This
     /// catches same-line unstaged edits whose add/delete totals stay constant.
     /// It is now guarded by an effective-change fingerprint so no-op
@@ -342,13 +356,19 @@ final class RightPaneState: GGSplitCommitServicing {
     private var refreshInFlight = false
 
     @ObservationIgnored
+    private var refreshGeneration = 0
+
+    @ObservationIgnored
     private var refreshRerunRequested = false
 
     @ObservationIgnored
     private var refreshRerunRequiresReviewLoopRemote = false
 
     @ObservationIgnored
-    private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+    private var refreshWaiters: [CheckedContinuation<Bool, Never>] = []
+
+    @ObservationIgnored
+    private var stageMutationWorker: Task<Void, Never>? = nil
 
     @ObservationIgnored
     private var lastReviewLoopRemoteRefreshAt: Date?
@@ -694,39 +714,40 @@ final class RightPaneState: GGSplitCommitServicing {
         baseCommits?.count ?? displayCommits.count
     }
 
+    @discardableResult
     @MainActor
-    func refresh(forceReviewLoopRemote: Bool = false) async {
+    func refresh(forceReviewLoopRemote: Bool = false) async -> Bool {
         if refreshInFlight {
             refreshRerunRequested = true
             refreshRerunRequiresReviewLoopRemote = refreshRerunRequiresReviewLoopRemote || forceReviewLoopRemote
-            await withCheckedContinuation { continuation in
+            return await withCheckedContinuation { continuation in
                 refreshWaiters.append(continuation)
             }
-            return
         }
 
         refreshInFlight = true
-        defer {
-            refreshInFlight = false
-            let waiters = refreshWaiters
-            refreshWaiters = []
-            for waiter in waiters {
-                waiter.resume()
-            }
-        }
-
         var forceRemoteRefresh = forceReviewLoopRemote
+        var refreshed = false
         repeat {
             forceRemoteRefresh = forceRemoteRefresh || refreshRerunRequiresReviewLoopRemote
             refreshRerunRequested = false
             refreshRerunRequiresReviewLoopRemote = false
-            await performRefresh(forceReviewLoopRemote: forceRemoteRefresh)
+            refreshed = await performRefresh(forceReviewLoopRemote: forceRemoteRefresh)
             forceRemoteRefresh = false
         } while refreshRerunRequested
+        refreshInFlight = false
+        let waiters = refreshWaiters
+        refreshWaiters = []
+        for waiter in waiters {
+            waiter.resume(returning: refreshed)
+        }
+        return refreshed
     }
 
     @MainActor
-    private func performRefresh(forceReviewLoopRemote: Bool) async {
+    private func performRefresh(forceReviewLoopRemote: Bool) async -> Bool {
+        refreshGeneration += 1
+        let currentRefreshGeneration = refreshGeneration
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
         let snapshotGeneration = snapshotInvalidationGeneration
         loading = true
@@ -806,7 +827,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 workingTreeContentFingerprint: workingTreeContentFingerprint
             )
             guard snapshotGeneration == snapshotInvalidationGeneration else {
-                return
+                return false
             }
             // Watcher-driven refreshes fire continuously while agents or
             // builds write into the worktree. @Observable invalidates every
@@ -816,6 +837,9 @@ final class RightPaneState: GGSplitCommitServicing {
             // diff live-lock: docs/plans/2026-07-09-draft-commit-diff-livelock-fix.md).
             if self.upstreamRef != resolvedUpstream?.ref { self.upstreamRef = resolvedUpstream?.ref }
             if self.changes != entries { self.changes = entries }
+            pendingStageMutations.removeAll {
+                $0.hasAppliedGitMutation && $0.minimumRefreshGeneration <= currentRefreshGeneration
+            }
             self.reconcileStashCaches(with: stashes)
             if self.stashes != stashes { self.stashes = stashes }
             if self.lastChangesFingerprint != newChangesFingerprint {
@@ -893,10 +917,11 @@ final class RightPaneState: GGSplitCommitServicing {
             if previousReviewRequestFingerprint != currentReviewRequestFingerprint {
                 changesGeneration += 1
             }
+            return true
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
             guard snapshotGeneration == snapshotInvalidationGeneration else {
-                return
+                return false
             }
             sidebarError = error.localizedDescription
             hasLoadedSnapshot = true
@@ -906,6 +931,7 @@ final class RightPaneState: GGSplitCommitServicing {
             // `self.changes` at its last successful value, which presented as
             // an empty Changes pane when the very first refresh failed.
             logger.error("refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -1850,6 +1876,28 @@ final class RightPaneState: GGSplitCommitServicing {
         return "\(base)\u{0000}\(workingTreeContentFingerprint)"
     }
 
+    nonisolated static func applyingStageMutations(
+        _ mutations: [(paths: Set<String>, target: ChangeStage)],
+        to changes: [ChangedFile]
+    ) -> [ChangedFile] {
+        mutations.reduce(changes) { projected, mutation in
+            projected.map { file in
+                guard mutation.paths.contains(file.path), file.stage != mutation.target else {
+                    return file
+                }
+                return ChangedFile(
+                    path: file.path,
+                    status: file.status,
+                    stage: mutation.target,
+                    add: file.add,
+                    del: file.del,
+                    renameFrom: file.renameFrom,
+                    conflict: file.conflict
+                )
+            }
+        }
+    }
+
     func invalidateFileTreeChildLoadsForRefresh() {
         fileTreeGeneration += 1
         loadedFileTreeChildPaths = [""]
@@ -1859,21 +1907,10 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func toggleStage(_ file: ChangedFile) {
-        sidebarError = nil
-        Task { @MainActor in
-            do {
-                if file.stage == .staged {
-                    // For a staged rename, include the original path so both
-                    // sides of the rename are restored to the working tree;
-                    // otherwise the deletion of the old path remains staged.
-                    try await git.unstage(worktreePath: worktree.path, files: Self.unstagePaths(for: file))
-                } else {
-                    try await git.stage(worktreePath: worktree.path, files: [file.path])
-                }
-            } catch {
-                self.sidebarError = (error as NSError).localizedDescription
-            }
-            await self.refresh()
+        if file.stage == .staged {
+            unstageAll([file])
+        } else {
+            stageAll([file])
         }
     }
 
@@ -2214,23 +2251,55 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func stageAll(_ files: [ChangedFile]) {
-        let paths = files.map(\.path)
-        sidebarError = nil
-        Task { @MainActor in
-            do { try await git.stageAll(worktreePath: worktree.path, files: paths) }
-            catch { self.sidebarError = (error as NSError).localizedDescription }
-            await self.refresh()
-        }
+        enqueueStageMutation(files: files, target: .staged, gitPaths: files.map(\.path))
     }
 
     func unstageAll(_ files: [ChangedFile]) {
-        let paths = files.flatMap(Self.unstagePaths(for:))
+        enqueueStageMutation(
+            files: files,
+            target: .unstaged,
+            gitPaths: files.flatMap(Self.unstagePaths(for:))
+        )
+    }
+
+    private func enqueueStageMutation(
+        files: [ChangedFile],
+        target: ChangeStage,
+        gitPaths: [String]
+    ) {
+        guard !files.isEmpty else { return }
         sidebarError = nil
-        Task { @MainActor in
-            do { try await git.unstageAll(worktreePath: worktree.path, files: paths) }
-            catch { self.sidebarError = (error as NSError).localizedDescription }
-            await self.refresh()
+        pendingStageMutations.append(PendingStageMutation(
+            paths: Set(files.map(\.path)),
+            gitPaths: gitPaths,
+            target: target
+        ))
+        guard stageMutationWorker == nil else { return }
+        stageMutationWorker = Task { @MainActor [weak self] in
+            await self?.runStageMutationQueue()
         }
+    }
+
+    private func runStageMutationQueue() async {
+        while let mutation = pendingStageMutations.first(where: { !$0.hasAppliedGitMutation }) {
+            do {
+                if mutation.target == .staged {
+                    try await git.stageAll(worktreePath: worktree.path, files: mutation.gitPaths)
+                } else {
+                    try await git.unstageAll(worktreePath: worktree.path, files: mutation.gitPaths)
+                }
+                if let index = pendingStageMutations.firstIndex(where: { $0.id == mutation.id }) {
+                    pendingStageMutations[index].hasAppliedGitMutation = true
+                    pendingStageMutations[index].minimumRefreshGeneration = refreshGeneration + 1
+                }
+                await refresh()
+            } catch {
+                pendingStageMutations.removeAll { $0.id == mutation.id }
+                sidebarError = (error as NSError).localizedDescription
+                await refresh()
+            }
+        }
+        stageMutationWorker = nil
     }
 
     func requestDiscardFile(path: String) {
