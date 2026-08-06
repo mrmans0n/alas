@@ -569,12 +569,16 @@ struct DiffPaneView: View {
             flagEnabled: appKitScrollerEnabled,
             verticalScrollMode: verticalScrollMode
         ) {
+            let fusionStates = resolvedHunkFusionStates
             AppKitDiffScroller(
                 plan: DiffPaneRowPlanBuilder.build(input: input, state: presentationState),
                 scrollRequest: nil,
                 onActiveOwnerChange: { _ in },
                 onScrollRequestCompletion: { _ in }
             )
+            .padding(.horizontal, 10)
+            .padding(.top, outerTopPadding(for: fusionStates))
+            .padding(.bottom, outerBottomPadding(for: fusionStates))
         } else if verticalScrollMode == .internalScroll {
             GeometryReader { proxy in
                 ScrollView(.vertical) {

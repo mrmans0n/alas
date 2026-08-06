@@ -438,6 +438,7 @@ struct DiffReviewSurface: View {
                 codeFontSize: codeFontSize,
                 showsSourceBadge: showsSourceBadges,
                 focusedFeedbackID: focusedFeedbackID,
+                inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
                 focusedDraftCommentID: focusedDraftCommentID,
                 allowsDraftCommentCreation: allowsDraftCommentCreation,
                 actionPresence: .init(

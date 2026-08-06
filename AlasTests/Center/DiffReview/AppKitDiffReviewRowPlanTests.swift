@@ -220,6 +220,23 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(row.contextRowCount != nil)
     }
 
+    @Test func commandedInlineFeedbackIsIncludedBeyondVisibleCap() {
+        let file = textFile()
+        let items = (1...4).map { feedback(id: "feedback-\($0)", line: nil) }
+        let target = items[3]
+        let input = AppKitDiffReviewRowInput(
+            file: file,
+            inlineFeedback: items,
+            state: AppKitDiffReviewFileState(),
+            theme: theme,
+            inlineFeedbackScrollTargetID: target.id
+        )
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.map(\.id)
+
+        #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
+    }
+
     @Test func contextFailureRowDisappearsAfterSuccessfulRetry() async throws {
         let attempts = ContextAttempts()
         let provider = DiffReviewContextProvider {
@@ -496,9 +513,13 @@ struct AppKitDiffReviewRowPlanTests {
         )
     }
 
-    private func feedback(path: String = "Sources/Example.swift", line: Int?) -> DiffReviewInlineFeedback {
+    private func feedback(
+        id: String = "feedback",
+        path: String = "Sources/Example.swift",
+        line: Int?
+    ) -> DiffReviewInlineFeedback {
         .init(
-            id: "feedback", providerName: "Provider", author: nil, bodyPreview: "Needs work",
+            id: id, providerName: "Provider", author: nil, bodyPreview: "Needs work",
             status: .actionable, providerURL: nil,
             anchor: .init(path: path, line: line, side: line == nil ? .unknown : .new),
             evidenceItemID: "evidence"

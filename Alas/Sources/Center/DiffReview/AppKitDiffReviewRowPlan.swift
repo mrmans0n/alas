@@ -80,6 +80,7 @@ struct AppKitDiffReviewRowInput {
     var automaticallyRendersDiff = true
     var showsBottomSpacing = true
     var focusedFeedbackID: String?
+    var inlineFeedbackScrollTargetID: String?
     var focusedDraftCommentID: String?
     var allowsDraftCommentCreation = true
     var actionPresence = AppKitDiffReviewActionPresence()
@@ -103,6 +104,7 @@ struct AppKitDiffReviewRowInput {
         automaticallyRendersDiff: Bool = true,
         showsBottomSpacing: Bool = true,
         focusedFeedbackID: String? = nil,
+        inlineFeedbackScrollTargetID: String? = nil,
         focusedDraftCommentID: String? = nil,
         allowsDraftCommentCreation: Bool = true,
         actionPresence: AppKitDiffReviewActionPresence = .init(),
@@ -127,6 +129,7 @@ struct AppKitDiffReviewRowInput {
         self.automaticallyRendersDiff = automaticallyRendersDiff
         self.showsBottomSpacing = showsBottomSpacing
         self.focusedFeedbackID = focusedFeedbackID
+        self.inlineFeedbackScrollTargetID = inlineFeedbackScrollTargetID
         self.focusedDraftCommentID = focusedDraftCommentID
         self.allowsDraftCommentCreation = allowsDraftCommentCreation
         self.actionPresence = actionPresence
@@ -549,7 +552,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         fallbacks: inout [String: String]
     ) {
         let display = DiffReviewInlineFeedbackDisplayPolicy.display(
-            for: items, includingRequiredIDs: Set([input.focusedFeedbackID].compactMap(\.self))
+            for: items,
+            includingRequiredIDs: Set([input.focusedFeedbackID, input.inlineFeedbackScrollTargetID].compactMap(\.self))
         )
         for item in display.visibleItems {
             appendFeedback(item, contextRows: contextRows, input: input, rows: &rows, fallbacks: &fallbacks)
