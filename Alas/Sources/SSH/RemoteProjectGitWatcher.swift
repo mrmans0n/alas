@@ -429,7 +429,7 @@ final class RemoteProjectGitWatcher {
             options: [.skipsHiddenFiles]
         )
         else { return "" }
-        return entries.compactMap { url -> String? in
+        var output = entries.compactMap { url -> String? in
             let name = url.lastPathComponent
             guard !nonRevisionTopLevelRefNames.contains(name),
                   (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
@@ -441,6 +441,11 @@ final class RemoteProjectGitWatcher {
             guard isTopLevelRevisionContent(contents) else { return nil }
             return "\(name) \(contents.trimmingCharacters(in: .whitespacesAndNewlines))"
         }
+        let graftsURL = gitDir.appendingPathComponent("info").appendingPathComponent("grafts")
+        if let grafts = try? String(contentsOf: graftsURL, encoding: .utf8) {
+            output.append("info/grafts \(shallowSignature(from: grafts))")
+        }
+        return output
         .sorted()
         .joined(separator: "\n")
     }
@@ -479,14 +484,34 @@ final class RemoteProjectGitWatcher {
         return """
         git_dir=$(git rev-parse --absolute-git-dir) || exit $?
         [ -d "$git_dir" ] || exit 0
-        find "$git_dir" -maxdepth 1 -type f -print | while IFS= read -r path; do
-          name=${path##*/}
-          case "$name" in
-            \(ignored)) continue ;;
-          esac
-          IFS= read -r line < "$path" || line=
-          if [ "$name" = shallow ]; then
-            out=$(cat "$path" 2>/dev/null || true)
+        {
+          find "$git_dir" -maxdepth 1 -type f -print | while IFS= read -r path; do
+            name=${path##*/}
+            case "$name" in
+              \(ignored)) continue ;;
+            esac
+            IFS= read -r line < "$path" || line=
+            if [ "$name" = shallow ]; then
+              out=$(cat "$path" 2>/dev/null || true)
+              if command -v shasum >/dev/null 2>&1; then
+                digest=$(printf '%s\\n' "$out" | shasum -a 256 | awk '{print $1}')
+              elif command -v sha256sum >/dev/null 2>&1; then
+                digest=$(printf '%s\\n' "$out" | sha256sum | awk '{print $1}')
+              else
+                digest=$(printf '%s\\n' "$out" | cksum | awk '{print $1 ":" $2}')
+              fi
+              count=$(printf '%s\\n' "$out" | sed '/^$/d' | wc -l | awk '{print $1}')
+              printf 'shallow entries=%s;sha=%s\\n' "$count" "$digest"
+              continue
+            fi
+            case "$line" in
+              "ref: refs/"*) printf '%s %s\\n' "$name" "$line" ;;
+              *) printf '%s' "$line" | grep -Eq '^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$' && printf '%s %s\\n' "$name" "$line" ;;
+            esac
+          done
+          grafts="$git_dir/info/grafts"
+          if [ -f "$grafts" ]; then
+            out=$(cat "$grafts" 2>/dev/null || true)
             if command -v shasum >/dev/null 2>&1; then
               digest=$(printf '%s\\n' "$out" | shasum -a 256 | awk '{print $1}')
             elif command -v sha256sum >/dev/null 2>&1; then
@@ -495,14 +520,9 @@ final class RemoteProjectGitWatcher {
               digest=$(printf '%s\\n' "$out" | cksum | awk '{print $1 ":" $2}')
             fi
             count=$(printf '%s\\n' "$out" | sed '/^$/d' | wc -l | awk '{print $1}')
-            printf 'shallow entries=%s;sha=%s\\n' "$count" "$digest"
-            continue
+            printf 'info/grafts entries=%s;sha=%s\\n' "$count" "$digest"
           fi
-          case "$line" in
-            "ref: refs/"*) printf '%s %s\\n' "$name" "$line" ;;
-            *) printf '%s' "$line" | grep -Eq '^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$' && printf '%s %s\\n' "$name" "$line" ;;
-          esac
-        done | sort
+        } | sort
         """
     }
 

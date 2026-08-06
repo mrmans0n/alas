@@ -115,6 +115,14 @@ struct GitEventFilterTests {
         ) == .revisionChange)
     }
 
+    @Test func graftAncestryUpdateIsRevisionChange() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/info/grafts",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .revisionChange)
+    }
+
     @Test func reflogUpdatesAreRevisionChanges() {
         let cases = [
             "/repo/.git/logs/HEAD",

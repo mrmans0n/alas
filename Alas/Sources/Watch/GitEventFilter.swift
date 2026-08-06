@@ -87,6 +87,9 @@ enum GitEventFilter {
         if rel == "shallow" {
             return .revisionChange
         }
+        if rel == "info/grafts" {
+            return .revisionChange
+        }
         if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {
             return .revisionChange
         }

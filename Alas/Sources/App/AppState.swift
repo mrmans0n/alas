@@ -3211,6 +3211,8 @@ final class AppState {
     }
 
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
+        let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
+        let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
         Task { @MainActor in
             let resolvedPrefill: String?
             if let prefill {
@@ -3218,6 +3220,11 @@ final class AppState {
             } else {
                 resolvedPrefill = await suggestedFollowRevisionPrefill(worktreeID: worktreeID, tabID: tabID)
             }
+            guard isCurrentFollowRevisionRequest(
+                worktreeID: worktreeID,
+                requestKey: requestKey,
+                requestGeneration: requestGeneration
+            ) else { return }
             presentFollowRevisionPrompt(worktreeID: worktreeID, tabID: tabID, prefill: resolvedPrefill, isEditing: prefill != nil)
         }
     }
