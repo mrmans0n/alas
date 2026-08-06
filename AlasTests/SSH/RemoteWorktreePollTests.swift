@@ -198,19 +198,28 @@ struct RemoteWorktreePollTests {
         let config = """
         branch.feature.merge refs/heads/main
         branch.feature.remote origin
+        remote.origin.fetch +refs/heads/main:refs/remotes/origin/main
         """
         let reordered = """
+        remote.origin.fetch +refs/heads/main:refs/remotes/origin/main
         branch.feature.remote origin
         branch.feature.merge refs/heads/main
         """
         let changed = """
         branch.feature.merge refs/heads/next
         branch.feature.remote origin
+        remote.origin.fetch +refs/heads/main:refs/remotes/origin/main
+        """
+        let fetchChanged = """
+        branch.feature.merge refs/heads/main
+        branch.feature.remote origin
+        remote.origin.fetch +refs/heads/main:refs/remotes/fork/main
         """
         let pushChanged = """
         branch.feature.merge refs/heads/main
         branch.feature.pushremote fork
         branch.feature.remote origin
+        remote.origin.fetch +refs/heads/main:refs/remotes/origin/main
         push.default current
         remote.fork.push refs/heads/feature:refs/heads/feature
         remote.pushdefault origin
@@ -236,21 +245,29 @@ struct RemoteWorktreePollTests {
             revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": pushChanged]),
             pseudoRefCommits: [:]
         )
+        let fetched = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": fetchChanged]),
+            pseudoRefCommits: [:]
+        )
 
         #expect(first == same)
         #expect(first != second)
         #expect(first != pushed)
+        #expect(first != fetched)
         #expect(first.contains("config:/srv/repo:branch.feature.merge refs/heads/main"))
+        #expect(first.contains("remote.origin.fetch +refs/heads/main:refs/remotes/origin/main"))
         #expect(pushed.contains("branch.feature.pushremote fork"))
         #expect(pushed.contains("remote.fork.push refs/heads/feature:refs/heads/feature"))
         #expect(pushed.contains("remote.pushdefault origin"))
         #expect(pushed.contains("push.default current"))
     }
 
-    @Test func revisionConfigPatternMatchesGitCanonicalPushKeys() throws {
+    @Test func revisionConfigPatternMatchesGitCanonicalRevisionKeys() throws {
         let regex = try Regex(RemoteProjectGitWatcher.revisionConfigPattern)
         #expect("branch.feature.pushremote".wholeMatch(of: regex) != nil)
         #expect("remote.pushdefault".wholeMatch(of: regex) != nil)
+        #expect("remote.origin.fetch".wholeMatch(of: regex) != nil)
         #expect("remote.fork.push".wholeMatch(of: regex) != nil)
         #expect("branch.feature.pushRemote".wholeMatch(of: regex) == nil)
         #expect("remote.pushDefault".wholeMatch(of: regex) == nil)

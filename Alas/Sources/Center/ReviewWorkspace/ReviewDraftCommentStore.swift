@@ -19,6 +19,15 @@ struct ReviewDraftCommentStore {
         return snapshot.commentsBySessionID.values.flatMap { $0 }.sorted(by: sortComments)
     }
 
+    func snapshot() throws -> ReviewDraftCommentStoreSnapshot {
+        let snapshot = try readSnapshot()
+        return ReviewDraftCommentStoreSnapshot(commentsBySessionID: snapshot.commentsBySessionID)
+    }
+
+    func restore(_ saved: ReviewDraftCommentStoreSnapshot) throws {
+        try store.write(Snapshot(commentsBySessionID: saved.commentsBySessionID), to: url)
+    }
+
     func find(commentID: String) throws -> ReviewDraftComment? {
         let snapshot = try readSnapshot()
         for comments in snapshot.commentsBySessionID.values {
@@ -108,4 +117,8 @@ struct ReviewDraftCommentStore {
     private struct Snapshot: Codable, Equatable {
         var commentsBySessionID: [String: [ReviewDraftComment]]
     }
+}
+
+struct ReviewDraftCommentStoreSnapshot: Equatable {
+    fileprivate var commentsBySessionID: [String: [ReviewDraftComment]]
 }

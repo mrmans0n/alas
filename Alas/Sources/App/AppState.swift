@@ -3410,8 +3410,15 @@ final class AppState {
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
             let merged = mergedReviewSession(existing: existing, source: record)
             do {
-                try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
-                try store.replace(id: record.id, with: merged)
+                let draftStore = ReviewDraftCommentStore()
+                let draftSnapshot = try draftStore.snapshot()
+                try draftStore.migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                do {
+                    try store.replace(id: record.id, with: merged)
+                } catch {
+                    try? draftStore.restore(draftSnapshot)
+                    throw error
+                }
                 invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
                 tabs.close(worktreeId: worktreeID, tabId: tabID)
             } catch {
@@ -3439,8 +3446,15 @@ final class AppState {
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
             let merged = mergedReviewSession(existing: existing, source: record)
             do {
-                try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
-                try store.replace(id: record.id, with: merged)
+                let draftStore = ReviewDraftCommentStore()
+                let draftSnapshot = try draftStore.snapshot()
+                try draftStore.migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                do {
+                    try store.replace(id: record.id, with: merged)
+                } catch {
+                    try? draftStore.restore(draftSnapshot)
+                    throw error
+                }
                 invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
                 tabs.close(worktreeId: worktreeID, tabId: tabID)
             } catch {

@@ -411,7 +411,7 @@ final class RemoteProjectGitWatcher {
     }
 
     nonisolated static let revisionConfigPattern =
-        #"^(branch\..*\.(remote|merge|pushremote)|remote\.pushdefault|push\.default|remote\..*\.push)$"#
+        #"^(branch\..*\.(remote|merge|pushremote)|remote\.pushdefault|push\.default|remote\..*\.(fetch|push))$"#
 
     nonisolated static func customTopLevelRefsOutput(at worktreePath: URL) async -> String {
         guard let gitDirResult = try? await Process.git(

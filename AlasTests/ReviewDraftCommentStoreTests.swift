@@ -193,6 +193,46 @@ return value + other
         #expect(rekeyed.startLine == 4)
     }
 
+    @Test func snapshotRestorePreservesDraftsAfterMigration() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("review-draft-comments.json")
+        let store = ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        let oldID = ReviewDraftSessionID.commit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "aaa"
+        )
+        let newID = ReviewDraftSessionID.trackedCommit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            expression: "HEAD~3"
+        )
+        let source = makeComment(
+            id: "draft-1",
+            session: oldID,
+            startLine: 4,
+            endLine: nil,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let destination = makeComment(
+            id: "draft-2",
+            session: newID,
+            startLine: 8,
+            endLine: nil,
+            createdAt: Date(timeIntervalSince1970: 11)
+        )
+
+        try store.save(source)
+        try store.save(destination)
+        let snapshot = try store.snapshot()
+        try store.migrate(from: oldID, to: newID)
+        try store.restore(snapshot)
+
+        #expect(try store.load(sessionID: oldID) == [source])
+        #expect(try store.load(sessionID: newID) == [destination])
+    }
+
     @Test @MainActor func controllerMarksDraftPublishedAndRecordsProviderErrors() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
