@@ -3109,7 +3109,10 @@ final class AppState {
                 self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
             }
             watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: project.id) }
-            watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: project.id) }
+            watcher.onTopologyChanged = { [weak self] in
+                self?.bumpRevisionGenerationForProject(projectId: project.id)
+                self?.handleProjectTopologyChange(projectId: project.id)
+            }
             remoteProjectWatchers[project.id] = watcher
             watcher.start()
             return
@@ -3118,7 +3121,10 @@ final class AppState {
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
         watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
-        watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: projectId) }
+        watcher.onTopologyChanged = { [weak self] in
+            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.handleProjectTopologyChange(projectId: projectId)
+        }
         watcher.start()
         projectGitWatchers[projectId] = watcher
     }
@@ -3373,6 +3379,7 @@ final class AppState {
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
             do {
                 try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                try store.save(mergedReviewSession(existing: existing, source: record))
                 try store.delete(id: record.id)
                 invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
                 tabs.close(worktreeId: worktreeID, tabId: tabID)
@@ -3399,6 +3406,7 @@ final class AppState {
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
             do {
                 try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
+                try store.save(mergedReviewSession(existing: existing, source: record))
                 try store.delete(id: record.id)
                 invalidateFollowRevisionRequests(for: [tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })].compactMap { $0 })
                 tabs.close(worktreeId: worktreeID, tabId: tabID)
@@ -3426,6 +3434,33 @@ final class AppState {
               )
         else { return }
         persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+    }
+
+    private func mergedReviewSession(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
+        var merged = existing
+        if merged.selectedFileID == nil {
+            merged.selectedFileID = source.selectedFileID
+        }
+        if merged.focusedCommentID == nil {
+            merged.focusedCommentID = source.focusedCommentID
+        }
+        if merged.handoffs.isEmpty {
+            merged.handoffs = source.handoffs
+        } else {
+            let existingHandoffIDs = Set(merged.handoffs.map(\.id))
+            merged.handoffs.append(contentsOf: source.handoffs.filter { !existingHandoffIDs.contains($0.id) })
+        }
+        if merged.lastSendError == nil {
+            merged.lastSendError = source.lastSendError
+        }
+        if merged.verdict == nil {
+            merged.verdict = source.verdict
+        }
+        if merged.status == .active, source.status != .active {
+            merged.status = source.status
+        }
+        merged.updatedAt = max(merged.updatedAt, source.updatedAt)
+        return merged
     }
 
     private func persistReviewRetargeting(
