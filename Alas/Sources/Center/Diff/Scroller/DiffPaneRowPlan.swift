@@ -173,12 +173,24 @@ enum DiffPaneRowPlanBuilder {
                     input: input,
                     fusion: fusion,
                     expandedCollapsedRowIDs: state.expandedCollapsedRowIDs
-                )
+                ),
+                retention: hunkRetention(for: hunkThreads, state: state)
             ) {
                 AnyView(DiffPaneHunkRow(group: group, fusion: fusion, input: input, state: state))
             }
         }
         return AppKitDiffRowPlan(rows: rows)
+    }
+
+    @MainActor
+    private static func hunkRetention(
+        for threads: [DiffInlineCommentThread],
+        state: DiffPanePresentationState
+    ) -> AppKitDiffRowRetention {
+        guard let activeThreadID = state.activeThreadID,
+              threads.contains(where: { $0.id == activeThreadID })
+        else { return .recyclable }
+        return .pinned
     }
 
     static func resolvedFusions(for input: DiffPaneRowPlanInput) -> [DiffPaneHunkFusionState] {

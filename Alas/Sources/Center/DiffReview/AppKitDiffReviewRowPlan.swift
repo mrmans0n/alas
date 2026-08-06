@@ -397,8 +397,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         let feedback = context?.fileLevelInlineFeedback ?? input.inlineFeedback
         let drafts = context?.fileLevelDraftComments
             ?? ReviewDraftCommentPlacement.position(input.draftComments, in: []).fileLevel
-        for comment in drafts { appendDraft(comment, input: input, rows: &rows, fallbacks: &fallbacks) }
-        appendFeedback(feedback, scopeID: "file", input: input, rows: &rows, fallbacks: &fallbacks)
+        for comment in drafts { appendDraft(comment, contextRows: nil, input: input, rows: &rows, fallbacks: &fallbacks) }
+        appendFeedback(feedback, scopeID: "file", contextRows: nil, input: input, rows: &rows, fallbacks: &fallbacks)
     }
 
     private static func appendTextRows(
@@ -409,7 +409,14 @@ enum AppKitDiffReviewRowPlanBuilder {
     ) {
         let fusions = DiffReviewHunkFusionResolver.states(for: context.groups)
         for (groupIndex, group) in context.groups.enumerated() {
-            appendFeedback(group.inlineFeedback, scopeID: group.id, input: input, rows: &rows, fallbacks: &fallbacks)
+            appendFeedback(
+                group.inlineFeedback,
+                scopeID: group.id,
+                contextRows: group.displayGroup.rows,
+                input: input,
+                rows: &rows,
+                fallbacks: &fallbacks
+            )
             let groupID = AppKitDiffReviewRowID.groupHeader(fileID: input.file.id, groupID: group.id)
             if !group.containsLocalAccessories {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
@@ -452,7 +459,9 @@ enum AppKitDiffReviewRowPlanBuilder {
                         }
                     }
                 }
-                for comment in segment.draftComments { appendDraft(comment, input: input, rows: &rows, fallbacks: &fallbacks) }
+                for comment in segment.draftComments {
+                    appendDraft(comment, contextRows: segment.rows, input: input, rows: &rows, fallbacks: &fallbacks)
+                }
                 if segment.showsComposer {
                     let composerID = AppKitDiffReviewRowID.composer(fileID: input.file.id, segmentID: segment.id)
                     append(
@@ -534,6 +543,7 @@ enum AppKitDiffReviewRowPlanBuilder {
     private static func appendFeedback(
         _ items: [DiffReviewInlineFeedback],
         scopeID: String,
+        contextRows: [DiffDisplayRow]?,
         input: AppKitDiffReviewRowInput,
         rows: inout [AppKitDiffRowSpec],
         fallbacks: inout [String: String]
@@ -542,7 +552,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             for: items, includingRequiredIDs: Set([input.focusedFeedbackID].compactMap(\.self))
         )
         for item in display.visibleItems {
-            appendFeedback(item, input: input, rows: &rows, fallbacks: &fallbacks)
+            appendFeedback(item, contextRows: contextRows, input: input, rows: &rows, fallbacks: &fallbacks)
         }
         guard display.hiddenCount > 0 else { return }
         append(
@@ -555,6 +565,7 @@ enum AppKitDiffReviewRowPlanBuilder {
 
     private static func appendFeedback(
         _ item: DiffReviewInlineFeedback,
+        contextRows: [DiffDisplayRow]?,
         input: AppKitDiffReviewRowInput,
         rows: inout [AppKitDiffRowSpec],
         fallbacks: inout [String: String]
@@ -562,17 +573,19 @@ enum AppKitDiffReviewRowPlanBuilder {
         let target = DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: input.file.id)
         let id = AppKitDiffReviewRowID.inlineFeedback(target)
         append(
-            &rows, id: id, input: input, signature: String(reflecting: item).hashValue, height: 96,
+            &rows, id: id, input: input, signature: accessorySignature(item, contextRows: contextRows), height: 96,
             retention: input.state.activeInlineFeedbackEditorID == item.id ? .pinned : .recyclable,
-            inlineAvailability: input.state.actionRelay.inlineFeedbackAvailability(for: item, file: input.file.summary)
+            inlineAvailability: input.state.actionRelay.inlineFeedbackAvailability(for: item, file: input.file.summary),
+            contextRowCount: contextRows?.count
         ) {
-            AnyView(AppKitDiffReviewInlineFeedbackRowBody(item: item, input: input))
+            AnyView(AppKitDiffReviewInlineFeedbackRowBody(item: item, input: input, rows: contextRows))
         }
         fallbacks[id] = id
     }
 
     private static func appendDraft(
         _ comment: ReviewDraftComment,
+        contextRows: [DiffDisplayRow]?,
         input: AppKitDiffReviewRowInput,
         rows: inout [AppKitDiffRowSpec],
         fallbacks: inout [String: String]
@@ -580,16 +593,26 @@ enum AppKitDiffReviewRowPlanBuilder {
         let target = DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: input.file.id)
         let id = AppKitDiffReviewRowID.draftComment(target)
         append(
-            &rows, id: id, input: input, signature: String(reflecting: comment).hashValue, height: 112,
+            &rows, id: id, input: input, signature: accessorySignature(comment, contextRows: contextRows), height: 112,
             retention: input.state.activeDraftCommentEditorID == comment.id ? .pinned : .recyclable,
             draftAvailability: input.state.actionRelay.draftCommentAvailability(for: comment),
             draftAgentTargets: (input.draftCommentActions ?? input.state.actionRelay.draftCommentActionsForRow)
                 .agentTargets(),
-            reviewFeedbackTarget: input.reviewFeedbackTarget
+            reviewFeedbackTarget: input.reviewFeedbackTarget,
+            contextRowCount: contextRows?.count
         ) {
-            AnyView(AppKitDiffReviewDraftCommentRowBody(comment: comment, input: input))
+            AnyView(AppKitDiffReviewDraftCommentRowBody(comment: comment, input: input, rows: contextRows))
         }
         fallbacks[id] = id
+    }
+
+    private static func accessorySignature(_ value: some Any, contextRows: [DiffDisplayRow]?) -> Int {
+        var hasher = Hasher()
+        hasher.combine(String(reflecting: value))
+        if let contextRows {
+            hasher.combine(DiffDisplayRowsSignature(contextRows))
+        }
+        return hasher.finalize()
     }
 
     private static func mapTargets(_ input: AppKitDiffReviewRowInput, to rowID: String, into fallbacks: inout [String: String]) {
@@ -620,6 +643,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         draftAgentTargets: [ReviewFeedbackAgentTarget] = [],
         reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
         includesActiveHighlight: Bool = false,
+        contextRowCount: Int? = nil,
         build: @escaping () -> AnyView
     ) {
         let token = AppKitDiffReviewRowToken(
@@ -642,7 +666,15 @@ enum AppKitDiffReviewRowPlanBuilder {
             draftComposerFocused: input.state.isDraftComposerFocused,
             actionPresence: input.actionPresence
         )
-        rows.append(.init(id: id, ownerID: input.file.id.rawValue, equalityToken: .init(token), estimatedHeight: height, retention: retention, build: build))
+        rows.append(.init(
+            id: id,
+            ownerID: input.file.id.rawValue,
+            equalityToken: .init(token),
+            estimatedHeight: height,
+            retention: retention,
+            contextRowCount: contextRowCount,
+            build: build
+        ))
     }
 
     private static func headerSignature(_ input: AppKitDiffReviewRowInput) -> Int {

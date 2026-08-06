@@ -76,6 +76,21 @@ struct DiffPaneRowPlanTests {
         #expect(calls == ["second"])
     }
 
+    @Test func hunkRowIsPinnedWhileContainedThreadEditorIsActive() throws {
+        let thread = DiffInlineCommentThread(
+            id: "thread", filePath: "Sources/Example.swift", newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let state = DiffPanePresentationState()
+        let resting = try #require(DiffPaneRowPlanBuilder.build(input: input(threads: [thread]), state: state).rows.first)
+
+        state.setThreadActive(thread.id, active: true)
+        let active = try #require(DiffPaneRowPlanBuilder.build(input: input(threads: [thread]), state: state).rows.first)
+
+        #expect(resting.retention == .recyclable)
+        #expect(active.retention == .pinned)
+    }
+
     @Test func expandedContextUpdatesTheRowEstimate() throws {
         let input = input(model: collapsibleModel())
         let state = DiffPanePresentationState()
@@ -106,6 +121,7 @@ struct DiffPaneRowPlanTests {
         codeFontSize: CGFloat = 13,
         theme: Theme? = nil,
         lspContext: DiffPaneLSPContext? = nil,
+        threads: [DiffInlineCommentThread] = [],
         actions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions = { _ in .init() }
     ) -> DiffPaneRowPlanInput {
         DiffPaneRowPlanInput(
@@ -118,6 +134,7 @@ struct DiffPaneRowPlanTests {
             codeFontSize: codeFontSize,
             theme: theme ?? (try! ThemeStore().current),
             lspContext: lspContext,
+            threads: threads,
             hunkActions: actions
         )
     }

@@ -27,6 +27,7 @@ struct AppKitDiffRowSpec {
     let equalityToken: AppKitDiffRowEqualityToken
     let estimatedHeight: CGFloat
     var retention: AppKitDiffRowRetention = .recyclable
+    var contextRowCount: Int? = nil
     let build: () -> AnyView
 }
 

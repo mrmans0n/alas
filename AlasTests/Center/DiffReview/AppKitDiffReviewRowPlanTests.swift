@@ -200,6 +200,26 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!withoutRow.equalityToken.isEqual(to: withRow.equalityToken))
     }
 
+    @Test func hunkInlineFeedbackRowsReceiveRowContext() throws {
+        let file = textFile()
+        let item = feedback(line: 1)
+        let input = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: AppKitDiffReviewFileState(), theme: theme)
+        let feedbackID = AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: item.id, fileID: file.id))
+        let row = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == feedbackID })
+
+        #expect(row.contextRowCount == file.displayModel!.groups[0].rows.count)
+    }
+
+    @Test func lineDraftRowsReceiveRowContext() throws {
+        let file = textFile()
+        let draft = draftComment(fileID: file.id)
+        let input = AppKitDiffReviewRowInput(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme)
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        let row = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == draftID })
+
+        #expect(row.contextRowCount != nil)
+    }
+
     @Test func contextFailureRowDisappearsAfterSuccessfulRetry() async throws {
         let attempts = ContextAttempts()
         let provider = DiffReviewContextProvider {
