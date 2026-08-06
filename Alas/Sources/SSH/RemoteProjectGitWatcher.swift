@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 
 enum RemotePollCadence {
@@ -190,14 +191,14 @@ final class RemoteProjectGitWatcher {
             return nil
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return nil }
-        let upstreamConfigOutput = await pollUpstreamConfigOutput()
-        let reflogOutput = await pollReflogOutput()
-        var pseudoRefCommits: [String: String] = [:]
         let worktreePaths = ([projectPath] + entries.map { URL(fileURLWithPath: $0.path) })
             .reduce(into: [String: URL]()) { pathsByKey, path in
                 pathsByKey[path.standardizedFileURL.path] = path
             }
             .sorted { $0.key < $1.key }
+        let revisionConfigOutput = await pollRevisionConfigOutput(worktreePaths: worktreePaths)
+        let reflogSignature = await pollReflogSignature()
+        var pseudoRefCommits: [String: String] = [:]
         for (pathKey, path) in worktreePaths {
             guard let commits = await pollPseudoRefCommits(at: path) else { return nil }
             for (ref, commit) in commits {
@@ -206,34 +207,50 @@ final class RemoteProjectGitWatcher {
         }
         return Self.sharedRefsSignature(
             showRefOutput: result.stdout,
-            upstreamConfigOutput: upstreamConfigOutput,
-            reflogOutput: reflogOutput,
+            revisionConfigOutput: revisionConfigOutput,
+            reflogSignature: reflogSignature,
             pseudoRefCommits: pseudoRefCommits
         )
     }
 
-    private func pollUpstreamConfigOutput() async -> String {
-        let result = try? await Process.git(
-            ["config", "--get-regexp", #"^(branch\..*\.(remote|merge|pushRemote)|remote\.pushDefault|push\.default)$"#],
-            cwd: projectPath
-        )
-        guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
-            return ""
+    private func pollRevisionConfigOutput(worktreePaths: [(key: String, value: URL)]) async -> String {
+        var pathOutputs: [String: String] = [:]
+        for (pathKey, path) in worktreePaths {
+            let result = try? await Process.git(
+                ["config", "--get-regexp", #"^(branch\..*\.(remote|merge|pushRemote)|remote\.pushDefault|push\.default)$"#],
+                cwd: path
+            )
+            guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+                continue
+            }
+            guard result.exitCode == 0 || result.exitCode == 1 else { continue }
+            pathOutputs[pathKey] = result.stdout
         }
-        guard result.exitCode == 0 || result.exitCode == 1 else { return "" }
-        return Self.upstreamConfigSignature(from: result.stdout)
+        return Self.revisionConfigSignature(pathOutputs: pathOutputs)
     }
 
-    private func pollReflogOutput() async -> String {
-        let result = try? await Process.git(
-            ["reflog", "show", "--all", "--max-count=256", "--format=%H %gD"],
-            cwd: projectPath
-        )
+    private func pollReflogSignature() async -> String {
+        let result: ProcessResult?
+        if let host {
+            result = try? await RemoteExec.run(
+                host: host,
+                cwd: projectPath.path,
+                command: Self.reflogDigestCommand()
+            )
+        } else {
+            result = try? await Process.git(
+                ["reflog", "show", "--all", "--format=%H %gD"],
+                cwd: projectPath
+            )
+        }
         guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
             return ""
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return "" }
-        return result.stdout
+        guard host != nil else {
+            return Self.reflogSignature(from: result.stdout)
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func pollPseudoRefCommits(at path: URL) async -> [String: String]? {
@@ -265,16 +282,16 @@ final class RemoteProjectGitWatcher {
 
     nonisolated static func sharedRefsSignature(
         showRefOutput: String,
-        upstreamConfigOutput: String = "",
-        reflogOutput: String = "",
+        revisionConfigOutput: String = "",
+        reflogSignature: String = "",
         pseudoRefCommits: [String: String]
     ) -> String {
         var signature = showRefOutput
-        if !upstreamConfigOutput.isEmpty {
-            signature += "\nconfig:\(upstreamConfigOutput)"
+        if !revisionConfigOutput.isEmpty {
+            signature += "\nconfig:\(revisionConfigOutput)"
         }
-        if !reflogOutput.isEmpty {
-            signature += "\nreflog:\(reflogOutput)"
+        if !reflogSignature.isEmpty {
+            signature += "\nreflog:\(reflogSignature)"
         }
         for key in pseudoRefCommits.keys.sorted() {
             signature += "\n\(key):\(pseudoRefCommits[key] ?? "")"
@@ -289,6 +306,46 @@ final class RemoteProjectGitWatcher {
             .filter { !$0.isEmpty }
             .sorted()
             .joined(separator: "\n")
+    }
+
+    nonisolated static func revisionConfigSignature(pathOutputs: [String: String]) -> String {
+        pathOutputs
+            .flatMap { path, output in
+                upstreamConfigSignature(from: output)
+                    .split(whereSeparator: \.isNewline)
+                    .map { "\(path):\($0)" }
+            }
+            .sorted()
+            .joined(separator: "\n")
+    }
+
+    nonisolated static func reflogSignature(from output: String) -> String {
+        let lines = output
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        let digest = SHA256.hash(data: Data(output.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "entries=\(lines.count);sha=\(digest)"
+    }
+
+    nonisolated static func reflogDigestCommand() -> String {
+        """
+        status=0
+        out=$(git reflog show --all --format='%H %gD') || status=$?
+        if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+          exit "$status"
+        fi
+        if command -v shasum >/dev/null 2>&1; then
+          digest=$(printf '%s\\n' "$out" | shasum -a 256 | awk '{print $1}')
+        elif command -v sha256sum >/dev/null 2>&1; then
+          digest=$(printf '%s\\n' "$out" | sha256sum | awk '{print $1}')
+        else
+          digest=$(printf '%s\\n' "$out" | cksum | awk '{print $1 ":" $2}')
+        fi
+        count=$(printf '%s\\n' "$out" | sed '/^$/d' | wc -l | awk '{print $1}')
+        printf 'entries=%s;sha=%s\\n' "$count" "$digest"
+        """
     }
 
     nonisolated static let revisionPseudoRefs = [

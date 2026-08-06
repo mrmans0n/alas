@@ -161,48 +161,75 @@ struct RemoteWorktreePollTests {
 
         let first = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
-            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: config),
+            revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": config]),
             pseudoRefCommits: [:]
         )
         let same = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
-            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: reordered),
+            revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": reordered]),
             pseudoRefCommits: [:]
         )
         let second = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
-            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: changed),
+            revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": changed]),
             pseudoRefCommits: [:]
         )
         let pushed = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
-            upstreamConfigOutput: RemoteProjectGitWatcher.upstreamConfigSignature(from: pushChanged),
+            revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": pushChanged]),
             pseudoRefCommits: [:]
         )
 
         #expect(first == same)
         #expect(first != second)
         #expect(first != pushed)
-        #expect(first.contains("config:branch.feature.merge refs/heads/main"))
+        #expect(first.contains("config:/srv/repo:branch.feature.merge refs/heads/main"))
         #expect(pushed.contains("branch.feature.pushRemote fork"))
         #expect(pushed.contains("remote.pushDefault origin"))
         #expect(pushed.contains("push.default current"))
     }
 
-    @Test func sharedRefsSignatureIncludesReflogOutput() {
+    @Test func revisionConfigSignatureQualifiesEachWorktreePath() {
+        let main = """
+        branch.feature.merge refs/heads/main
+        branch.feature.remote origin
+        """
+        let linked = """
+        branch.feature.merge refs/heads/linked
+        branch.feature.remote origin
+        """
+
+        let signature = RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: [
+            "/srv/repo": main,
+            "/srv/repo-linked": linked,
+        ])
+
+        #expect(signature.contains("/srv/repo:branch.feature.merge refs/heads/main"))
+        #expect(signature.contains("/srv/repo-linked:branch.feature.merge refs/heads/linked"))
+    }
+
+    @Test func sharedRefsSignatureIncludesCompleteReflogSignature() {
+        let full = RemoteProjectGitWatcher.reflogSignature(from: "abc HEAD@{0}\ndef HEAD@{1}\n")
+        let shortened = RemoteProjectGitWatcher.reflogSignature(from: "abc HEAD@{0}\n")
         let first = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
-            reflogOutput: "abc HEAD@{0}\ndef HEAD@{1}\n",
+            reflogSignature: full,
             pseudoRefCommits: [:]
         )
         let second = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
-            reflogOutput: "abc HEAD@{0}\n",
+            reflogSignature: shortened,
             pseudoRefCommits: [:]
         )
 
         #expect(first != second)
-        #expect(first.contains("reflog:abc HEAD@{0}"))
-        #expect(first.contains("def HEAD@{1}"))
+        #expect(first.contains("reflog:entries=2;sha="))
+    }
+
+    @Test func reflogDigestCommandCoversCompleteReflog() {
+        let command = RemoteProjectGitWatcher.reflogDigestCommand()
+        #expect(command.contains("git reflog show --all --format='%H %gD'"))
+        #expect(!command.contains("--max-count"))
+        #expect(command.contains("shasum -a 256") || command.contains("sha256sum"))
     }
 }

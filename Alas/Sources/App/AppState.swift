@@ -584,6 +584,7 @@ final class AppState {
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
     private(set) var revisionChangeGenerations: [String: Int] = [:]
     private(set) var reviewSessionRetargetGenerations: [String: Int] = [:]
+    private var followRevisionRequestGenerations: [String: Int] = [:]
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -3141,7 +3142,7 @@ final class AppState {
     }
 
     func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
-        bumpRevisionGenerationForWorktreePaths(projectId: projectId, paths: Array(branchByWorktreePath.keys))
+        bumpRevisionGenerationForProject(projectId: projectId)
         let changedPaths = projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
@@ -3160,8 +3161,15 @@ final class AppState {
     }
 
     func followRevision(worktreeID: String, tabID: TabID, expression: String) {
+        let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
+        let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
         Task { @MainActor in
-            await applyFollowRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
+            await applyFollowRevision(
+                worktreeID: worktreeID,
+                requestKey: requestKey,
+                requestGeneration: requestGeneration,
+                expression: expression
+            )
         }
     }
 
@@ -3260,7 +3268,12 @@ final class AppState {
         }
     }
 
-    private func applyFollowRevision(worktreeID: String, tabID: TabID, expression: String) async {
+    private func applyFollowRevision(
+        worktreeID: String,
+        requestKey: String,
+        requestGeneration: Int,
+        expression: String
+    ) async {
         guard let worktree = worktree(withId: worktreeID) else { return }
         let candidate: TrackedRevisionCandidate
         do {
@@ -3281,17 +3294,43 @@ final class AppState {
             Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
             return
         }
-        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
+        guard followRevisionRequestGenerations[requestKey] == requestGeneration,
+              let tab = tabs.tabs(forWorktree: worktreeID).first(where: { followRevisionRequestKey(for: $0) == requestKey })
+        else { return }
 
         switch tab {
         case .commit:
-            _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
+            _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tab.id) {
                 $0.follow(revision)
             }
         case .reviewSession(let state):
-            followReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID, revision: revision)
+            followReviewSession(worktreeID: worktreeID, tabID: tab.id, sessionID: state.sessionID, revision: revision)
         default:
             return
+        }
+    }
+
+    private func bumpFollowRevisionRequestGeneration(_ key: String) -> Int {
+        let next = followRevisionRequestGenerations[key, default: 0] + 1
+        followRevisionRequestGenerations[key] = next
+        return next
+    }
+
+    private func followRevisionRequestKey(worktreeID: String, tabID: TabID) -> String {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else {
+            return "\(worktreeID):\(tabID)"
+        }
+        return followRevisionRequestKey(for: tab)
+    }
+
+    private func followRevisionRequestKey(for tab: Tab) -> String {
+        switch tab {
+        case .commit(let state):
+            return "\(state.worktreeId):\(state.viewID)"
+        case .reviewSession(let state):
+            return "\(state.worktreeId):\(state.viewID)"
+        default:
+            return "\(tab.id)"
         }
     }
 
