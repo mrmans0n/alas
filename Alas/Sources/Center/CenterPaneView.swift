@@ -418,7 +418,7 @@ struct CenterPaneView: View {
                             tabState: sessionState,
                             appState: state
                         )
-                        .id(sessionState.id)
+                        .id(sessionState.viewID)
                     case .mission(let missionState):
                         MissionTabView(
                             state: state,

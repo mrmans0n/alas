@@ -283,18 +283,41 @@ struct FileHistoryTabState: Codable, Equatable, Identifiable {
 struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     var id: TabID
     let worktreeId: String
+    var viewID: TabID
     var sessionID: ReviewSessionID
     var title: String
     var selectedFileID: DiffReviewFileID?
     var focusedCommentID: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case viewID
+        case sessionID
+        case title
+        case selectedFileID
+        case focusedCommentID
+    }
+
     init(worktreeId: String, record: ReviewSessionRecord) {
         self.id = "review-session:\(record.id.rawValue)"
         self.worktreeId = worktreeId
+        self.viewID = id
         self.sessionID = record.id
         self.title = record.target.title
         self.selectedFileID = record.selectedFileID
         self.focusedCommentID = record.focusedCommentID
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        viewID = try container.decodeIfPresent(TabID.self, forKey: .viewID) ?? id
+        sessionID = try container.decode(ReviewSessionID.self, forKey: .sessionID)
+        title = try container.decode(String.self, forKey: .title)
+        selectedFileID = try container.decodeIfPresent(DiffReviewFileID.self, forKey: .selectedFileID)
+        focusedCommentID = try container.decodeIfPresent(String.self, forKey: .focusedCommentID)
     }
 
     mutating func retarget(to record: ReviewSessionRecord) {

@@ -55,6 +55,62 @@ struct TabsManagerReviewSessionTests {
         #expect(state.selectedFileID == DiffReviewFileID(namespace: "commit", path: "A.swift"))
     }
 
+    @Test func reviewSessionViewIDSurvivesRetargeting() throws {
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let fixedTarget = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            sha: "old",
+            title: "Review old"
+        )
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "new"
+        ))
+        let trackedTarget = ReviewSessionTarget.trackedCommit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            revision: tracked,
+            title: "Review HEAD~2"
+        )
+        var state = ReviewSessionTabState(
+            worktreeId: "wt-1",
+            record: ReviewSessionRecord(
+                id: fixedTarget.id,
+                target: fixedTarget,
+                createdAt: .init(timeIntervalSince1970: 1),
+                updatedAt: .init(timeIntervalSince1970: 1)
+            )
+        )
+        let viewID = state.viewID
+
+        state.retarget(to: ReviewSessionRecord(
+            id: trackedTarget.id,
+            target: trackedTarget,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 2)
+        ))
+
+        #expect(state.id != viewID)
+        #expect(state.viewID == viewID)
+    }
+
+    @Test func legacyReviewSessionTabDecodeUsesIDAsViewID() throws {
+        let json = """
+        {
+          "id": "review-session:old",
+          "worktreeId": "wt-1",
+          "sessionID": "old",
+          "title": "Review old"
+        }
+        """
+
+        let state = try JSONDecoder().decode(ReviewSessionTabState.self, from: Data(json.utf8))
+
+        #expect(state.id == "review-session:old")
+        #expect(state.viewID == "review-session:old")
+        #expect(state.sessionID == ReviewSessionID(rawValue: "old"))
+    }
+
     @Test func retargetingReviewSessionCoalescesExistingDestinationTab() throws {
         var manager = TabsManager()
         let repositoryPath = URL(fileURLWithPath: "/repo")
