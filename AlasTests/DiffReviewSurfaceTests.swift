@@ -189,6 +189,51 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func appKitReviewWindowScrollsSameFileItemsAndMissingTargetsToFallback() async throws {
+        let summary = summary(path: "Sources/LargeSameFile.swift")
+        let file = fileSection(
+            summary: summary,
+            displayModel: largeDisplayModel(groupCount: 80, filePath: summary.path)
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "deep-feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review the deep line.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: summary.path, line: 80, side: .new),
+            evidenceItemID: "deep-feedback"
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
+        model.inlineFeedbackByFileID = [file.id: [feedback]]
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 260
+            )
+            let window = attachWindow(controller, width: 1_000, height: 260)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+
+            model.inlineFeedbackCommand = .init(feedbackID: "deep-feedback", fileID: file.id, generation: 1)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.30))
+            await drainSwiftUI(controller.view)
+            let deepTargetY = scroller.scrollY
+            #expect(deepTargetY > 0)
+            #expect(model.selected == file.id)
+
+            model.inlineFeedbackCommand = .init(feedbackID: "missing-feedback", fileID: file.id, generation: 2)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.30))
+            await drainSwiftUI(controller.view)
+            #expect(scroller.scrollY < deepTargetY)
+            #expect(model.selected == file.id)
+        }
+    }
+
     @Test func appKitReviewWindowExpandsContextAndCompensatesInsertionsAboveViewport() async throws {
         let firstSummary = summary(path: "Sources/Context.swift")
         let secondSummary = summary(path: "Sources/Below.swift")
@@ -230,6 +275,34 @@ struct DiffReviewSurfaceTests {
 
             #expect(model.selected == secondSummary.id)
             #expect(scroller.scrollY >= beforeInsertionY)
+        }
+    }
+
+    @Test func appKitReviewWindowExpandsContextThroughRenderedControl() async throws {
+        let summary = summary(path: "Sources/ContextControl.swift")
+        let file = fileSection(
+            summary: summary,
+            displayModel: collapsedContextDisplayModel(filePath: summary.path, hiddenRowCount: 8)
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 420
+            )
+            let window = attachWindow(controller, width: 1_000, height: 420)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+            let collapsedHeight = scroller.documentView?.frame.height ?? 0
+
+            #expect(pressButton(withToolTip: "Expand context", in: controller.view))
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            await drainSwiftUI(controller.view)
+
+            #expect((scroller.documentView?.frame.height ?? 0) > collapsedHeight)
         }
     }
 
@@ -543,6 +616,49 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-loading-\(file.id.rawValue)", in: controller.view) == nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-failure-\(file.id.rawValue)", in: controller.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-retry-\(file.id.rawValue)", in: controller.view) != nil)
+    }
+
+    @Test func legacyFileSectionImageProviderLoadsOnce() async {
+        let imageLoader = AppKitImageRetryRecorder()
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Assets/legacy.png", status: .modified),
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "abc123^",
+                    afterRevision: "abc123",
+                    beforePath: "Assets/legacy.png",
+                    afterPath: "Assets/legacy.png"
+                ),
+                load: { await imageLoader.load() }
+            )
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            allowsDraftCommentCreation: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 520)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+        await drainSwiftUI(controller.view)
+
+        #expect(imageLoader.loadCount == 1)
     }
 
     @Test func imageFileSectionRendersProviderThreadsAndAnnotations() async {
@@ -4648,7 +4764,8 @@ struct DiffReviewSurfaceTests {
     }
 
     private func pressButton(withToolTip toolTip: String, in view: NSView) -> Bool {
-        for button in allSubviews(of: view).compactMap({ $0 as? NSButton }) where button.toolTip == toolTip {
+        for button in allSubviews(of: view).compactMap({ $0 as? NSButton })
+            where button.toolTip == toolTip || button.accessibilityLabel() == toolTip {
             button.performClick(nil)
             return true
         }

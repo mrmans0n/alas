@@ -321,7 +321,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 appendFileAccessories(input, context: nil, rows: &rows, fallbacks: &fallbackByTargetID)
                 let imageID = AppKitDiffReviewRowID.image(fileID: fileID)
                 append(&rows, id: imageID, input: input, signature: input.file.imageProvider?.id.hashValue ?? 0, height: 360) {
-                    AnyView(AppKitDiffReviewImageRowBody(input: input))
+                    AnyView(AppKitDiffReviewImageRowBody(input: input, loadsImage: true))
                 }
                 mapTargetsDirectly(input, into: &fallbackByTargetID)
             } else if let context = renderContext(for: input) {
@@ -714,6 +714,7 @@ struct AppKitDiffReviewPlaceholderRowBody: View {
 
 struct AppKitDiffReviewImageRowBody: View {
     let input: AppKitDiffReviewRowInput
+    var loadsImage = false
 
     var body: some View {
         Group {
@@ -753,6 +754,7 @@ struct AppKitDiffReviewImageRowBody: View {
         }
         .background(input.theme.color("bg-1"))
         .task(id: input.file.imageProvider?.id) {
+            guard loadsImage else { return }
             guard let provider = input.file.imageProvider else {
                 input.state.imageState.clear()
                 return
