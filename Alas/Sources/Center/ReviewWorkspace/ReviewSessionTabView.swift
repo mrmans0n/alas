@@ -1155,7 +1155,8 @@ struct ReviewSessionTabView: View {
     }
 
     private func recordSessionSendFailure(_ error: Error) {
-        guard var current = record else { return }
+        guard let visibleRecord = record else { return }
+        var current = (try? sessionStore.load(id: visibleRecord.id)) ?? visibleRecord
         current.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
         current.updatedAt = now()
         record = current
