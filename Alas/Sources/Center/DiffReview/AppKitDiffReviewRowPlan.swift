@@ -9,6 +9,9 @@ enum AppKitDiffReviewRowID {
     static func segment(fileID: DiffReviewFileID, segmentID: String, blockID: String) -> String { "file:\(fileID.rawValue):segment:\(segmentID):rows:\(blockID)" }
     static func composer(fileID: DiffReviewFileID, segmentID: String) -> String { "file:\(fileID.rawValue):composer:\(segmentID)" }
     static func spacing(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):spacing" }
+    static func inlineFeedbackMore(fileID: DiffReviewFileID, scopeID: String) -> String {
+        "file:\(fileID.rawValue):feedback-more:\(scopeID)"
+    }
 
     static func inlineFeedback(_ target: DiffReviewInlineFeedbackTargetID) -> String {
         "file:\(target.fileID.rawValue):feedback:\(target.feedbackID)"
@@ -394,7 +397,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         let drafts = context?.fileLevelDraftComments
             ?? ReviewDraftCommentPlacement.position(input.draftComments, in: []).fileLevel
         for comment in drafts { appendDraft(comment, input: input, rows: &rows, fallbacks: &fallbacks) }
-        for item in feedback { appendFeedback(item, input: input, rows: &rows, fallbacks: &fallbacks) }
+        appendFeedback(feedback, scopeID: "file", input: input, rows: &rows, fallbacks: &fallbacks)
     }
 
     private static func appendTextRows(
@@ -405,7 +408,7 @@ enum AppKitDiffReviewRowPlanBuilder {
     ) {
         let fusions = DiffReviewHunkFusionResolver.states(for: context.groups)
         for (groupIndex, group) in context.groups.enumerated() {
-            for item in group.inlineFeedback { appendFeedback(item, input: input, rows: &rows, fallbacks: &fallbacks) }
+            appendFeedback(group.inlineFeedback, scopeID: group.id, input: input, rows: &rows, fallbacks: &fallbacks)
             let groupID = AppKitDiffReviewRowID.groupHeader(fileID: input.file.id, groupID: group.id)
             if !group.containsLocalAccessories {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
@@ -524,6 +527,28 @@ enum AppKitDiffReviewRowPlanBuilder {
             ) {
                 AnyView(AppKitDiffReviewImageAnnotationRowBody(annotation: annotation, input: input))
             }
+        }
+    }
+
+    private static func appendFeedback(
+        _ items: [DiffReviewInlineFeedback],
+        scopeID: String,
+        input: AppKitDiffReviewRowInput,
+        rows: inout [AppKitDiffRowSpec],
+        fallbacks: inout [String: String]
+    ) {
+        let display = DiffReviewInlineFeedbackDisplayPolicy.display(
+            for: items, includingRequiredIDs: Set([input.focusedFeedbackID].compactMap(\.self))
+        )
+        for item in display.visibleItems {
+            appendFeedback(item, input: input, rows: &rows, fallbacks: &fallbacks)
+        }
+        guard display.hiddenCount > 0 else { return }
+        append(
+            &rows, id: AppKitDiffReviewRowID.inlineFeedbackMore(fileID: input.file.id, scopeID: scopeID),
+            input: input, signature: display.hiddenCount, height: DiffReviewInlineFeedbackDisplayPolicy.moreRowEstimatedHeight
+        ) {
+            AnyView(DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount))
         }
     }
 

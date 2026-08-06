@@ -2518,7 +2518,7 @@ struct DiffReviewInlineFeedbackReplyEditorState: Equatable {
     }
 }
 
-private struct DiffReviewInlineFeedbackMoreRow: View {
+struct DiffReviewInlineFeedbackMoreRow: View {
     let hiddenCount: Int
 
     @Environment(\.theme) private var theme

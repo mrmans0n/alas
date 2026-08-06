@@ -120,8 +120,20 @@ final class AppKitDiffScrollerReconciler {
             // so active-owner feedback cannot fight navigation. Re-tile at the
             // final native offset before announcing completion, however, or a
             // long jump can leave only the source viewport mounted.
-            self?.layoutVisibleRows()
-            completion?()
+            guard let self else {
+                completion?()
+                return
+            }
+            self.layoutVisibleRows()
+            guard let measuredOffset = self.tiling.targetOffset(
+                id: targetID,
+                alignment: request.alignment,
+                viewportHeight: self.scrollView.viewportHeight
+            ) else {
+                completion?()
+                return
+            }
+            self.scrollView.setScrollY(measuredOffset, animated: false, completion: completion)
         }
         layoutVisibleRows()
     }
