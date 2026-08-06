@@ -10,6 +10,7 @@ struct CommitTabStateTests {
 
         #expect(state.revision == .fixed(sha: "abc"))
         #expect(state.id == "commit:wt:abc")
+        #expect(state.viewID == "commit:wt:abc")
     }
 
     @Test func idIsStablePerWorktreeAndSha() {
@@ -30,6 +31,7 @@ struct CommitTabStateTests {
         }
         #expect(r.id == s.id)
         #expect(r.worktreeId == "wt-1")
+        #expect(r.viewID == s.viewID)
         #expect(r.sha == "deadbeefcafebabe")
         #expect(r.title == "fix: foo")
     }
@@ -61,6 +63,22 @@ struct CommitTabStateTests {
         #expect(fixed.fixedSHA == "deadbeef")
         #expect(followed.sha == "deadbeef")
         #expect(followed.fixedSHA == nil)
+    }
+
+    @Test func commitViewIDSurvivesFollowAndFixRekeys() throws {
+        var state = CommitTabState(worktreeId: "wt", sha: "old", title: "Old")
+        let viewID = state.viewID
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "new"
+        ))
+
+        state.follow(tracked)
+        #expect(state.id != viewID)
+        #expect(state.viewID == viewID)
+
+        state.fix(sha: "new")
+        #expect(state.id == "commit:wt:new")
+        #expect(state.viewID == viewID)
     }
 
     @Test func trackedRevisionTrimsExpressionAndClassifiesHEADDependence() throws {

@@ -364,7 +364,7 @@ struct CenterPaneView: View {
                             worktreeId: worktree.id,
                             appState: state
                         )
-                        .id(s.id)
+                        .id(s.viewID)
                     case .commitEditor(let s):
                         CommitEditorTabView(
                             worktreePath: worktree.path,

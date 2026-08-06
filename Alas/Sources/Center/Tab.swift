@@ -388,12 +388,14 @@ enum CommitRevision: Codable, Equatable, Hashable, Sendable {
 struct CommitTabState: Codable, Equatable, Identifiable {
     var id: TabID
     let worktreeId: String
+    var viewID: TabID
     var revision: CommitRevision
     var title: String
 
     private enum CodingKeys: String, CodingKey {
         case id
         case worktreeId
+        case viewID
         case revision
         case sha
         case title
@@ -409,6 +411,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     init(worktreeId: String, sha: String, title: String) {
         self.id = Self.fixedID(worktreeId: worktreeId, sha: sha)
         self.worktreeId = worktreeId
+        self.viewID = id
         self.revision = .fixed(sha: sha)
         self.title = title
     }
@@ -416,6 +419,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     init(worktreeId: String, trackedRevision: TrackedRevision, title: String) {
         self.id = Self.trackedID(worktreeId: worktreeId, expression: trackedRevision.expression)
         self.worktreeId = worktreeId
+        self.viewID = id
         self.revision = .following(trackedRevision)
         self.title = title
     }
@@ -424,6 +428,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(TabID.self, forKey: .id)
         worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        viewID = try container.decodeIfPresent(TabID.self, forKey: .viewID) ?? id
         title = try container.decode(String.self, forKey: .title)
         if let decodedRevision = try container.decodeIfPresent(CommitRevision.self, forKey: .revision) {
             revision = decodedRevision
@@ -436,6 +441,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(worktreeId, forKey: .worktreeId)
+        try container.encode(viewID, forKey: .viewID)
         try container.encode(revision, forKey: .revision)
         try container.encode(sha, forKey: .sha)
         try container.encode(title, forKey: .title)

@@ -195,10 +195,9 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     if let Ok(relative) = path.strip_prefix(&info.worktree_dir) {
         let relative = relative.to_string_lossy();
         let relative = relative.trim_matches('/');
-        if matches!(
-            relative,
-            "HEAD" | "index" | "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "REBASE_HEAD"
-        ) || relative == "rebase-merge"
+        if matches!(relative, "HEAD" | "index")
+            || is_revision_pseudo_ref(relative)
+            || relative == "rebase-merge"
             || relative.starts_with("rebase-merge/")
             || relative == "rebase-apply"
             || relative.starts_with("rebase-apply/")
@@ -211,12 +210,12 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     };
     let relative = relative.to_string_lossy();
     let relative = relative.trim_matches('/');
-    if relative == "FETCH_HEAD"
+    if relative == "config"
         || relative == "packed-refs"
         || relative == "refs/stash"
         || relative == "logs/refs/stash"
-        || relative.starts_with("refs/heads/")
-        || relative.starts_with("refs/remotes/")
+        || relative.starts_with("refs/")
+        || is_revision_pseudo_ref(relative)
     {
         return true;
     }
@@ -225,9 +224,24 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     }
     if let Some(rest) = relative.strip_prefix("worktrees/") {
         let parts: Vec<_> = rest.split('/').filter(|part| !part.is_empty()).collect();
-        return parts.len() == 1 || (parts.len() == 2 && parts[1] == "HEAD");
+        return parts.len() == 1
+            || (parts.len() == 2 && (parts[1] == "HEAD" || is_revision_pseudo_ref(parts[1])))
+            || (parts.len() >= 2 && (parts[1] == "rebase-merge" || parts[1] == "rebase-apply"));
     }
     false
+}
+
+fn is_revision_pseudo_ref(relative: &str) -> bool {
+    matches!(
+        relative,
+        "AUTO_MERGE"
+            | "CHERRY_PICK_HEAD"
+            | "FETCH_HEAD"
+            | "MERGE_HEAD"
+            | "ORIG_HEAD"
+            | "REBASE_HEAD"
+            | "REVERT_HEAD"
+    )
 }
 
 #[cfg(test)]
@@ -295,10 +309,14 @@ mod tests {
             &info
         ));
         assert!(is_relevant_git_path(&root.join(".git/FETCH_HEAD"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/ORIG_HEAD"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/AUTO_MERGE"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/config"), &info));
         assert!(is_relevant_git_path(
             &root.join(".git/refs/remotes/origin/main"),
             &info
         ));
+        assert!(is_relevant_git_path(&root.join(".git/refs/tags/v1"), &info));
         assert!(is_relevant_git_path(&root.join(".git/refs/stash"), &info));
         assert!(is_relevant_git_path(
             &root.join(".git/logs/refs/stash"),
@@ -325,6 +343,14 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/worktrees/feature/CHERRY_PICK_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/ORIG_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/FETCH_HEAD"),
             &info
         ));
         assert!(is_relevant_git_path(
