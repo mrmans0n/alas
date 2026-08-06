@@ -929,6 +929,50 @@ struct TabsManagerTests {
         #expect(state.revision == .fixed(sha: "new"))
         #expect(state.title == "New subject")
     }
+
+    @Test func trackedCommitRekeyFocusesExistingTrackedDestination() throws {
+        let worktreeId = "tabs-manager-tracked-commit-rekey-existing-tracked"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.appendCommit(worktreeId: worktreeId, sha: "one", title: "One")
+        let second = manager.appendCommit(worktreeId: worktreeId, sha: "two", title: "Two")
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~2", baselineBranch: "feature", resolvedSHA: "tracked-sha"
+        ))
+        let existing = manager.updateCommit(worktreeId: worktreeId, tabId: first.id) {
+            $0.follow(tracked)
+        }
+
+        let result = manager.updateCommit(worktreeId: worktreeId, tabId: second.id) {
+            $0.follow(tracked)
+        }
+
+        #expect(result?.id == existing?.id)
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [try #require(existing?.id)])
+        #expect(manager.activeTabId(forWorktree: worktreeId) == existing?.id)
+    }
+
+    @Test func trackedCommitRekeyFocusesExistingFixedDestination() throws {
+        let worktreeId = "tabs-manager-tracked-commit-rekey-existing-fixed"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let fixed = manager.appendCommit(worktreeId: worktreeId, sha: "target", title: "Target")
+        let followedSource = manager.appendCommit(worktreeId: worktreeId, sha: "source", title: "Source")
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD", baselineBranch: "feature", resolvedSHA: "target"
+        ))
+        let followed = manager.updateCommit(worktreeId: worktreeId, tabId: followedSource.id) {
+            $0.follow(tracked)
+        }
+
+        let result = manager.updateCommit(worktreeId: worktreeId, tabId: try #require(followed?.id)) {
+            $0.fix(sha: "target")
+        }
+
+        #expect(result?.id == fixed.id)
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [fixed.id])
+        #expect(manager.activeTabId(forWorktree: worktreeId) == fixed.id)
+    }
 }
 
 private struct RestoreMemoryStore: PersistenceStoreProtocol {
