@@ -21,6 +21,7 @@ struct GGSplitCommitTabView: View {
     @State private var showWhitespace = false
     @State private var appKitPreviewScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
     @State private var previewImageStore = GGSplitPreviewImageStore()
+    @State private var previewPresentationStore = GGSplitPreviewPresentationStore()
 
     init(
         tabState: GGSplitCommitTabState,
@@ -296,7 +297,8 @@ struct GGSplitCommitTabView: View {
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
                     theme: theme,
-                    imageStore: previewImageStore
+                    imageStore: previewImageStore,
+                    presentationStore: previewPresentationStore
                 )),
                 scrollRequest: nil,
                 onActiveOwnerChange: { _ in },

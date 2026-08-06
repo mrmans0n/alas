@@ -54,6 +54,27 @@ final class GGSplitPreviewImageStore {
 }
 
 @MainActor
+final class GGSplitPreviewPresentationStore {
+    private var states: [String: DiffPanePresentationState] = [:]
+
+    func state(previewID: String, filePath: String) -> DiffPanePresentationState {
+        let key = "\(previewID):\(filePath)"
+        if let state = states[key] { return state }
+        let state = DiffPanePresentationState()
+        states[key] = state
+        return state
+    }
+
+    func prune(keeping keys: Set<String>) {
+        states = states.filter { keys.contains($0.key) }
+    }
+
+    #if DEBUG
+    var keysForTests: Set<String> { Set(states.keys) }
+    #endif
+}
+
+@MainActor
 struct GGSplitPreviewRowPlanInput {
     let previewID: String
     let preview: GGSplitPreview
@@ -67,6 +88,7 @@ struct GGSplitPreviewRowPlanInput {
     let codeFontSize: CGFloat
     let theme: Theme
     let imageStore: GGSplitPreviewImageStore
+    let presentationStore: GGSplitPreviewPresentationStore
 }
 
 private struct GGSplitPreviewHeaderToken: Equatable {
@@ -87,6 +109,8 @@ private struct GGSplitPreviewImageToken: Equatable {
 enum GGSplitPreviewRowPlanBuilder {
     static func build(input: GGSplitPreviewRowPlanInput) -> AppKitDiffRowPlan {
         var rows: [AppKitDiffRowSpec] = []
+        let presentationKeys = Set(input.preview.files.map { "\(input.previewID):\($0.path)" })
+        input.presentationStore.prune(keeping: presentationKeys)
         for file in input.preview.files {
             let prefix = "gg-preview:\(input.previewID):file:\(file.path)"
             rows.append(.init(
@@ -122,7 +146,7 @@ enum GGSplitPreviewRowPlanBuilder {
                     allowsReviewLineSelection: false,
                     hunkActions: { _ in DiffPaneHunkActions() }
                 ),
-                state: DiffPanePresentationState()
+                state: input.presentationStore.state(previewID: input.previewID, filePath: file.path)
             )
             for (index, hunk) in hunkPlan.rows.enumerated() {
                 rows.append(.init(

@@ -42,8 +42,8 @@ final class AppKitDiffReviewFileState: ObservableObject {
     @Published var contextLoadError: String? { didSet { structuralDidChange.send() } }
     @Published var pendingContextExpansions: [PendingContextExpansion] = []
     @Published var imageState = DiffReviewImageState()
-    @Published var hoveredInlineFeedbackID: String?
-    @Published var hoveredDraftCommentID: String?
+    @Published var hoveredInlineFeedbackID: String? { didSet { structuralDidChange.send() } }
+    @Published var hoveredDraftCommentID: String? { didSet { structuralDidChange.send() } }
     @Published var activeThreadID: String? { didSet { structuralDidChange.send() } }
     @Published var showFullDiffOverride = false { didSet { structuralDidChange.send() } }
     @Published var isDraftComposerFocused = false { didSet { structuralDidChange.send() } }

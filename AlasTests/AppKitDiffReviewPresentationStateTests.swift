@@ -128,7 +128,7 @@ struct AppKitDiffReviewPresentationStateTests {
         #expect(calls == ["second"])
     }
 
-    @Test func presentationStoreIgnoresComposerTypingAndHoverButForwardsStructuralChanges() {
+    @Test func presentationStoreIgnoresComposerTypingButForwardsHoverAndStructuralChanges() {
         let store = AppKitDiffReviewPresentationStore()
         let state = store.state(for: fileModel())
         var changes = 0
@@ -136,13 +136,14 @@ struct AppKitDiffReviewPresentationStateTests {
 
         state.pendingDraftBody = "a"
         state.hoveredInlineFeedbackID = "feedback"
+        #expect(changes == 1)
         state.hoveredDraftCommentID = "draft"
-        #expect(changes == 0)
+        #expect(changes == 2)
 
         state.pendingDraftAnchor = DiffReviewLineAnchor(
             path: "Sources/File.swift", side: .new, line: 1, rowIndex: 0, selectedText: "line"
         )
-        #expect(changes == 1)
+        #expect(changes == 3)
         _ = cancellable
     }
 

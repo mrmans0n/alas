@@ -70,11 +70,38 @@ struct GGSplitPreviewRowPlanTests {
         #expect(!GGSplitCommitTabView.usesAppKitPreviewScroller(flagEnabled: false))
     }
 
+    @Test("text hunk state survives a preview rebuild and is pruned with its file")
+    func textStateRetentionAndPruning() {
+        let imageStore = GGSplitPreviewImageStore()
+        let presentationStore = GGSplitPreviewPresentationStore()
+        let preview = GGSplitPreview(files: [previewFile(path: "Sources/Retained.swift")], nonTextualFiles: [])
+        _ = GGSplitPreviewRowPlanBuilder.build(input: input(
+            previewID: "remainder", preview: preview, showsResultingImages: false,
+            imageStore: imageStore, presentationStore: presentationStore
+        ))
+        let state = presentationStore.state(previewID: "remainder", filePath: "Sources/Retained.swift")
+        state.expandedCollapsedRowIDs = ["collapsed"]
+
+        _ = GGSplitPreviewRowPlanBuilder.build(input: input(
+            previewID: "remainder", preview: preview, showsResultingImages: false,
+            imageStore: imageStore, presentationStore: presentationStore
+        ))
+        #expect(presentationStore.state(previewID: "remainder", filePath: "Sources/Retained.swift") === state)
+        #expect(state.expandedCollapsedRowIDs == ["collapsed"])
+
+        _ = GGSplitPreviewRowPlanBuilder.build(input: input(
+            previewID: "remainder", preview: .init(files: [], nonTextualFiles: []), showsResultingImages: false,
+            imageStore: imageStore, presentationStore: presentationStore
+        ))
+        #expect(presentationStore.keysForTests.isEmpty)
+    }
+
     private func input(
         previewID: String,
         preview: GGSplitPreview,
         showsResultingImages: Bool,
-        imageStore: GGSplitPreviewImageStore
+        imageStore: GGSplitPreviewImageStore,
+        presentationStore: GGSplitPreviewPresentationStore = GGSplitPreviewPresentationStore()
     ) -> GGSplitPreviewRowPlanInput {
         GGSplitPreviewRowPlanInput(
             previewID: previewID,
@@ -88,7 +115,8 @@ struct GGSplitPreviewRowPlanTests {
             codeFontFamily: "SF Mono",
             codeFontSize: 13,
             theme: try! ThemeStore().current,
-            imageStore: imageStore
+            imageStore: imageStore,
+            presentationStore: presentationStore
         )
     }
 

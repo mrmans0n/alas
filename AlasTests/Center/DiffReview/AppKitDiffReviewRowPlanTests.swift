@@ -179,6 +179,22 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!availableRow.equalityToken.isEqual(to: busyRow.equalityToken))
     }
 
+    @Test func hoverStateChangesRenderedHunkRowToken() throws {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let first = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first {
+            $0.id.contains(":segment:")
+        })
+
+        state.hoveredInlineFeedbackID = "feedback"
+        let hovered = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first {
+            $0.id == first.id
+        })
+
+        #expect(!first.equalityToken.isEqual(to: hovered.equalityToken))
+    }
+
     @Test func accessorySegmentRowsTrackLSPContextInTheirEqualityToken() throws {
         let file = textFile()
         let state = AppKitDiffReviewFileState()

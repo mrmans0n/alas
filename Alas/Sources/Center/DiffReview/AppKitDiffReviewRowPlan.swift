@@ -578,8 +578,8 @@ enum AppKitDiffReviewRowPlanBuilder {
             lspLanguage: input.lspContext?.language,
             lspManagerIdentity: input.lspContext.map { ObjectIdentifier($0.lsp) },
             inlineFeedbackAvailability: inlineAvailability, draftCommentAvailability: draftAvailability,
-            hoveredInlineFeedbackID: nil,
-            hoveredDraftCommentID: nil,
+            hoveredInlineFeedbackID: input.state.hoveredInlineFeedbackID,
+            hoveredDraftCommentID: input.state.hoveredDraftCommentID,
             activeThreadID: input.state.activeThreadID,
             draftComposerFocused: input.state.isDraftComposerFocused,
             actionPresence: input.actionPresence
