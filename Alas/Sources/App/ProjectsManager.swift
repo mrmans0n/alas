@@ -37,6 +37,7 @@ struct ProjectUpdate: Equatable {
 
 enum WorktreeOperationState: Equatable {
     case creating
+    case preparingDelete
     case deleting
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
@@ -402,7 +403,7 @@ final class ProjectsManager {
                         reconciled.append(optimistic)
                     }
                 }
-            case .deleting:
+            case .preparingDelete, .deleting:
                 // If the row is gone from git, the deletion succeeded.
                 if !liveIds.contains(id) {
                     clearOperationIds.append(id)
@@ -517,9 +518,8 @@ final class ProjectsManager {
     ///
     /// Skips rows whose operation state is `.creating` or `.createFailed`:
     /// those rows show the user's intended branch name, not whatever git
-    /// has on disk yet. `.deleting` and `.deleteFailed` rows are still
-    /// updated — they correspond to real git worktrees with a pending UI
-    /// operation, so git's branch is still the truth.
+    /// has on disk yet. Delete-operation rows are still updated — they
+    /// correspond to real git worktrees, so git's branch is still the truth.
     @discardableResult
     func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) -> Set<String> {
         guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return [] }
@@ -534,7 +534,7 @@ final class ProjectsManager {
             if let op = worktreeOperationStates[rows[i].id] {
                 switch op {
                 case .creating, .createFailed: continue
-                case .deleting, .deleteFailed: break
+                case .preparingDelete, .deleting, .deleteFailed: break
                 }
             }
             if rows[i].branch != newBranch || rows[i].name != newBranch {

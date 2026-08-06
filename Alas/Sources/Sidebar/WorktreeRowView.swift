@@ -113,16 +113,17 @@ struct WorktreeRowView: View {
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     @Environment(\.theme) var theme
 
-    private var isPending: Bool {
+    nonisolated static func isPending(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
-        case .creating, .deleting: return true
+        case .creating, .preparingDelete, .deleting: return true
         default: return false
         }
     }
 
-    private var statusText: String {
+    nonisolated static func statusText(for operationState: WorktreeOperationState?) -> String {
         switch operationState {
         case .creating: return "Creating…"
+        case .preparingDelete: return "Preparing deletion…"
         case .deleting: return "Deleting…"
         case .createFailed(_, let msg, _, _): return "Create failed: \(msg.trimmedForDisplay)"
         case .deleteFailed(let msg): return "Delete failed: \(msg.trimmedForDisplay)"
@@ -130,11 +131,22 @@ struct WorktreeRowView: View {
         }
     }
 
+    nonisolated static func showsProgress(operationState: WorktreeOperationState?) -> Bool {
+        switch operationState {
+        case .preparingDelete, .deleting: return true
+        case .creating, .createFailed, .deleteFailed, .none: return false
+        }
+    }
+
+    private var isPending: Bool {
+        Self.isPending(operationState: operationState)
+    }
+
     private var errorMessage: String? {
         switch operationState {
         case .createFailed(_, let message, _, _), .deleteFailed(let message):
             return message
-        case .creating, .deleting, .none:
+        case .creating, .preparingDelete, .deleting, .none:
             return nil
         }
     }
@@ -168,11 +180,18 @@ struct WorktreeRowView: View {
                         .truncationMode(.tail)
                 }
                 if operationState != nil {
-                    Text(statusText)
-                        .font(.system(size: 10.5))
-                        .foregroundColor(theme.color("warning"))
-                        .lineLimit(2)
-                        .truncationMode(.tail)
+                    HStack(spacing: 5) {
+                        if Self.showsProgress(operationState: operationState) {
+                            Spinner(lineWidth: 1.5, duration: 0.7, color: theme.color("warning"))
+                                .frame(width: 10, height: 10)
+                                .accessibilityHidden(true)
+                        }
+                        Text(Self.statusText(for: operationState))
+                            .font(.system(size: 10.5))
+                            .foregroundColor(theme.color("warning"))
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                    }
                 } else {
                     HStack(spacing: 8) {
                         Text(relative(worktree.lastActivity))

@@ -1538,7 +1538,7 @@ final class AppState {
         })
         else { return nil }
         switch projectsManager.operationState(for: worktree.id) {
-        case nil, .deleteFailed:
+        case nil, .preparingDelete, .deleteFailed:
             return worktree
         case .creating, .deleting, .createFailed:
             return nil
@@ -1941,13 +1941,12 @@ final class AppState {
                 guard let self else { return [] }
                 // Match `RootView.selectedWorktree()`: hide creating /
                 // deleting / createFailed rows (the main pane returns nil
-                // for them) but keep deleteFailed selectable so the user
-                // can recover via keyboard nav, mirroring the sidebar.
+                // for them) but keep preflight and deleteFailed rows selectable.
                 return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
                     switch self.projectsManager.operationState(for: $0.id) {
                     case .creating, .deleting, .createFailed:
                         return false
-                    case nil, .deleteFailed:
+                    case nil, .preparingDelete, .deleteFailed:
                         return true
                     }
                 }
@@ -6117,9 +6116,11 @@ final class AppState {
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
 
         Task { @MainActor in
             let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
+            guard projectsManager.operationState(for: worktree.id) == .preparingDelete else { return }
             let confirmation = Self.deleteConfirmation(
                 branch: worktree.branch,
                 keepBranch: keepBranch,
@@ -6130,7 +6131,12 @@ final class AppState {
                 keepBranch: keepBranch,
                 preflight: preflight,
                 userConfirmed: confirmDeleteWorktree(confirmation)
-            ) else { return }
+            ) else {
+                if projectsManager.operationState(for: worktree.id) == .preparingDelete {
+                    projectsManager.setOperationState(id: worktree.id, state: nil)
+                }
+                return
+            }
 
             projectsManager.setOperationState(id: worktree.id, state: .deleting)
             await performDeleteWorktree(
@@ -8097,7 +8103,7 @@ extension AppState: RemoteSessionsProvider {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .deleteFailed:
+                case nil, .preparingDelete, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
                 }
             }
@@ -8122,7 +8128,7 @@ extension AppState: RemoteSessionsProvider {
         switch projectsManager.operationState(for: worktreeId) {
         case .creating, .deleting, .createFailed:
             return .failure("Worktree is no longer available.")
-        case nil, .deleteFailed:
+        case nil, .preparingDelete, .deleteFailed:
             break
         }
 
