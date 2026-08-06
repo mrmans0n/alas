@@ -323,6 +323,31 @@ struct ReviewTargetPaletteModelTests {
         #expect(model.selectedIndex == 1)
     }
 
+    @Test func queryChangeClearsPreviousFollowedRevisionBeforeDebounce() async {
+        let model = ReviewTargetPaletteModel()
+        model.open(prefill: worktree("feature"))
+        let env = environment(commits: [], branches: [])
+        await model.loadTargets(environment: env)
+        model.query = "HEAD~3"
+        await model.validateRevisionQuery(environment: env)
+        #expect(model.targetRows().contains(.followedRevision(
+            expression: "HEAD~3",
+            resolvedSHA: "resolved-HEAD~3",
+            branch: "feature",
+            headSHA: "resolved-HEAD~3"
+        )))
+
+        model.query = "HEAD~4"
+
+        #expect(!model.targetRows().contains(.followedRevision(
+            expression: "HEAD~3",
+            resolvedSHA: "resolved-HEAD~3",
+            branch: "feature",
+            headSHA: "resolved-HEAD~3"
+        )))
+        #expect(model.targetRows().filter(\.isSelectable).isEmpty)
+    }
+
     @Test func backReturnsToWorktreesAndResetsQueryAndAnchor() {
         let model = ReviewTargetPaletteModel()
         model.open()

@@ -173,7 +173,10 @@ final class ReviewTargetPaletteModel {
         guard case .targets = level else { return [] }
         if isLoadingTargets { return [.message("Loading commits…")] }
         var rows: [TargetRow] = []
-        if let followedRevisionRow {
+        let revisionExpression = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let followedRevisionRow,
+           case .followedRevision(let expression, _, _, _) = followedRevisionRow,
+           expression == revisionExpression {
             rows.append(.header("Followed Revision"))
             rows.append(followedRevisionRow)
         }
