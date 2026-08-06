@@ -196,7 +196,7 @@ struct RemoteWorktreePollTests {
         #expect(command.contains("info/grafts entries"))
     }
 
-    @Test func sharedRefsSignatureIncludesSortedUpstreamConfig() {
+    @Test func sharedRefsSignatureIncludesOrderedUpstreamConfig() {
         let config = """
         branch.feature.merge refs/heads/main
         branch.feature.remote origin
@@ -216,6 +216,12 @@ struct RemoteWorktreePollTests {
         branch.feature.merge refs/heads/main
         branch.feature.remote origin
         remote.origin.fetch +refs/heads/main:refs/remotes/fork/main
+        """
+        let duplicateOrderChanged = """
+        branch.feature.merge refs/heads/main
+        branch.feature.remote fork
+        branch.feature.remote origin
+        remote.origin.fetch +refs/heads/main:refs/remotes/origin/main
         """
         let pushChanged = """
         branch.feature.merge refs/heads/main
@@ -252,11 +258,17 @@ struct RemoteWorktreePollTests {
             revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": fetchChanged]),
             pseudoRefCommits: [:]
         )
+        let duplicateReordered = RemoteProjectGitWatcher.sharedRefsSignature(
+            showRefOutput: "abc refs/heads/main\n",
+            revisionConfigOutput: RemoteProjectGitWatcher.revisionConfigSignature(pathOutputs: ["/srv/repo": duplicateOrderChanged]),
+            pseudoRefCommits: [:]
+        )
 
-        #expect(first == same)
+        #expect(first != same)
         #expect(first != second)
         #expect(first != pushed)
         #expect(first != fetched)
+        #expect(first != duplicateReordered)
         #expect(first.contains("config:/srv/repo:branch.feature.merge refs/heads/main"))
         #expect(first.contains("remote.origin.fetch +refs/heads/main:refs/remotes/origin/main"))
         #expect(pushed.contains("branch.feature.pushremote fork"))

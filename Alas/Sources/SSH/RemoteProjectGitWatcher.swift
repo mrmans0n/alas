@@ -369,18 +369,16 @@ final class RemoteProjectGitWatcher {
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .sorted()
             .joined(separator: "\n")
     }
 
     nonisolated static func revisionConfigSignature(pathOutputs: [String: String]) -> String {
-        pathOutputs
-            .flatMap { path, output in
-                upstreamConfigSignature(from: output)
+        pathOutputs.keys.sorted()
+            .flatMap { path in
+                upstreamConfigSignature(from: pathOutputs[path] ?? "")
                     .split(whereSeparator: \.isNewline)
                     .map { "\(path):\($0)" }
             }
-            .sorted()
             .joined(separator: "\n")
     }
 
