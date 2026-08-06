@@ -176,6 +176,30 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!localRow.equalityToken.isEqual(to: providerRow.equalityToken))
     }
 
+    @Test func draftRowRebuildsWhenItsAgentTargetsChange() throws {
+        let file = textFile()
+        let draft = draftComment(fileID: file.id)
+        let state = AppKitDiffReviewFileState()
+        let withoutTargets = AppKitDiffReviewRowInput(
+            file: file, draftComments: [draft], state: state, theme: theme,
+            draftCommentActions: .init(agentTargets: { [] })
+        )
+        let withTargets = AppKitDiffReviewRowInput(
+            file: file, draftComments: [draft], state: state, theme: theme,
+            draftCommentActions: .init(agentTargets: {
+                [
+                    .existingSession(worktreeID: "wt", sessionID: "session", title: "Review chat"),
+                    .newChat(agentID: "codex", title: "New chat"),
+                ]
+            })
+        )
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        let withoutRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [withoutTargets]).corePlan.rows.first { $0.id == draftID })
+        let withRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [withTargets]).corePlan.rows.first { $0.id == draftID })
+
+        #expect(!withoutRow.equalityToken.isEqual(to: withRow.equalityToken))
+    }
+
     @Test func contextFailureRowDisappearsAfterSuccessfulRetry() async throws {
         let attempts = ContextAttempts()
         let provider = DiffReviewContextProvider {

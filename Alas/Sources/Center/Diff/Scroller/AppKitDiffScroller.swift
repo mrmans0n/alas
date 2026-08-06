@@ -38,6 +38,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
         private var mostRecentPlan: AppKitDiffRowPlan?
         private var pendingScrollRequest: AppKitDiffScrollRequest?
         private var lastConsumedRequestGeneration: Int?
+        private var activeScrollRequestGeneration: Int?
         private var latestActiveOwner: String?
         private var onActiveOwnerChange: ((String?) -> Void)?
         private var onScrollRequestCompletion: ((Int) -> Void)?
@@ -98,6 +99,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
             self.scrollView = nil
             mostRecentPlan = nil
             pendingScrollRequest = nil
+            activeScrollRequestGeneration = nil
             onActiveOwnerChange = nil
             onScrollRequestCompletion = nil
             latestActiveOwner = nil
@@ -116,7 +118,15 @@ struct AppKitDiffScroller: NSViewRepresentable {
             guard let pendingScrollRequest, hasUsableLayout else { return }
             lastConsumedRequestGeneration = pendingScrollRequest.generation
             self.pendingScrollRequest = nil
-            reconciler?.scroll(to: pendingScrollRequest) { [weak self] in
+            activeScrollRequestGeneration = pendingScrollRequest.generation
+            reconciler?.scroll(
+                to: pendingScrollRequest,
+                isCurrent: { [weak self] in
+                    self?.activeScrollRequestGeneration == pendingScrollRequest.generation
+                }
+            ) { [weak self] in
+                guard self?.activeScrollRequestGeneration == pendingScrollRequest.generation else { return }
+                self?.activeScrollRequestGeneration = nil
                 self?.onScrollRequestCompletion?(pendingScrollRequest.generation)
             }
         }

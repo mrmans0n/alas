@@ -51,6 +51,7 @@ struct AppKitDiffReviewRowToken: Equatable {
     let lspManagerIdentity: ObjectIdentifier?
     let inlineFeedbackAvailability: DiffReviewInlineFeedbackActionAvailability?
     let draftCommentAvailability: ReviewDraftCommentActionAvailability?
+    let draftCommentAgentTargets: [ReviewFeedbackAgentTarget]
     let reviewFeedbackTarget: ReviewFeedbackTarget?
     let hoveredInlineFeedbackID: String?
     let hoveredDraftCommentID: String?
@@ -582,6 +583,8 @@ enum AppKitDiffReviewRowPlanBuilder {
             &rows, id: id, input: input, signature: String(reflecting: comment).hashValue, height: 112,
             retention: input.state.activeDraftCommentEditorID == comment.id ? .pinned : .recyclable,
             draftAvailability: input.state.actionRelay.draftCommentAvailability(for: comment),
+            draftAgentTargets: (input.draftCommentActions ?? input.state.actionRelay.draftCommentActionsForRow)
+                .agentTargets(),
             reviewFeedbackTarget: input.reviewFeedbackTarget
         ) {
             AnyView(AppKitDiffReviewDraftCommentRowBody(comment: comment, input: input))
@@ -614,6 +617,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         signature: Int, height: CGFloat, retention: AppKitDiffRowRetention = .recyclable,
         inlineAvailability: DiffReviewInlineFeedbackActionAvailability? = nil,
         draftAvailability: ReviewDraftCommentActionAvailability? = nil,
+        draftAgentTargets: [ReviewFeedbackAgentTarget] = [],
         reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
         includesActiveHighlight: Bool = false,
         build: @escaping () -> AnyView
@@ -628,6 +632,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             lspLanguage: input.lspContext?.language,
             lspManagerIdentity: input.lspContext.map { ObjectIdentifier($0.lsp) },
             inlineFeedbackAvailability: inlineAvailability, draftCommentAvailability: draftAvailability,
+            draftCommentAgentTargets: draftAgentTargets,
             reviewFeedbackTarget: reviewFeedbackTarget,
             hoveredInlineFeedbackID: includesActiveHighlight ? input.state.hoveredInlineFeedbackID : nil,
             hoveredDraftCommentID: includesActiveHighlight ? input.state.hoveredDraftCommentID : nil,

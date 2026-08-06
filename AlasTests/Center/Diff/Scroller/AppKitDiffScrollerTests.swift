@@ -200,6 +200,44 @@ struct AppKitDiffScrollerTests {
         #expect(completedGenerations == [73])
     }
 
+    @Test("superseded animated request completion cannot restore the previous target")
+    func supersededAnimatedRequestCompletionIsIgnored() async throws {
+        var completedGenerations: [Int] = []
+        var finishAnimations: [() -> Void] = []
+        let stack = makeStack(
+            animatedScrollExecutorForTests: { scrollView, point, completion in
+                scrollView.contentView.setBoundsOrigin(point)
+                finishAnimations.append(completion)
+            }
+        )
+        stack.coordinator.update(plan: plan(), scrollRequest: nil, onActiveOwnerChange: { _ in })
+
+        stack.coordinator.update(
+            plan: plan(),
+            scrollRequest: .init(
+                targetID: "row-20", fallbackID: nil, alignment: .top, animated: true, generation: 1
+            ),
+            onActiveOwnerChange: { _ in },
+            onScrollRequestCompletion: { completedGenerations.append($0) }
+        )
+        stack.coordinator.update(
+            plan: plan(),
+            scrollRequest: .init(
+                targetID: "row-60", fallbackID: nil, alignment: .top, animated: true, generation: 2
+            ),
+            onActiveOwnerChange: { _ in },
+            onScrollRequestCompletion: { completedGenerations.append($0) }
+        )
+
+        let secondTargetY = stack.scrollView.scrollY
+        finishAnimations.first?()
+        #expect(stack.scrollView.scrollY == secondTargetY)
+        #expect(completedGenerations.isEmpty)
+
+        finishAnimations.last?()
+        #expect(completedGenerations == [2])
+    }
+
     @Test("long animated navigation mounts the destination before completion")
     func animatedNavigationMountsDestination() async throws {
         var mountedAtCompletion = false

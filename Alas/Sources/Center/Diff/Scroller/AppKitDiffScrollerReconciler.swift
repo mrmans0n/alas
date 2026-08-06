@@ -99,7 +99,11 @@ final class AppKitDiffScrollerReconciler {
         layoutMountedRows()
     }
 
-    func scroll(to request: AppKitDiffScrollRequest, completion: (() -> Void)? = nil) {
+    func scroll(
+        to request: AppKitDiffScrollRequest,
+        isCurrent: @escaping () -> Bool = { true },
+        completion: (() -> Void)? = nil
+    ) {
         let targetID: String?
         if tiling.row(withID: request.targetID) != nil {
             targetID = request.targetID
@@ -124,6 +128,7 @@ final class AppKitDiffScrollerReconciler {
                 completion?()
                 return
             }
+            guard isCurrent() else { return }
             self.layoutVisibleRows()
             guard let measuredOffset = self.tiling.targetOffset(
                 id: targetID,
@@ -135,7 +140,9 @@ final class AppKitDiffScrollerReconciler {
             }
             self.scrollView.setScrollY(measuredOffset, animated: false, completion: completion)
         }
-        layoutVisibleRows()
+        if isCurrent() {
+            layoutVisibleRows()
+        }
     }
 
     private var isLayingOutRows = false
