@@ -423,9 +423,12 @@ final class RemoteProjectGitWatcher {
             let name = url.lastPathComponent
             guard !nonRevisionTopLevelRefNames.contains(name),
                   (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
-                  let contents = try? String(contentsOf: url, encoding: .utf8),
-                  isTopLevelRevisionContent(contents)
+                  let contents = try? String(contentsOf: url, encoding: .utf8)
             else { return nil }
+            if name == "shallow" {
+                return "shallow \(shallowSignature(from: contents))"
+            }
+            guard isTopLevelRevisionContent(contents) else { return nil }
             return "\(name) \(contents.trimmingCharacters(in: .whitespacesAndNewlines))"
         }
         .sorted()
@@ -472,6 +475,19 @@ final class RemoteProjectGitWatcher {
             \(ignored)) continue ;;
           esac
           IFS= read -r line < "$path" || line=
+          if [ "$name" = shallow ]; then
+            out=$(cat "$path" 2>/dev/null || true)
+            if command -v shasum >/dev/null 2>&1; then
+              digest=$(printf '%s\\n' "$out" | shasum -a 256 | awk '{print $1}')
+            elif command -v sha256sum >/dev/null 2>&1; then
+              digest=$(printf '%s\\n' "$out" | sha256sum | awk '{print $1}')
+            else
+              digest=$(printf '%s\\n' "$out" | cksum | awk '{print $1 ":" $2}')
+            fi
+            count=$(printf '%s\\n' "$out" | sed '/^$/d' | wc -l | awk '{print $1}')
+            printf 'shallow entries=%s;sha=%s\\n' "$count" "$digest"
+            continue
+          fi
           case "$line" in
             "ref: refs/"*) printf '%s %s\\n' "$name" "$line" ;;
             *) printf '%s' "$line" | grep -Eq '^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$' && printf '%s %s\\n' "$name" "$line" ;;
@@ -490,6 +506,16 @@ final class RemoteProjectGitWatcher {
             return true
         }
         return (line.count == 40 || line.count == 64) && line.allSatisfy(\.isHexDigit)
+    }
+
+    nonisolated static func shallowSignature(from output: String) -> String {
+        let lines = output
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        let digest = SHA256.hash(data: Data(output.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "entries=\(lines.count);sha=\(digest)"
     }
 
     nonisolated static let nonRevisionTopLevelRefNames: Set<String> = [

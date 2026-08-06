@@ -84,6 +84,9 @@ enum GitEventFilter {
         if rel == "config" || rel == "config.worktree" {
             return .revisionChange
         }
+        if rel == "shallow" {
+            return .revisionChange
+        }
         if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {
             return .revisionChange
         }
