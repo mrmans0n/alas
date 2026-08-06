@@ -131,8 +131,8 @@ final class RemoteProjectGitWatcher {
         if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         guard result.exitCode == 0 else { return true }
 
-        let sharedRefsSignature = await pollSharedRefsSignature()
         let entries = RemoteWorktreePoll.parse(porcelain: result.stdout)
+        let sharedRefsSignature = await pollSharedRefsSignature(entries: entries)
         defer {
             lastEntries = entries
             if let sharedRefsSignature {
@@ -184,22 +184,31 @@ final class RemoteProjectGitWatcher {
         )
     }
 
-    private func pollSharedRefsSignature() async -> String? {
+    private func pollSharedRefsSignature(entries: [RemoteWorktreePollEntry]) async -> String? {
         let result = try? await Process.git(["show-ref", "--head"], cwd: projectPath)
         guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
             return nil
         }
         guard result.exitCode == 0 || result.exitCode == 1 else { return nil }
         var pseudoRefCommits: [String: String] = [:]
-        for ref in Self.revisionPseudoRefs {
-            let probe = try? await Process.git(
-                ["rev-parse", "--verify", "-q", "\(ref)^{commit}"],
-                cwd: projectPath
-            )
-            guard let probe, !RemoteExec.isConnectionFailure(exitCode: probe.exitCode) else {
-                return nil
+        let worktreePaths = ([projectPath] + entries.map { URL(fileURLWithPath: $0.path) })
+            .reduce(into: [String: URL]()) { pathsByKey, path in
+                pathsByKey[path.standardizedFileURL.path] = path
             }
-            pseudoRefCommits[ref] = probe.exitCode == 0 ? probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            .sorted { $0.key < $1.key }
+        for (pathKey, path) in worktreePaths {
+            for ref in Self.revisionPseudoRefs {
+                let probe = try? await Process.git(
+                    ["rev-parse", "--verify", "-q", "\(ref)^{commit}"],
+                    cwd: path
+                )
+                guard let probe, !RemoteExec.isConnectionFailure(exitCode: probe.exitCode) else {
+                    return nil
+                }
+                pseudoRefCommits["\(pathKey):\(ref)"] = probe.exitCode == 0
+                    ? probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : ""
+            }
         }
         return Self.sharedRefsSignature(showRefOutput: result.stdout, pseudoRefCommits: pseudoRefCommits)
     }
@@ -211,8 +220,8 @@ final class RemoteProjectGitWatcher {
         pseudoRefCommits: [String: String]
     ) -> String {
         var signature = showRefOutput
-        for ref in revisionPseudoRefs {
-            signature += "\n\(ref):\(pseudoRefCommits[ref] ?? "")"
+        for key in pseudoRefCommits.keys.sorted() {
+            signature += "\n\(key):\(pseudoRefCommits[key] ?? "")"
         }
         return signature
     }

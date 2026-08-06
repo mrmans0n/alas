@@ -11,7 +11,11 @@ struct ReviewSessionStore {
 
     func load(id: ReviewSessionID) throws -> ReviewSessionRecord? {
         let snapshot = try readSnapshot()
-        return snapshot.recordsByID[id.rawValue]
+        if let record = snapshot.recordsByID[id.rawValue] {
+            return record
+        }
+        guard let replacementID = snapshot.replacementIDsByOldID[id.rawValue] else { return nil }
+        return snapshot.recordsByID[replacementID]
     }
 
     func list(worktreeID: String) throws -> [ReviewSessionRecord] {
@@ -44,6 +48,7 @@ struct ReviewSessionStore {
         var snapshot = try readSnapshot()
         if oldID != record.id {
             snapshot.recordsByID[oldID.rawValue] = nil
+            snapshot.replacementIDsByOldID[oldID.rawValue] = record.id.rawValue
         }
         snapshot.recordsByID[record.id.rawValue] = record
         try store.write(snapshot, to: url)
@@ -52,11 +57,12 @@ struct ReviewSessionStore {
     func delete(id: ReviewSessionID) throws {
         var snapshot = try readSnapshot()
         snapshot.recordsByID[id.rawValue] = nil
+        snapshot.replacementIDsByOldID[id.rawValue] = nil
         try store.write(snapshot, to: url)
     }
 
     private func readSnapshot() throws -> Snapshot {
-        try store.readIfExists(Snapshot.self, from: url) ?? Snapshot(recordsByID: [:])
+        try store.readIfExists(Snapshot.self, from: url) ?? Snapshot(recordsByID: [:], replacementIDsByOldID: [:])
     }
 
     private func sortSessions(_ lhs: ReviewSessionRecord, _ rhs: ReviewSessionRecord) -> Bool {
@@ -68,5 +74,20 @@ struct ReviewSessionStore {
 
     private struct Snapshot: Codable, Equatable {
         var recordsByID: [String: ReviewSessionRecord]
+        var replacementIDsByOldID: [String: String] = [:]
+
+        init(recordsByID: [String: ReviewSessionRecord], replacementIDsByOldID: [String: String] = [:]) {
+            self.recordsByID = recordsByID
+            self.replacementIDsByOldID = replacementIDsByOldID
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            recordsByID = try container.decode([String: ReviewSessionRecord].self, forKey: .recordsByID)
+            replacementIDsByOldID = try container.decodeIfPresent(
+                [String: String].self,
+                forKey: .replacementIDsByOldID
+            ) ?? [:]
+        }
     }
 }

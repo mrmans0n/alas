@@ -128,13 +128,13 @@ struct RemoteWorktreePollTests {
         let signature = RemoteProjectGitWatcher.sharedRefsSignature(
             showRefOutput: "abc refs/heads/main\n",
             pseudoRefCommits: [
-                "FETCH_HEAD": "fetch-sha",
-                "REBASE_HEAD": "rebase-sha",
+                "/repo:FETCH_HEAD": "fetch-sha",
+                "/repo/worktrees/feat:REBASE_HEAD": "rebase-sha",
             ]
         )
 
         #expect(signature.contains("abc refs/heads/main"))
-        #expect(signature.contains("FETCH_HEAD:fetch-sha"))
-        #expect(signature.contains("REBASE_HEAD:rebase-sha"))
+        #expect(signature.contains("/repo:FETCH_HEAD:fetch-sha"))
+        #expect(signature.contains("/repo/worktrees/feat:REBASE_HEAD:rebase-sha"))
     }
 }

@@ -148,7 +148,7 @@ struct ReviewSessionStoreTests {
         try store.save(source)
         try store.replace(id: source.id, with: retargeted)
 
-        #expect(try store.load(id: source.id) == nil)
+        #expect(try store.load(id: source.id) == retargeted)
         #expect(try store.load(id: retargeted.id) == retargeted)
     }
 
