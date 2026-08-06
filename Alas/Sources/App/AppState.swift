@@ -3239,10 +3239,12 @@ final class AppState {
             switch tab {
             case .commit(let state):
                 guard case .following(let revision) = state.revision else { return }
+                _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
                 _ = tabs.updateCommit(worktreeId: worktreeID, tabId: tabID) {
                     $0.fix(sha: revision.resolvedSHA)
                 }
             case .reviewSession(let state):
+                _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
                 stopFollowingReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
             default:
                 return

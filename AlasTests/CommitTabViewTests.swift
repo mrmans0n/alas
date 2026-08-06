@@ -220,6 +220,31 @@ struct CommitTabViewTests {
         #expect(newer.isActive(activeKey: newer.key, activeID: newer.id))
     }
 
+    @Test func commitReviewLoadIdentityPreservesPublishedSessionForSameSHA() {
+        let current = details(sha: "current-sha")
+
+        #expect(CommitReviewLoadIdentity.preservesPublishedSession(
+            details: current,
+            sha: "current-sha",
+            hasReviewSession: true
+        ))
+        #expect(!CommitReviewLoadIdentity.preservesPublishedSession(
+            details: current,
+            sha: "other-sha",
+            hasReviewSession: true
+        ))
+        #expect(!CommitReviewLoadIdentity.preservesPublishedSession(
+            details: current,
+            sha: "current-sha",
+            hasReviewSession: false
+        ))
+        #expect(!CommitReviewLoadIdentity.preservesPublishedSession(
+            details: nil,
+            sha: "current-sha",
+            hasReviewSession: true
+        ))
+    }
+
     @Test func commitReviewContentStateShowsLoadingForNonEmptyCommitWithoutSession() {
         #expect(CommitReviewContentState.resolve(
             detailsFileCount: 1,

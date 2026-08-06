@@ -205,7 +205,12 @@ struct CommitTabView: View {
         let requestedToken = CommitReviewLoadToken.next(key: loadTaskID)
         activeDetailsKey = requestedToken.key
         activeDetailsID = requestedToken.id
-        let isTrackedRefresh = tabState.revision.tracked != nil && details != nil
+        let preservesCurrentSnapshot = CommitReviewLoadIdentity.preservesPublishedSession(
+            details: details,
+            sha: tabState.sha,
+            hasReviewSession: reviewSession != nil
+        )
+        let isTrackedRefresh = (tabState.revision.tracked != nil || preservesCurrentSnapshot) && details != nil
         loadingDetails = details == nil
         isRefreshingTrackedRevision = isTrackedRefresh
         detailsError = nil
@@ -434,6 +439,10 @@ struct CommitReviewLoadToken: Equatable {
 enum CommitReviewLoadIdentity {
     static func isCurrent(details: CommitDetails, currentDetails: CommitDetails?, sha: String) -> Bool {
         details.info.sha == sha && currentDetails?.info.sha == details.info.sha
+    }
+
+    static func preservesPublishedSession(details: CommitDetails?, sha: String, hasReviewSession: Bool) -> Bool {
+        details?.info.sha == sha && hasReviewSession
     }
 }
 
