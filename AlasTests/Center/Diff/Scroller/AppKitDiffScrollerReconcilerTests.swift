@@ -33,11 +33,12 @@ struct AppKitDiffScrollerReconcilerTests {
         _ id: String,
         token: Int = 0,
         height: CGFloat = 20,
+        ownerID: String? = nil,
         retention: AppKitDiffRowRetention = .recyclable
     ) -> AppKitDiffRowSpec {
         AppKitDiffRowSpec(
             id: id,
-            ownerID: nil,
+            ownerID: ownerID,
             equalityToken: .init(token),
             estimatedHeight: height,
             retention: retention
@@ -173,6 +174,37 @@ struct AppKitDiffScrollerReconcilerTests {
         ))
 
         #expect(stack.pool.mountedIDs.contains("row-0"))
+    }
+
+    @Test("retention and owner-only updates are not treated as no-ops")
+    func retentionAndOwnerOnlyUpdatesApply() {
+        let stack = makeStack()
+        var rows = plan().rows
+        stack.reconciler.apply(plan: .init(rows: rows), contentWidth: stack.scrollView.contentWidth)
+        stack.reconciler.scroll(to: .init(
+            targetID: "row-150", fallbackID: nil, alignment: .top, animated: false, generation: 1
+        ))
+
+        rows[0] = spec("row-0", height: 40, retention: .pinned)
+        rows[150] = spec("row-150", height: 40, ownerID: "file-150")
+        stack.reconciler.apply(plan: .init(rows: rows), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(stack.pool.mountedIDs.contains("row-0"))
+        #expect(stack.tiling.row(withID: "row-150")?.ownerID == "file-150")
+    }
+
+    @Test("an intrinsic-size invalidation remeasures the mounted row")
+    func intrinsicSizeInvalidationRemeasuresMountedRow() throws {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: [spec("row", height: 20)]),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let view = try #require(stack.pool.mountedView(id: "row"))
+        view.updateRootView(AnyView(Color.clear.frame(height: 80)))
+        view.invalidateIntrinsicContentSize()
+
+        #expect(stack.tiling.row(withID: "row")?.height == 80)
     }
 
     @Test("height-only resize lays out a new band without a full apply")

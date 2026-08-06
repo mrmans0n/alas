@@ -16,6 +16,7 @@ final class AppKitDiffScrollerReconciler {
     private var isReconciling = false
     private var deferredLayoutScheduled = false
     private var needsDeferredLayout = false
+    private var invalidatedRowIDs: Set<String> = []
 
     #if DEBUG
     private(set) var fullPlanApplyCountForTests = 0
@@ -40,7 +41,11 @@ final class AppKitDiffScrollerReconciler {
         let ids = plan.rows.map(\.id)
         let widthChanged = width != contentWidth
         let isUnchanged = !widthChanged && ids == orderedIDs && plan.rows.allSatisfy { spec in
-            specsByID[spec.id]?.equalityToken.isEqual(to: spec.equalityToken) == true
+            guard let current = specsByID[spec.id] else { return false }
+            return current.equalityToken.isEqual(to: spec.equalityToken)
+                && current.ownerID == spec.ownerID
+                && current.retention == spec.retention
+                && current.estimatedHeight == spec.estimatedHeight
         }
         guard !isUnchanged else { return }
 
@@ -145,7 +150,9 @@ final class AppKitDiffScrollerReconciler {
                 if view.superview !== scrollView.flippedDocumentView {
                     scrollView.flippedDocumentView.addSubview(view)
                 }
-                let shouldMeasure = result.contentChanged || view.lastMeasuredWidth != contentWidth
+                let shouldMeasure = result.contentChanged
+                    || view.lastMeasuredWidth != contentWidth
+                    || invalidatedRowIDs.remove(id) != nil
                 if shouldMeasure {
                     let height = max(0, view.measuredHeight(forWidth: contentWidth))
                     measuredHeights[id] = height
@@ -171,6 +178,7 @@ final class AppKitDiffScrollerReconciler {
 
     private func intrinsicSizeInvalidated(for id: String) {
         guard specsByID[id] != nil else { return }
+        invalidatedRowIDs.insert(id)
         if isReconciling || isLayingOutRows {
             needsDeferredLayout = true
             scheduleDeferredLayoutIfNeeded()
