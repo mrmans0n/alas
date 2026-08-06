@@ -983,6 +983,33 @@ final class RightPaneState: GGSplitCommitServicing {
             await reconcileGGUndoCandidateIfNeeded()
             return
         }
+        let previousStack = ggStack
+        let previousKey = ggStackCommitsKey
+        let previousLoadState = ggStackLoadState
+        let previousSummary = GGStackSummaryStore.shared.summaries[worktree.path.path]
+        defer {
+            if Task.isCancelled,
+               snapshotGeneration == snapshotInvalidationGeneration,
+               refreshGeneration == ggStackRefreshGeneration,
+               ggStackLoadState == .loading {
+                let canRestorePreviousSnapshot = previousKey == key
+                    && key == currentGGStackCommitsKey
+                    && (previousLoadState == .loaded || previousLoadState == .empty)
+                if canRestorePreviousSnapshot {
+                    ggStack = previousStack
+                    ggStackCommitsKey = previousKey
+                    ggStackLoadState = previousLoadState
+                    GGStackSummaryStore.shared.summaries[worktree.path.path] = previousSummary
+                } else {
+                    ggStack = nil
+                    ggStackCommitsKey = nil
+                    ggStackLoadState = .failed(
+                        "Stack refresh was interrupted. Retry to load it again."
+                    )
+                    GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+                }
+            }
+        }
         ggStackLoadState = .loading
         ggStackCommitsKey = nil
         if ggStack != nil { ggStack = nil }
