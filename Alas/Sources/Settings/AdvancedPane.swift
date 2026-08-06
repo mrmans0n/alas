@@ -11,6 +11,7 @@ struct AdvancedPane: View {
     /// correctly once but never invalidates this view, so the switch could
     /// keep drawing its old position after the override had already changed.
     @State private var appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
+    @State private var appKitDiffScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
 
     var body: some View {
         ScrollView {
@@ -30,6 +31,18 @@ struct AdvancedPane: View {
                             set: {
                                 appKitScrollerEnabled = $0
                                 ACPTranscriptScrollerFlag.setOverride($0)
+                            }
+                        ))
+                    }
+                    SettingsRow(
+                        name: "AppKit diff scrollers",
+                        desc: "Replaces vertical scrolling in diff and review panes with an AppKit-backed scroller. Toggling this re-creates open diff views, so their scroll positions are lost."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { appKitDiffScrollerEnabled },
+                            set: {
+                                appKitDiffScrollerEnabled = $0
+                                AppKitDiffScrollerFlag.setOverride($0)
                             }
                         ))
                     }
@@ -87,6 +100,11 @@ struct AdvancedPane: View {
             // Keeps the switch honest when the override changes from outside
             // this pane — a `defaults write`, or another window's copy of it.
             appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
+        ) { _ in
+            appKitDiffScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
         }
     }
 
