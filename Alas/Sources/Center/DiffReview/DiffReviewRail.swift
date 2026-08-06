@@ -239,6 +239,14 @@ struct DiffReviewRail: View {
                             label: name
                         )
                     )
+                ReviewDraftCommentActionPressMarker(
+                    identifier: "diff-review-rail-row-\(file.id.rawValue)",
+                    label: file.path
+                ) {
+                    selectedFileID = file.id
+                    onSelectFile(file.id)
+                }
+                .frame(width: 1, height: 1)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(name)
                         .font(.system(size: 12, weight: .medium))

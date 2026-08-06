@@ -124,6 +124,214 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func appKitReviewWindowHandlesRailSameFileFallbackAndSuppressedNavigationUpdates() async throws {
+        let files = [
+            summary(path: "Sources/First.swift"),
+            summary(path: "Sources/Second.swift"),
+            summary(path: "Sources/Third.swift"),
+            summary(path: "Sources/Fourth.swift"),
+            summary(path: "Sources/Fifth.swift"),
+        ]
+        let session = loadedSession(summaries: files)
+        let model = AppKitReviewSurfaceWindowModel(session: session)
+        let sameFileFeedback = DiffReviewInlineFeedback(
+            id: "same-file-feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Stay on this file.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: files[2].path, line: nil, side: .unknown),
+            evidenceItemID: "same-file-feedback"
+        )
+        let farDraft = draftComment(
+            id: "far-draft",
+            fileID: files[4].id,
+            path: files[4].path,
+            startLine: 1
+        )
+        model.inlineFeedbackByFileID = [files[2].id: [sameFileFeedback]]
+        model.draftCommentsByFileID = [files[4].id: [farDraft]]
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 150
+            )
+            let window = attachWindow(controller, width: 1_000, height: 150)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+
+            model.inlineFeedbackCommand = .init(feedbackID: "same-file-feedback", fileID: files[2].id, generation: 1)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[2].id)
+
+            model.inlineFeedbackCommand = .init(feedbackID: "same-file-feedback", fileID: files[2].id, generation: 2)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[2].id)
+
+            model.inlineFeedbackCommand = .init(feedbackID: "missing-feedback", fileID: files[2].id, generation: 3)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[2].id)
+
+            model.inlineFeedbackCommand = nil
+            model.draftCommentCommand = .init(commentID: "far-draft", fileID: files[4].id, generation: 1)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+            scroller.contentView.scroll(to: NSPoint(x: 0, y: 0))
+            scroller.reflectScrolledClipView(scroller.contentView)
+            await drainSwiftUI(controller.view)
+            #expect(model.selected == files[4].id)
+        }
+    }
+
+    @Test func appKitReviewWindowExpandsContextAndCompensatesInsertionsAboveViewport() async throws {
+        let firstSummary = summary(path: "Sources/Context.swift")
+        let secondSummary = summary(path: "Sources/Below.swift")
+        let collapsedFirst = fileSection(
+            summary: firstSummary,
+            displayModel: collapsedContextDisplayModel(filePath: firstSummary.path, hiddenRowCount: 8)
+        )
+        let second = fileSection(
+            summary: secondSummary,
+            displayModel: largeSingleGroupDisplayModel(rowCount: 40, filePath: secondSummary.path)
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [collapsedFirst, second]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 220
+            )
+            let window = attachWindow(controller, width: 1_000, height: 220)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+
+            #expect(pressAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-rail-row-\(secondSummary.id.rawValue)",
+                in: controller.view
+            ))
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+            await drainSwiftUI(controller.view)
+            let beforeInsertionY = scroller.scrollY
+
+            let expandedFirst = fileSection(
+                summary: firstSummary,
+                displayModel: expandedContextDisplayModel(filePath: firstSummary.path, hiddenRowCount: 16)
+            )
+            model.session = loadedSession(files: [expandedFirst, second])
+            await drainSwiftUI(controller.view)
+
+            #expect(model.selected == secondSummary.id)
+            #expect(scroller.scrollY >= beforeInsertionY)
+        }
+    }
+
+    @Test func appKitReviewWindowPinsFocusedComposerWhileScrolling() async throws {
+        let file = fileSection(
+            summary: summary(path: "Sources/Composer.swift"),
+            displayModel: largeSingleGroupDisplayModel(rowCount: 80, filePath: "Sources/Composer.swift")
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 260
+            )
+            let window = attachWindow(controller, width: 1_000, height: 260)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+
+            try selectReviewLine(selectionIndex: 0, in: controller.view)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            await drainSwiftUI(controller.view)
+            let composer = try #require(draftComposerTextView(in: controller.view))
+            #expect(window.firstResponder === composer)
+
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+            scroller.setScrollY(900, animated: false)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.10))
+            await drainSwiftUI(controller.view)
+            #expect(draftComposerTextView(in: controller.view) != nil)
+            #expect(window.firstResponder === composer)
+        }
+    }
+
+    @Test func appKitReviewWindowRoutesImageRetryAndStagedMutationActions() async throws {
+        let imageLoader = AppKitImageRetryRecorder()
+        let actions = AppKitReviewActionRecorder()
+        let imageSummary = summary(path: "Assets/logo.png", status: .modified)
+        let stagedSummary = summary(
+            path: "Sources/Staged.swift",
+            namespace: "staged",
+            groupID: "staged",
+            groupTitle: "Staged"
+        )
+        let imageFile = fileSection(
+            summary: imageSummary,
+            displayModel: nil,
+            imageProvider: DiffReviewImageProvider(
+                id: DiffReviewImageProviderID(
+                    source: .commit,
+                    repository: "/repo",
+                    beforeRevision: "abc123^",
+                    afterRevision: "abc123",
+                    beforePath: imageSummary.path,
+                    afterPath: imageSummary.path
+                ),
+                load: { await imageLoader.load() }
+            )
+        )
+        let stagedFile = fileSection(
+            summary: stagedSummary,
+            displayModel: displayModel(),
+            stagedMutationActions: DiffReviewStagedMutationActions(
+                unstageFile: { actions.unstagedFiles += 1 },
+                unstageHunk: { _ in actions.unstagedHunks += 1 },
+                isHunkUnstageEnabled: { _ in true }
+            )
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [imageFile, stagedFile]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 900
+            )
+            let window = attachWindow(controller, width: 1_000, height: 900)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            await drainSwiftUI(controller.view)
+
+            #expect(imageLoader.loadCount == 1)
+            #expect(pressAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-image-retry-\(imageSummary.id.rawValue)",
+                in: controller.view
+            ))
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            await drainSwiftUI(controller.view)
+            #expect(imageLoader.loadCount == 2)
+
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+            scroller.setScrollY(420, animated: false)
+            await drainSwiftUI(controller.view)
+            #expect(pressAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-unstage-file-\(stagedSummary.id.rawValue)",
+                in: controller.view
+            ))
+            #expect(actions.unstagedFiles == 1)
+        }
+    }
+
     @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
         let model = ReviewDraftComposerFocusModel()
         let controller = NSHostingController(
@@ -4142,6 +4350,91 @@ struct DiffReviewSurfaceTests {
         return DiffDisplayModel(filePath: filePath, groups: [group])
     }
 
+    private func collapsedContextDisplayModel(filePath: String, hiddenRowCount: Int) -> DiffDisplayModel {
+        let hiddenRows = (1...hiddenRowCount).map { line in
+            DiffDisplayRow(
+                id: "hidden-row-\(line)",
+                kind: .context,
+                old: nil,
+                new: diffLine(
+                    id: "hidden-line-\(line)",
+                    side: .new,
+                    newLine: line,
+                    text: "let hidden\(line) = \(line)",
+                    rowIndex: line - 1
+                ),
+                collapsedLineCount: 0
+            )
+        }
+        let collapsed = DiffDisplayRow(
+            id: "collapsed-context",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: hiddenRowCount,
+            collapsedRows: hiddenRows
+        )
+        let changed = DiffDisplayRow(
+            id: "visible-change",
+            kind: .add,
+            old: nil,
+            new: diffLine(
+                id: "visible-line",
+                side: .new,
+                newLine: hiddenRowCount + 1,
+                text: "let visible = true",
+                kind: .add,
+                rowIndex: hiddenRowCount
+            ),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "context-group",
+            header: "@@ -1,\(hiddenRowCount + 1) +1,\(hiddenRowCount + 1) @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [collapsed, changed]
+        )
+        return DiffDisplayModel(filePath: filePath, groups: [group])
+    }
+
+    private func expandedContextDisplayModel(filePath: String, hiddenRowCount: Int) -> DiffDisplayModel {
+        let collapsedModel = collapsedContextDisplayModel(filePath: filePath, hiddenRowCount: hiddenRowCount)
+        let group = collapsedModel.groups[0]
+        let expandedRows = group.rows.flatMap { row in
+            row.kind == .collapsed ? [row] + row.collapsedRows : [row]
+        }
+        return DiffDisplayModel(
+            filePath: filePath,
+            groups: [
+                DiffDisplayGroup(
+                    id: group.id,
+                    header: group.header,
+                    sourceHunk: group.sourceHunk,
+                    rows: expandedRows
+                ),
+            ]
+        )
+    }
+
+    private func fileSection(
+        summary: DiffReviewFileSummary,
+        displayModel: DiffDisplayModel?,
+        imageProvider: DiffReviewImageProvider? = nil,
+        stagedMutationActions: DiffReviewStagedMutationActions? = nil
+    ) -> DiffReviewFileSectionModel {
+        var file = DiffReviewFileSectionModel(
+            summary: summary,
+            parsedDiff: displayModel == nil ? nil : parsedDiff(),
+            displayModel: displayModel,
+            placeholderMessage: displayModel == nil && imageProvider == nil ? "No diff." : nil,
+            openFile: nil,
+            contextProvider: nil,
+            imageProvider: imageProvider
+        )
+        file.stagedMutationActions = stagedMutationActions
+        return file
+    }
+
     private func loadedSession(summaries: [DiffReviewFileSummary]) -> DiffReviewLoadedSession {
         DiffReviewLoadedSession(
             files: summaries.map { summary in
@@ -4155,6 +4448,13 @@ struct DiffReviewSurfaceTests {
                 )
             },
             summary: DiffReviewSessionModel(files: summaries, groupsEnabled: false)
+        )
+    }
+
+    private func loadedSession(files: [DiffReviewFileSectionModel]) -> DiffReviewLoadedSession {
+        DiffReviewLoadedSession(
+            files: files,
+            summary: DiffReviewSessionModel(files: files.map(\.summary), groupsEnabled: false)
         )
     }
 
@@ -4347,6 +4647,14 @@ struct DiffReviewSurfaceTests {
         return false
     }
 
+    private func pressButton(withToolTip toolTip: String, in view: NSView) -> Bool {
+        for button in allSubviews(of: view).compactMap({ $0 as? NSButton }) where button.toolTip == toolTip {
+            button.performClick(nil)
+            return true
+        }
+        return false
+    }
+
     private func selectReviewLine(selectionIndex: Int, in view: NSView) throws {
         let selectableRows = allSubviews(of: view)
             .compactMap { $0 as? DiffPaneLineNumberRulerView }
@@ -4530,4 +4838,25 @@ private final class ReviewBundleActionRecorder: @unchecked Sendable {
     var copied: ReviewFeedbackBundle?
     var sent: ReviewFeedbackBundle?
     var sentTarget: ReviewFeedbackAgentTarget?
+}
+
+@MainActor
+private final class AppKitImageRetryRecorder {
+    private(set) var loadCount = 0
+
+    func load() async -> ImageDiffPair {
+        loadCount += 1
+        return ImageDiffPair(
+            before: .failed(.init(message: "Could not decode before image")),
+            after: .missing,
+            oldPath: nil,
+            kind: .deleted
+        )
+    }
+}
+
+@MainActor
+private final class AppKitReviewActionRecorder {
+    var unstagedFiles = 0
+    var unstagedHunks = 0
 }

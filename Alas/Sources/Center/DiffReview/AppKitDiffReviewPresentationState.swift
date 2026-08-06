@@ -4,16 +4,21 @@ import SwiftUI
 @MainActor
 final class AppKitDiffReviewPresentationStore: ObservableObject {
     private var states: [DiffReviewFileID: AppKitDiffReviewFileState] = [:]
+    private var stateCancellables: [DiffReviewFileID: AnyCancellable] = [:]
 
     func state(for file: DiffReviewFileSectionModel) -> AppKitDiffReviewFileState {
         if let state = states[file.id] { return state }
         let state = AppKitDiffReviewFileState()
         states[file.id] = state
+        stateCancellables[file.id] = state.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         return state
     }
 
     func prune(keeping fileIDs: Set<DiffReviewFileID>) {
         states = states.filter { fileIDs.contains($0.key) }
+        stateCancellables = stateCancellables.filter { fileIDs.contains($0.key) }
     }
 }
 

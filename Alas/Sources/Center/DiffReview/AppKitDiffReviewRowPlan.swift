@@ -624,6 +624,12 @@ struct AppKitDiffReviewHeaderRowBody: View {
                     .background(input.theme.color("bg-3"))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .accessibilityIdentifier("diff-review-unstage-file-\(input.file.id.rawValue)")
+                    .background(ReviewDraftCommentActionPressMarker(
+                        identifier: "diff-review-unstage-file-\(input.file.id.rawValue)",
+                        label: "Unstage \(input.file.summary.path)"
+                    ) {
+                        unstage()
+                    })
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
@@ -731,10 +737,12 @@ struct AppKitDiffReviewImageRowBody: View {
                             .background(input.theme.color("bg-3"))
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                             .accessibilityIdentifier("diff-review-image-retry-\(input.file.id.rawValue)")
-                            .background(DiffReviewAccessibilityMarker(
+                            .background(ReviewDraftCommentActionPressMarker(
                                 identifier: "diff-review-image-retry-\(input.file.id.rawValue)",
                                 label: "Retry image diff"
-                            ))
+                            ) {
+                                Task { await input.state.imageState.retry() }
+                            })
                     }
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(DiffReviewAccessibilityMarker(
@@ -744,6 +752,13 @@ struct AppKitDiffReviewImageRowBody: View {
             }
         }
         .background(input.theme.color("bg-1"))
+        .task(id: input.file.imageProvider?.id) {
+            guard let provider = input.file.imageProvider else {
+                input.state.imageState.clear()
+                return
+            }
+            await input.state.imageState.load(provider: provider)
+        }
     }
 
     private func failureMessage(in pair: ImageDiffPair) -> String? {
@@ -860,6 +875,15 @@ struct AppKitDiffReviewGroupHeaderRowBody: View {
                         .frame(width: 22, height: 20)
                 }
                 .buttonStyle(.plain).help(expanded ? "Collapse context" : "Expand context")
+                .accessibilityIdentifier("diff-review-context-toggle-\(input.file.id.rawValue)-\(group.id)")
+                .overlay(ReviewDraftCommentActionPressMarker(
+                    identifier: "diff-review-context-toggle-\(input.file.id.rawValue)-\(group.id)",
+                    label: expanded ? "Collapse context" : "Expand context"
+                ) {
+                    input.state.expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
+                        group, expandedIDs: input.state.expandedCollapsedRowIDs
+                    )
+                })
             }
         }
         .padding(.horizontal, 13).padding(.vertical, 8).background(input.theme.color("bg-2"))
