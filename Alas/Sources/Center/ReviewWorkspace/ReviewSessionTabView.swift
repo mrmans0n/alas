@@ -663,7 +663,7 @@ struct ReviewSessionTabView: View {
             let target = storedRecord.target.updatingTrackedRevision(stalled, title: storedRecord.target.title)
             return (
                 storedRecord.retargetingCommit(to: target, resolvedSHAChanged: false, now: now()),
-                false
+                true
             )
         }
         switch TrackedRevisionPolicy.evaluate(current: revision, candidate: candidate) {
