@@ -1,8 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// AppKit-backed transcript scroller (feature-flagged replacement for the
-/// SwiftUI ScrollView in ACPMessageList). SwiftUI remains the reconciliation
+/// AppKit-backed transcript scroller. SwiftUI remains the reconciliation
 /// driver: every updateNSView builds the ordered row-spec list from the
 /// transcript's render window and hands it to the reconciler; AppKit owns
 /// scrolling, tiling, and offset compensation.
