@@ -129,16 +129,23 @@ final class AppKitDiffScrollerReconciler {
         if anchorRestructured {
             // If previousScrollY was beyond the estimated document, the
             // unclamped band may have found no rows to measure. Iterate:
-            // scroll to the document bottom, measure the tail rows, and
-            // repeat until the document height stabilizes or encompasses
-            // previousScrollY — a single pass may not measure enough rows
-            // when many underestimated replacement rows sit above the tail.
+            // scroll progressively earlier so each pass measures a different
+            // band of underestimated replacement rows, growing the document
+            // height until it encompasses previousScrollY or stabilizes.
             var previousDocumentHeight = tiling.documentHeight
+            var probeY = tiling.documentHeight
             while previousScrollY > tiling.documentHeight {
-                scrollView.setScrollY(tiling.documentHeight, animated: false)
+                scrollView.setScrollY(probeY, animated: false)
                 layoutVisibleRows()
-                if tiling.documentHeight <= previousDocumentHeight { break }
+                if tiling.documentHeight <= previousDocumentHeight {
+                    // No growth at this band — try measuring further up.
+                    let nextProbe = max(0, probeY - scrollView.viewportHeight - AppKitDiffScrollerReconciler.overscan)
+                    if nextProbe == probeY { break }
+                    probeY = nextProbe
+                    continue
+                }
                 previousDocumentHeight = tiling.documentHeight
+                probeY = tiling.documentHeight
             }
             // Restore the saved Y (clamped against the now-measured document)
             // and re-tile so the viewport band is mounted at the final position.
