@@ -342,7 +342,14 @@ private struct ACPSessionView: View {
                     elicitationId: elicitationId
                 )
             },
-            onQueueEdit: isMirror ? { _ in } : { item in
+            // Every queue callback below re-reads `isMirror` when it fires
+            // rather than being swapped for a no-op up front: the AppKit
+            // scroller retains a mounted queue row's closures until that
+            // row's equality token changes, and the token cannot cover
+            // callback identity. See
+            // `ACPTranscriptQueuePolicy.allowsQueueMutation`.
+            onQueueEdit: { item in
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 // Pull the queued prompt back into the composer for editing,
                 // appended after any text the user has already typed so
                 // nothing is clobbered. `takeForEditing` removes the item and
@@ -355,26 +362,31 @@ private struct ACPSessionView: View {
                 manager.persistQueue(for: session)
                 manager.runners[sessionId]?.flushQueueIfIdle()
             },
-            onQueueForceSend: isMirror ? { _ in } : { id in
+            onQueueForceSend: { id in
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 manager.runners[sessionId]?.forceSendQueuedItem(id: id)
             },
-            onQueueRemove: isMirror ? { _ in } : { id in
+            onQueueRemove: { id in
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 session.removeFromQueue(id: id)
                 manager.persistQueue(for: session)
                 manager.runners[sessionId]?.flushQueueIfIdle()
             },
-            onQueueRetry: isMirror ? { _ in } : { id in
+            onQueueRetry: { id in
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
                 session.queue[idx].lastError = nil
                 manager.persistQueue(for: session)
                 manager.runners[sessionId]?.flushQueueIfIdle()
             },
-            onQueueReorder: isMirror ? { _, _ in } : { src, dst in
+            onQueueReorder: { src, dst in
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 session.moveInQueue(from: src, to: dst)
                 manager.persistQueue(for: session)
                 manager.runners[sessionId]?.flushQueueIfIdle()
             },
-            onQueueClearAll: isMirror ? {} : {
+            onQueueClearAll: {
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 session.clearPendingQueue()
                 manager.persistQueue(for: session)
                 manager.runners[sessionId]?.flushQueueIfIdle()

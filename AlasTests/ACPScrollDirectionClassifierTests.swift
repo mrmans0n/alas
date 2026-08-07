@@ -3,36 +3,6 @@ import CoreGraphics
 @testable import Alas
 
 struct ACPScrollDirectionClassifierTests {
-    @Test func initialTailRestoreSuppressesHeadPagination() {
-        #expect(!ACPMessageList.shouldStepHeadBackFromGeometry(
-            visibleHead: 70,
-            isRestoring: true,
-            isHeadPaginationDriven: false,
-            newMinY: 0,
-            threshold: 200
-        ))
-    }
-
-    @Test func delayedInitialGeometryDoesNotStepHeadBackAfterRestore() {
-        #expect(!ACPMessageList.shouldStepHeadBackFromGeometry(
-            visibleHead: 70,
-            isRestoring: false,
-            isHeadPaginationDriven: false,
-            newMinY: 0,
-            threshold: 200
-        ))
-    }
-
-    @Test func userDrivenTopGeometryAllowsLaterHeadPagination() {
-        #expect(ACPMessageList.shouldStepHeadBackFromGeometry(
-            visibleHead: 70,
-            isRestoring: false,
-            isHeadPaginationDriven: true,
-            newMinY: 0,
-            threshold: 200
-        ))
-    }
-
     @Test func firstSampleReportsNoChange() {
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: nil,

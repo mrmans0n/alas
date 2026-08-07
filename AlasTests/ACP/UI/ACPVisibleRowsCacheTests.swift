@@ -8,9 +8,9 @@ struct ACPVisibleRowsCacheTests {
     func sameKeyReturnsCachedRowsWithoutRebuilding() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         let first = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -24,9 +24,9 @@ struct ACPVisibleRowsCacheTests {
     func bumpingGenerationRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -39,9 +39,9 @@ struct ACPVisibleRowsCacheTests {
     func changingHeadRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -54,9 +54,9 @@ struct ACPVisibleRowsCacheTests {
     func changingTailRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -69,39 +69,36 @@ struct ACPVisibleRowsCacheTests {
     func lookupMemoizedForSameKey() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
             return [
-                ACPMessageList.VisibleRow(index: 0, stableId: "a"),
-                ACPMessageList.VisibleRow(index: 1, stableId: "b")
+                ACPTranscriptVisibleRow(index: 0, stableId: "a"),
+                ACPTranscriptVisibleRow(index: 1, stableId: "b")
             ]
         }
 
-        let first = cache.lookup(generation: 1, head: 0, tail: 2, build: build)
+        _ = cache.lookup(generation: 1, head: 0, tail: 2, build: build)
         let second = cache.lookup(generation: 1, head: 0, tail: 2, build: build)
 
         #expect(buildCount == 1)
-        #expect(first.ids == second.ids)
-        #expect(first.contains("a"))
-        #expect(first.contains("b"))
-        #expect(first.transcriptIndex(for: "b") == 1)
+        #expect(second.transcriptIndex(for: "b") == 1)
     }
 
     @Test("lookup rebuilds when the key changes")
     func lookupRebuildsWhenKeyChanges() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: buildCount - 1, stableId: "row-\(buildCount)")]
+            return [ACPTranscriptVisibleRow(index: buildCount - 1, stableId: "row-\(buildCount)")]
         }
 
         let first = cache.lookup(generation: 1, head: 0, tail: 1, build: build)
         let second = cache.lookup(generation: 2, head: 0, tail: 1, build: build)
 
         #expect(buildCount == 2)
-        #expect(first.contains("row-1"))
-        #expect(!second.contains("row-1"))
-        #expect(second.contains("row-2"))
+        #expect(first.transcriptIndex(for: "row-1") == 0)
+        #expect(second.transcriptIndex(for: "row-1") == nil)
+        #expect(second.transcriptIndex(for: "row-2") == 1)
     }
 }

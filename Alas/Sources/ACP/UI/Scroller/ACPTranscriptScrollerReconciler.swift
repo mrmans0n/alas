@@ -341,10 +341,10 @@ final class ACPTranscriptScrollerReconciler {
     /// The "at the tail" test is skipped on the RISING EDGE of tail-follow —
     /// `followsTail` true where `wasFollowingTail` is false. That transition
     /// is somebody deliberately (re-)arming the follow from wherever the
-    /// viewport happens to be: the "go to newest" button (which sets
-    /// `session.followsTranscriptTail` and resets the render window WITHOUT
-    /// scrolling, leaving this re-pin as the only thing that makes it jump —
-    /// ACPMessageList.swift:222-226), `Coordinator.resumeTailFollow`, and the
+    /// viewport happens to be: `ACPMessageList`'s "go to newest" button
+    /// (which sets `session.followsTranscriptTail` and resets the render
+    /// window WITHOUT scrolling, leaving this re-pin as the only thing that
+    /// makes it jump), `Coordinator.resumeTailFollow`, and the
     /// initial load. Requiring the viewport to already be at the tail there
     /// would defeat the whole point of the gesture.
     ///

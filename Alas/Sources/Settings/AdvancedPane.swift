@@ -6,11 +6,10 @@ struct AdvancedPane: View {
     @State private var pendingAction: CleanupAction?
     @State private var cleanupMessage: String?
     @State private var isCleaningStaleProjects = false
-    /// Mirrors `ACPTranscriptScrollerFlag.isEnabled` in observable state.
+    /// Mirrors `AppKitDiffScrollerFlag.isEnabled` in observable state.
     /// Reading the flag straight from a `Binding` getter renders the toggle
     /// correctly once but never invalidates this view, so the switch could
     /// keep drawing its old position after the override had already changed.
-    @State private var appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
     @State private var appKitDiffScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
 
     var body: some View {
@@ -22,18 +21,6 @@ struct AdvancedPane: View {
                     .padding(.bottom, 12)
 
                 SettingsGroup(title: "Experiments") {
-                    SettingsRow(
-                        name: "AppKit transcript scroller",
-                        desc: "Replaces the transcript's scrolling implementation with an AppKit-backed scroller, keeping pagination through long chat history jump-free. Toggling this re-creates the transcript view, so the scroll position in any open chats is lost."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { appKitScrollerEnabled },
-                            set: {
-                                appKitScrollerEnabled = $0
-                                ACPTranscriptScrollerFlag.setOverride($0)
-                            }
-                        ))
-                    }
                     SettingsRow(
                         name: "AppKit diff scrollers",
                         desc: "Replaces vertical scrolling in diff and review panes with an AppKit-backed scroller. Toggling this re-creates open diff views, so their scroll positions are lost."
@@ -95,15 +82,10 @@ struct AdvancedPane: View {
             Text(action.message(projectCount: state.projects.count))
         }
         .onReceive(
-            NotificationCenter.default.publisher(for: ACPTranscriptScrollerFlag.overrideDidChangeNotification)
+            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
         ) { _ in
             // Keeps the switch honest when the override changes from outside
             // this pane — a `defaults write`, or another window's copy of it.
-            appKitScrollerEnabled = ACPTranscriptScrollerFlag.isEnabled
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
-        ) { _ in
             appKitDiffScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
         }
     }
