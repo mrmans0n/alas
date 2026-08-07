@@ -128,6 +128,27 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(secondState.renderContextCache.missCountForTests == 0)
     }
 
+    @Test func aggregateBudgetUsesReviewDeferredPlaceholderTitle() {
+        let first = textFile(path: "Sources/First.swift")
+        let second = textFile(path: "Sources/Second.swift")
+        let input = AppKitDiffReviewRowInput(file: second, state: AppKitDiffReviewFileState(), theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(
+            inputs: [
+                .init(file: first, state: AppKitDiffReviewFileState(), theme: theme),
+                input,
+            ],
+            maxAutomaticallyRenderedRows: DiffReviewRenderBudget.renderedRowCount(of: first.displayModel!)
+        )
+        let placeholder = AppKitDiffReviewPlaceholderRowBody(
+            input: input,
+            isDeferred: true,
+            isAggregateDeferred: plan.placeholderByFileID[second.id] != nil
+        )
+
+        #expect(placeholder.title == "Large review diff deferred for performance")
+    }
+
     @Test func renderedTargetsAreDirectRowsAndComposerIsPinnedOnlyWhileFocused() throws {
         let file = textFile()
         let feedback = feedback(line: 1)

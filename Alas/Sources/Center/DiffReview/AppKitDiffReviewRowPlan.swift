@@ -356,14 +356,26 @@ enum AppKitDiffReviewRowPlanBuilder {
                 }
             }
 
+            let automaticallyRendersByAggregateBudget = eligibility[index].automaticallyRendersDiff
             let individuallyDeferred = input.file.displayModel.map(DiffReviewRenderBudget.isOverBudget) ?? false
-            let isDeferred = (!input.automaticallyRendersDiff || !eligibility[index].automaticallyRendersDiff || individuallyDeferred)
+            let isAggregateDeferred = input.automaticallyRendersDiff && !automaticallyRendersByAggregateBudget && !individuallyDeferred
+            let isDeferred = (!input.automaticallyRendersDiff || !automaticallyRendersByAggregateBudget || individuallyDeferred)
                 && !input.state.showFullDiffOverride
             if isDeferred || (input.file.displayModel == nil && input.file.imageProvider == nil) {
                 let placeholderID = AppKitDiffReviewRowID.placeholder(fileID: fileID)
                 placeholderByFileID[fileID] = placeholderID
-                append(&rows, id: placeholderID, input: input, signature: placeholderSignature(input, deferred: isDeferred), height: 88) {
-                    AnyView(AppKitDiffReviewPlaceholderRowBody(input: input, isDeferred: isDeferred))
+                append(
+                    &rows,
+                    id: placeholderID,
+                    input: input,
+                    signature: placeholderSignature(input, deferred: isDeferred, aggregateDeferred: isAggregateDeferred),
+                    height: 88
+                ) {
+                    AnyView(AppKitDiffReviewPlaceholderRowBody(
+                        input: input,
+                        isDeferred: isDeferred,
+                        isAggregateDeferred: isAggregateDeferred
+                    ))
                 }
                 mapTargets(input, to: placeholderID, into: &fallbackByTargetID)
             } else if input.file.imageProvider != nil {
@@ -735,13 +747,18 @@ enum AppKitDiffReviewRowPlanBuilder {
         return hasher.finalize()
     }
 
-    private static func placeholderSignature(_ input: AppKitDiffReviewRowInput, deferred: Bool) -> Int {
+    private static func placeholderSignature(
+        _ input: AppKitDiffReviewRowInput,
+        deferred: Bool,
+        aggregateDeferred: Bool
+    ) -> Int {
         var hasher = Hasher()
         hasher.combine(input.file.placeholderMessage)
         hasher.combine(input.file.summary.additions)
         hasher.combine(input.file.summary.deletions)
         hasher.combine(input.inlineFeedback.count + input.draftComments.count + input.threads.count)
         hasher.combine(deferred)
+        hasher.combine(aggregateDeferred)
         return hasher.finalize()
     }
 
@@ -1023,12 +1040,20 @@ private struct AppKitDiffReviewCardBorderShape: Shape {
 struct AppKitDiffReviewPlaceholderRowBody: View {
     let input: AppKitDiffReviewRowInput
     let isDeferred: Bool
+    let isAggregateDeferred: Bool
+
+    var title: String {
+        if isDeferred {
+            isAggregateDeferred || !input.automaticallyRendersDiff
+                ? "Large review diff deferred for performance"
+                : "Large diff hidden for performance"
+        } else {
+            input.file.placeholderMessage ?? "This file cannot be rendered in the review view."
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            let title = isDeferred
-                ? (input.automaticallyRendersDiff ? "Large diff hidden for performance" : "Large review diff deferred for performance")
-                : (input.file.placeholderMessage ?? "This file cannot be rendered in the review view.")
             Text(title)
                 .font(.system(size: 12, weight: isDeferred ? .semibold : .regular))
                 .foregroundColor(isDeferred ? input.theme.color("fg") : input.theme.color("fg-dim"))
@@ -1066,7 +1091,7 @@ struct AppKitDiffReviewPlaceholderRowBody: View {
             identifier: isDeferred
                 ? "diff-review-render-budget-\(input.file.id.rawValue)"
                 : "diff-review-placeholder-\(input.file.id.rawValue)",
-            label: isDeferred ? "Large review diff deferred for performance" : (input.file.placeholderMessage ?? "This file cannot be rendered in the review view.")
+            label: title
         ))
     }
 }

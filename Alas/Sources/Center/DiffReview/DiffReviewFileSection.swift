@@ -562,7 +562,11 @@ struct DiffReviewFileSection: View {
     }
 
     private var renderBudgetPlaceholder: some View {
-        AppKitDiffReviewPlaceholderRowBody(input: focusedRowInput, isDeferred: true)
+        AppKitDiffReviewPlaceholderRowBody(
+            input: focusedRowInput,
+            isDeferred: true,
+            isAggregateDeferred: isDeferredByAggregateBudget
+        )
         .background(renderBudgetScrollAnchors)
         .background {
             if isDeferredByAggregateBudget {
@@ -632,7 +636,11 @@ struct DiffReviewFileSection: View {
                 lazyGroupStack(renderableGroups, displayModel: displayModel)
             }
         } else {
-            AppKitDiffReviewPlaceholderRowBody(input: focusedRowInput, isDeferred: false)
+            AppKitDiffReviewPlaceholderRowBody(
+                input: focusedRowInput,
+                isDeferred: false,
+                isAggregateDeferred: false
+            )
         }
     }
 
