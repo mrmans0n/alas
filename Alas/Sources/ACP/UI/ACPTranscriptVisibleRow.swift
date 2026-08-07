@@ -26,3 +26,24 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
         }
     }
 }
+
+/// O(1) transcript-index lookup by stable id, built once per render window
+/// and reused by scroll callbacks that need the mapping until the window
+/// changes.
+struct ACPTranscriptVisibleRowLookup {
+    private let indexByStableId: [String: Int]
+
+    init(rows: [(index: Int, stableId: String)]) {
+        var indexByStableId: [String: Int] = [:]
+        indexByStableId.reserveCapacity(rows.count)
+        for row in rows {
+            indexByStableId[row.stableId] = row.index
+        }
+        self.indexByStableId = indexByStableId
+    }
+
+    func transcriptIndex(for id: String?) -> Int? {
+        guard let id else { return nil }
+        return indexByStableId[id]
+    }
+}

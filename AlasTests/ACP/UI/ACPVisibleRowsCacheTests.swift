@@ -77,14 +77,11 @@ struct ACPVisibleRowsCacheTests {
             ]
         }
 
-        let first = cache.lookup(generation: 1, head: 0, tail: 2, build: build)
+        _ = cache.lookup(generation: 1, head: 0, tail: 2, build: build)
         let second = cache.lookup(generation: 1, head: 0, tail: 2, build: build)
 
         #expect(buildCount == 1)
-        #expect(first.ids == second.ids)
-        #expect(first.contains("a"))
-        #expect(first.contains("b"))
-        #expect(first.transcriptIndex(for: "b") == 1)
+        #expect(second.transcriptIndex(for: "b") == 1)
     }
 
     @Test("lookup rebuilds when the key changes")
@@ -100,8 +97,8 @@ struct ACPVisibleRowsCacheTests {
         let second = cache.lookup(generation: 2, head: 0, tail: 1, build: build)
 
         #expect(buildCount == 2)
-        #expect(first.contains("row-1"))
-        #expect(!second.contains("row-1"))
-        #expect(second.contains("row-2"))
+        #expect(first.transcriptIndex(for: "row-1") == 0)
+        #expect(second.transcriptIndex(for: "row-1") == nil)
+        #expect(second.transcriptIndex(for: "row-2") == 1)
     }
 }

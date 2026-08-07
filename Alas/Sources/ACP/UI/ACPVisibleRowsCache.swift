@@ -13,7 +13,7 @@ final class ACPVisibleRowsCache {
     }
     private var key: Key?
     private var rows: [ACPTranscriptVisibleRow] = []
-    private var lookup: ACPMessageList.VisibleMessageLookup?
+    private var lookup: ACPTranscriptVisibleRowLookup?
 
     func rows(
         generation: UInt64, head: Int, tail: Int,
@@ -31,10 +31,10 @@ final class ACPVisibleRowsCache {
     func lookup(
         generation: UInt64, head: Int, tail: Int,
         build: () -> [ACPTranscriptVisibleRow]
-    ) -> ACPMessageList.VisibleMessageLookup {
+    ) -> ACPTranscriptVisibleRowLookup {
         let r = rows(generation: generation, head: head, tail: tail, build: build)
         if let lookup { return lookup }
-        let l = ACPMessageList.visibleMessageLookup(rows: r.map { ($0.index, $0.stableId) })
+        let l = ACPTranscriptVisibleRowLookup(rows: r.map { ($0.index, $0.stableId) })
         lookup = l
         return l
     }

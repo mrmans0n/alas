@@ -1,7 +1,7 @@
 import AppKit
 
 /// Maps an `NSEvent.EventType` to whether it represents a live user scroll
-/// gesture, used by `ACPScrollEventObserver` to decide if an upward bounds
+/// gesture, used by the transcript scroller to decide if an upward bounds
 /// change is deliberate. Extracted as a pure function so the mapping is unit
 /// testable without a running event loop.
 ///

@@ -19,8 +19,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let rememberedScrollAnchor: () -> String?
     let onRememberScrollAnchor: (String?, Int?, Bool) -> Void
     // Remaining ACPMessageList host inputs (ACPMessageList.swift:5-36),
-    // carried through with identical names/types so Task 11 can pass this
-    // struct's init the same arguments it already builds for ACPMessageList.
+    // carried through with identical names/types: ACPMessageList's own body
+    // passes this struct's init the same arguments its callers build for it.
     let onOpenTranscriptLink: (URL) -> Bool
     let policy: ACPPermissionPolicy?
     let scopeKey: String
@@ -46,8 +46,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// spec re-applies this value explicitly (see `wrapRow`).
     @Environment(\.theme) private var theme
 
-    /// Mirrors `ACPMessageList.openTranscriptURLAction`: routes markdown
-    /// link taps inside message rows back through the host callback.
+    /// Routes markdown link taps inside message rows back through the host
+    /// callback.
     private var openTranscriptURLAction: OpenURLAction {
         OpenURLAction { url in
             onOpenTranscriptLink(url) ? .handled : .systemAction
@@ -266,14 +266,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         // MARK: row specs
 
         /// Wraps a row's content with the layout and environment values that
-        /// would otherwise reach it "for free" as a child of the legacy
-        /// VStack. In the legacy list, `.frame(maxWidth: contentMaxWidth,
+        /// would otherwise reach it "for free" as a child of a single shared
+        /// `VStack`. In that shape, `.frame(maxWidth: contentMaxWidth,
         /// alignment: .leading).padding(.horizontal: 28 +
         /// laneWidth).frame(maxWidth: .infinity, alignment: .center)` sits
-        /// on the WHOLE VStack (ACPMessageList.swift:267-270), constraining
-        /// every child — including synthetic rows — into one centered
-        /// content column. `\.theme` and `\.openURL` are likewise set once
-        /// at that same root. Each row here is instead hosted in its own,
+        /// on the whole stack, constraining every child — including synthetic
+        /// rows — into one centered content column. `\.theme` and
+        /// `\.openURL` are likewise set once at that same root. Each row
+        /// here is instead hosted in its own,
         /// independently-created `NSHostingView` (see
         /// `ACPTranscriptRowHostingPool`), which SwiftUI's layout/environment
         /// propagation does not reach automatically — so both the column
@@ -429,7 +429,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         }
 
         /// Verbatim port of the fork divider inserted right after the fork
-        /// boundary row in the legacy VStack (ACPMessageList.swift:179-191).
+        /// boundary row in the legacy `ForEach`.
         static func forkDividerSpec(
             host: ACPTranscriptScroller,
             fork: ACPSessionForkRecord
@@ -461,13 +461,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        /// Verbatim ports of the trailing elements of the legacy VStack
-        /// (ACPMessageList.swift:199-265): pending permission prompt,
-        /// pending user-input prompt, URL-elicitation waits, streaming
-        /// caret, queue header, queued bubbles, context-recovery row, and
-        /// the invisible composer spacer. Same ids the legacy list used.
-        /// Equality tokens carry the same values `scrollSignature` hashed
-        /// for each element.
+        /// Verbatim ports of the trailing elements of the legacy `VStack`:
+        /// pending permission prompt, pending user-input prompt,
+        /// URL-elicitation waits, streaming caret, queue header, queued
+        /// bubbles, context-recovery row, and the invisible composer
+        /// spacer. Same ids the legacy list used. Equality tokens carry
+        /// the same values the legacy `scrollSignature` hashed for each
+        /// element.
         static func syntheticTailSpecs(host: ACPTranscriptScroller) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             let session = host.session
@@ -683,9 +683,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let currentEventType = eventIsFresh ? event?.type : nil
             // Classifies whether to PAUSE tail-follow, and nothing else — the
             // pagination decisions below are geometric (see
-            // `shouldStepHeadBack`). Mirrors
-            // `ACPMessageList.handleScrollGeometry`: a click on the scrollbar
-            // track arrives as a plain `.leftMouseDown`, which
+            // `shouldStepHeadBack`). Mirrors the legacy scroll-geometry
+            // handler: a click on the scrollbar track arrives as a plain
+            // `.leftMouseDown`, which
             // `ACPUserScrollEvent.isUserDriven` alone rejects (a bare click
             // can't be told apart from clicking a transcript control by event
             // type). Widen to `isHeadPaginationDriven`, which additionally
@@ -1099,8 +1099,8 @@ extension ACPTranscriptScroller {
     /// step's compensation pushes the offset back down by the height it
     /// grafted in, so the window stops growing as soon as there is
     /// `threshold`-worth of loaded history above the viewport. The legacy
-    /// path paginated from a geometry sentinel coming into view
-    /// (`ACPMessageList.handleHeadFramePreference`) for the same reason.
+    /// path paginated from a geometry sentinel coming into view for the
+    /// same reason.
     nonisolated static func shouldStepHeadBack(
         visibleHead: Int, scrollY: CGFloat, threshold: CGFloat,
         hasPendingHeadStep: Bool = false
@@ -1108,8 +1108,8 @@ extension ACPTranscriptScroller {
         visibleHead > 0 && scrollY < threshold && !hasPendingHeadStep
     }
 
-    /// Mirrors `ACPMessageList.shouldStepTailForwardFromBottomGeometry`: a
-    /// bounds change within the bottom threshold only pages the hidden tail
+    /// Mirrors the legacy path's bottom-geometry rule: a bounds change
+    /// within the bottom threshold only pages the hidden tail
     /// while the viewport is actually moving DOWN through the document (in
     /// this flipped, top-down coordinate space, that means `newScrollY`
     /// increasing past `previousScrollY`). Without this, browsing upward
@@ -1142,7 +1142,7 @@ extension ACPTranscriptScroller {
 
 // MARK: - Synthetic row content
 
-/// Verbatim port of `ACPMessageList.StreamingCaret` (private to that file).
+/// Verbatim port of the legacy transcript path's streaming caret.
 private struct StreamingCaret: View {
     @State private var on = false
     @Environment(\.theme) private var theme
@@ -1155,8 +1155,7 @@ private struct StreamingCaret: View {
     }
 }
 
-/// Verbatim port of `ACPMessageList.contextRecoveryRow(_:)` +
-/// `contextRecoveryText(_:)` (private to that file).
+/// Verbatim port of the legacy transcript path's context-recovery row.
 private struct ContextRecoveryRow: View {
     let status: ACPSession.ContextRecoveryStatus
     let onRetry: () -> Void

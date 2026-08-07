@@ -7,8 +7,8 @@ enum ACPScrollDecision: Equatable {
     case userAtBottom
 }
 
-/// Pure decision logic shared by `ACPScrollEventObserver`. Kept free of
-/// AppKit/SwiftUI so it can be exercised in unit tests.
+/// Pure decision logic shared by the transcript's scroll-tracking paths. Kept
+/// free of AppKit/SwiftUI so it can be exercised in unit tests.
 enum ACPScrollDirectionClassifier {
     /// Sub-pixel jitter is ignored. 0.5pt comfortably covers Retina rounding
     /// noise; anything larger can be treated as deliberate direction.
