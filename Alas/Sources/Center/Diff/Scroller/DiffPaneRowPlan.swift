@@ -6,6 +6,17 @@ final class DiffPanePresentationState: ObservableObject {
     let actionRelay = DiffPaneActionRelay()
     @Published private(set) var expandedCollapsedRowIDs: Set<String> = []
     @Published private(set) var activeThreadID: String?
+    private var prewarmedHighlightSignatures: Set<Int> = []
+
+    /// Records that a highlight prewarm for `signature` was scheduled.
+    /// Returns true only the first time a signature is seen so plan rebuilds
+    /// don't re-enqueue identical background work.
+    func registerHighlightPrewarm(signature: Int) -> Bool {
+        if prewarmedHighlightSignatures.count > 512 {
+            prewarmedHighlightSignatures.removeAll(keepingCapacity: true)
+        }
+        return prewarmedHighlightSignatures.insert(signature).inserted
+    }
 
     func toggleCollapsedContext(in group: DiffDisplayGroup) {
         expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
@@ -143,6 +154,7 @@ enum DiffPaneRowPlanBuilder {
     @MainActor
     static func build(input: DiffPaneRowPlanInput, state: DiffPanePresentationState) -> AppKitDiffRowPlan {
         state.actionRelay.update(from: input)
+        prewarmHighlightsIfNeeded(input: input, state: state)
         let fusions = resolvedFusions(for: input)
         let rows = input.model.groups.enumerated().map { index, group in
             let fusion = fusions[index]
@@ -193,6 +205,27 @@ enum DiffPaneRowPlanBuilder {
     }
 
     @MainActor
+    private static func prewarmHighlightsIfNeeded(input: DiffPaneRowPlanInput, state: DiffPanePresentationState) {
+        let signature = DiffHighlightPrewarmer.signature(
+            groups: input.model.groups,
+            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs,
+            layoutMode: input.layoutMode,
+            fileExtension: input.fileExtension,
+            showWhitespace: input.showWhitespace
+        )
+        guard state.registerHighlightPrewarm(signature: signature) else { return }
+        DiffHighlightPrewarmer.prewarm(
+            groups: input.model.groups,
+            expandedCollapsedRowIDs: state.expandedCollapsedRowIDs,
+            layoutMode: input.layoutMode,
+            fileExtension: input.fileExtension,
+            font: CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize),
+            showWhitespace: input.showWhitespace,
+            theme: input.theme
+        )
+    }
+
+    @MainActor
     private static func hunkRetention(
         for threads: [DiffInlineCommentThread],
         state: DiffPanePresentationState
@@ -229,6 +262,7 @@ enum DiffPaneRowPlanBuilder {
     }
 
     static func threads(for rows: [DiffDisplayRow], from threads: [DiffInlineCommentThread]) -> [DiffInlineCommentThread] {
+        guard !threads.isEmpty else { return [] }
         let oldLines = Set(rows.compactMap { $0.old?.anchor.oldLine })
         let newLines = Set(rows.compactMap { $0.new?.anchor.newLine })
         return threads.filter { thread in
@@ -239,6 +273,7 @@ enum DiffPaneRowPlanBuilder {
     }
 
     static func annotations(for rows: [DiffDisplayRow], from annotations: [DiffInlineAnnotation]) -> [DiffInlineAnnotation] {
+        guard !annotations.isEmpty else { return [] }
         let newLines = Set(rows.compactMap { $0.new?.anchor.newLine })
         return annotations.filter { newLines.contains($0.newLine) }
     }

@@ -92,7 +92,18 @@ struct TreeSitterHighlighter {
     }
 
     /// Tokenize a full file. Returns highlight spans against `source`.
+    /// Results are memoized in `HighlightSpanCache`; spans depend only on
+    /// the source text and language.
     static func highlight(source: String, fileExtension ext: String) -> [HighlightSpan] {
+        if let cached = HighlightSpanCache.shared.spans(source: source, fileExtension: ext) {
+            return cached
+        }
+        let spans = computeHighlight(source: source, fileExtension: ext)
+        HighlightSpanCache.shared.store(spans, source: source, fileExtension: ext)
+        return spans
+    }
+
+    private static func computeHighlight(source: String, fileExtension ext: String) -> [HighlightSpan] {
         let effectiveExt = effectiveExtension(for: source, fileExtension: ext)
         guard
             let language = LanguageRegistry.language(forFileExtension: effectiveExt),
