@@ -123,7 +123,13 @@ final class AppKitDiffScrollerReconciler {
             completion?()
             return
         }
-        scrollView.setScrollY(offset, animated: request.animated) { [weak self] in
+        // For requests that opt in (file-click navigation), snap for long
+        // jumps and only animate when the destination is already close
+        // enough (within one screen) that motion reads as a nudge rather
+        // than a multi-second slide.
+        let animated = request.animated
+            && (!request.snapsWhenFar || abs(offset - scrollView.scrollY) <= scrollView.viewportHeight)
+        scrollView.setScrollY(offset, animated: animated) { [weak self] in
             // Bounds notifications remain suppressed for programmatic animation
             // so active-owner feedback cannot fight navigation. Re-tile at the
             // final native offset before announcing completion, however, or a

@@ -70,6 +70,10 @@ struct AppKitDiffScrollRequest: Equatable {
     let alignment: AppKitDiffScrollAlignment
     let animated: Bool
     let generation: Int
+    /// When true, a long jump snaps instantly instead of animating even
+    /// though `animated` is true — used for file-click navigation so a
+    /// multi-second slide doesn't get old on repeated clicks.
+    var snapsWhenFar: Bool = false
 }
 
 struct AppKitDiffScrollAnchor: Equatable {

@@ -44,7 +44,8 @@ enum AppKitDiffReviewScrollRequestResolver {
             fallbackID: headerID,
             alignment: .top,
             animated: true,
-            generation: commandGeneration(fileCommand.generation, kind: .file)
+            generation: commandGeneration(fileCommand.generation, kind: .file),
+            snapsWhenFar: true
         )
     }
 
@@ -74,7 +75,8 @@ enum AppKitDiffReviewScrollRequestResolver {
             fallbackID: request!.fallbackID,
             alignment: request!.alignment,
             animated: request!.animated,
-            generation: generation
+            generation: generation,
+            snapsWhenFar: request!.snapsWhenFar
         )
     }
 

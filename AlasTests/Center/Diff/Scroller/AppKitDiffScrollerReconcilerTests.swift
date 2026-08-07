@@ -267,4 +267,41 @@ struct AppKitDiffScrollerReconcilerTests {
         ))
         #expect(stack.scrollView.scrollY == beforeMissingTarget)
     }
+
+    @Test("snapsWhenFar requests skip animation for a jump beyond one viewport")
+    func snapsWhenFarSkipsAnimationForLongJump() {
+        var executorCalled = false
+        let stack = makeStack()
+        stack.scrollView.animatedScrollExecutorForTests = { scrollView, point, completion in
+            executorCalled = true
+            scrollView.contentView.setBoundsOrigin(point)
+            completion()
+        }
+        stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
+
+        stack.reconciler.scroll(to: .init(
+            targetID: "row-150", fallbackID: nil, alignment: .top, animated: true, generation: 1, snapsWhenFar: true
+        ))
+
+        #expect(!executorCalled)
+        #expect(stack.scrollView.scrollY > 2_000)
+    }
+
+    @Test("snapsWhenFar requests still animate a jump within one viewport")
+    func snapsWhenFarAnimatesNearbyJump() {
+        var executorCalled = false
+        let stack = makeStack()
+        stack.scrollView.animatedScrollExecutorForTests = { scrollView, point, completion in
+            executorCalled = true
+            scrollView.contentView.setBoundsOrigin(point)
+            completion()
+        }
+        stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
+
+        stack.reconciler.scroll(to: .init(
+            targetID: "row-1", fallbackID: nil, alignment: .top, animated: true, generation: 1, snapsWhenFar: true
+        ))
+
+        #expect(executorCalled)
+    }
 }
