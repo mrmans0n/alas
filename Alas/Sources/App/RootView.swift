@@ -671,6 +671,16 @@ private struct RootGGPresentationHandlers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .modifier(RootGGConfirmationHandlers(state: state))
+            .modifier(RootGGSheetHandlers(state: state))
+    }
+}
+
+private struct RootGGConfirmationHandlers: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
             .confirmationDialog(
                 "Land stack?",
                 isPresented: Binding(
@@ -723,6 +733,14 @@ private struct RootGGPresentationHandlers: ViewModifier {
             } message: {
                 Text("Remove every merged gg stack and associated worktree in this repository.")
             }
+    }
+}
+
+private struct RootGGSheetHandlers: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
             .sheet(
                 item: Binding(
                     get: { state.rightPaneStore.stateWithPendingGGUnstack()?.pendingGGUnstack },

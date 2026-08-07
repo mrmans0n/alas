@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-08-07
+
+### ✨ Features
+
+- Improve the `gg` split pane UX (#993).
+- Follow `gg` stack entries by GG-ID (#992).
+
+### 🐛 Fixes
+
+- Keep AppKit diff scroll position when the first review comment composer appears (#988).
+- Snap review file-click scrolling instead of always animating (#991).
+- Anchor the follow revision popover (#990).
+- Stop localizing the PR/MR number in the `gg` inbox pane (#989).
+
 ## [0.14.5] - 2026-08-07
 
 ### ✨ Features
