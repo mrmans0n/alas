@@ -10,6 +10,7 @@ struct AppKitDiffRowHostingPoolTests {
             id: id,
             ownerID: nil,
             equalityToken: .init(token),
+            contentSignature: 0,
             estimatedHeight: 20
         ) { AnyView(Text(text)) }
     }
@@ -21,7 +22,7 @@ struct AppKitDiffRowHostingPoolTests {
         func spec(_ value: Int) -> AppKitDiffRowSpec {
             .init(
                 id: "row", ownerID: nil,
-                equalityToken: .init(value), estimatedHeight: 20
+                equalityToken: .init(value), contentSignature: value, estimatedHeight: 20
             ) {
                 builds += 1
                 return AnyView(Text("\(value)"))

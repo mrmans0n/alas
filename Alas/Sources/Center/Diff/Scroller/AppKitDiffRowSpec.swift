@@ -31,6 +31,7 @@ struct AppKitDiffRowSpec {
     let id: String
     let ownerID: String?
     let equalityToken: AppKitDiffRowEqualityToken
+    let contentSignature: Int
     let estimatedHeight: CGFloat
     var retention: AppKitDiffRowRetention = .recyclable
     var contextRowCount: Int? = nil

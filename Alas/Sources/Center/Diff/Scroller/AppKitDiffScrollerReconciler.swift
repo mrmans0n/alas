@@ -76,16 +76,17 @@ final class AppKitDiffScrollerReconciler {
         }
 
         // Detect whether the anchor row's content identity changed between
-        // plans (its equalityToken differs). This happens when a group's row
-        // plan restructures — e.g. a fused hunk row splitting into header +
+        // plans (its contentSignature differs). This happens when a group's
+        // row plan restructures — e.g. a fused hunk row splitting into header +
         // segment rows when the first comment composer appears — even though
-        // the row id is reused. A pure width or measurement change keeps the
-        // same token; only a semantic restructure invalidates the anchor.
+        // the row id is reused. A pure width, measurement, or hover/focus
+        // presentation change keeps the same contentSignature; only a semantic
+        // restructure invalidates the anchor.
         let anchorRestructured: Bool
         if let anchor {
             if let previous = previousSpecs[anchor.rowID],
                let next = nextSpecs[anchor.rowID] {
-                anchorRestructured = !previous.equalityToken.isEqual(to: next.equalityToken)
+                anchorRestructured = previous.contentSignature != next.contentSignature
             } else {
                 anchorRestructured = true
             }

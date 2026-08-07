@@ -115,7 +115,7 @@ struct AppKitDiffScrollerStressTests {
         height: CGFloat = 40
     ) -> AppKitDiffRowSpec {
         .init(
-            id: id, ownerID: ownerID, equalityToken: .init(token), estimatedHeight: height
+            id: id, ownerID: ownerID, equalityToken: .init(token), contentSignature: token, estimatedHeight: height
         ) {
             AnyView(Color.clear.frame(height: height))
         }
@@ -124,6 +124,7 @@ struct AppKitDiffScrollerStressTests {
     private func accessibleRow(retention: AppKitDiffRowRetention) -> AppKitDiffRowSpec {
         .init(
             id: "focus-row", ownerID: "owner-0", equalityToken: .init(retention),
+            contentSignature: 0,
             estimatedHeight: 40, retention: retention
         ) {
             AnyView(AccessibleMarker(identifier: "focusable-draft").frame(height: 40))

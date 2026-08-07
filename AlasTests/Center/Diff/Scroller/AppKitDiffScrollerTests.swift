@@ -36,6 +36,7 @@ struct AppKitDiffScrollerTests {
                 id: "row-\(index)",
                 ownerID: "owner-\(index / 10)",
                 equalityToken: .init(index),
+                contentSignature: index,
                 estimatedHeight: 40
             ) {
                 AnyView(Color.clear.frame(height: 40))
@@ -97,7 +98,7 @@ struct AppKitDiffScrollerTests {
         var laterPlan = plan().rows
         laterPlan.append(
             AppKitDiffRowSpec(
-                id: "later", ownerID: nil, equalityToken: .init(101), estimatedHeight: 40
+                id: "later", ownerID: nil, equalityToken: .init(101), contentSignature: 101, estimatedHeight: 40
             ) {
                 AnyView(Color.clear.frame(height: 40))
             }
@@ -120,7 +121,7 @@ struct AppKitDiffScrollerTests {
         var laterPlan = plan().rows
         laterPlan.append(
             AppKitDiffRowSpec(
-                id: "later", ownerID: nil, equalityToken: .init(101), estimatedHeight: 40
+                id: "later", ownerID: nil, equalityToken: .init(101), contentSignature: 101, estimatedHeight: 40
             ) {
                 AnyView(Color.clear.frame(height: 40))
             }

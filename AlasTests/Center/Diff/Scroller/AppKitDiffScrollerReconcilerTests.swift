@@ -40,6 +40,7 @@ struct AppKitDiffScrollerReconcilerTests {
             id: id,
             ownerID: ownerID,
             equalityToken: .init(token),
+            contentSignature: token,
             estimatedHeight: height,
             retention: retention
         ) {
@@ -200,6 +201,7 @@ struct AppKitDiffScrollerReconcilerTests {
             id: "wrapping",
             ownerID: nil,
             equalityToken: .init(1),
+            contentSignature: 1,
             estimatedHeight: 20
         ) {
             AnyView(
