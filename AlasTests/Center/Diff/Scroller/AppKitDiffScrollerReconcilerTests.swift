@@ -40,6 +40,7 @@ struct AppKitDiffScrollerReconcilerTests {
             id: id,
             ownerID: ownerID,
             equalityToken: .init(token),
+            contentSignature: token,
             estimatedHeight: height,
             retention: retention
         ) {
@@ -83,6 +84,139 @@ struct AppKitDiffScrollerReconcilerTests {
         let after = stack.tiling.row(withID: "row-150")!.minY - stack.scrollView.scrollY
 
         #expect(abs(before - after) < 0.5)
+    }
+
+    @Test("a replaced anchor row keeps the absolute viewport position")
+    func replacedAnchorRowKeepsAbsoluteViewportPosition() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("giant-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(500 * 3 + 250)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        let replaced = (0..<20).flatMap { index -> [AppKitDiffRowSpec] in
+            [spec("header-\(index)", height: 37)] + (0..<5).map { spec("seg-\(index)-\($0)", height: 92) }
+        }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(abs(stack.scrollView.scrollY - min(y, max(0, stack.tiling.documentHeight - stack.scrollView.viewportHeight))) < 0.5)
+    }
+
+    @Test("a restructured anchor row keeps the previous absolute viewport position")
+    func restructuredAnchorRowKeepsAbsoluteViewportPosition() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        // Viewport top exactly at a row boundary: the anchor row is `row-3`,
+        // a 500pt fused hunk row that the first-comment restructure replaces
+        // with a 37pt group header (different content signature) plus segment
+        // and composer rows.
+        let y = CGFloat(3 * 500)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        var replaced: [AppKitDiffRowSpec] = (0..<3).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-3", token: 99, height: 37))
+        replaced += (0..<5).map { spec("seg-3-\($0)", height: 92) }
+        replaced += (4..<20).map { spec("row-\($0)", height: 500) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+    }
+
+    @Test("a remeasured anchor row preserves the id-based anchor under width changes")
+    func remeasuredAnchorRowPreservesIdAnchor() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(3 * 500 + 250)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Same content (same equalityToken) but a width change drops the
+        // measured height back to a shorter estimate. The anchor row's
+        // identity is unchanged, so the id-based anchor should clamp into
+        // the row rather than fall back to absolute-Y preservation.
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 37) }),
+            contentWidth: 120
+        )
+
+        let clampedY = stack.tiling.row(withID: "row-3")!.minY + 37
+        #expect(abs(stack.scrollView.scrollY - clampedY) < 0.5)
+    }
+
+    @Test("a restructured anchor row preserves absolute Y past short estimates")
+    func restructuredAnchorRowPreservesAbsoluteYPastShortEstimates() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(3 * 500 + 250)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Restructure: the anchor row's contentSignature changes, and the
+        // replacement rows' estimates are collectively much shorter than the
+        // original — the estimated document is shorter than `y`. The absolute
+        // Y must still be preserved after measurement restores the document
+        // height.
+        var replaced: [AppKitDiffRowSpec] = (0..<3).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-3", token: 99, height: 37))
+        replaced += (0..<2).map { spec("seg-3-\($0)", height: 92) }
+        replaced += (4..<20).map { spec("row-\($0)", height: 500) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+    }
+
+    @Test("a restructured final hunk measures tail rows past the estimated document")
+    func restructuredFinalHunkMeasuresTailRows() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<10).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        // Scroll to the bottom hunk — previousScrollY is near the document end.
+        let y = CGFloat(9 * 500 + 100)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Restructure the final hunk: its replacement estimates are much
+        // shorter, so the estimated document is shorter than `y`.
+        var replaced: [AppKitDiffRowSpec] = (0..<9).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-9", token: 99, height: 37))
+        replaced += (0..<2).map { spec("seg-9-\($0)", height: 92) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        // The content genuinely shrank — scrollY clamps to the real bottom.
+        let maxScroll = max(0, stack.tiling.documentHeight - stack.scrollView.viewportHeight)
+        #expect(abs(stack.scrollView.scrollY - maxScroll) < 0.5)
+    }
+
+    @Test("a restructured final hunk mounts the viewport band at the restored Y")
+    func restructuredFinalHunkMountsViewportBandAtRestoredY() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<10).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(5 * 500 + 100)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Restructure mid-document with many short-estimated replacement rows.
+        var replaced: [AppKitDiffRowSpec] = (0..<5).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-5", token: 99, height: 37))
+        replaced += (0..<8).map { spec("seg-5-\($0)", height: 20) }
+        replaced += (6..<10).map { spec("row-\($0)", height: 500) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        // The viewport band must be mounted at the restored position.
+        #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+        #expect(!stack.pool.mountedIDs.isEmpty)
     }
 
     @Test("unchanged plans do not perform another full apply")
@@ -136,6 +270,7 @@ struct AppKitDiffScrollerReconcilerTests {
             id: "wrapping",
             ownerID: nil,
             equalityToken: .init(1),
+            contentSignature: 1,
             estimatedHeight: 20
         ) {
             AnyView(

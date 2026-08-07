@@ -160,6 +160,7 @@ enum GGSplitPreviewRowPlanBuilder {
                     codeFontSize: input.codeFontSize,
                     theme: input.theme
                 )),
+                contentSignature: 0,
                 estimatedHeight: 35
             ) {
                 AnyView(GGSplitPreviewFileHeaderRow(
@@ -200,6 +201,7 @@ enum GGSplitPreviewRowPlanBuilder {
                         topPadding: topPadding,
                         bottomPadding: bottomPadding
                     )),
+                    contentSignature: hunk.contentSignature,
                     estimatedHeight: hunk.estimatedHeight + topPadding + bottomPadding,
                     retention: hunk.retention
                 ) {
@@ -241,6 +243,7 @@ enum GGSplitPreviewRowPlanBuilder {
                         codeFontSize: input.codeFontSize,
                         theme: input.theme
                     )),
+                    contentSignature: 0,
                     estimatedHeight: 255
                 ) {
                     AnyView(GGSplitResultingImagePreview(
@@ -266,6 +269,7 @@ enum GGSplitPreviewRowPlanBuilder {
                     codeFontSize: input.codeFontSize,
                     theme: input.theme
                 )),
+                contentSignature: 0,
                 estimatedHeight: 43
             ) {
                 AnyView(GGSplitPreviewOtherFileRow(

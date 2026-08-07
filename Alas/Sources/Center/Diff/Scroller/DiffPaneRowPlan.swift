@@ -190,6 +190,7 @@ enum DiffPaneRowPlanBuilder {
                 id: "diff-hunk-\(group.id)",
                 ownerID: group.id,
                 equalityToken: .init(token),
+                contentSignature: visibleRows.signature.hashValue,
                 estimatedHeight: estimatedHeight(
                     for: group,
                     input: input,

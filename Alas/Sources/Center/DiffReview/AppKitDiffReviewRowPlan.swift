@@ -481,6 +481,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     id: groupID,
                     ownerID: input.file.id.rawValue,
                     equalityToken: hunk.equalityToken,
+                    contentSignature: hunk.contentSignature,
                     estimatedHeight: hunk.estimatedHeight,
                     retention: hunk.retention
                 ) {
@@ -727,6 +728,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             id: id,
             ownerID: input.file.id.rawValue,
             equalityToken: .init(token),
+            contentSignature: signature,
             estimatedHeight: height,
             retention: retention,
             contextRowCount: contextRowCount,
@@ -905,6 +907,7 @@ private extension AppKitDiffRowSpec {
                 position: position,
                 theme: theme
             )),
+            contentSignature: contentSignature,
             estimatedHeight: estimatedHeight,
             retention: retention,
             contextRowCount: contextRowCount

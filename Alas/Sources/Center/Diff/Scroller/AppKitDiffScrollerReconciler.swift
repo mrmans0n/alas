@@ -75,6 +75,26 @@ final class AppKitDiffScrollerReconciler {
             }
         }
 
+        // Detect whether the anchor row's content identity changed between
+        // plans (its contentSignature differs). This happens when a group's
+        // row plan restructures — e.g. a fused hunk row splitting into header +
+        // segment rows when the first comment composer appears — even though
+        // the row id is reused. A pure width, measurement, or hover/focus
+        // presentation change keeps the same contentSignature; only a semantic
+        // restructure invalidates the anchor.
+        let anchorRestructured: Bool
+        if let anchor {
+            if let previous = previousSpecs[anchor.rowID],
+               let next = nextSpecs[anchor.rowID] {
+                anchorRestructured = previous.contentSignature != next.contentSignature
+            } else {
+                anchorRestructured = true
+            }
+        } else {
+            anchorRestructured = false
+        }
+
+        let previousScrollY = scrollView.scrollY
         specsByID = nextSpecs
         orderedIDs = ids
         measuredHeights = nextMeasuredHeights
@@ -88,10 +108,57 @@ final class AppKitDiffScrollerReconciler {
             )
         }, metrics: .init(topPadding: plan.contentInsets.top, bottomPadding: plan.contentInsets.bottom))
         scrollView.setDocumentHeight(tiling.documentHeight)
-        if let anchoredY = tiling.viewportMinY(for: anchor) {
+        if let anchoredY = tiling.viewportMinY(for: anchor),
+           !anchorRestructured {
             scrollView.setScrollY(anchoredY, animated: false)
         }
+        // When the anchor row was removed or its content identity changed
+        // (semantic restructure, e.g. a fused hunk row splitting into header
+        // + segment rows when the first comment composer appears), the
+        // id-based anchor no longer refers to the same content — clamping into
+        // the shrunken id-matching row would snap the viewport to its top.
+        // Restore the pre-reconcile absolute Y without clamping so
+        // layoutVisibleRows measures the correct band (the estimated document
+        // may be temporarily shorter than the original Y). After measurement
+        // updates the document height, setScrollY clamps against the real
+        // document.
+        if anchorRestructured {
+            scrollView.setUnclampedScrollY(previousScrollY)
+        }
         layoutVisibleRows()
+        if anchorRestructured {
+            // If previousScrollY was beyond the estimated document, the
+            // unclamped band may have found no rows to measure. Iterate:
+            // scroll progressively earlier so each pass measures a different
+            // band of underestimated replacement rows, growing the document
+            // height until the maximum scroll offset can represent
+            // previousScrollY, or the scan is exhausted. The scan is bounded
+            // to avoid freezing the UI on a genuine shrink — if the document
+            // can't grow enough in a limited number of passes, the final
+            // setScrollY correctly clamps to the real bottom.
+            var previousDocumentHeight = tiling.documentHeight
+            var probeY = tiling.documentHeight
+            var remainingPasses = 8
+            while previousScrollY > max(0, tiling.documentHeight - scrollView.viewportHeight),
+                  remainingPasses > 0 {
+                remainingPasses -= 1
+                scrollView.setScrollY(probeY, animated: false)
+                layoutVisibleRows()
+                if tiling.documentHeight <= previousDocumentHeight {
+                    // No growth at this band — try measuring further up.
+                    let nextProbe = max(0, probeY - scrollView.viewportHeight - AppKitDiffScrollerReconciler.overscan)
+                    if nextProbe == probeY { break }
+                    probeY = nextProbe
+                    continue
+                }
+                previousDocumentHeight = tiling.documentHeight
+                probeY = tiling.documentHeight
+            }
+            // Restore the saved Y (clamped against the now-measured document)
+            // and re-tile so the viewport band is mounted at the final position.
+            scrollView.setScrollY(previousScrollY, animated: false)
+            layoutVisibleRows()
+        }
     }
 
     func layoutVisibleRows() {
