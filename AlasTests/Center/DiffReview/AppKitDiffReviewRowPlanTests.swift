@@ -1,5 +1,7 @@
+import AppKit
 import Combine
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -74,6 +76,21 @@ struct AppKitDiffReviewRowPlanTests {
             AppKitDiffReviewRowID.header(fileID: file.id),
             AppKitDiffReviewRowID.placeholder(fileID: file.id),
         ])
+    }
+
+    @Test func headerRowCarriesLegacyFileSectionAccessibilityMarker() throws {
+        let file = textFile()
+        let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)
+        let controller = NSHostingController(rootView: AppKitDiffReviewHeaderRowBody(input: input))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 640, height: 64)
+        controller.view.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let marker = try #require(allSubviews(of: controller.view).first {
+            $0.accessibilityIdentifier() == "diff-review-file-section-\(file.id.rawValue)"
+        })
+        #expect(marker.accessibilityLabel() == file.summary.path)
     }
 
     @Test func aggregateBudgetDefersLaterFilesBeforeBuildingTheirContext() {
@@ -511,6 +528,10 @@ struct AppKitDiffReviewRowPlanTests {
     }
 
     private var theme: Theme { try! ThemeStore().current }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap(allSubviews)
+    }
 
     private func textFile(
         path: String = "Sources/Example.swift",

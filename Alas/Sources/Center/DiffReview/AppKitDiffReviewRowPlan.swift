@@ -739,7 +739,11 @@ struct AppKitDiffReviewHeaderRowBody: View {
                     .foregroundColor(input.theme.color("fg"))
                     .lineLimit(1).truncationMode(.middle)
                 if let originalPath = input.file.summary.originalPath {
-                    Text("from \(originalPath)").font(.system(size: 10.5)).foregroundColor(input.theme.color("fg-faint"))
+                    Text("from \(originalPath)")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(input.theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
             if input.showsSourceBadge, let title = input.file.summary.groupTitle {
@@ -803,6 +807,10 @@ struct AppKitDiffReviewHeaderRowBody: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(input.theme.color("bg-2"))
+        .background(DiffReviewAccessibilityMarker(
+            identifier: "diff-review-file-section-\(input.file.id.rawValue)",
+            label: input.file.summary.path
+        ))
         .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 
