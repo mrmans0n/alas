@@ -3152,9 +3152,9 @@ final class AppState {
             watcher.onHeadChanged = { [weak self] updates in
                 self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
             }
-            watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: project.id) }
+            watcher.onRevisionChanged = { [weak self] in self?.handleProjectRevisionChange(projectId: project.id) }
             watcher.onTopologyChanged = { [weak self] in
-                self?.bumpRevisionGenerationForProject(projectId: project.id)
+                self?.handleProjectRevisionChange(projectId: project.id)
                 self?.handleProjectTopologyChange(projectId: project.id)
             }
             remoteProjectWatchers[project.id] = watcher
@@ -3164,9 +3164,9 @@ final class AppState {
         let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
-        watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
+        watcher.onRevisionChanged = { [weak self] in self?.handleProjectRevisionChange(projectId: projectId) }
         watcher.onTopologyChanged = { [weak self] in
-            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.handleProjectRevisionChange(projectId: projectId)
             self?.handleProjectTopologyChange(projectId: projectId)
         }
         watcher.start()
@@ -3200,6 +3200,11 @@ final class AppState {
         for path in changedPaths {
             GGStackSummaryStore.shared.summaries[path] = nil
         }
+        Task { await GGStackCache.shared.invalidate() }
+    }
+
+    private func handleProjectRevisionChange(projectId: String) {
+        bumpRevisionGenerationForProject(projectId: projectId)
         Task { await GGStackCache.shared.invalidate() }
     }
 
