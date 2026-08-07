@@ -11,7 +11,8 @@ private func makeHost(
     session: ACPSession = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t"),
     contentMaxWidth: CGFloat = 800,
     typography: ACPChatTypography = .default,
-    onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in }
+    onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in },
+    onQueueRemove: @escaping (UUID) -> Void = { _ in }
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
         session: session,
@@ -33,7 +34,7 @@ private func makeHost(
         onDismissElicitationURLWait: { _ in },
         onQueueEdit: { _ in },
         onQueueForceSend: { _ in },
-        onQueueRemove: { _ in },
+        onQueueRemove: onQueueRemove,
         onQueueRetry: { _ in },
         onQueueReorder: { _, _ in },
         onQueueClearAll: {},
@@ -190,6 +191,29 @@ struct ACPTranscriptScrollerQueueBubbleTokenTests {
         let tokenA = try #require(queueBubbleToken(host: hostA, id: id))
         let tokenB = try #require(queueBubbleToken(host: hostB, id: id))
         #expect(tokenA.isEqual(to: tokenB))
+    }
+
+    /// Row identity is content-based: closures aren't `Equatable`, so a
+    /// row's equality token cannot cover callback identity, and the
+    /// reconciler keeps an already-mounted row (with the closures its build
+    /// captured) whenever the token compares equal.
+    ///
+    /// That is precisely why `ACPTabView`'s queue callbacks re-read
+    /// ownership when they fire instead of being swapped for no-ops up
+    /// front — see `ACPTranscriptQueuePolicy.allowsQueueMutation`. Two hosts
+    /// differing only in their queue callbacks is exactly the shape a
+    /// writer↔mirror transition produces.
+    @Test("token ignores callback identity, so ownership must be re-read at invocation")
+    func tokenIgnoresCallbackIdentity() throws {
+        let id = UUID()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.queue = [QueuedPrompt(id: id, blocks: [.text("hello")], status: .pending)]
+        let live = makeHost(session: session, onQueueRemove: { _ in _ = id })
+        let noop = makeHost(session: session, onQueueRemove: { _ in })
+
+        let liveToken = try #require(queueBubbleToken(host: live, id: id))
+        let noopToken = try #require(queueBubbleToken(host: noop, id: id))
+        #expect(liveToken.isEqual(to: noopToken))
     }
 
     @Test("token changes when contentMaxWidth changes, QueuedPrompt unchanged")

@@ -26,6 +26,12 @@ struct ACPTranscriptRowWindowTests {
         #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending, .pending]) == 1)
     }
 
+    @Test("queue mutations are allowed only while the session is not a mirror")
+    func queueMutationsGatedOnOwnership() {
+        #expect(ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: false))
+        #expect(!ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: true))
+    }
+
     @Test("go-to-newest affordance shows only when tail-follow is paused")
     func goToNewestAffordanceShowsOnlyWhenTailFollowPaused() {
         #expect(!ACPMessageList.shouldShowGoToNewestAffordance(followsTranscriptTail: true))
