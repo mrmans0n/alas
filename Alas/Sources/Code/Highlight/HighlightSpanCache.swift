@@ -47,8 +47,14 @@ final class HighlightSpanCache: @unchecked Sendable {
     }
     #endif
 
-    init(countLimit: Int = 8192) {
+    /// `countLimit` alone bounds entry count, not bytes: each key can retain
+    /// up to `maximumSourceUTF16Length` of source text plus its span array,
+    /// so an eagerly-prewarmed large review could otherwise grow this cache
+    /// into the hundreds of megabytes. Mirrors `ImageDiffDecodedCache`'s use
+    /// of a byte-cost limit for the same reason.
+    init(countLimit: Int = 8192, totalCostLimit: Int = 64 * 1024 * 1024) {
         storage.countLimit = countLimit
+        storage.totalCostLimit = totalCostLimit
     }
 
     func spans(source: String, fileExtension: String) -> [HighlightSpan]? {
@@ -62,7 +68,8 @@ final class HighlightSpanCache: @unchecked Sendable {
 
     func store(_ spans: [HighlightSpan], source: String, fileExtension: String) {
         guard (source as NSString).length <= Self.maximumSourceUTF16Length else { return }
-        storage.setObject(Entry(spans: spans), forKey: Self.key(source: source, fileExtension: fileExtension))
+        let cost = (source as NSString).length * 2 + spans.count * MemoryLayout<HighlightSpan>.stride
+        storage.setObject(Entry(spans: spans), forKey: Self.key(source: source, fileExtension: fileExtension), cost: cost)
     }
 
     func removeAll() {
