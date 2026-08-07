@@ -75,6 +75,24 @@ final class AppKitDiffScrollerReconciler {
             }
         }
 
+        // Detect whether the anchor row's content identity changed between
+        // plans (its equalityToken differs). This happens when a group's row
+        // plan restructures — e.g. a fused hunk row splitting into header +
+        // segment rows when the first comment composer appears — even though
+        // the row id is reused. A pure width or measurement change keeps the
+        // same token; only a semantic restructure invalidates the anchor.
+        let anchorRestructured: Bool
+        if let anchor {
+            if let previous = previousSpecs[anchor.rowID],
+               let next = nextSpecs[anchor.rowID] {
+                anchorRestructured = !previous.equalityToken.isEqual(to: next.equalityToken)
+            } else {
+                anchorRestructured = true
+            }
+        } else {
+            anchorRestructured = false
+        }
+
         specsByID = nextSpecs
         orderedIDs = ids
         measuredHeights = nextMeasuredHeights
@@ -88,13 +106,17 @@ final class AppKitDiffScrollerReconciler {
             )
         }, metrics: .init(topPadding: plan.contentInsets.top, bottomPadding: plan.contentInsets.bottom))
         scrollView.setDocumentHeight(tiling.documentHeight)
-        if let anchoredY = tiling.viewportMinY(for: anchor) {
+        if let anchoredY = tiling.viewportMinY(for: anchor),
+           !anchorRestructured {
             scrollView.setScrollY(anchoredY, animated: false)
         }
-        // When the anchor cannot be resolved (row removed, or restructured so
-        // the id-matching row no longer holds the anchored content), preserve
-        // the absolute viewport position — clamped by the native scroll view
-        // if the document shrank — instead of snapping elsewhere.
+        // When the anchor row was removed or its content identity changed
+        // (semantic restructure, e.g. a fused hunk row splitting into header
+        // + segment rows when the first comment composer appears), the
+        // id-based anchor no longer refers to the same content — clamping into
+        // the shrunken id-matching row would snap the viewport to its top.
+        // Preserve the absolute viewport position instead, clamped by the
+        // native scroll view if the document shrank.
         layoutVisibleRows()
     }
 

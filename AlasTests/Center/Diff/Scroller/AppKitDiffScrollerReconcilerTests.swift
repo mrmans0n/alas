@@ -112,17 +112,41 @@ struct AppKitDiffScrollerReconcilerTests {
         )
         // Viewport top exactly at a row boundary: the anchor row is `row-3`,
         // a 500pt fused hunk row that the first-comment restructure replaces
-        // with a 37pt group header plus segment and composer rows.
+        // with a 37pt group header (different content signature) plus segment
+        // and composer rows.
         let y = CGFloat(3 * 500)
         stack.scrollView.setScrollY(y, animated: false)
 
         var replaced: [AppKitDiffRowSpec] = (0..<3).map { spec("row-\($0)", height: 500) }
-        replaced.append(spec("row-3", height: 37))
+        replaced.append(spec("row-3", token: 99, height: 37))
         replaced += (0..<5).map { spec("seg-3-\($0)", height: 92) }
         replaced += (4..<20).map { spec("row-\($0)", height: 500) }
         stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
 
         #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+    }
+
+    @Test("a remeasured anchor row preserves the id-based anchor under width changes")
+    func remeasuredAnchorRowPreservesIdAnchor() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(3 * 500 + 250)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Same content (same equalityToken) but a width change drops the
+        // measured height back to a shorter estimate. The anchor row's
+        // identity is unchanged, so the id-based anchor should clamp into
+        // the row rather than fall back to absolute-Y preservation.
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 37) }),
+            contentWidth: 120
+        )
+
+        let clampedY = stack.tiling.row(withID: "row-3")!.minY + 37
+        #expect(abs(stack.scrollView.scrollY - clampedY) < 0.5)
     }
 
     @Test("unchanged plans do not perform another full apply")

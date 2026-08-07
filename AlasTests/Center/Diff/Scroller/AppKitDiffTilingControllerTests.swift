@@ -134,26 +134,7 @@ struct AppKitDiffTilingControllerTests {
         tiling.replaceAll(rows: [.init(id: "a", ownerID: nil, height: 100)])
 
         #expect(tiling.viewportMinY(for: .init(rowID: "a", intraRowOffset: -20)) == 10)
-        #expect(tiling.viewportMinY(for: .init(rowID: "a", intraRowOffset: 200)) == nil)
-    }
-
-    @Test("anchor restoration tolerates small measurement drift")
-    func anchorRestorationToleratesSmallDrift() {
-        let tiling = controller(topPadding: 10, bottomPadding: 20)
-        tiling.replaceAll(rows: [.init(id: "a", ownerID: nil, height: 96)])
-
-        #expect(tiling.viewportMinY(for: .init(rowID: "a", intraRowOffset: 100)) == 106)
-    }
-
-    @Test("anchor restoration rejects offsets past a restructured anchor row")
-    func anchorRestorationRejectsRestructuredAnchorRow() {
-        let tiling = controller(topPadding: 10, bottomPadding: 20)
-        tiling.replaceAll(rows: [
-            .init(id: "header", ownerID: nil, height: 37),
-            .init(id: "segment", ownerID: nil, height: 2_000),
-        ])
-
-        #expect(tiling.viewportMinY(for: .init(rowID: "header", intraRowOffset: 300)) == nil)
+        #expect(tiling.viewportMinY(for: .init(rowID: "a", intraRowOffset: 200)) == 110)
     }
 
     @Test("row equality tokens compare equal values of the same type")

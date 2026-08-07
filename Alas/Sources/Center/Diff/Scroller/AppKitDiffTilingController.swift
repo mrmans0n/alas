@@ -70,21 +70,9 @@ final class AppKitDiffTilingController {
 
     func viewportMinY(for anchor: AppKitDiffScrollAnchor?) -> CGFloat? {
         guard let anchor, let row = row(withID: anchor.rowID) else { return nil }
-        // When the anchor row still exists by id but shrank well below the
-        // captured intra-row offset, the row's content was restructured (e.g.
-        // a fused hunk row splitting into header + segment rows when the first
-        // comment composer appears). The id anchor no longer refers to the
-        // same content, so clamping into the shrunken row would snap the
-        // viewport to its top. Report the anchor as unresolvable instead and
-        // let the caller fall back to preserving the absolute viewport Y.
-        guard anchor.intraRowOffset <= row.height + Self.anchorSlack else { return nil }
         let intraRowOffset = min(max(0, anchor.intraRowOffset), row.height)
         return min(max(0, row.minY + intraRowOffset), documentHeight)
     }
-
-    /// Tolerance (in points) for intra-row offset drift caused by normal
-    /// measurement differences between the captured and applied plans.
-    private static let anchorSlack: CGFloat = 24
 
     func mountBand(viewportMinY: CGFloat, viewportHeight: CGFloat, overscan: CGFloat) -> Range<Int> {
         guard !rows.isEmpty else { return 0..<0 }
