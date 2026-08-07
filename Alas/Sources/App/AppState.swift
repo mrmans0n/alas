@@ -3201,12 +3201,26 @@ final class AppState {
         for path in changedPaths {
             GGStackSummaryStore.shared.summaries[path] = nil
         }
-        Task { await GGStackCache.shared.invalidate() }
+        invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
     }
 
     private func handleProjectRevisionChange(projectId: String) {
         bumpRevisionGenerationForProject(projectId: projectId)
-        Task { await GGStackCache.shared.invalidate() }
+        invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
+    }
+
+    /// Invalidation itself is a fast, in-memory actor call, but it's still
+    /// async relative to the synchronous generation bump these callers just
+    /// made — a follower's `.task(id:)` can restart on the new generation
+    /// and read the cache before this completes, resolving a GG-ID against
+    /// the pre-rewrite stack. Bumping the generation again once invalidation
+    /// has actually landed gives any follower that raced ahead a second,
+    /// guaranteed-fresh reload instead of sticking to a stale entry.
+    private func invalidateGGStackCacheAndRebumpGeneration(projectId: String) {
+        Task { @MainActor in
+            await GGStackCache.shared.invalidate()
+            self.bumpRevisionGenerationForProject(projectId: projectId)
+        }
     }
 
     func revisionChangeGeneration(worktreeID: String) -> Int {

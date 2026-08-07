@@ -168,6 +168,33 @@ struct ProjectsManagerHeadUpdatesTests {
         #expect(state.projectsManager.worktrees(projectId: project.id).first { $0.id == linked.id }?.branch == "feature")
     }
 
+    /// A follower's `.task(id:)` can restart on the synchronous generation
+    /// bump before the async `GGStackCache` invalidation lands, and read a
+    /// stale stack. The generation must bump again once invalidation
+    /// actually completes so that follower gets a guaranteed-fresh reload.
+    @Test func headUpdatesRebumpGenerationAfterCacheInvalidationCompletes() async throws {
+        let project = ProjectConfig(
+            id: "p1",
+            name: "p1",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let main = wt(path: "/repo", branch: "main")
+        seed(state.projectsManager, projectId: project.id, [main])
+
+        state.handleProjectHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [main.path: "main-updated"]
+        )
+        #expect(state.revisionChangeGeneration(worktreeID: main.id) == 1)
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(state.revisionChangeGeneration(worktreeID: main.id) == 2)
+    }
+
     @Test func revisionWatcherInvalidatesGGStackCache() async throws {
         let project = ProjectConfig(
             id: "p1",
