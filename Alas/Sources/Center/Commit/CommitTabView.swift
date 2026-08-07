@@ -71,13 +71,12 @@ struct CommitTabView: View {
                 CommitHeaderView(
                     details: details,
                     expanded: $headerExpanded,
-                    revisionExpression: tabState.revision.tracked?.expression,
-                    pendingCheckout: tabState.revision.tracked?.pendingCheckout,
+                    trackedRevision: tabState.revision.tracked,
+                    worktreeID: worktreeId,
+                    tabID: tabState.id,
+                    appState: appState,
                     isRefreshingRevision: isRefreshingTrackedRevision,
                     revisionError: detailsError,
-                    onFollowRevision: { appState.promptFollowRevision(worktreeID: worktreeId, tabID: tabState.id) },
-                    onEditRevision: editFollowedRevision,
-                    onStopFollowingRevision: stopFollowingRevision,
                     onAcceptPendingCheckout: acceptPendingCheckout,
                     onRetryRevision: retryRevisionRefresh
                 )
@@ -397,20 +396,6 @@ struct CommitTabView: View {
             },
             onFailure: { reviewSessionLaunchError = $0.localizedDescription }
         )
-    }
-
-    @MainActor
-    private func editFollowedRevision() {
-        appState.promptFollowRevision(
-            worktreeID: worktreeId,
-            tabID: tabState.id,
-            prefill: tabState.revision.tracked?.expression
-        )
-    }
-
-    @MainActor
-    private func stopFollowingRevision() {
-        appState.stopFollowingRevision(worktreeID: worktreeId, tabID: tabState.id)
     }
 
     @MainActor

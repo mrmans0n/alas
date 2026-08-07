@@ -189,6 +189,7 @@ struct CenterPaneView: View {
                     }
                 },
                 onFollowRevision: { id in
+                    state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
                     state.promptFollowRevision(worktreeID: worktree.id, tabID: id)
                 },
                 onEditRevision: { id in
@@ -206,6 +207,7 @@ struct CenterPaneView: View {
                             return nil
                         }
                     }()
+                    state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
                     state.promptFollowRevision(worktreeID: worktree.id, tabID: id, prefill: prefill)
                 },
                 onStopFollowingRevision: { id in

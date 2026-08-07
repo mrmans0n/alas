@@ -615,7 +615,9 @@ final class AppState {
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
     private(set) var revisionChangeGenerations: [String: Int] = [:]
     private(set) var reviewSessionRetargetGenerations: [String: Int] = [:]
+    var followRevisionEditorRequest: FollowRevisionEditorRequest?
     private var followRevisionRequestGenerations: [String: Int] = [:]
+    private var followRevisionEditorGeneration = 0
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -3224,6 +3226,7 @@ final class AppState {
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
         let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
         let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
+        let editorGeneration = bumpFollowRevisionEditorGeneration()
         Task { @MainActor in
             let resolvedPrefill: String?
             if let prefill {
@@ -3235,27 +3238,35 @@ final class AppState {
                 worktreeID: worktreeID,
                 requestKey: requestKey,
                 requestGeneration: requestGeneration
-            ) else { return }
-            presentFollowRevisionPrompt(worktreeID: worktreeID, tabID: tabID, prefill: resolvedPrefill, isEditing: prefill != nil)
+            ), followRevisionEditorGeneration == editorGeneration
+            else { return }
+            followRevisionEditorRequest = FollowRevisionEditorRequest(
+                worktreeID: worktreeID,
+                tabID: tabID,
+                expression: resolvedPrefill ?? "",
+                isEditing: prefill != nil
+            )
         }
     }
 
-    private func presentFollowRevisionPrompt(worktreeID: String, tabID: TabID, prefill: String?, isEditing: Bool) {
-        let alert = NSAlert()
-        alert.messageText = isEditing ? "Edit Followed Revision" : "Follow Revision"
-        alert.informativeText = "Enter a single Git revision expression, such as HEAD~3."
-        alert.addButton(withTitle: "Follow")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.stringValue = prefill ?? ""
-        alert.accessoryView = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let expression = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !expression.isEmpty else {
-            Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
-            return
-        }
-        followRevision(worktreeID: worktreeID, tabID: tabID, expression: expression)
+    func submitFollowRevisionEditor() {
+        guard var request = followRevisionEditorRequest,
+              !request.isSubmitting,
+              let expression = request.submissionExpression
+        else { return }
+        request.isSubmitting = true
+        request.errorMessage = nil
+        followRevisionEditorRequest = request
+        followRevision(worktreeID: request.worktreeID, tabID: request.tabID, expression: expression)
+    }
+
+    func dismissFollowRevisionEditor() {
+        guard let request = followRevisionEditorRequest else { return }
+        _ = bumpFollowRevisionRequestGeneration(
+            followRevisionRequestKey(worktreeID: request.worktreeID, tabID: request.tabID)
+        )
+        _ = bumpFollowRevisionEditorGeneration()
+        followRevisionEditorRequest = nil
     }
 
     private func suggestedFollowRevisionPrefill(worktreeID: String, tabID: TabID) async -> String? {
@@ -3340,8 +3351,9 @@ final class AppState {
         } catch {
             guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
             else { return }
-            Self.showWarningAlert(
-                title: "Invalid Revision",
+            publishFollowRevisionError(
+                worktreeID: worktreeID,
+                requestKey: requestKey,
                 message: (error as NSError).localizedDescription
             )
             return
@@ -3354,13 +3366,22 @@ final class AppState {
         ) else {
             guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
             else { return }
-            Self.showWarningAlert(title: "Invalid Revision", message: "Revision expression must not be empty.")
+            publishFollowRevisionError(
+                worktreeID: worktreeID,
+                requestKey: requestKey,
+                message: "Revision expression must not be empty."
+            )
             return
         }
         guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration),
               let tab = followRevisionRequestTab(worktreeID: worktreeID, requestKey: requestKey)
         else {
             return
+        }
+        if followRevisionEditorRequest.map({
+            $0.worktreeID == worktreeID && followRevisionRequestKey(worktreeID: worktreeID, tabID: $0.tabID) == requestKey
+        }) == true {
+            followRevisionEditorRequest = nil
         }
 
         switch tab {
@@ -3375,10 +3396,28 @@ final class AppState {
         }
     }
 
+    private func publishFollowRevisionError(worktreeID: String, requestKey: String, message: String) {
+        guard var request = followRevisionEditorRequest,
+              request.worktreeID == worktreeID,
+              followRevisionRequestKey(worktreeID: worktreeID, tabID: request.tabID) == requestKey
+        else {
+            Self.showWarningAlert(title: "Invalid Revision", message: message)
+            return
+        }
+        request.isSubmitting = false
+        request.errorMessage = message
+        followRevisionEditorRequest = request
+    }
+
     private func bumpFollowRevisionRequestGeneration(_ key: String) -> Int {
         let next = followRevisionRequestGenerations[key, default: 0] + 1
         followRevisionRequestGenerations[key] = next
         return next
+    }
+
+    private func bumpFollowRevisionEditorGeneration() -> Int {
+        followRevisionEditorGeneration += 1
+        return followRevisionEditorGeneration
     }
 
     private func isCurrentFollowRevisionRequest(

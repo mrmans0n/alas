@@ -384,15 +384,9 @@ struct ReviewTargetDialog: View {
         isSelected: Bool
     ) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "pin")
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 1) {
-                Text(expression)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                Text("\(String(resolvedSHA.prefix(10))) · \(branch)")
+                RevisionTetherView(expression: expression, resolvedSHA: String(resolvedSHA.prefix(10)))
+                Text(branch)
                     .font(.system(size: 10))
                     .foregroundColor(theme.color("fg-dim"))
             }
