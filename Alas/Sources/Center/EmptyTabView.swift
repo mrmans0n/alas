@@ -42,8 +42,8 @@ struct EmptyTabView: View {
                 )
                 EmptyTabActionRow(
                     icon: "sparkle",
-                    title: "New Agent Terminal",
-                    subtitle: "Pick an enabled agent to run in a terminal",
+                    title: "New Agent",
+                    subtitle: "Pick an agent to launch on the default surface",
                     shortcut: newAgentTerminalShortcut,
                     action: onNewAgentTerminal
                 )

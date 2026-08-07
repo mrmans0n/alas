@@ -55,7 +55,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .newWorktree:              return "New Worktree"
         case .focusMainWorktree:        return "Focus Main Worktree"
         case .newTerminalTab:           return "New Terminal Tab"
-        case .launchAgentTerminal:      return "Launch Agent Terminal"
+        case .launchAgentTerminal:      return "Launch Agent"
         case .launchAgentChat:          return "Launch Agent Chat"
         case .openReviewPalette:        return "Review Worktree"
         case .runScript:                return "Run Script"
@@ -84,7 +84,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles:        return "Open the file search"
         case .switchRepository:   return "Open the repository picker"
-        case .launchAgentTerminal: return "Open the agent launcher in Terminal mode"
+        case .launchAgentTerminal: return "Open the agent launcher on the default surface"
         case .launchAgentChat:     return "Open the agent launcher in Chat mode"
         case .openReviewPalette:   return "Open the review target palette"
         case .runScript:           return "Open the run script palette"
