@@ -69,9 +69,6 @@ struct RevisionFollowControl: View {
                 .shadow(color: pulse ? railColor.opacity(0.8) : .clear, radius: 4)
                 .offset(y: -9)
         }
-        .popover(isPresented: editorPresented, arrowEdge: .bottom) {
-            editor
-        }
         .onChange(of: presentation.resolvedSHA) { oldSHA, newSHA in
             guard let newSHA else { return }
             guard RevisionFollowPresentation.shouldPulse(
@@ -112,6 +109,9 @@ struct RevisionFollowControl: View {
             .controlSize(.small)
             .disabled(appState == nil)
             .accessibilityIdentifier("\(accessibilityPrefix)-follow")
+            .popover(isPresented: editorPresented, arrowEdge: .bottom) {
+                editor
+            }
         default:
             Menu("Following") {
                 Button("Edit revision…") {
@@ -130,6 +130,9 @@ struct RevisionFollowControl: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .disabled(appState == nil)
+            .popover(isPresented: editorPresented, arrowEdge: .bottom) {
+                editor
+            }
         }
     }
 
