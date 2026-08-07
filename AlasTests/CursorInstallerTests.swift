@@ -27,17 +27,10 @@ struct CursorInstallerTests {
         let installedHooks = installed["hooks"] as! [String: Any]
         #expect(installedHooks["sessionStart"] != nil)
         #expect(installedHooks["sessionEnd"] != nil)
-        #expect(installedHooks["beforeShellExecution"] != nil)
-        #expect(installedHooks["beforeMCPExecution"] != nil)
-
-        for event in ["beforeShellExecution", "beforeMCPExecution"] {
-            let entries = installedHooks[event] as! [[String: Any]]
-            #expect(entries.count == 1)
-            let command = entries[0]["command"] as! String
-            #expect(command.contains(#"printf '%s\n' '{"continue":true}'"#))
-            #expect(command.contains(#""event":"permission_request""#))
-            #expect(command.hasSuffix(AlasHookCommand.ownershipSentinel))
-        }
+        // Cursor's execution hooks fire for every shell command and MCP call;
+        // they do not indicate that the agent is blocked on user approval.
+        #expect(installedHooks["beforeShellExecution"] == nil)
+        #expect(installedHooks["beforeMCPExecution"] == nil)
 
         try installer.uninstall()
         #expect(installer.installState() == .notInstalled)
@@ -95,10 +88,40 @@ struct CursorInstallerTests {
 
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
         var hooks = json["hooks"] as! [String: Any]
-        hooks.removeValue(forKey: "beforeShellExecution")
+        hooks.removeValue(forKey: "beforeSubmitPrompt")
         json["hooks"] = hooks
         try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
 
         #expect(installer.installState() == .outdated)
+    }
+
+    @Test func reinstall_removesLegacyExecutionHooks() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = CursorInstaller(settingsURL: url)
+        try await installer.install()
+
+        let legacyCommand = AlasHookCommand.compositeCommand(
+            events: [.permissionRequest],
+            agent: .cursor,
+            forwardStdinAsBody: false,
+            stdoutResponse: #"{"continue":true}"#
+        )
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        let legacyEntry: [String: Any] = ["command": legacyCommand, "timeout": 10]
+        hooks["beforeShellExecution"] = [legacyEntry]
+        hooks["beforeMCPExecution"] = [legacyEntry]
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
+
+        #expect(installer.installState() == .outdated)
+
+        try await installer.install()
+        let reinstalled = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let reinstalledHooks = reinstalled["hooks"] as! [String: Any]
+        #expect(reinstalledHooks["beforeShellExecution"] == nil)
+        #expect(reinstalledHooks["beforeMCPExecution"] == nil)
+        #expect(installer.installState() == .installed)
     }
 }
