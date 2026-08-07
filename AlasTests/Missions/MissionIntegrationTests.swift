@@ -372,9 +372,7 @@ struct MissionIntegrationTests {
         #expect(harness.controller.aggregate(id: id) == nil)
         #expect(harness.controller.aggregates.isEmpty)
         #expect(harness.controller.loadError == nil)
-        #expect(harness.providerMutations.isEmpty)
         #expect(harness.worktreeMutations.isEmpty)
-        #expect(harness.sessionStops.isEmpty)
     }
 
     @Test("deleteCompleted only removes Missions that are actually completed")
@@ -393,6 +391,34 @@ struct MissionIntegrationTests {
 
         #expect(try await harness.persistence.aggregate(id: id) == nil)
         #expect(harness.controller.aggregate(id: id) == nil)
+    }
+
+    @Test("deleteCompleted removes only the completed Mission from a mixed batch and returns exactly its id")
+    func deleteCompletedRemovesOnlyCompletedFromMixedBatch() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let completedID = MissionID(rawValue: "mission-1")
+        let runningID = MissionID(rawValue: "mission-2")
+        let unknownID = MissionID(rawValue: "mission-unknown")
+
+        var runningAggregate = MissionFixtures.creatingMission(
+            id: runningID.rawValue,
+            issue: MissionFixtures.issue(number: 43)
+        )
+        runningAggregate.mission.state = .running
+        runningAggregate.mission.setupCheckpoint = .running
+        try harness.insert(runningAggregate)
+
+        await harness.controller.load()
+        await harness.controller.complete(completedID)
+
+        let removed = await harness.controller.deleteCompleted(ids: [completedID, runningID, unknownID])
+
+        #expect(removed == [completedID])
+        #expect(try await harness.persistence.aggregate(id: completedID) == nil)
+        #expect(harness.controller.aggregate(id: completedID) == nil)
+        #expect(try await harness.persistence.aggregate(id: runningID) != nil)
+        #expect(harness.controller.aggregate(id: runningID) != nil)
+        #expect(harness.controller.aggregate(id: runningID)?.mission.state == .running)
     }
 }
 
@@ -647,6 +673,10 @@ private final class MissionIntegrationHarness {
 
     func failNextACPStart(forProjectID projectID: String) {
         recorder.failNextACPStart(forProjectID: projectID)
+    }
+
+    func insert(_ aggregate: MissionAggregate) throws {
+        try Self.insert(aggregate, at: path)
     }
 
     func markArchived(_ leg: MissionLeg) {

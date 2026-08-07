@@ -674,15 +674,18 @@ final class MissionController {
 
     // Completed Missions have no in-flight setup work, so this deliberately
     // skips the per-Mission lifecycle gate and deletes them in one transaction.
-    func deleteCompleted(ids: [MissionID]) async {
+    @discardableResult
+    func deleteCompleted(ids: [MissionID]) async -> [MissionID] {
         let completed = ids.filter { aggregate(id: $0)?.mission.state == .completed }
-        guard !completed.isEmpty else { return }
+        guard !completed.isEmpty else { return [] }
         do {
             try await persistence.delete(ids: completed)
             for id in completed { remove(id: id) }
             loadError = nil
+            return completed
         } catch {
             loadError = error.localizedDescription
+            return []
         }
     }
 

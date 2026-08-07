@@ -519,4 +519,60 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.globalTabs.tabs.isEmpty)
         #expect(!fixture.state.canReopenClosedTab)
     }
+
+    @Test func deletingCompletedMissionsClosesOnlyTheCompletedMissionsTab() async throws {
+        let completedID = MissionID(rawValue: "closed-tabs-completed-mission")
+        let runningID = MissionID(rawValue: "closed-tabs-running-mission")
+        let persistence = try Self.makeMixedMissionPersistence(completedID: completedID, runningID: runningID)
+        let state = AppState(store: MemoryStore(), missionPersistence: persistence)
+        let fixture = makeFixture(state: state)
+        await fixture.state.missions.load()
+
+        let completedTab = fixture.state.globalTabs.openOrFocusMission(missionID: completedID, title: "Completed Mission")
+        let runningTab = fixture.state.globalTabs.openOrFocusMission(missionID: runningID, title: "Running Mission")
+        #expect(fixture.state.globalTabs.tabs.map(\.id) == [completedTab.id, runningTab.id])
+
+        await fixture.state.deleteCompletedMissions(ids: [completedID, runningID])
+
+        #expect(fixture.state.globalTabs.tabs.map(\.id) == [runningTab.id])
+        #expect(!fixture.state.canReopenClosedTab)
+
+        // The running Mission's tab and its ordinary close/reopen behavior remain untouched.
+        fixture.state.requestCloseGlobalTab(tabID: runningTab.id)
+        #expect(fixture.state.canReopenClosedTab)
+
+        await fixture.state.reopenLastClosedTab()
+
+        #expect(fixture.state.globalTabs.tabs.map(\.id) == [runningTab.id])
+        #expect(fixture.state.globalTabs.activeTabId == runningTab.id)
+        #expect(!fixture.state.canReopenClosedTab)
+    }
+
+    private static func makeMixedMissionPersistence(
+        completedID: MissionID,
+        runningID: MissionID
+    ) throws -> MissionPersistence {
+        var completedAggregate = MissionFixtures.creatingMission(
+            id: completedID.rawValue,
+            issue: MissionFixtures.issue(number: 501)
+        )
+        completedAggregate.mission.state = .completed
+        completedAggregate.mission.setupCheckpoint = .running
+        completedAggregate.mission.completedAt = Date(timeIntervalSince1970: 200)
+
+        var runningAggregate = MissionFixtures.creatingMission(
+            id: runningID.rawValue,
+            issue: MissionFixtures.issue(number: 502)
+        )
+        runningAggregate.mission.state = .running
+        runningAggregate.mission.setupCheckpoint = .running
+
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("closed-tabs-missions-\(UUID().uuidString).sqlite")
+            .path
+        let store = try MissionStore(path: path)
+        try store.insert(completedAggregate)
+        try store.insert(runningAggregate)
+        return MissionPersistence(path: path)
+    }
 }

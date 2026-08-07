@@ -4684,8 +4684,7 @@ final class AppState {
     }
 
     func deleteCompletedMissions(ids: [MissionID]) async {
-        await missions.deleteCompleted(ids: ids)
-        for id in ids where missions.aggregate(id: id) == nil {
+        for id in await missions.deleteCompleted(ids: ids) {
             discardMissionUI(id: id)
         }
     }
