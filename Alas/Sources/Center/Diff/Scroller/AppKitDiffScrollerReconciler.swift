@@ -131,10 +131,17 @@ final class AppKitDiffScrollerReconciler {
             // unclamped band may have found no rows to measure. Iterate:
             // scroll progressively earlier so each pass measures a different
             // band of underestimated replacement rows, growing the document
-            // height until it encompasses previousScrollY or stabilizes.
+            // height until the maximum scroll offset can represent
+            // previousScrollY, or the scan is exhausted. The scan is bounded
+            // to avoid freezing the UI on a genuine shrink — if the document
+            // can't grow enough in a limited number of passes, the final
+            // setScrollY correctly clamps to the real bottom.
             var previousDocumentHeight = tiling.documentHeight
             var probeY = tiling.documentHeight
-            while previousScrollY > tiling.documentHeight {
+            var remainingPasses = 8
+            while previousScrollY > max(0, tiling.documentHeight - scrollView.viewportHeight),
+                  remainingPasses > 0 {
+                remainingPasses -= 1
                 scrollView.setScrollY(probeY, animated: false)
                 layoutVisibleRows()
                 if tiling.documentHeight <= previousDocumentHeight {
