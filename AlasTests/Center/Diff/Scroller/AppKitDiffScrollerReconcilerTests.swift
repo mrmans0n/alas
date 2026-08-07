@@ -174,6 +174,29 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(abs(stack.scrollView.scrollY - y) < 0.5)
     }
 
+    @Test("a restructured final hunk measures tail rows past the estimated document")
+    func restructuredFinalHunkMeasuresTailRows() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<10).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        // Scroll to the bottom hunk — previousScrollY is near the document end.
+        let y = CGFloat(9 * 500 + 100)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Restructure the final hunk: its replacement estimates are much
+        // shorter, so the estimated document is shorter than `y`.
+        var replaced: [AppKitDiffRowSpec] = (0..<9).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-9", token: 99, height: 37))
+        replaced += (0..<2).map { spec("seg-9-\($0)", height: 92) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        // The content genuinely shrank — scrollY clamps to the real bottom.
+        let maxScroll = max(0, stack.tiling.documentHeight - stack.scrollView.viewportHeight)
+        #expect(abs(stack.scrollView.scrollY - maxScroll) < 0.5)
+    }
+
     @Test("unchanged plans do not perform another full apply")
     func unchangedPlanIsNoOp() {
         let stack = makeStack()

@@ -127,6 +127,14 @@ final class AppKitDiffScrollerReconciler {
         }
         layoutVisibleRows()
         if anchorRestructured {
+            // If previousScrollY was beyond the estimated document, the
+            // unclamped band may have found no rows to measure. Measure the
+            // tail rows so the document height reflects real heights before
+            // the final clamped restore.
+            if previousScrollY > tiling.documentHeight {
+                scrollView.setScrollY(tiling.documentHeight, animated: false)
+                layoutVisibleRows()
+            }
             scrollView.setScrollY(previousScrollY, animated: false)
         }
     }
