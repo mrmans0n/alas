@@ -3758,6 +3758,52 @@ let second = true
         #expect(helpTexts.contains("Discard hunk"))
     }
 
+    @Test func extractedHunkRowExpandsCollapsedContextInMountedLegacyPane() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: collapsedContextModel(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() },
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let collapsedCodeViews = visibleCodeTextViews(in: controller.view)
+        #expect(collapsedCodeViews.count == 2)
+        let collapsedRowCounts = collapsedCodeViews.map(\.lineMetadata.count)
+        let expandButton = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSButton }.first {
+            $0.toolTip == "Expand context"
+        })
+        expandButton.performClick(nil)
+
+        let renderDeadline = Date(timeIntervalSinceNow: 1)
+        var expandedRowCounts: [Int] = []
+        repeat {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+            controller.view.layoutSubtreeIfNeeded()
+            expandedRowCounts = visibleCodeTextViews(in: controller.view).map(\.lineMetadata.count)
+        } while Date() < renderDeadline && expandedRowCounts == collapsedRowCounts
+
+        let buttons = allSubviews(of: controller.view).compactMap { $0 as? NSButton }
+        let helpTexts = buttons.compactMap { $0.toolTip }
+        #expect(helpTexts.contains("Collapse context"))
+        #expect(expandedRowCounts.count == 2)
+        #expect(zip(expandedRowCounts, collapsedRowCounts).allSatisfy { expanded, collapsed in
+            expanded > collapsed
+        })
+    }
+
     @Test func visibleWhitespacePreservesInlineBackgrounds() {
         let rendered = DiffCodeText.attributedString(
             text: "\tlet b = 3",

@@ -220,6 +220,52 @@ final class DiffReviewRenderContextCache: ObservableObject {
         return context
     }
 
+    /// Shared cache entry point for both the legacy section and the flattened
+    /// AppKit row plan. Keeping this construction here prevents either path
+    /// from accidentally deriving a second context for the same file pass.
+    func reviewContext(
+        fileID: DiffReviewFileID,
+        displayModel: DiffDisplayModel,
+        contextSnapshot: DiffReviewFileContextSnapshot?,
+        contextProviderAvailable: Bool,
+        contextExpansion: DiffContextExpansionState,
+        inlineFeedback: [DiffReviewInlineFeedback],
+        draftComments: [ReviewDraftComment],
+        pendingDraftAnchor: DiffReviewLineAnchor?,
+        canCreateDraftComment: Bool,
+        threads: [DiffInlineCommentThread],
+        annotations: [DiffInlineAnnotation]
+    ) -> DiffReviewRenderContext {
+        let key = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: displayModel,
+            contextSnapshot: contextSnapshot,
+            contextProviderAvailable: contextProviderAvailable,
+            contextExpansion: contextExpansion,
+            inlineFeedback: inlineFeedback,
+            draftComments: draftComments,
+            pendingDraftAnchor: pendingDraftAnchor,
+            canCreateDraftComment: canCreateDraftComment,
+            threads: threads,
+            annotations: annotations
+        )
+        return context(key: key) {
+            DiffReviewRenderContextBuilder.build(
+                fileID: fileID,
+                displayModel: displayModel,
+                contextSnapshot: contextSnapshot,
+                contextProviderAvailable: contextProviderAvailable,
+                contextExpansion: contextExpansion,
+                inlineFeedback: inlineFeedback,
+                draftComments: draftComments,
+                pendingDraftAnchor: pendingDraftAnchor,
+                canCreateDraftComment: canCreateDraftComment,
+                threads: threads,
+                annotations: annotations
+            )
+        }
+    }
+
     func removeAll() {
         storage.removeAll()
         recency.removeAll()

@@ -134,6 +134,10 @@ struct DiffReviewScrollCommandController: Equatable {
         generation += 1
         return DiffReviewScrollCommand(id: id, generation: generation)
     }
+
+    mutating func reset() {
+        generation = 0
+    }
 }
 
 enum DiffReviewScrollCommandConsumption {

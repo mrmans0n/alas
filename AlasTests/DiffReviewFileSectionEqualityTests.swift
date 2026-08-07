@@ -46,6 +46,17 @@ struct DiffReviewFileSectionEqualityTests {
         #expect(base != section(file: file, canAddToReview: true))
     }
 
+    @Test func sharedPresentationStateParticipatesInEquality() {
+        let file = fileModel(path: "a.swift")
+        let state = AppKitDiffReviewFileState()
+        let base = section(file: file, presentationStateSignature: DiffReviewFilePresentationSignature(state))
+
+        state.showFullDiffOverride = true
+        let updated = section(file: file, presentationStateSignature: DiffReviewFilePresentationSignature(state))
+
+        #expect(base != updated)
+    }
+
     @Test func collectionsParticipateInEquality() {
         let file = fileModel(path: "a.swift")
         let base = section(file: file)
@@ -256,7 +267,8 @@ private func section(
     canAddToReview: Bool = false,
     draftCommentAvailability: [ReviewDraftCommentActionAvailability] = [],
     inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability] = [],
-    draftCommentAgentTargets: [ReviewFeedbackAgentTarget] = []
+    draftCommentAgentTargets: [ReviewFeedbackAgentTarget] = [],
+    presentationStateSignature: DiffReviewFilePresentationSignature? = nil
 ) -> EquatableDiffReviewFileSection {
     EquatableDiffReviewFileSection(
         section: DiffReviewFileSection(
@@ -287,7 +299,8 @@ private func section(
         showWhitespace: showWhitespace,
         draftCommentAvailability: draftCommentAvailability,
         inlineFeedbackAvailability: inlineFeedbackAvailability,
-        draftCommentAgentTargets: draftCommentAgentTargets
+        draftCommentAgentTargets: draftCommentAgentTargets,
+        presentationStateSignature: presentationStateSignature
     )
 }
 
