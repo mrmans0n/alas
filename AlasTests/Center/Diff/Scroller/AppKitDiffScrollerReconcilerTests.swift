@@ -197,6 +197,28 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(abs(stack.scrollView.scrollY - maxScroll) < 0.5)
     }
 
+    @Test("a restructured final hunk mounts the viewport band at the restored Y")
+    func restructuredFinalHunkMountsViewportBandAtRestoredY() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<10).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(5 * 500 + 100)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Restructure mid-document with many short-estimated replacement rows.
+        var replaced: [AppKitDiffRowSpec] = (0..<5).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-5", token: 99, height: 37))
+        replaced += (0..<8).map { spec("seg-5-\($0)", height: 20) }
+        replaced += (6..<10).map { spec("row-\($0)", height: 500) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        // The viewport band must be mounted at the restored position.
+        #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+        #expect(!stack.pool.mountedIDs.isEmpty)
+    }
+
     @Test("unchanged plans do not perform another full apply")
     func unchangedPlanIsNoOp() {
         let stack = makeStack()
