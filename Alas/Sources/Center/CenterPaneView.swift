@@ -293,7 +293,7 @@ struct CenterPaneView: View {
                 } else if tabs.isEmpty {
                     EmptyTabView(
                         onNewTerminal: openTerminal,
-                        onNewAgentTerminal: { state.openAgentLauncherOverlay(mode: .terminal) },
+                        onNewAgentTerminal: { state.openAgentLauncherOverlay(mode: nil) },
                         onNewAgentChat: { state.openAgentLauncherOverlay(mode: .acp) },
                         newTerminalShortcut: state.binding(for: .newTerminalTab)?.displayString,
                         newAgentTerminalShortcut: state.binding(for: .launchAgentTerminal)?.displayString,
