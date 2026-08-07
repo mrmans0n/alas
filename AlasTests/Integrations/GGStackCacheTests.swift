@@ -25,8 +25,14 @@ struct GGStackCacheTests {
         let counter = LoadCounter()
         let path = URL(fileURLWithPath: "/tmp/wt")
 
-        let first = try await cache.stack(at: path) { await counter.increment(); return self.stack(name: "s") }
-        let second = try await cache.stack(at: path) { await counter.increment(); return self.stack(name: "s") }
+        let first = try await cache.stack(at: path) {
+            await counter.increment()
+            return self.stack(name: "s")
+        }
+        let second = try await cache.stack(at: path) {
+            await counter.increment()
+            return self.stack(name: "s")
+        }
 
         #expect(first?.name == "s")
         #expect(second?.name == "s")
@@ -38,10 +44,12 @@ struct GGStackCacheTests {
         let counter = LoadCounter()
 
         _ = try await cache.stack(at: URL(fileURLWithPath: "/tmp/a")) {
-            await counter.increment(); return self.stack(name: "a")
+            await counter.increment()
+            return self.stack(name: "a")
         }
         _ = try await cache.stack(at: URL(fileURLWithPath: "/tmp/b")) {
-            await counter.increment(); return self.stack(name: "b")
+            await counter.increment()
+            return self.stack(name: "b")
         }
 
         #expect(await counter.count == 2)
@@ -52,9 +60,15 @@ struct GGStackCacheTests {
         let counter = LoadCounter()
         let path = URL(fileURLWithPath: "/tmp/wt")
 
-        _ = try await cache.stack(at: path) { await counter.increment(); return self.stack(name: "s") }
+        _ = try await cache.stack(at: path) {
+            await counter.increment()
+            return self.stack(name: "s")
+        }
         await cache.invalidate()
-        _ = try await cache.stack(at: path) { await counter.increment(); return self.stack(name: "s") }
+        _ = try await cache.stack(at: path) {
+            await counter.increment()
+            return self.stack(name: "s")
+        }
 
         #expect(await counter.count == 2)
     }
@@ -66,9 +80,15 @@ struct GGStackCacheTests {
         let path = URL(fileURLWithPath: "/tmp/wt")
 
         await #expect(throws: Boom.self) {
-            try await cache.stack(at: path) { await counter.increment(); throw Boom() }
+            try await cache.stack(at: path) {
+                await counter.increment()
+                throw Boom()
+            }
         }
-        _ = try await cache.stack(at: path) { await counter.increment(); return self.stack(name: "s") }
+        _ = try await cache.stack(at: path) {
+            await counter.increment()
+            return self.stack(name: "s")
+        }
 
         #expect(await counter.count == 2)
     }
