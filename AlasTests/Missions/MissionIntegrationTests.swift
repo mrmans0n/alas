@@ -359,6 +359,41 @@ struct MissionIntegrationTests {
         #expect(harness.worktreeCreateCount == 1)
         #expect(harness.sessionIDs.count == 1)
     }
+
+    @Test("delete removes the Mission with no external side effects")
+    func deleteHasNoExternalSideEffects() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        await harness.controller.delete(id)
+
+        #expect(try await harness.persistence.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregates.isEmpty)
+        #expect(harness.controller.loadError == nil)
+        #expect(harness.providerMutations.isEmpty)
+        #expect(harness.worktreeMutations.isEmpty)
+        #expect(harness.sessionStops.isEmpty)
+    }
+
+    @Test("deleteCompleted only removes Missions that are actually completed")
+    func deleteCompletedSkipsUnfinishedMissions() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        await harness.controller.deleteCompleted(ids: [id])
+
+        #expect(try await harness.persistence.aggregate(id: id) != nil)
+        #expect(harness.controller.aggregate(id: id) != nil)
+
+        await harness.controller.complete(id)
+        await harness.controller.deleteCompleted(ids: [id])
+
+        #expect(try await harness.persistence.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregate(id: id) == nil)
+    }
 }
 
 private extension ReviewLoopSnapshot {

@@ -659,6 +659,33 @@ final class MissionController {
         }
     }
 
+    func delete(_ id: MissionID) async {
+        await withLifecycleMutation(id: id) { [weak self] in
+            guard let self else { return }
+            do {
+                try await persistence.delete(id: id)
+                remove(id: id)
+                loadError = nil
+            } catch {
+                loadError = error.localizedDescription
+            }
+        }
+    }
+
+    // Completed Missions have no in-flight setup work, so this deliberately
+    // skips the per-Mission lifecycle gate and deletes them in one transaction.
+    func deleteCompleted(ids: [MissionID]) async {
+        let completed = ids.filter { aggregate(id: $0)?.mission.state == .completed }
+        guard !completed.isEmpty else { return }
+        do {
+            try await persistence.delete(ids: completed)
+            for id in completed { remove(id: id) }
+            loadError = nil
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
     func aggregate(id: MissionID) -> MissionAggregate? {
         aggregates.first { $0.mission.id == id }
     }
@@ -1225,6 +1252,10 @@ final class MissionController {
         // the same issue-scoped input instead of starting recovery empty.
         guard leg.ordinal == 0 else { return nil }
         return MissionPromptBuilder.build(source: source)
+    }
+
+    private func remove(id: MissionID) {
+        aggregates.removeAll { $0.mission.id == id }
     }
 
     private func replace(_ aggregate: MissionAggregate) {
