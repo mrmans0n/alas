@@ -525,3 +525,143 @@ private enum ResolverTestError: Error, Equatable {
     case missingHEAD
     case unexpectedRef(String)
 }
+
+struct RevisionFollowPresentationTests {
+    @Test func fixedRevisionShowsOpenTether() {
+        let presentation = RevisionFollowPresentation(
+            fixedSHA: "0123456789abcdef",
+            revision: nil,
+            refreshError: nil
+        )
+
+        #expect(presentation == .fixed(sha: "0123456789"))
+    }
+
+    @Test func followedRevisionLinksExpressionToResolvedCommit() throws {
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            resolvedSHA: "abcdef0123456789"
+        ))
+
+        let presentation = RevisionFollowPresentation(
+            fixedSHA: "ignored",
+            revision: revision,
+            refreshError: nil
+        )
+
+        #expect(presentation == .following(expression: "HEAD~3", resolvedSHA: "abcdef0123"))
+    }
+
+    @Test func checkoutPauseKeepsCurrentCommitAndShowsCandidate() throws {
+        var revision = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            resolvedSHA: "current012345"
+        ))
+        revision = revision.withPendingCheckout(TrackedRevisionCandidate(
+            branch: "main",
+            sha: "candidate98765"
+        ))
+
+        let presentation = RevisionFollowPresentation(
+            fixedSHA: "ignored",
+            revision: revision,
+            refreshError: nil
+        )
+
+        #expect(presentation == .paused(
+            expression: "HEAD~3",
+            resolvedSHA: "current012",
+            candidateSHA: "candidate9",
+            message: "Paused: HEAD moved to main"
+        ))
+    }
+
+    @Test func detachedCheckoutPauseHasUsefulMessage() throws {
+        var revision = try #require(TrackedRevision(
+            expression: "HEAD",
+            baselineBranch: "",
+            resolvedSHA: "current012345"
+        ))
+        revision = revision.withPendingCheckout(TrackedRevisionCandidate(
+            branch: "",
+            sha: "candidate98765"
+        ))
+
+        let presentation = RevisionFollowPresentation(
+            fixedSHA: "ignored",
+            revision: revision,
+            refreshError: nil
+        )
+
+        #expect(presentation.pauseMessage == "Paused: detached HEAD moved")
+    }
+
+    @Test func refreshFailureKeepsLastResolvedCommit() throws {
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            resolvedSHA: "current012345"
+        ))
+
+        let presentation = RevisionFollowPresentation(
+            fixedSHA: "ignored",
+            revision: revision,
+            refreshError: "unknown revision"
+        )
+
+        #expect(presentation == .failed(
+            expression: "HEAD~3",
+            resolvedSHA: "current012",
+            message: "unknown revision"
+        ))
+    }
+
+    @Test func updatePulseRequiresAChangedCommitAndMotion() {
+        #expect(RevisionFollowPresentation.shouldPulse(
+            previousSHA: "old",
+            resolvedSHA: "new",
+            reduceMotion: false
+        ))
+        #expect(!RevisionFollowPresentation.shouldPulse(
+            previousSHA: "same",
+            resolvedSHA: "same",
+            reduceMotion: false
+        ))
+        #expect(!RevisionFollowPresentation.shouldPulse(
+            previousSHA: "old",
+            resolvedSHA: "new",
+            reduceMotion: true
+        ))
+        #expect(!RevisionFollowPresentation.shouldPulse(
+            previousSHA: nil,
+            resolvedSHA: "new",
+            reduceMotion: false
+        ))
+    }
+
+    @Test func editorRequestTrimsSubmissionAndMatchesItsTab() {
+        let request = FollowRevisionEditorRequest(
+            worktreeID: "wt",
+            tabID: "tab",
+            expression: "  HEAD~3  ",
+            isEditing: false
+        )
+
+        #expect(request.submissionExpression == "HEAD~3")
+        #expect(request.matches(worktreeID: "wt", tabID: "tab"))
+        #expect(!request.matches(worktreeID: "other", tabID: "tab"))
+    }
+
+    @Test func editorRequestRejectsWhitespaceOnlySubmission() {
+        let request = FollowRevisionEditorRequest(
+            worktreeID: "wt",
+            tabID: "tab",
+            expression: " \n ",
+            isEditing: false
+        )
+
+        #expect(request.submissionExpression == nil)
+    }
+}

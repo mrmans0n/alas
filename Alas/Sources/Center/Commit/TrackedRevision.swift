@@ -330,3 +330,70 @@ enum TrackedRevisionRetargeter {
         )
     }
 }
+
+enum RevisionFollowPresentation: Equatable {
+    case fixed(sha: String)
+    case following(expression: String, resolvedSHA: String)
+    case paused(expression: String, resolvedSHA: String, candidateSHA: String, message: String)
+    case failed(expression: String, resolvedSHA: String, message: String)
+
+    init(fixedSHA: String, revision: TrackedRevision?, refreshError: String?) {
+        guard let revision else {
+            self = .fixed(sha: Self.shortSHA(fixedSHA))
+            return
+        }
+        if let refreshError, !refreshError.isEmpty {
+            self = .failed(
+                expression: revision.expression,
+                resolvedSHA: Self.shortSHA(revision.resolvedSHA),
+                message: refreshError
+            )
+        } else if let pending = revision.pendingCheckout {
+            self = .paused(
+                expression: revision.expression,
+                resolvedSHA: Self.shortSHA(revision.resolvedSHA),
+                candidateSHA: Self.shortSHA(pending.sha),
+                message: pending.branch.isEmpty
+                    ? "Paused: detached HEAD moved"
+                    : "Paused: HEAD moved to \(pending.branch)"
+            )
+        } else {
+            self = .following(
+                expression: revision.expression,
+                resolvedSHA: Self.shortSHA(revision.resolvedSHA)
+            )
+        }
+    }
+
+    var pauseMessage: String? {
+        guard case .paused(_, _, _, let message) = self else { return nil }
+        return message
+    }
+
+    static func shouldPulse(previousSHA: String?, resolvedSHA: String, reduceMotion: Bool) -> Bool {
+        guard !reduceMotion, let previousSHA else { return false }
+        return previousSHA != resolvedSHA
+    }
+
+    private static func shortSHA(_ sha: String) -> String {
+        String(sha.prefix(10))
+    }
+}
+
+struct FollowRevisionEditorRequest: Equatable {
+    let worktreeID: String
+    let tabID: TabID
+    var expression: String
+    let isEditing: Bool
+    var isSubmitting = false
+    var errorMessage: String?
+
+    var submissionExpression: String? {
+        let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func matches(worktreeID: String, tabID: TabID) -> Bool {
+        self.worktreeID == worktreeID && self.tabID == tabID
+    }
+}

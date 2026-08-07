@@ -5,13 +5,12 @@ struct CommitHeaderView: View {
 
     let details: CommitDetails
     @Binding var expanded: Bool
-    var revisionExpression: String?
-    var pendingCheckout: TrackedRevisionCandidate?
+    var trackedRevision: TrackedRevision? = nil
+    var worktreeID = ""
+    var tabID: TabID = ""
+    var appState: AppState? = nil
     var isRefreshingRevision = false
     var revisionError: String?
-    var onFollowRevision: (() -> Void)?
-    var onEditRevision: (() -> Void)?
-    var onStopFollowingRevision: (() -> Void)?
     var onAcceptPendingCheckout: (() -> Void)?
     var onRetryRevision: (() -> Void)?
 
@@ -22,9 +21,8 @@ struct CommitHeaderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             compactRow
-            if showsRevisionRow {
-                revisionRow
-                    .padding(.top, 8)
+            if appState != nil {
+                revisionRow.padding(.top, 8)
             }
             if expanded {
                 ViewThatFits(in: .vertical) {
@@ -42,14 +40,6 @@ struct CommitHeaderView: View {
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .copyFeedbackOverlay(message: copyFeedback.message)
-    }
-
-    private var showsRevisionRow: Bool {
-        revisionExpression != nil ||
-            pendingCheckout != nil ||
-            isRefreshingRevision ||
-            revisionError != nil ||
-            onFollowRevision != nil
     }
 
     private var compactRow: some View {
@@ -100,79 +90,20 @@ struct CommitHeaderView: View {
     }
 
     private var revisionRow: some View {
-        HStack(spacing: 8) {
-            if let revisionExpression {
-                Text("\(revisionExpression) -> \(details.info.shortSha)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityIdentifier("commit-revision-following-label")
-            } else if onFollowRevision != nil {
-                Text("Fixed commit")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-muted"))
-            }
-
-            if isRefreshingRevision {
-                Text("Refreshing")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .accessibilityIdentifier("commit-revision-updating")
-            }
-
-            if let pendingCheckout {
-                Text("Paused on checkout to \(pendingCheckout.branch)")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("warn"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityIdentifier("commit-revision-pending-checkout")
-                Button("Update") {
-                    onAcceptPendingCheckout?()
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .accessibilityIdentifier("commit-revision-accept-checkout")
-            }
-
-            if let revisionError, !revisionError.isEmpty {
-                Text(revisionError)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("del"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityIdentifier("commit-revision-error")
-                if let onRetryRevision {
-                    Button("Retry", action: onRetryRevision)
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .accessibilityIdentifier("commit-revision-error-retry")
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            if revisionExpression == nil, let onFollowRevision {
-                Button("Follow Revision…", action: onFollowRevision)
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .accessibilityIdentifier("commit-revision-follow")
-            } else {
-                if let onEditRevision {
-                    Button("Edit…", action: onEditRevision)
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .accessibilityIdentifier("commit-revision-edit")
-                }
-                if let onStopFollowingRevision {
-                    Button("Stop", action: onStopFollowingRevision)
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .accessibilityIdentifier("commit-revision-stop")
-                }
-            }
-        }
+        RevisionFollowControl(
+            presentation: RevisionFollowPresentation(
+                fixedSHA: details.info.sha,
+                revision: trackedRevision,
+                refreshError: trackedRevision == nil ? nil : revisionError
+            ),
+            worktreeID: worktreeID,
+            tabID: tabID,
+            accessibilityPrefix: "commit-revision",
+            appState: appState,
+            isRefreshing: isRefreshingRevision,
+            onAcceptPendingCheckout: onAcceptPendingCheckout,
+            onRetry: onRetryRevision
+        )
     }
 
     private var expandedBlock: some View {

@@ -164,15 +164,24 @@ struct TabBarView: View {
             }
             let revisionCapability = revisionFollowCapability(tab)
             if revisionCapability.isSupported {
-                Button(revisionCapability.isFollowing ? "Edit Followed Revision…" : "Follow Revision…") {
+                Button {
                     if revisionCapability.isFollowing {
                         onEditRevision(tab.id)
                     } else {
                         onFollowRevision(tab.id)
                     }
+                } label: {
+                    Label(
+                        revisionCapability.isFollowing ? "Edit Followed Revision…" : "Follow Revision…",
+                        systemImage: revisionCapability.isFollowing ? "link" : "link.badge.plus"
+                    )
                 }
                 if revisionCapability.isFollowing {
-                    Button("Stop Following Revision") { onStopFollowingRevision(tab.id) }
+                    Button {
+                        onStopFollowingRevision(tab.id)
+                    } label: {
+                        Label("Stop Following Revision", systemImage: "link.slash")
+                    }
                 }
                 Divider()
             }

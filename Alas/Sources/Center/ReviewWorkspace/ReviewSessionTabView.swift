@@ -273,76 +273,25 @@ struct ReviewSessionTabView: View {
     }
 
     private var trackedRevisionRow: some View {
-        HStack(spacing: 8) {
-            if let revision = trackedRevision {
-                Text("\(revision.expression) -> \(String(revision.resolvedSHA.prefix(10)))")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityIdentifier("review-session-revision-following-label")
-
-                if let pending = revision.pendingCheckout {
-                    Text("Paused on checkout to \(pending.branch)")
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.color("warn"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .accessibilityIdentifier("review-session-revision-pending-checkout")
-                    Button("Update") {
-                        acceptPendingCheckout()
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .accessibilityIdentifier("review-session-revision-accept-checkout")
-                }
-            } else {
-                Text("Fixed commit review")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-muted"))
-            }
-
-            Spacer(minLength: 8)
-
-            if trackedRevision == nil {
-                Button("Follow Revision…") {
-                    promptFollowRevision(prefill: nil)
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .accessibilityIdentifier("review-session-revision-follow")
-            } else {
-                Button("Edit…") {
-                    promptFollowRevision(prefill: trackedRevision?.expression)
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .accessibilityIdentifier("review-session-revision-edit")
-
-                Button("Stop") {
-                    stopFollowingRevision()
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .accessibilityIdentifier("review-session-revision-stop")
-            }
-        }
-    }
-
-    @MainActor
-    private func promptFollowRevision(prefill: String?) {
-        guard let worktree, let appState else { return }
-        appState.promptFollowRevision(
-            worktreeID: worktree.id,
+        RevisionFollowControl(
+            presentation: RevisionFollowPresentation(
+                fixedSHA: fixedReviewSHA,
+                revision: trackedRevision,
+                refreshError: trackedRevision == nil ? nil : loadError
+            ),
+            worktreeID: worktree?.id ?? tabState.worktreeId,
             tabID: tabState.id,
-            prefill: prefill
+            accessibilityPrefix: "review-session-revision",
+            appState: appState,
+            isRefreshing: isLoading && trackedRevision != nil,
+            onAcceptPendingCheckout: acceptPendingCheckout,
+            onRetry: { loadGeneration += 1 }
         )
     }
 
-    @MainActor
-    private func stopFollowingRevision() {
-        guard let worktree, let appState else { return }
-        appState.stopFollowingRevision(worktreeID: worktree.id, tabID: tabState.id)
+    private var fixedReviewSHA: String {
+        if case .commit(let sha) = record?.target.payload { return sha }
+        return trackedRevision?.resolvedSHA ?? "commit"
     }
 
     @MainActor
@@ -368,7 +317,7 @@ struct ReviewSessionTabView: View {
 
     private func emptyReviewState() -> some View {
         VStack(spacing: 0) {
-            if let loadError, !loadError.isEmpty {
+            if trackedRevision == nil, let loadError, !loadError.isEmpty {
                 trackedRefreshErrorBanner(loadError)
             }
             stateView(title: "No files to review", detail: "This review session has no file diffs.", color: theme.color("fg-dim"), showsRetry: false)
@@ -403,7 +352,7 @@ struct ReviewSessionTabView: View {
             if let providerPublishError, !providerPublishError.isEmpty {
                 providerErrorBanner(providerPublishError)
             }
-            if let loadError, !loadError.isEmpty {
+            if trackedRevision == nil, let loadError, !loadError.isEmpty {
                 trackedRefreshErrorBanner(loadError)
             }
             DiffReviewSurface(
