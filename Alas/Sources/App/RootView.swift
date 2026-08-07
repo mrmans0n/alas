@@ -264,6 +264,7 @@ struct RootView: View {
                     )
                     MissionTabView(state: state, worktree: nil, tabState: tabState)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         case .worktree(let wt):
             CenterPaneView(
