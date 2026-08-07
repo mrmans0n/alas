@@ -50,6 +50,9 @@ final class AppKitDiffReviewFileState: ObservableObject {
     @Published var activeInlineFeedbackEditorID: String? { didSet { structuralDidChange.send() } }
     @Published var activeDraftCommentEditorID: String? { didSet { structuralDidChange.send() } }
     @Published var activeThreadID: String? { didSet { structuralDidChange.send() } }
+    @Published var inlineFeedbackReplyEditors: [String: DiffReviewInlineFeedbackReplyEditorState] = [:]
+    @Published var draftCommentEditors: [String: ReviewDraftCommentEditorState] = [:]
+    @Published var threadCommentEditors: [String: DiffInlineCommentCardEditorState] = [:]
     @Published var showFullDiffOverride = false { didSet { structuralDidChange.send() } }
     @Published var isDraftComposerFocused = false { didSet { structuralDidChange.send() } }
 
@@ -101,6 +104,9 @@ final class AppKitDiffReviewFileState: ObservableObject {
         activeInlineFeedbackEditorID = nil
         activeDraftCommentEditorID = nil
         activeThreadID = nil
+        inlineFeedbackReplyEditors = [:]
+        draftCommentEditors = [:]
+        threadCommentEditors = [:]
         showFullDiffOverride = false
         isDraftComposerFocused = false
         imageState.clear()
@@ -126,6 +132,27 @@ final class AppKitDiffReviewFileState: ObservableObject {
         contextLoadSignature = nil
         contextLoadError = nil
         pendingContextExpansions = []
+    }
+
+    func bindingForInlineFeedbackReplyEditor(_ id: String) -> Binding<DiffReviewInlineFeedbackReplyEditorState> {
+        Binding(
+            get: { self.inlineFeedbackReplyEditors[id] ?? DiffReviewInlineFeedbackReplyEditorState() },
+            set: { self.inlineFeedbackReplyEditors[id] = $0 }
+        )
+    }
+
+    func bindingForDraftCommentEditor(_ id: String) -> Binding<ReviewDraftCommentEditorState> {
+        Binding(
+            get: { self.draftCommentEditors[id] ?? ReviewDraftCommentEditorState() },
+            set: { self.draftCommentEditors[id] = $0 }
+        )
+    }
+
+    func bindingForThreadCommentEditor(_ id: String) -> Binding<DiffInlineCommentCardEditorState> {
+        Binding(
+            get: { self.threadCommentEditors[id] ?? DiffInlineCommentCardEditorState() },
+            set: { self.threadCommentEditors[id] = $0 }
+        )
     }
 
     func beginContextLoad(fileID: DiffReviewFileID, signature: DiffReviewContextStateSignature) -> Int {

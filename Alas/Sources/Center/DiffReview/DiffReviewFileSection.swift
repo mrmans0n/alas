@@ -493,6 +493,7 @@ struct DiffReviewFileSection: View {
                         canReply: presentation.canReply,
                         canResolve: presentation.canResolve,
                         canAddToReview: presentation.canAddToReview,
+                        editorState: state.bindingForThreadCommentEditor(thread.id),
                         onActiveChange: { active in
                             activeThreadID = active
                                 ? thread.id
@@ -1800,6 +1801,11 @@ enum DiffReviewInlineFeedbackMarkdown {
     }
 }
 
+struct ReviewDraftCommentEditorState: Equatable {
+    var isEditing = false
+    var editingBody = ""
+}
+
 struct ReviewDraftCommentCard: View {
     let comment: ReviewDraftComment
     let file: DiffReviewFileSummary
@@ -1809,10 +1815,10 @@ struct ReviewDraftCommentCard: View {
     let onSelect: (ReviewDraftComment) -> Void
     var onHoverChange: (Bool) -> Void = { _ in }
     var onEditorActiveChange: (Bool) -> Void = { _ in }
+    var editorState: Binding<ReviewDraftCommentEditorState>?
 
     @Environment(\.theme) private var theme
-    @State private var isEditing = false
-    @State private var editingBody = ""
+    @State private var localEditorState = ReviewDraftCommentEditorState()
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -1840,7 +1846,7 @@ struct ReviewDraftCommentCard: View {
         .onHover { hovering in
             onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
         }
-        .onChange(of: isEditing) { _, isEditing in
+        .onChange(of: editorStateBinding.wrappedValue.isEditing) { _, isEditing in
             onEditorActiveChange(isEditing)
         }
     }
@@ -1886,9 +1892,9 @@ struct ReviewDraftCommentCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if isEditing {
+                if editorStateBinding.wrappedValue.isEditing {
                     ReviewDraftComposerTextEditor(
-                        text: $editingBody,
+                        text: editorStateBinding.editingBody,
                         theme: theme,
                         isFocused: $editorFocused,
                         onSave: saveEditingComment,
@@ -1937,7 +1943,7 @@ struct ReviewDraftCommentCard: View {
 
     @ViewBuilder
     private var selectionPressMarker: some View {
-        if !isEditing {
+        if !editorStateBinding.wrappedValue.isEditing {
             ReviewDraftCommentActionPressMarker(
                 identifier: "diff-review-draft-comment-select-\(comment.id)",
                 label: "Select draft comment",
@@ -1947,7 +1953,7 @@ struct ReviewDraftCommentCard: View {
     }
 
     private func selectWhenNotEditing() {
-        guard !isEditing else { return }
+        guard !editorStateBinding.wrappedValue.isEditing else { return }
         onSelect(comment)
     }
 
@@ -1974,7 +1980,7 @@ struct ReviewDraftCommentCard: View {
         {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
-                if isEditing {
+                if editorStateBinding.wrappedValue.isEditing {
                     actionButton(id: "save", title: "Save") {
                         saveEditingComment()
                     }
@@ -1983,8 +1989,8 @@ struct ReviewDraftCommentCard: View {
                     }
                 } else if availability.canEdit {
                     actionButton(id: "edit", title: "Edit") {
-                        editingBody = comment.bodyMarkdown
-                        isEditing = true
+                        editorStateBinding.wrappedValue.editingBody = comment.bodyMarkdown
+                        editorStateBinding.wrappedValue.isEditing = true
                         editorFocused = true
                     }
                 }
@@ -2165,14 +2171,18 @@ struct ReviewDraftCommentCard: View {
     }
 
     private func saveEditingComment() {
-        actions.edit(comment, editingBody)
+        actions.edit(comment, editorStateBinding.wrappedValue.editingBody)
         cancelEditingComment()
     }
 
     private func cancelEditingComment() {
-        isEditing = false
-        editingBody = ""
+        editorStateBinding.wrappedValue.isEditing = false
+        editorStateBinding.wrappedValue.editingBody = ""
         editorFocused = false
+    }
+
+    private var editorStateBinding: Binding<ReviewDraftCommentEditorState> {
+        editorState ?? $localEditorState
     }
 
     private var feedbackBundle: ReviewFeedbackBundle {
@@ -2292,9 +2302,10 @@ struct DiffReviewInlineFeedbackCard: View {
     let onSelect: (DiffReviewInlineFeedback) -> Void
     var onHoverChange: (Bool) -> Void = { _ in }
     var onEditorActiveChange: (Bool) -> Void = { _ in }
+    var replyEditorState: Binding<DiffReviewInlineFeedbackReplyEditorState>?
 
     @Environment(\.theme) private var theme
-    @State private var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
+    @State private var localReplyEditor = DiffReviewInlineFeedbackReplyEditorState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -2327,7 +2338,7 @@ struct DiffReviewInlineFeedbackCard: View {
         .onHover { hovering in
             onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
         }
-        .onChange(of: replyEditor.isReplying) { _, isReplying in
+        .onChange(of: replyEditorBinding.wrappedValue.isReplying) { _, isReplying in
             onEditorActiveChange(isReplying)
         }
     }
@@ -2391,9 +2402,9 @@ struct DiffReviewInlineFeedbackCard: View {
     @ViewBuilder
     private var actionRow: some View {
         let availability = actions.availability(item, file)
-        if replyEditor.isReplying {
+        if replyEditorBinding.wrappedValue.isReplying {
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Reply", text: $replyEditor.body, axis: .vertical)
+                TextField("Reply", text: replyEditorBinding.body, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11.5))
                     .foregroundColor(theme.color("fg"))
@@ -2405,12 +2416,12 @@ struct DiffReviewInlineFeedbackCard: View {
                 HStack(spacing: 6) {
                     Spacer(minLength: 0)
                     inlineActionButton(id: "reply-save", title: "Save") {
-                        _ = replyEditor.save(item) { feedback, body in
+                        _ = replyEditorBinding.wrappedValue.save(item) { feedback, body in
                             actions.replyProvider(feedback, file, body)
                         }
                     }
                     inlineActionButton(id: "reply-cancel", title: "Cancel") {
-                        replyEditor.cancel()
+                        replyEditorBinding.wrappedValue.cancel()
                     }
                 }
             }
@@ -2445,7 +2456,7 @@ struct DiffReviewInlineFeedbackCard: View {
                 }
                 if availability.canReplyProvider {
                     inlineActionButton(id: "reply", title: "Reply") {
-                        replyEditor.start()
+                        replyEditorBinding.wrappedValue.start()
                     }
                 }
                 if availability.canResolveProvider {
@@ -2489,6 +2500,10 @@ struct DiffReviewInlineFeedbackCard: View {
                 action: action
             )
         )
+    }
+
+    private var replyEditorBinding: Binding<DiffReviewInlineFeedbackReplyEditorState> {
+        replyEditorState ?? $localReplyEditor
     }
 
     private var accessibilityLabel: String {

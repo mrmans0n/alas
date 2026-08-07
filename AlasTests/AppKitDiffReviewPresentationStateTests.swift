@@ -39,6 +39,50 @@ struct AppKitDiffReviewPresentationStateTests {
         #expect(remounted.expandedCollapsedRowIDs == ["hunk:1"])
     }
 
+    @Test func retainedStateKeepsReviewEditorDraftsAcrossUnmount() {
+        let store = AppKitDiffReviewPresentationStore()
+        let file = fileModel()
+        let state = store.state(for: file)
+
+        state.bindingForInlineFeedbackReplyEditor("feedback").wrappedValue = DiffReviewInlineFeedbackReplyEditorState(
+            isReplying: true,
+            body: "provider reply"
+        )
+        state.bindingForDraftCommentEditor("draft").wrappedValue = ReviewDraftCommentEditorState(
+            isEditing: true,
+            editingBody: "draft edit"
+        )
+        state.bindingForThreadCommentEditor("thread").wrappedValue = DiffInlineCommentCardEditorState(
+            isComposerOpen: true,
+            replyDraft: "thread reply",
+            editingCommentID: "comment",
+            editDraft: "thread edit"
+        )
+
+        let remounted = store.state(for: file)
+
+        #expect(remounted.bindingForInlineFeedbackReplyEditor("feedback").wrappedValue.body == "provider reply")
+        #expect(remounted.bindingForInlineFeedbackReplyEditor("feedback").wrappedValue.isReplying)
+        #expect(remounted.bindingForDraftCommentEditor("draft").wrappedValue.editingBody == "draft edit")
+        #expect(remounted.bindingForDraftCommentEditor("draft").wrappedValue.isEditing)
+        #expect(remounted.bindingForThreadCommentEditor("thread").wrappedValue.replyDraft == "thread reply")
+        #expect(remounted.bindingForThreadCommentEditor("thread").wrappedValue.editDraft == "thread edit")
+        #expect(remounted.bindingForThreadCommentEditor("thread").wrappedValue.editingCommentID == "comment")
+    }
+
+    @Test func fileIdentityResetClearsReviewEditorDrafts() {
+        let state = AppKitDiffReviewFileState()
+        state.bindingForInlineFeedbackReplyEditor("feedback").wrappedValue.body = "provider reply"
+        state.bindingForDraftCommentEditor("draft").wrappedValue.editingBody = "draft edit"
+        state.bindingForThreadCommentEditor("thread").wrappedValue.replyDraft = "thread reply"
+
+        state.resetForFileIdentityChange()
+
+        #expect(state.inlineFeedbackReplyEditors.isEmpty)
+        #expect(state.draftCommentEditors.isEmpty)
+        #expect(state.threadCommentEditors.isEmpty)
+    }
+
     @Test func fileAndHunkPresentationShareCollapsedContextState() {
         let state = AppKitDiffReviewFileState()
 

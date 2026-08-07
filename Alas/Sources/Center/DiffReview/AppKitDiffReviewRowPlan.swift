@@ -1192,6 +1192,7 @@ struct AppKitDiffReviewImageThreadRowBody: View {
             canReply: input.actionPresence.canReply && thread.viewerCanReply,
             canResolve: input.actionPresence.canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
             canAddToReview: input.actionPresence.canAddToReview,
+            editorState: input.state.bindingForThreadCommentEditor(thread.id),
             onActiveChange: { active in
                 input.state.activeThreadID = active
                     ? thread.id
@@ -1259,7 +1260,8 @@ struct AppKitDiffReviewInlineFeedbackRowBody: View {
                 input.state.activeInlineFeedbackEditorID = active
                     ? item.id
                     : (input.state.activeInlineFeedbackEditorID == item.id ? nil : input.state.activeInlineFeedbackEditorID)
-            }
+            },
+            replyEditorState: input.state.bindingForInlineFeedbackReplyEditor(item.id)
         )
         .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: input.file.id))
     }
@@ -1307,7 +1309,8 @@ struct AppKitDiffReviewDraftCommentRowBody: View {
                 input.state.activeDraftCommentEditorID = active
                     ? comment.id
                     : (input.state.activeDraftCommentEditorID == comment.id ? nil : input.state.activeDraftCommentEditorID)
-            }
+            },
+            editorState: input.state.bindingForDraftCommentEditor(comment.id)
         )
         .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: input.file.id))
     }
@@ -1393,6 +1396,7 @@ struct AppKitDiffReviewThreadRowBody: View {
                 canReply: input.actionPresence.canReply && thread.viewerCanReply,
                 canResolve: input.actionPresence.canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
                 canAddToReview: input.actionPresence.canAddToReview,
+                editorState: input.state.bindingForThreadCommentEditor(thread.id),
                 onActiveChange: { active in
                     input.state.activeThreadID = active
                         ? thread.id

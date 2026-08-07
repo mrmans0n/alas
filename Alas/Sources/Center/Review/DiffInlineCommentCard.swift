@@ -1,5 +1,12 @@
 import SwiftUI
 
+struct DiffInlineCommentCardEditorState: Equatable {
+    var isComposerOpen = false
+    var replyDraft = ""
+    var editingCommentID: String?
+    var editDraft = ""
+}
+
 struct DiffInlineCommentCard: View {
     private enum FocusedEditor: Hashable {
         case reply
@@ -17,12 +24,10 @@ struct DiffInlineCommentCard: View {
     var onStageReply: (String) -> Void = { _ in }
     var canAddToReview: Bool = false
     var onActiveChange: (Bool) -> Void = { _ in }
+    var editorState: Binding<DiffInlineCommentCardEditorState>?
 
     @State private var isExpanded: Bool
-    @State private var isComposerOpen = false
-    @State private var replyDraft = ""
-    @State private var editingCommentID: String? = nil
-    @State private var editDraft = ""
+    @State private var localEditorState = DiffInlineCommentCardEditorState()
     @State private var isHovered = false
     @FocusState private var isCardFocused: Bool
     @FocusState private var focusedEditor: FocusedEditor?
@@ -38,6 +43,7 @@ struct DiffInlineCommentCard: View {
         canReply: Bool = true,
         canResolve: Bool = true,
         canAddToReview: Bool = false,
+        editorState: Binding<DiffInlineCommentCardEditorState>? = nil,
         onActiveChange: @escaping (Bool) -> Void = { _ in }
     ) {
         self.thread = thread
@@ -50,6 +56,7 @@ struct DiffInlineCommentCard: View {
         self.canReply = canReply
         self.canResolve = canResolve
         self.canAddToReview = canAddToReview
+        self.editorState = editorState
         self.onActiveChange = onActiveChange
         // Smart default: expanded when unresolved and not outdated
         _isExpanded = State(initialValue: !thread.isResolved && !thread.isOutdated)
@@ -149,7 +156,7 @@ struct DiffInlineCommentCard: View {
             .padding(.vertical, 8)
 
             // Inline reply composer
-            if isComposerOpen {
+            if editorStateBinding.wrappedValue.isComposerOpen {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
@@ -158,13 +165,13 @@ struct DiffInlineCommentCard: View {
                             .foregroundColor(.secondary)
                         Spacer(minLength: 0)
                         Button("Suggest") {
-                            replyDraft = "```suggestion\n\n```"
+                            editorStateBinding.wrappedValue.replyDraft = "```suggestion\n\n```"
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
                         .foregroundColor(.accentColor)
                     }
-                    TextEditor(text: $replyDraft)
+                    TextEditor(text: editorStateBinding.replyDraft)
                         .font(.system(size: 11))
                         .focused($focusedEditor, equals: .reply)
                         .frame(minHeight: 60)
@@ -177,9 +184,8 @@ struct DiffInlineCommentCard: View {
                         }
                     HStack(spacing: 8) {
                         Button("Comment") {
-                            onReply(replyDraft)
-                            replyDraft = ""
-                            isComposerOpen = false
+                            onReply(editorStateBinding.wrappedValue.replyDraft)
+                            clearReplyComposer()
                             focusedEditor = nil
                         }
                         .buttonStyle(.plain)
@@ -188,9 +194,8 @@ struct DiffInlineCommentCard: View {
 
                         if canAddToReview {
                             Button("Add to review") {
-                                onStageReply(replyDraft)
-                                replyDraft = ""
-                                isComposerOpen = false
+                                onStageReply(editorStateBinding.wrappedValue.replyDraft)
+                                clearReplyComposer()
                                 focusedEditor = nil
                             }
                             .buttonStyle(.plain)
@@ -199,8 +204,7 @@ struct DiffInlineCommentCard: View {
                         }
 
                         Button("Cancel") {
-                            replyDraft = ""
-                            isComposerOpen = false
+                            clearReplyComposer()
                             focusedEditor = nil
                         }
                         .buttonStyle(.plain)
@@ -218,8 +222,8 @@ struct DiffInlineCommentCard: View {
             HStack(spacing: 8) {
                 if canReply {
                     Button("Reply") {
-                        isComposerOpen.toggle()
-                        focusedEditor = isComposerOpen ? .reply : nil
+                        editorStateBinding.wrappedValue.isComposerOpen.toggle()
+                        focusedEditor = editorStateBinding.wrappedValue.isComposerOpen ? .reply : nil
                     }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
@@ -257,13 +261,13 @@ struct DiffInlineCommentCard: View {
 
     @ViewBuilder
     private func commentRow(_ comment: DiffInlineComment) -> some View {
-        if editingCommentID == comment.id {
+        if editorStateBinding.wrappedValue.editingCommentID == comment.id {
             // Edit mode for this comment
             VStack(alignment: .leading, spacing: 3) {
                 Text(comment.author)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.primary)
-                TextEditor(text: $editDraft)
+                TextEditor(text: editorStateBinding.editDraft)
                     .font(.system(size: 11))
                     .focused($focusedEditor, equals: .edit(comment.id))
                     .frame(minHeight: 60)
@@ -276,9 +280,8 @@ struct DiffInlineCommentCard: View {
                     }
                 HStack(spacing: 8) {
                     Button("Save") {
-                        onEdit(comment, editDraft)
-                        editingCommentID = nil
-                        editDraft = ""
+                        onEdit(comment, editorStateBinding.wrappedValue.editDraft)
+                        clearEditComposer()
                         focusedEditor = nil
                     }
                     .buttonStyle(.plain)
@@ -286,8 +289,7 @@ struct DiffInlineCommentCard: View {
                     .foregroundColor(.accentColor)
 
                     Button("Cancel") {
-                        editingCommentID = nil
-                        editDraft = ""
+                        clearEditComposer()
                         focusedEditor = nil
                     }
                     .buttonStyle(.plain)
@@ -306,8 +308,8 @@ struct DiffInlineCommentCard: View {
                     Spacer(minLength: 0)
                     if comment.viewerCanUpdate {
                         Button {
-                            editingCommentID = comment.id
-                            editDraft = comment.body
+                            editorStateBinding.wrappedValue.editingCommentID = comment.id
+                            editorStateBinding.wrappedValue.editDraft = comment.body
                             focusedEditor = .edit(comment.id)
                         } label: {
                             Image(systemName: "pencil")
@@ -343,6 +345,20 @@ struct DiffInlineCommentCard: View {
     }
 
     // MARK: - Helpers
+
+    private var editorStateBinding: Binding<DiffInlineCommentCardEditorState> {
+        editorState ?? $localEditorState
+    }
+
+    private func clearReplyComposer() {
+        editorStateBinding.wrappedValue.replyDraft = ""
+        editorStateBinding.wrappedValue.isComposerOpen = false
+    }
+
+    private func clearEditComposer() {
+        editorStateBinding.wrappedValue.editingCommentID = nil
+        editorStateBinding.wrappedValue.editDraft = ""
+    }
 
     private var accentColor: Color {
         if thread.isResolved {
