@@ -3319,15 +3319,15 @@ final class AppState {
 
     /// Whether this worktree can follow stack entries at all: gg must be
     /// installed, enabled for the project, and the branch stack-shaped.
+    ///
+    /// Reads the cached, observable gg context already maintained by
+    /// `rightPaneStore` (the same source `CenterPaneView`'s split-commit
+    /// workflow gate reads) instead of recomputing it from disk on every
+    /// call — this is invoked from SwiftUI view bodies, so it must stay
+    /// cheap. Falls back to `false` if the worktree's right pane state
+    /// hasn't been activated / seeded yet.
     func ggFollowSupported(worktreeID: String) -> Bool {
-        guard let worktree = worktree(withId: worktreeID),
-              let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
-        else { return false }
-        return ggWorktreeContext(
-            project: project,
-            worktree: worktree,
-            branch: worktree.branch
-        ).isActive
+        rightPaneStore.activeState(worktreeId: worktreeID)?.ggContext.isActive ?? false
     }
 
     private func followedStackEntryGGID(worktreeID: String, tabID: TabID) -> String? {

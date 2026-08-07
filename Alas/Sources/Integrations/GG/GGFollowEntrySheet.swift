@@ -35,6 +35,14 @@ struct GGFollowEntrySheet: View {
         .padding(18)
         .frame(minWidth: 520)
         .onAppear { selectedID = presentation.selectedGGID ?? loadedModel?.selectedID }
+        .onChange(of: presentation.state) { _, _ in
+            // The sheet is presented while the stack is still loading
+            // (`presentation.state == .loading`), so `onAppear` fires before
+            // there is anything to preselect. Re-seed once the load resolves,
+            // without clobbering a selection the user already made.
+            guard selectedID == nil else { return }
+            selectedID = presentation.selectedGGID ?? loadedModel?.selectedID
+        }
     }
 
     @ViewBuilder
