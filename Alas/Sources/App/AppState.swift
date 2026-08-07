@@ -3388,10 +3388,14 @@ final class AppState {
             return state.sha
         case .reviewSession(let state):
             let record = try? ReviewSessionStore().load(id: state.sessionID)
-            if case .commit(let sha) = record?.target.payload {
+            switch record?.target.payload {
+            case .commit(let sha):
                 return sha
+            case .trackedCommit(let revision):
+                return revision.resolvedSHA
+            default:
+                return nil
             }
-            return nil
         default:
             return nil
         }

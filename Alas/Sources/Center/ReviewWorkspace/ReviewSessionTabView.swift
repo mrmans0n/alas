@@ -283,6 +283,7 @@ struct ReviewSessionTabView: View {
             tabID: tabState.id,
             accessibilityPrefix: "review-session-revision",
             appState: appState,
+            followedTarget: trackedRevision?.target,
             isRefreshing: isLoading && trackedRevision != nil,
             onAcceptPendingCheckout: acceptPendingCheckout,
             onRetry: { loadGeneration += 1 }

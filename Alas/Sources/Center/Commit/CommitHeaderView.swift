@@ -100,6 +100,7 @@ struct CommitHeaderView: View {
             tabID: tabID,
             accessibilityPrefix: "commit-revision",
             appState: appState,
+            followedTarget: trackedRevision?.target,
             isRefreshing: isRefreshingRevision,
             onAcceptPendingCheckout: onAcceptPendingCheckout,
             onRetry: onRetryRevision

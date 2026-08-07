@@ -6,6 +6,11 @@ struct RevisionFollowControl: View {
     let tabID: TabID
     let accessibilityPrefix: String
     let appState: AppState?
+    /// The followed revision's typed target, used to seed the "Edit
+    /// revision…" prompt. `presentation.expression` is only a display
+    /// label — for a stack entry it's the bare GG-ID, which would
+    /// misroute into the plain-expression editor if wrapped as `.expression`.
+    var followedTarget: TrackedRevisionTarget?
     var isRefreshing = false
     var onAcceptPendingCheckout: (() -> Void)?
     var onRetry: (() -> Void)?
@@ -154,7 +159,7 @@ struct RevisionFollowControl: View {
                     appState?.promptFollowRevision(
                         worktreeID: worktreeID,
                         tabID: tabID,
-                        prefill: presentation.expression.map { .expression($0) }
+                        prefill: followedTarget
                     )
                 }
                 .accessibilityIdentifier("\(accessibilityPrefix)-edit")
@@ -284,16 +289,6 @@ struct RevisionTetherView: View {
 }
 
 private extension RevisionFollowPresentation {
-    var expression: String? {
-        switch self {
-        case .following(let expression, _),
-             .paused(let expression, _, _, _),
-             .stalled(let expression, _, _),
-             .failed(let expression, _, _): expression
-        case .fixed: nil
-        }
-    }
-
     var resolvedSHA: String? {
         switch self {
         case .fixed(let sha): sha
