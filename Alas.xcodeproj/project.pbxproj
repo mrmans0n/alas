@@ -948,6 +948,7 @@
 		9D439D5F19ACEB5A39B7CB68 /* CodexACPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3985F2F58DB6E3BBF3520EFD /* CodexACPInstaller.swift */; };
 		9D4F9F5CE9FF51C33E32703C /* ACPMessageWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21F30DB5A812E396262A926 /* ACPMessageWire.swift */; };
 		9D6FE5A4589D73A7480CE2B2 /* IndentationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C3F234BEF9CE053CD4DB1E /* IndentationHelper.swift */; };
+		9D7DBBABD4F28F7890E0844E /* TrackedRevisionResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153CE5618748C7830799DBCE /* TrackedRevisionResolverTests.swift */; };
 		9D99FFFDFB3A256C4960D388 /* ReleaseCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */; };
 		9DDA9F2462746F06A652973A /* DiffContextExpansionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B9CB2A64E9E16A2DE3A6272 /* DiffContextExpansionTests.swift */; };
 		9DF0D37CE59DF8AAD7172443 /* ACPSetupChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E9864A515B0ED49C68739B6 /* ACPSetupChecker.swift */; };
@@ -1692,6 +1693,7 @@
 		14D1ECA099BBDCB5BB2EEC67 /* DiffReviewModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewModels.swift; sourceTree = "<group>"; };
 		1513AFD842F4CF16F8DEEA31 /* ChangesPreparationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesPreparationCard.swift; sourceTree = "<group>"; };
 		152EB5D0C23CAEB13283C634 /* GGRestackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGRestackSheet.swift; sourceTree = "<group>"; };
+		153CE5618748C7830799DBCE /* TrackedRevisionResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedRevisionResolverTests.swift; sourceTree = "<group>"; };
 		155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessService.swift; sourceTree = "<group>"; };
 		15630570F849AC577CA0D379 /* ACPAdapterVersionChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterVersionChecker.swift; sourceTree = "<group>"; };
 		159FE807399835B0821E1CAB /* EnvBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvBuilder.swift; sourceTree = "<group>"; };
@@ -3655,6 +3657,7 @@
 				AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */,
 				56D1AC9E1E00C3C5C234382C /* TouchTargetSmokeTests.swift */,
 				D3552BE48184E15F0BE6084C /* TrackedRevisionCodingTests.swift */,
+				153CE5618748C7830799DBCE /* TrackedRevisionResolverTests.swift */,
 				D0A8DE0526D46C36C672213B /* TrackedRevisionTargetTests.swift */,
 				AD29EE0AFA5232B1ED728514 /* UnionCanvasGeometryTests.swift */,
 				708AB670AB611EFB9D216D7C /* UpdateThrottleTests.swift */,
@@ -7462,6 +7465,7 @@
 				75B5EE5F1761CF5C830F0549 /* TitlelessWindowTests.swift in Sources */,
 				9C65A1E2757C2503C02CD081 /* TouchTargetSmokeTests.swift in Sources */,
 				F24D9A50F61692958ABCB4F1 /* TrackedRevisionCodingTests.swift in Sources */,
+				9D7DBBABD4F28F7890E0844E /* TrackedRevisionResolverTests.swift in Sources */,
 				6889CC15F0DA498DB58B9757 /* TrackedRevisionTargetTests.swift in Sources */,
 				67981D1D60512503BFD901C8 /* TreeSitterHighlighterTests.swift in Sources */,
 				9C4246D4FEE6C6A7D3C738A8 /* UnionCanvasGeometryTests.swift in Sources */,

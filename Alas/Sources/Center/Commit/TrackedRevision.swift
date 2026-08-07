@@ -235,10 +235,16 @@ enum TrackedRevisionPolicy {
 struct TrackedRevisionResolver {
     var resolve: (URL, String) async throws -> String
     var branch: (URL) async throws -> String
+    var stack: (URL) async throws -> GGStack? = { _ in nil }
 
     static let live = TrackedRevisionResolver(
         resolve: { try await GitService().resolveRevision(at: $0, ref: $1) },
-        branch: { try await GitService().currentBranch(worktreePath: $0) }
+        branch: { try await GitService().currentBranch(worktreePath: $0) },
+        stack: { worktreePath in
+            try await GGStackCache.shared.stack(at: worktreePath) {
+                try await GGService().currentStack(worktreePath: worktreePath.path)
+            }
+        }
     )
 
     func resolve(at worktreePath: URL, expression: String) async throws -> TrackedRevisionCandidate {
@@ -289,10 +295,37 @@ struct TrackedRevisionResolver {
     }
 
     func resolve(at worktreePath: URL, target: TrackedRevisionTarget) async throws -> TrackedRevisionCandidate {
-        guard let expression = target.expressionValue else {
-            throw TrackedRevisionResolverError.stackEntryNotFound(target.displayLabel)
+        switch target {
+        case .expression(let expression):
+            return try await resolve(at: worktreePath, expression: expression)
+        case .stackEntry(let ggID):
+            return try await resolveStackEntry(at: worktreePath, ggID: ggID)
         }
-        return try await resolve(at: worktreePath, expression: expression)
+    }
+
+    private func resolveStackEntry(at worktreePath: URL, ggID: String) async throws -> TrackedRevisionCandidate {
+        while true {
+            let startingBranch = try await branch(worktreePath)
+            let startingHEAD = try await resolve(worktreePath, "HEAD")
+            guard let entry = try await stack(worktreePath)?
+                .entries
+                .first(where: { $0.ggId == ggID })
+            else {
+                throw TrackedRevisionResolverError.stackEntryNotFound(ggID)
+            }
+            // gg reports abbreviated SHAs; the rest of Alas carries full ones.
+            let resolvedSHA = try await resolve(worktreePath, entry.sha)
+            let endingBranch = try await branch(worktreePath)
+            let endingHEAD = try await resolve(worktreePath, "HEAD")
+            if startingBranch == endingBranch, startingHEAD == endingHEAD {
+                return TrackedRevisionCandidate(
+                    branch: endingBranch,
+                    sha: resolvedSHA,
+                    headSHA: endingHEAD
+                )
+            }
+            try Task.checkCancellation()
+        }
     }
 }
 
