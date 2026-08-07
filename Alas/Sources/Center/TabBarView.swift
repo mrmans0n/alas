@@ -22,6 +22,7 @@ struct TabBarView: View {
         RevisionFollowCapability(tab: tab)
     }
     var onFollowRevision: (TabID) -> Void = { _ in }
+    var onFollowStackEntry: (TabID) -> Void = { _ in }
     var onEditRevision: (TabID) -> Void = { _ in }
     var onStopFollowingRevision: (TabID) -> Void = { _ in }
     /// Whether system-open / reveal-in-Finder actions are available for this
@@ -164,6 +165,13 @@ struct TabBarView: View {
             }
             let revisionCapability = revisionFollowCapability(tab)
             if revisionCapability.isSupported {
+                if revisionCapability.supportsStackEntry {
+                    Button {
+                        onFollowStackEntry(tab.id)
+                    } label: {
+                        Label("Follow Stack Entry…", systemImage: "arrow.triangle.branch")
+                    }
+                }
                 Button {
                     if revisionCapability.isFollowing {
                         onEditRevision(tab.id)
@@ -220,10 +228,14 @@ struct TabBarView: View {
 struct RevisionFollowCapability: Equatable {
     let isSupported: Bool
     let isFollowing: Bool
+    let supportsStackEntry: Bool
 
-    init(isSupported: Bool, isFollowing: Bool) {
+    init(isSupported: Bool, isFollowing: Bool, supportsStackEntry: Bool = false) {
         self.isSupported = isSupported
         self.isFollowing = isFollowing
+        // Stack-entry following is a refinement of revision following, never
+        // an alternative to it.
+        self.supportsStackEntry = isSupported && supportsStackEntry
     }
 
     init(tab: Tab) {

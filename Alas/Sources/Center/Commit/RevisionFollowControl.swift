@@ -114,17 +114,39 @@ struct RevisionFollowControl: View {
     private var action: some View {
         switch presentation {
         case .fixed:
-            Button {
-                appState?.promptFollowRevision(worktreeID: worktreeID, tabID: tabID)
-            } label: {
-                Label("Follow a revision", systemImage: "link.badge.plus")
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .disabled(appState == nil)
-            .accessibilityIdentifier("\(accessibilityPrefix)-follow")
-            .popover(isPresented: editorPresented, arrowEdge: .bottom) {
-                editor
+            if appState?.ggFollowSupported(worktreeID: worktreeID) == true {
+                Menu {
+                    Button("Stack Entry…") {
+                        appState?.promptFollowStackEntry(worktreeID: worktreeID, tabID: tabID)
+                    }
+                    .accessibilityIdentifier("\(accessibilityPrefix)-follow-stack-entry")
+                    Button("Revision…") {
+                        appState?.promptFollowRevision(worktreeID: worktreeID, tabID: tabID)
+                    }
+                    .accessibilityIdentifier("\(accessibilityPrefix)-follow-expression")
+                } label: {
+                    Label("Follow…", systemImage: "link.badge.plus")
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityIdentifier("\(accessibilityPrefix)-follow-menu")
+                .popover(isPresented: editorPresented, arrowEdge: .bottom) {
+                    editor
+                }
+            } else {
+                Button {
+                    appState?.promptFollowRevision(worktreeID: worktreeID, tabID: tabID)
+                } label: {
+                    Label("Follow a revision", systemImage: "link.badge.plus")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(appState == nil)
+                .accessibilityIdentifier("\(accessibilityPrefix)-follow")
+                .popover(isPresented: editorPresented, arrowEdge: .bottom) {
+                    editor
+                }
             }
         default:
             Menu("Following") {
