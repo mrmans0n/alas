@@ -33,6 +33,10 @@ struct MissionSidebarModel: Equatable {
         .init(active: [], completed: [])
     }
 
+    var completedIDs: [MissionID] {
+        completed.map(\.id)
+    }
+
     nonisolated static func make(
         aggregates: [MissionAggregate],
         activeProjectIds: [String],
@@ -182,11 +186,14 @@ struct MissionSidebarSection: View {
     let selectedMissionID: MissionID?
     let onOpenMission: (MissionID) -> Void
     let onNewMission: () -> Void
+    let onDeleteMission: (MissionID) -> Void
+    let onDeleteCompleted: ([MissionID]) -> Void
     @Environment(\.theme) private var theme
     @State private var collapsed = false
     @State private var completedCollapsed = true
     @State private var hoveringHeader = false
     @State private var plusHovering = false
+    @State private var pendingDeletion: MissionDeletionRequest?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -197,7 +204,8 @@ struct MissionSidebarSection: View {
                         MissionSidebarRowView(
                             row: row,
                             isSelected: selectedMissionID == row.id,
-                            onOpenMission: onOpenMission
+                            onOpenMission: onOpenMission,
+                            onDelete: { pendingDeletion = .single(id: row.id, title: row.title) }
                         )
                     }
                     if !model.completed.isEmpty {
@@ -207,7 +215,8 @@ struct MissionSidebarSection: View {
                                 MissionSidebarRowView(
                                     row: row,
                                     isSelected: selectedMissionID == row.id,
-                                    onOpenMission: onOpenMission
+                                    onOpenMission: onOpenMission,
+                                    onDelete: { pendingDeletion = .single(id: row.id, title: row.title) }
                                 )
                             }
                         }
@@ -215,6 +224,29 @@ struct MissionSidebarSection: View {
                 }
                 .padding(.horizontal, 6)
             }
+        }
+        .confirmationDialog(
+            pendingDeletion?.confirmationTitle ?? "",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingDeletion {
+                Button(pendingDeletion.confirmationButtonTitle, role: .destructive) {
+                    switch pendingDeletion {
+                    case .single(let id, _):
+                        onDeleteMission(id)
+                    case .completed(let ids):
+                        onDeleteCompleted(ids)
+                    }
+                    self.pendingDeletion = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: {
+            Text(MissionDeletionRequest.consequence)
         }
     }
 
@@ -289,6 +321,11 @@ struct MissionSidebarSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Delete All Completed (\(model.completed.count))", role: .destructive) {
+                pendingDeletion = .completed(model.completedIDs)
+            }
+        }
     }
 }
 
@@ -296,6 +333,7 @@ private struct MissionSidebarRowView: View {
     let row: MissionSidebarRow
     let isSelected: Bool
     let onOpenMission: (MissionID) -> Void
+    let onDelete: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -351,6 +389,9 @@ private struct MissionSidebarRowView: View {
         .buttonStyle(.plain)
         .disabled(!row.isNavigationEnabled)
         .help(row.helpText)
+        .contextMenu {
+            Button("Delete Mission", role: .destructive, action: onDelete)
+        }
     }
 
     private var statusColor: Color {

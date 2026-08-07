@@ -41,7 +41,13 @@ struct SidebarView: View {
                             onOpenMission: { missionID in
                                 _ = state.openMission(id: missionID)
                             },
-                            onNewMission: onNewMission
+                            onNewMission: onNewMission,
+                            onDeleteMission: { missionID in
+                                Task { await state.deleteMission(id: missionID) }
+                            },
+                            onDeleteCompleted: { missionIDs in
+                                Task { await state.deleteCompletedMissions(ids: missionIDs) }
+                            }
                         )
                         ForEach(state.activeSpaceProjects) { project in
                             RepoGroupView(

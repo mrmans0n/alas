@@ -128,4 +128,13 @@ actor MissionPersistence {
     func complete(id: MissionID, leg: MissionLeg? = nil, at: Date, event: MissionEvent) throws {
         try openedStore().complete(id: id, leg: leg, at: at, event: event)
     }
+
+    @discardableResult
+    func delete(id: MissionID) throws -> Bool {
+        try openedStore().delete(id: id)
+    }
+
+    func delete(ids: [MissionID]) throws {
+        try openedStore().delete(ids: ids)
+    }
 }

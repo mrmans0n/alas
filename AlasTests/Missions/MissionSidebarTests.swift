@@ -189,6 +189,54 @@ struct MissionSidebarTests {
         #expect(row?.isNavigationEnabled == true)
     }
 
+    @Test func completedIdsCoverOnlyTheVisibleCompletedRows() {
+        let model = MissionSidebarModel.make(
+            aggregates: [
+                Self.mission(id: "visible-running", projectId: "alas", state: .running),
+                Self.mission(id: "visible-done", projectId: "alas", state: .completed),
+                Self.mission(id: "hidden-done", projectId: "other", state: .completed),
+            ],
+            activeProjectIds: ["alas"],
+            existingProjectIds: ["alas", "other"],
+            knownWorktreeIds: []
+        )
+
+        #expect(model.completedIDs == [MissionID(rawValue: "visible-done")])
+        #expect(model.completedIDs.count == model.completed.count)
+    }
+
+    @Test func singleDeletionCopyNamesTheMission() {
+        let request = MissionDeletionRequest.single(
+            id: MissionID(rawValue: "mission-1"),
+            title: "Fix parser crash"
+        )
+
+        #expect(request.confirmationTitle == "Delete \"Fix parser crash\"?")
+        #expect(request.confirmationButtonTitle == "Delete Mission")
+        #expect(request.missionIDs == [MissionID(rawValue: "mission-1")])
+    }
+
+    @Test func bulkDeletionCopyCountsTheMissions() {
+        let one = MissionDeletionRequest.completed([MissionID(rawValue: "a")])
+        let many = MissionDeletionRequest.completed([
+            MissionID(rawValue: "a"),
+            MissionID(rawValue: "b"),
+        ])
+
+        #expect(one.confirmationTitle == "Delete 1 completed Mission?")
+        #expect(one.confirmationButtonTitle == "Delete 1 Mission")
+        #expect(many.confirmationTitle == "Delete 2 completed Missions?")
+        #expect(many.confirmationButtonTitle == "Delete 2 Missions")
+        #expect(many.missionIDs.map(\.rawValue) == ["a", "b"])
+    }
+
+    @Test func deletionConsequenceSpellsOutWhatSurvives() {
+        #expect(MissionDeletionRequest.consequence == """
+        This removes the Mission and its history from Alas. Worktrees, branches, \
+        and running agents are left untouched.
+        """)
+    }
+
     private static func mission(
         id: String = "mission-1",
         projectId: String = "project-1",

@@ -231,6 +231,26 @@ struct MissionCoordinatorTests {
         #expect(!aggregate.events.contains { $0.kind == .attentionRequired })
     }
 
+    @Test("deletion during setup is silent cancellation")
+    func deletionDuringSetupIsSilentCancellation() async throws {
+        let fake = MissionCoordinatorFake(deleteWhenSessionReserved: true)
+        let coordinator = MissionCoordinator(environment: fake.environment)
+
+        let missionID = try await coordinator.create(Self.primaryDraft)
+        for _ in 0..<200 {
+            if try await fake.persistence.aggregate(id: missionID) == nil { break }
+            await Task.yield()
+        }
+        // The deletion above only tears down the Mission row; the coordinator's
+        // in-flight setup continuation (agent startup, then the final setup
+        // write) keeps running afterward. Give it room to settle before
+        // asserting nothing was reported.
+        for _ in 0..<50 { await Task.yield() }
+
+        #expect(try await fake.persistence.aggregate(id: missionID) == nil)
+        #expect(fake.reportedFailures.isEmpty)
+    }
+
     // Break caught: restart reconciliation awaits one creating leg to settle
     // before advancing the next, serializing otherwise independent Git work.
     @Test("restart advances creating legs independently")
@@ -1172,6 +1192,7 @@ private final class MissionCoordinatorFake {
     private let suspendWorktreePlanning: Bool
     private let suspendACPStartup: Bool
     private let completeWhenSessionReserved: Bool
+    private let deleteWhenSessionReserved: Bool
     private let completeAfterACPBeforeSetupPersistence: Bool
     private var completedAfterACP = false
     private var startedLegs: [MissionLegID: MissionLeg] = [:]
@@ -1197,6 +1218,7 @@ private final class MissionCoordinatorFake {
         suspendWorktreePlanning: Bool = false,
         suspendACPStartup: Bool = false,
         completeWhenSessionReserved: Bool = false,
+        deleteWhenSessionReserved: Bool = false,
         completeAfterACPBeforeSetupPersistence: Bool = false
     ) {
         let path = FileManager.default.temporaryDirectory
@@ -1214,6 +1236,7 @@ private final class MissionCoordinatorFake {
         self.suspendWorktreePlanning = suspendWorktreePlanning
         self.suspendACPStartup = suspendACPStartup
         self.completeWhenSessionReserved = completeWhenSessionReserved
+        self.deleteWhenSessionReserved = deleteWhenSessionReserved
         self.completeAfterACPBeforeSetupPersistence = completeAfterACPBeforeSetupPersistence
         if existing.contains(where: { $0.primaryLeg?.worktreeId != nil }) {
             worktreeAtDestination = worktree
@@ -1335,6 +1358,10 @@ private final class MissionCoordinatorFake {
                             createdAt: now.timeIntervalSince1970
                         )
                     )
+                }
+                if self.deleteWhenSessionReserved,
+                   aggregate.primaryLeg?.acpSessionId != nil {
+                    try! self.store.delete(id: aggregate.mission.id)
                 }
                 if aggregate.events.last?.kind == .created, aggregate.primaryLeg?.worktreeId == nil {
                     self.operations.append("insert:creatingWorktree")

@@ -107,6 +107,13 @@ final class MissionController {
     private var lifecycleMutations: Set<MissionID> = []
     @ObservationIgnored
     private var lifecycleWaiters: [MissionID: [CheckedContinuation<Void, Never>]] = [:]
+    // Tombstones ids removed via delete/deleteCompleted so a `replace(_:)` call
+    // from a publisher that raced the deletion (already holding a stale
+    // aggregate read before the row was removed) cannot resurrect it in
+    // `aggregates`. MissionIDs are UUIDs minted once and never reused, so this
+    // set is safe to grow unbounded for the life of the app session.
+    @ObservationIgnored
+    private var deletedMissionIDs: Set<MissionID> = []
     @ObservationIgnored
     private var sourceRefreshGenerations: [MissionID: Int] = [:]
     @ObservationIgnored
@@ -170,7 +177,9 @@ final class MissionController {
         do {
             let loaded = try await persistence.list(includeCompleted: true)
             guard !Task.isCancelled else { return }
-            aggregates = Self.sorted(loaded)
+            // A delete(_:) that completes while this load is in flight must not have
+            // its result overwritten by a snapshot read before the deletion committed.
+            aggregates = Self.sorted(loaded.filter { !deletedMissionIDs.contains($0.mission.id) })
             loadState = .loaded
         } catch {
             guard !Task.isCancelled else { return }
@@ -656,6 +665,36 @@ final class MissionController {
             } catch {
                 loadError = error.localizedDescription
             }
+        }
+    }
+
+    func delete(_ id: MissionID) async {
+        await withLifecycleMutation(id: id) { [weak self] in
+            guard let self else { return }
+            do {
+                try await persistence.delete(id: id)
+                remove(id: id)
+                loadError = nil
+            } catch {
+                loadError = error.localizedDescription
+            }
+        }
+    }
+
+    // Completed Missions have no in-flight setup work, so this deliberately
+    // skips the per-Mission lifecycle gate and deletes them in one transaction.
+    @discardableResult
+    func deleteCompleted(ids: [MissionID]) async -> [MissionID] {
+        let completed = ids.filter { aggregate(id: $0)?.mission.state == .completed }
+        guard !completed.isEmpty else { return [] }
+        do {
+            try await persistence.delete(ids: completed)
+            for id in completed { remove(id: id) }
+            loadError = nil
+            return completed
+        } catch {
+            loadError = error.localizedDescription
+            return []
         }
     }
 
@@ -1227,7 +1266,16 @@ final class MissionController {
         return MissionPromptBuilder.build(source: source)
     }
 
-    private func replace(_ aggregate: MissionAggregate) {
+    private func remove(id: MissionID) {
+        deletedMissionIDs.insert(id)
+        aggregates.removeAll { $0.mission.id == id }
+    }
+
+    // Not private: MissionIntegrationTests calls this directly to exercise the
+    // tombstone guard against a real MissionController without fabricating
+    // real concurrency.
+    func replace(_ aggregate: MissionAggregate) {
+        guard !deletedMissionIDs.contains(aggregate.mission.id) else { return }
         if let index = aggregates.firstIndex(where: { $0.mission.id == aggregate.mission.id }) {
             aggregates[index] = aggregate
         } else {

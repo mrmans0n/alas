@@ -11,6 +11,7 @@
 		0081FC8497ADEC2FF4EF7D25 /* GGActionEventsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A25C83033616FE27526C945 /* GGActionEventsTests.swift */; };
 		00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */; };
 		00ED86F7E72AFBF6C8DD69C7 /* GitInvocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03A4B0CD519C39CCB197CBD4 /* GitInvocationTests.swift */; };
+		013A70CCBCEAD106485AEC1E /* MissionDeletionRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F342E3DB9CF36E4A17452E /* MissionDeletionRequest.swift */; };
 		01568CB821D2E938C51BBCAB /* ACPHarnessBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5A3E6B2F9AC2CBB1CDA78E /* ACPHarnessBridgeTests.swift */; };
 		018E8980EAA0FA97A08A6EF6 /* RevisionSnapshotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12DA5ED8195BBE603DFC5B61 /* RevisionSnapshotCache.swift */; };
 		018F0BE1174B9020C52007BE /* ACPRemoteFileServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BDAB5BEDF7FE5EBFBFE9A2 /* ACPRemoteFileServerTests.swift */; };
@@ -3041,6 +3042,7 @@
 		F3A9FD2E7C30AA7C998FD071 /* BeautifulMermaidSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeautifulMermaidSmokeTests.swift; sourceTree = "<group>"; };
 		F3AB3D6DF4A23648F0C45AC5 /* GitServiceCommitEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceCommitEditingTests.swift; sourceTree = "<group>"; };
 		F3BF7A5409A551E913EED82F /* MissionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionStore.swift; sourceTree = "<group>"; };
+		F3F342E3DB9CF36E4A17452E /* MissionDeletionRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionDeletionRequest.swift; sourceTree = "<group>"; };
 		F40A1779F98074142F57210B /* PiMCPAdapterInspectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiMCPAdapterInspectorTests.swift; sourceTree = "<group>"; };
 		F4120556B9870D6246D0F30A /* ReviewSessionTabViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionTabViewTests.swift; sourceTree = "<group>"; };
 		F4526714086C04ED5B472C90 /* DiffInlineCommentCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineCommentCard.swift; sourceTree = "<group>"; };
@@ -4769,6 +4771,7 @@
 				B28CC0818EEC129C6CFE7A33 /* EditMissionSourceDialog.swift */,
 				D39349809C87AB2DA9CACF56 /* MissionController.swift */,
 				DE28FBD8A093452150901B6F /* MissionCoordinator.swift */,
+				F3F342E3DB9CF36E4A17452E /* MissionDeletionRequest.swift */,
 				F8393DE75ACFA27C6B581B5E /* MissionLegCoordinator.swift */,
 				FFDBC8F8504FF6C50FD070A2 /* MissionLegPresentation.swift */,
 				C9EF117AF22C11E37BB5B1F0 /* MissionLegPromptBuilder.swift */,
@@ -6556,6 +6559,7 @@
 				0BCDD4F3A4AE0B3944460D87 /* MermaidTextAttachment.swift in Sources */,
 				58BB9973486DACC65D7B8868 /* MissionController.swift in Sources */,
 				EE326CAD34D497B29C4601C6 /* MissionCoordinator.swift in Sources */,
+				013A70CCBCEAD106485AEC1E /* MissionDeletionRequest.swift in Sources */,
 				6C55D3C7C3916EB16F559F34 /* MissionLegCoordinator.swift in Sources */,
 				9466257C1D5E61A2674425B8 /* MissionLegPresentation.swift in Sources */,
 				1B68197F3766CF78E8FED978 /* MissionLegPromptBuilder.swift in Sources */,

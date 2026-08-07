@@ -359,6 +359,110 @@ struct MissionIntegrationTests {
         #expect(harness.worktreeCreateCount == 1)
         #expect(harness.sessionIDs.count == 1)
     }
+
+    @Test("delete removes the Mission with no external side effects")
+    func deleteHasNoExternalSideEffects() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        await harness.controller.delete(id)
+
+        #expect(try await harness.persistence.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregates.isEmpty)
+        #expect(harness.controller.loadError == nil)
+        #expect(harness.worktreeMutations.isEmpty)
+    }
+
+    @Test("a stale replace call after delete cannot resurrect the Mission")
+    func staleReplaceAfterDeleteCannotResurrectMission() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        let staleAggregate = try #require(harness.controller.aggregate(id: id))
+
+        await harness.controller.delete(id)
+        #expect(harness.controller.aggregate(id: id) == nil)
+
+        // Simulate a publisher (coordinator notifyChanged, retry, or publish(id:))
+        // that had already read this aggregate before the delete landed and is
+        // only now calling replace(_:) with the stale value. The tombstone left
+        // by delete(_:) must reject this and keep the Mission gone.
+        harness.controller.replace(staleAggregate)
+
+        #expect(harness.controller.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregates.isEmpty)
+    }
+
+    @Test("a full load cannot resurrect a Mission tombstoned by a concurrent delete")
+    func loadCannotResurrectATombstonedMission() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        let staleAggregate = try #require(harness.controller.aggregate(id: id))
+
+        await harness.controller.delete(id)
+        #expect(harness.controller.aggregate(id: id) == nil)
+
+        // Simulate persistence.list() having captured this row from before the
+        // deletion committed — e.g. a load() in flight during startup legacy
+        // reconciliation. The tombstone left by delete(_:) must reject it even
+        // though the store itself would (in this simulation) return it.
+        try await harness.persistence.insert(staleAggregate, allowDuplicate: true)
+        await harness.controller.load()
+
+        #expect(harness.controller.aggregate(id: id) == nil)
+        #expect(!harness.controller.aggregates.contains { $0.mission.id == id })
+    }
+
+    @Test("deleteCompleted only removes Missions that are actually completed")
+    func deleteCompletedSkipsUnfinishedMissions() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        await harness.controller.deleteCompleted(ids: [id])
+
+        #expect(try await harness.persistence.aggregate(id: id) != nil)
+        #expect(harness.controller.aggregate(id: id) != nil)
+
+        await harness.controller.complete(id)
+        await harness.controller.deleteCompleted(ids: [id])
+
+        #expect(try await harness.persistence.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregate(id: id) == nil)
+    }
+
+    @Test("deleteCompleted removes only the completed Mission from a mixed batch and returns exactly its id")
+    func deleteCompletedRemovesOnlyCompletedFromMixedBatch() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let completedID = MissionID(rawValue: "mission-1")
+        let runningID = MissionID(rawValue: "mission-2")
+        let unknownID = MissionID(rawValue: "mission-unknown")
+
+        var runningAggregate = MissionFixtures.creatingMission(
+            id: runningID.rawValue,
+            issue: MissionFixtures.issue(number: 43)
+        )
+        runningAggregate.mission.state = .running
+        runningAggregate.mission.setupCheckpoint = .running
+        try harness.insert(runningAggregate)
+
+        await harness.controller.load()
+        await harness.controller.complete(completedID)
+
+        let removed = await harness.controller.deleteCompleted(ids: [completedID, runningID, unknownID])
+
+        #expect(removed == [completedID])
+        #expect(try await harness.persistence.aggregate(id: completedID) == nil)
+        #expect(harness.controller.aggregate(id: completedID) == nil)
+        #expect(try await harness.persistence.aggregate(id: runningID) != nil)
+        #expect(harness.controller.aggregate(id: runningID) != nil)
+        #expect(harness.controller.aggregate(id: runningID)?.mission.state == .running)
+    }
 }
 
 private extension ReviewLoopSnapshot {
@@ -612,6 +716,10 @@ private final class MissionIntegrationHarness {
 
     func failNextACPStart(forProjectID projectID: String) {
         recorder.failNextACPStart(forProjectID: projectID)
+    }
+
+    func insert(_ aggregate: MissionAggregate) throws {
+        try Self.insert(aggregate, at: path)
     }
 
     func markArchived(_ leg: MissionLeg) {
