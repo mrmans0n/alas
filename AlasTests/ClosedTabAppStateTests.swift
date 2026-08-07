@@ -487,4 +487,36 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
         #expect(fixture.state.closedTabHistory.entries.isEmpty)
     }
+
+    @Test func closedTabHistoryPurgesEntriesForOneMission() {
+        var history = ClosedTabHistory()
+        let kept = MissionID(rawValue: "kept-mission")
+        let removed = MissionID(rawValue: "removed-mission")
+        let placement = ClosedTabPlacement(previousID: nil, nextID: nil, ordinal: 0)
+        history.record(ClosedTabEntry(
+            snapshot: .global(.mission(MissionTabState(missionID: kept, title: "Kept"))),
+            placement: placement
+        ))
+        history.record(ClosedTabEntry(
+            snapshot: .global(.mission(MissionTabState(missionID: removed, title: "Removed"))),
+            placement: placement
+        ))
+
+        history.purge(missionID: removed)
+
+        #expect(history.count == 1)
+        #expect(history.last?.snapshot == .global(.mission(MissionTabState(missionID: kept, title: "Kept"))))
+    }
+
+    @Test func deletingAMissionClosesItsTabWithoutRecordingHistory() async {
+        let fixture = makeFixture()
+        let missionID = MissionID(rawValue: "closed-tabs-mission")
+        let tab = fixture.state.globalTabs.openOrFocusMission(missionID: missionID, title: "Mission")
+        #expect(fixture.state.globalTabs.tabs.map(\.id) == [tab.id])
+
+        await fixture.state.deleteMission(id: missionID)
+
+        #expect(fixture.state.globalTabs.tabs.isEmpty)
+        #expect(!fixture.state.canReopenClosedTab)
+    }
 }

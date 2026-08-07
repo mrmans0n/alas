@@ -4677,6 +4677,35 @@ final class AppState {
         }
     }
 
+    func deleteMission(id: MissionID) async {
+        await missions.delete(id)
+        guard missions.aggregate(id: id) == nil else { return }
+        discardMissionUI(id: id)
+    }
+
+    func deleteCompletedMissions(ids: [MissionID]) async {
+        await missions.deleteCompleted(ids: ids)
+        for id in ids where missions.aggregate(id: id) == nil {
+            discardMissionUI(id: id)
+        }
+    }
+
+    private func discardMissionUI(id: MissionID) {
+        if let tab = globalTabs.tabs.first(where: { tab in
+            guard case .mission(let state) = tab else { return false }
+            return state.missionID == id
+        }) {
+            // Deliberately not requestCloseGlobalTab: a deleted Mission must not
+            // land in closed-tab history where Reopen could resurrect it.
+            closeGlobalTab(tabId: tab.id)
+        }
+        if missingMissionTab?.missionID == id {
+            missingMissionTab = nil
+            missingMissionRecoveryTarget = nil
+        }
+        closedTabHistory.purge(missionID: id)
+    }
+
     func requestCloseGlobalTab(tabID: TabID) {
         guard let tab = globalTabs.tabs.first(where: { $0.id == tabID }) else { return }
         closedTabHistory.record(ClosedTabEntry(
