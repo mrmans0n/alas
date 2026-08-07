@@ -98,6 +98,10 @@ enum GGSplitPreviewRowID {
     static func fileHeader(previewID: String, path: String) -> String {
         "gg-preview:\(previewID):file:\(path):header"
     }
+
+    static func legacyFile(path: String) -> String { "gg-preview:legacy:file:\(path)" }
+    static func legacyImage(path: String) -> String { "gg-preview:legacy:image:\(path)" }
+    static func legacyOther(path: String) -> String { "gg-preview:legacy:other:\(path)" }
 }
 
 struct GGSplitPreviewScrollRequestCoordinator {
@@ -110,7 +114,8 @@ struct GGSplitPreviewScrollRequestCoordinator {
             fallbackID: nil,
             alignment: .top,
             animated: true,
-            generation: generation
+            generation: generation,
+            snapsWhenFar: true
         )
     }
 }

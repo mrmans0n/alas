@@ -408,7 +408,7 @@ struct GGSplitCommitTabView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(preview.files) { file in
                         splitPreviewFile(file)
-                            .id(file.path)
+                            .id(GGSplitPreviewRowID.legacyFile(path: file.path))
                     }
                     if showsResultingImages, let targetSHA = model.targetSHA {
                         ForEach(partition.imagePaths, id: \.self) { path in
@@ -421,7 +421,7 @@ struct GGSplitCommitTabView: View {
                                 codeFontFamily: codeFontFamily,
                                 codeFontSize: codeFontSize
                             )
-                            .id(path)
+                            .id(GGSplitPreviewRowID.legacyImage(path: path))
                         }
                     }
                     ForEach(partition.otherPaths, id: \.self) { path in
@@ -430,7 +430,7 @@ struct GGSplitCommitTabView: View {
                             .foregroundStyle(theme.color("fg-dim"))
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(path)
+                            .id(GGSplitPreviewRowID.legacyOther(path: path))
                     }
                 }
             }
@@ -530,7 +530,7 @@ struct GGSplitCommitTabView: View {
             previewID: destination.previewID,
             path: path
         )
-        legacyScrollPath = path
+        legacyScrollPath = GGSplitPreviewRowID.legacyFile(path: path)
         legacyScrollGeneration += 1
     }
 

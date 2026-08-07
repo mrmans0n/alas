@@ -81,8 +81,17 @@ struct GGSplitPreviewRowPlanTests {
         #expect(first.fallbackID == nil)
         #expect(first.alignment == .top)
         #expect(first.animated)
+        #expect(first.snapsWhenFar)
         #expect(second.targetID == "gg-preview:original:file:Sources/App.swift:header")
         #expect(second.generation == first.generation + 1)
+    }
+
+    @Test("legacy navigation IDs distinguish a text file from same-path metadata")
+    func legacyNavigationIDsAreUnique() {
+        let path = "Sources/App.swift"
+
+        #expect(GGSplitPreviewRowID.legacyFile(path: path) != GGSplitPreviewRowID.legacyOther(path: path))
+        #expect(GGSplitPreviewRowID.legacyFile(path: path) != GGSplitPreviewRowID.legacyImage(path: path))
     }
 
     @Test("text hunk state survives a preview rebuild and is pruned with its file")
