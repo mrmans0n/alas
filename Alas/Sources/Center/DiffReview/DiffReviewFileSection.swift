@@ -23,6 +23,43 @@ struct DiffReviewContextStateSignature: Equatable {
     let structuralHash: Int?
 }
 
+struct DiffReviewFilePresentationSignature: Equatable {
+    let pendingDraftAnchor: DiffReviewLineAnchor?
+    let pendingDraftBody: String
+    let draftComposerFocusRequestGeneration: Int
+    let expandedCollapsedRowIDs: Set<String>
+    let contextSnapshot: DiffReviewFileContextSnapshot?
+    let contextExpansion: DiffContextExpansionState
+    let contextLoadError: String?
+    let hoveredInlineFeedbackID: String?
+    let hoveredDraftCommentID: String?
+    let activeInlineFeedbackEditorID: String?
+    let activeDraftCommentEditorID: String?
+    let activeThreadID: String?
+    let showFullDiffOverride: Bool
+    let isDraftComposerFocused: Bool
+    let copyFeedbackMessage: String?
+
+    @MainActor
+    init(_ state: AppKitDiffReviewFileState) {
+        pendingDraftAnchor = state.pendingDraftAnchor
+        pendingDraftBody = state.pendingDraftBody
+        draftComposerFocusRequestGeneration = state.draftComposerFocusRequestGeneration
+        expandedCollapsedRowIDs = state.expandedCollapsedRowIDs
+        contextSnapshot = state.contextSnapshot
+        contextExpansion = state.contextExpansion
+        contextLoadError = state.contextLoadError
+        hoveredInlineFeedbackID = state.hoveredInlineFeedbackID
+        hoveredDraftCommentID = state.hoveredDraftCommentID
+        activeInlineFeedbackEditorID = state.activeInlineFeedbackEditorID
+        activeDraftCommentEditorID = state.activeDraftCommentEditorID
+        activeThreadID = state.activeThreadID
+        showFullDiffOverride = state.showFullDiffOverride
+        isDraftComposerFocused = state.isDraftComposerFocused
+        copyFeedbackMessage = state.copyFeedback.message
+    }
+}
+
 enum DiffReviewActiveCommentCandidate: Equatable {
     case draft(String)
     case inlineFeedback(String)
@@ -938,6 +975,27 @@ struct EquatableDiffReviewFileSection: View, Equatable {
     /// title) can change while availability stays true, and the closure
     /// itself isn't comparable.
     let draftCommentAgentTargets: [ReviewFeedbackAgentTarget]
+    let presentationStateSignature: DiffReviewFilePresentationSignature?
+
+    init(
+        section: DiffReviewFileSection,
+        layoutMode: DiffLayoutMode,
+        wrapLines: Bool,
+        showWhitespace: Bool,
+        draftCommentAvailability: [ReviewDraftCommentActionAvailability],
+        inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability],
+        draftCommentAgentTargets: [ReviewFeedbackAgentTarget],
+        presentationStateSignature: DiffReviewFilePresentationSignature? = nil
+    ) {
+        self.section = section
+        self.layoutMode = layoutMode
+        self.wrapLines = wrapLines
+        self.showWhitespace = showWhitespace
+        self.draftCommentAvailability = draftCommentAvailability
+        self.inlineFeedbackAvailability = inlineFeedbackAvailability
+        self.draftCommentAgentTargets = draftCommentAgentTargets
+        self.presentationStateSignature = presentationStateSignature
+    }
 
     var body: some View { section }
 
@@ -957,6 +1015,7 @@ struct EquatableDiffReviewFileSection: View, Equatable {
             && lhs.draftCommentAvailability == rhs.draftCommentAvailability
             && lhs.inlineFeedbackAvailability == rhs.inlineFeedbackAvailability
             && lhs.draftCommentAgentTargets == rhs.draftCommentAgentTargets
+            && lhs.presentationStateSignature == rhs.presentationStateSignature
             && lhs.section.file.hasSameRenderableContent(as: rhs.section.file)
             && lhs.section.inlineFeedback == rhs.section.inlineFeedback
             && lhs.section.focusedFeedbackID == rhs.section.focusedFeedbackID

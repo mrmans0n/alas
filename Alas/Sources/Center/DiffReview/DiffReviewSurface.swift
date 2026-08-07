@@ -466,6 +466,7 @@ struct DiffReviewSurface: View {
     ) -> some View {
         let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
         let draftComments = draftCommentsByFileID[file.id] ?? []
+        let presentationState = appKitPresentationStore.state(for: file)
         EquatableDiffReviewFileSection(
             section: DiffReviewFileSection(
                 file: file,
@@ -509,14 +510,16 @@ struct DiffReviewSurface: View {
                 canReply: canReply,
                 canResolve: canResolve,
                 onStageReply: onStageReply,
-                canAddToReview: canAddToReview
+                canAddToReview: canAddToReview,
+                presentationState: presentationState
             ),
             layoutMode: layoutMode,
             wrapLines: wrapLines,
             showWhitespace: showWhitespace,
             draftCommentAvailability: draftComments.map(draftCommentActions.availability),
             inlineFeedbackAvailability: inlineFeedback.map { inlineFeedbackActions.availability($0, file.summary) },
-            draftCommentAgentTargets: draftCommentActions.agentTargets()
+            draftCommentAgentTargets: draftCommentActions.agentTargets(),
+            presentationStateSignature: DiffReviewFilePresentationSignature(presentationState)
         )
         .equatable()
     }
