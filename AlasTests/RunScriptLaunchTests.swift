@@ -49,7 +49,33 @@ struct RunScriptLaunchTests {
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
         )
-        #expect(suffix.hasSuffix("status=$?\nexit \"$status\""))
+        #expect(suffix.hasSuffix("exit_code=$?\nexit \"$exit_code\""))
+    }
+
+    @Test func closeOnExitPreservesScriptStatusInZsh() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let run = RunScript(
+            scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL,
+            displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true
+        )
+        let suffix = try AppState.runScriptStartupScript(
+            script: run, worktreeRoot: dir,
+            branch: "main", projectName: "alas", repoRoot: dir.path
+        )
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-fc", suffix]
+        try process.run()
+        process.waitUntilExit()
+
+        #expect(process.terminationStatus == 42)
     }
 
     @Test func cwdJoinsWorktreeRoot() throws {
