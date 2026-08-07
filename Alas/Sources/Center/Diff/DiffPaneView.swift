@@ -184,22 +184,14 @@ enum DiffPaneStaticHeightEstimator {
         let hunkHeights = model.groups.enumerated().reduce(CGFloat(0)) { total, item in
             let (index, group) = item
             let fusion = index < fusionStates.count ? fusionStates[index] : .none
-            let visibleRows = DiffPaneRowProjection.visibleRows(
-                in: group,
-                expandedCollapsedRowIDs: expandedCollapsedRowIDs
-            )
-            let wrappingColumnWidth = wrappingColumnWidth(
-                layoutMode: layoutMode,
-                availableWidth: availableWidth,
-                rows: visibleRows
-            )
-            let rowsHeight = textRowsHeight(
-                for: visibleRows,
+            let rowsHeight = cachedTextRowsHeight(
+                group: group,
+                expandedCollapsedRowIDs: expandedCollapsedRowIDs,
                 layoutMode: layoutMode,
                 codeLineHeight: codeLineHeight,
                 contextControlRowHeight: contextControlRowHeight,
                 wrapLines: wrapLines,
-                wrappingColumnWidth: wrappingColumnWidth,
+                availableWidth: availableWidth,
                 codeFont: codeFont,
                 showWhitespace: showWhitespace
             )
@@ -211,6 +203,113 @@ enum DiffPaneStaticHeightEstimator {
         }
 
         return topPadding + hunkHeights + bottomPadding
+    }
+
+    /// Row-height estimation walks every row of a hunk, so a multi-file review
+    /// re-walks thousands of rows each time a row plan is rebuilt — including
+    /// rebuilds triggered by unrelated state such as the selected file
+    /// changing mid-fling. The result is a pure function of the group's
+    /// content and the presentation inputs below, so memoize it.
+    private static func cachedTextRowsHeight(
+        group: DiffDisplayGroup,
+        expandedCollapsedRowIDs: Set<String>,
+        layoutMode: DiffLayoutMode,
+        codeLineHeight: CGFloat,
+        contextControlRowHeight: CGFloat,
+        wrapLines: Bool,
+        availableWidth: CGFloat?,
+        codeFont: NSFont,
+        showWhitespace: Bool
+    ) -> CGFloat {
+        var hasher = Hasher()
+        hasher.combine(group.contentHash)
+        hasher.combine(layoutMode)
+        hasher.combine(codeLineHeight)
+        hasher.combine(contextControlRowHeight)
+        hasher.combine(wrapLines)
+        hasher.combine(availableWidth)
+        hasher.combine(codeFont.fontName)
+        hasher.combine(codeFont.pointSize)
+        hasher.combine(showWhitespace)
+        // Only expansions belonging to this group change its height.
+        for row in group.rows where row.kind == .collapsed && expandedCollapsedRowIDs.contains(row.id) {
+            hasher.combine(row.id)
+        }
+        let key = hasher.finalize()
+
+        if let cached = rowsHeightCache.value(forKey: key) { return cached }
+
+        let visibleRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
+        let height = textRowsHeight(
+            for: visibleRows,
+            layoutMode: layoutMode,
+            codeLineHeight: codeLineHeight,
+            contextControlRowHeight: contextControlRowHeight,
+            wrapLines: wrapLines,
+            wrappingColumnWidth: wrappingColumnWidth(
+                layoutMode: layoutMode,
+                availableWidth: availableWidth,
+                rows: visibleRows
+            ),
+            codeFont: codeFont,
+            showWhitespace: showWhitespace
+        )
+        rowsHeightCache.setValue(height, forKey: key)
+        return height
+    }
+
+    static let rowsHeightCache = HeightCache()
+
+    /// Small lock-guarded memo. `estimatedHeight` is reachable from both the
+    /// main actor and the background highlight prewarmer.
+    final class HeightCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [Int: CGFloat] = [:]
+
+        #if DEBUG
+        private var hits = 0
+        private var misses = 0
+
+        /// Row walks avoided (`hits`) versus performed (`misses`).
+        var statisticsForTests: (hits: Int, misses: Int) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (hits, misses)
+        }
+
+        func resetStatisticsForTests() {
+            lock.lock()
+            defer { lock.unlock() }
+            hits = 0
+            misses = 0
+        }
+        #endif
+
+        func value(forKey key: Int) -> CGFloat? {
+            lock.lock()
+            defer { lock.unlock() }
+            let value = storage[key]
+            #if DEBUG
+            if value == nil { misses += 1 } else { hits += 1 }
+            #endif
+            return value
+        }
+
+        func setValue(_ value: CGFloat, forKey key: Int) {
+            lock.lock()
+            defer { lock.unlock() }
+            if storage.count > 4096 { storage.removeAll(keepingCapacity: true) }
+            storage[key] = value
+        }
+
+        func removeAll() {
+            lock.lock()
+            defer { lock.unlock() }
+            storage.removeAll(keepingCapacity: true)
+        }
     }
 
     private static func textRowsHeight(
