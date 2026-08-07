@@ -2713,7 +2713,7 @@ final class AppState {
             .map { "\($0.key)=\(shellQuote($0.value))" }
         let commandLine = (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
         guard exitOnCompletion else { return commandLine }
-        return "\(commandLine)\nstatus=$?\nexit \"$status\""
+        return "\(commandLine)\nexit_code=$?\nexit \"$exit_code\""
     }
 
     nonisolated private static func isValidShellAssignmentName(_ key: String) -> Bool {
