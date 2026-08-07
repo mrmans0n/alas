@@ -1199,6 +1199,74 @@ struct MissionStoreTests {
             MissionID(rawValue: "older-active"),
         ])
     }
+
+    @Test("deleting a Mission cascades to its legs, events and source")
+    func deleteCascadesToOwnedRows() throws {
+        let store = try MissionStore(path: temporaryPath())
+        try store.insert(MissionFixtures.creatingMission(id: "mission-1"))
+        try store.insert(MissionFixtures.creatingMission(id: "mission-2", issue: MissionFixtures.issue(number: 43)))
+
+        #expect(try store.delete(id: .init(rawValue: "mission-1")))
+
+        #expect(try store.aggregate(id: .init(rawValue: "mission-1")) == nil)
+        #expect(try store.aggregate(id: .init(rawValue: "mission-2")) != nil)
+        for table in ["mission_legs", "mission_events", "mission_sources"] {
+            let rows = try store.db.query(
+                "SELECT mission_id FROM \(table) WHERE mission_id = 'mission-1'"
+            )
+            #expect(rows.isEmpty, "\(table) still holds rows for the deleted Mission")
+        }
+    }
+
+    @Test("deleting an unknown Mission is a no-op rather than an error")
+    func deleteUnknownMissionIsANoOp() throws {
+        let store = try MissionStore(path: temporaryPath())
+        try store.insert(MissionFixtures.creatingMission(id: "mission-1"))
+
+        #expect(try store.delete(id: .init(rawValue: "missing")) == false)
+        #expect(try store.aggregate(id: .init(rawValue: "mission-1")) != nil)
+    }
+
+    @Test("bulk delete removes the named Missions and ignores unknown ids")
+    func bulkDeleteRemovesNamedMissions() throws {
+        let store = try MissionStore(path: temporaryPath())
+        try store.insert(MissionFixtures.creatingMission(id: "mission-1"))
+        try store.insert(MissionFixtures.creatingMission(id: "mission-2", issue: MissionFixtures.issue(number: 43)))
+        try store.insert(MissionFixtures.creatingMission(id: "mission-3", issue: MissionFixtures.issue(number: 44)))
+
+        try store.delete(ids: [
+            .init(rawValue: "mission-1"),
+            .init(rawValue: "missing"),
+            .init(rawValue: "mission-3"),
+        ])
+
+        #expect(try store.aggregate(id: .init(rawValue: "mission-1")) == nil)
+        #expect(try store.aggregate(id: .init(rawValue: "mission-2")) != nil)
+        #expect(try store.aggregate(id: .init(rawValue: "mission-3")) == nil)
+    }
+
+    @Test("bulk delete with no ids leaves the database untouched")
+    func bulkDeleteWithNoIdsIsANoOp() throws {
+        let store = try MissionStore(path: temporaryPath())
+        try store.insert(MissionFixtures.creatingMission(id: "mission-1"))
+
+        try store.delete(ids: [])
+
+        #expect(try store.aggregate(id: .init(rawValue: "mission-1")) != nil)
+    }
+
+    @Test("deleting the only Mission for a source frees that source identity")
+    func deleteFreesSourceIdentity() throws {
+        let store = try MissionStore(path: temporaryPath())
+        let aggregate = MissionFixtures.creatingMission(id: "mission-1")
+        try store.insert(aggregate)
+        let identity = aggregate.source.identity
+        #expect(try store.activeMission(sourceIdentity: identity) != nil)
+
+        #expect(try store.delete(id: .init(rawValue: "mission-1")))
+
+        #expect(try store.activeMission(sourceIdentity: identity) == nil)
+    }
 }
 
 private enum MissionStoreTestDatabase {

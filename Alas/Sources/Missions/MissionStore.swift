@@ -538,6 +538,25 @@ final class MissionStore {
         }
     }
 
+    @discardableResult
+    func delete(id: MissionID) throws -> Bool {
+        try immediateTransaction {
+            try db.execChanges(
+                "DELETE FROM missions WHERE id = ?",
+                bindings: [id.rawValue]
+            ) > 0
+        }
+    }
+
+    func delete(ids: [MissionID]) throws {
+        guard !ids.isEmpty else { return }
+        try immediateTransaction {
+            for id in ids {
+                try db.exec("DELETE FROM missions WHERE id = ?", bindings: [id.rawValue])
+            }
+        }
+    }
+
     private func migrate() throws {
         try db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         var current = try currentSchemaVersion()
