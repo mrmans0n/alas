@@ -126,7 +126,7 @@ struct ReviewSessionModelsTests {
         #expect(first.draftSessionID == .trackedCommit(
             worktreeID: "wt-1",
             repositoryPath: repositoryPath,
-            expression: "HEAD~3"
+            targetKey: "HEAD~3"
         ))
         #expect(second.revisionDescription == "HEAD~3 -> bbb")
         #expect(second.sourceDescription == "Commit HEAD~3 -> bbb")

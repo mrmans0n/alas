@@ -166,11 +166,13 @@ struct CenterPaneView: View {
                     FileSystemOpen.reveal(url: url)
                 },
                 revisionFollowCapability: { tab in
+                    let supportsStackEntry = state.ggFollowSupported(worktreeID: worktree.id)
                     switch tab {
                     case .commit(let state):
                         return RevisionFollowCapability(
                             isSupported: true,
-                            isFollowing: state.revision.tracked != nil
+                            isFollowing: state.revision.tracked != nil,
+                            supportsStackEntry: supportsStackEntry
                         )
                     case .reviewSession(let state):
                         let record = try? ReviewSessionStore().load(id: state.sessionID)
@@ -183,7 +185,11 @@ struct CenterPaneView: View {
                         } else {
                             isFollowing = false
                         }
-                        return RevisionFollowCapability(isSupported: true, isFollowing: isFollowing)
+                        return RevisionFollowCapability(
+                            isSupported: true,
+                            isFollowing: isFollowing,
+                            supportsStackEntry: supportsStackEntry
+                        )
                     default:
                         return RevisionFollowCapability(isSupported: false, isFollowing: false)
                     }
@@ -192,15 +198,18 @@ struct CenterPaneView: View {
                     state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
                     state.promptFollowRevision(worktreeID: worktree.id, tabID: id)
                 },
+                onFollowStackEntry: { id in
+                    state.promptFollowStackEntry(worktreeID: worktree.id, tabID: id)
+                },
                 onEditRevision: { id in
-                    let prefill: String? = {
+                    let prefill: TrackedRevisionTarget? = {
                         switch tabs.first(where: { $0.id == id }) {
                         case .commit(let s):
-                            return s.revision.tracked?.expression
+                            return s.revision.tracked?.target
                         case .reviewSession(let s):
                             let record = try? ReviewSessionStore().load(id: s.sessionID)
                             if case .trackedCommit(let revision) = record?.target.payload {
-                                return revision.expression
+                                return revision.target
                             }
                             return nil
                         default:

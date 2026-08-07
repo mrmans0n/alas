@@ -6,6 +6,11 @@ struct RevisionFollowControl: View {
     let tabID: TabID
     let accessibilityPrefix: String
     let appState: AppState?
+    /// The followed revision's typed target, used to seed the "Edit
+    /// revision…" prompt. `presentation.expression` is only a display
+    /// label — for a stack entry it's the bare GG-ID, which would
+    /// misroute into the plain-expression editor if wrapped as `.expression`.
+    var followedTarget: TrackedRevisionTarget?
     var isRefreshing = false
     var onAcceptPendingCheckout: (() -> Void)?
     var onRetry: (() -> Void)?
@@ -36,6 +41,19 @@ struct RevisionFollowControl: View {
                         .buttonStyle(.borderless)
                         .controlSize(.small)
                         .accessibilityIdentifier("\(accessibilityPrefix)-accept-checkout")
+                }
+            case .stalled(_, _, let message):
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("warn"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("\(accessibilityPrefix)-unresolved")
+                if let onRetry {
+                    Button("Retry", action: onRetry)
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("\(accessibilityPrefix)-unresolved-retry")
                 }
             case .failed(_, _, let message):
                 Text(message)
@@ -87,7 +105,8 @@ struct RevisionFollowControl: View {
         case .fixed(let sha):
             RevisionTetherView(expression: nil, resolvedSHA: sha)
         case .following(let expression, let resolvedSHA),
-             .failed(let expression, let resolvedSHA, _):
+             .failed(let expression, let resolvedSHA, _),
+             .stalled(let expression, let resolvedSHA, _):
             RevisionTetherView(expression: expression, resolvedSHA: resolvedSHA)
                 .accessibilityIdentifier("\(accessibilityPrefix)-following-label")
         case .paused(let expression, let resolvedSHA, let candidateSHA, _):
@@ -100,17 +119,39 @@ struct RevisionFollowControl: View {
     private var action: some View {
         switch presentation {
         case .fixed:
-            Button {
-                appState?.promptFollowRevision(worktreeID: worktreeID, tabID: tabID)
-            } label: {
-                Label("Follow a revision", systemImage: "link.badge.plus")
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .disabled(appState == nil)
-            .accessibilityIdentifier("\(accessibilityPrefix)-follow")
-            .popover(isPresented: editorPresented, arrowEdge: .bottom) {
-                editor
+            if appState?.ggFollowSupported(worktreeID: worktreeID) == true {
+                Menu {
+                    Button("Stack Entry…") {
+                        appState?.promptFollowStackEntry(worktreeID: worktreeID, tabID: tabID)
+                    }
+                    .accessibilityIdentifier("\(accessibilityPrefix)-follow-stack-entry")
+                    Button("Revision…") {
+                        appState?.promptFollowRevision(worktreeID: worktreeID, tabID: tabID)
+                    }
+                    .accessibilityIdentifier("\(accessibilityPrefix)-follow-expression")
+                } label: {
+                    Label("Follow…", systemImage: "link.badge.plus")
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityIdentifier("\(accessibilityPrefix)-follow-menu")
+                .popover(isPresented: editorPresented, arrowEdge: .bottom) {
+                    editor
+                }
+            } else {
+                Button {
+                    appState?.promptFollowRevision(worktreeID: worktreeID, tabID: tabID)
+                } label: {
+                    Label("Follow a revision", systemImage: "link.badge.plus")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(appState == nil)
+                .accessibilityIdentifier("\(accessibilityPrefix)-follow")
+                .popover(isPresented: editorPresented, arrowEdge: .bottom) {
+                    editor
+                }
             }
         default:
             Menu("Following") {
@@ -118,7 +159,7 @@ struct RevisionFollowControl: View {
                     appState?.promptFollowRevision(
                         worktreeID: worktreeID,
                         tabID: tabID,
-                        prefill: presentation.expression
+                        prefill: followedTarget
                     )
                 }
                 .accessibilityIdentifier("\(accessibilityPrefix)-edit")
@@ -199,7 +240,7 @@ struct RevisionFollowControl: View {
     private var railColor: Color {
         switch presentation {
         case .failed: theme.color("del")
-        case .paused: theme.color("warn")
+        case .paused, .stalled: theme.color("warn")
         case .following: theme.color("accent")
         case .fixed: theme.color("line")
         }
@@ -248,17 +289,13 @@ struct RevisionTetherView: View {
 }
 
 private extension RevisionFollowPresentation {
-    var expression: String? {
-        switch self {
-        case .following(let expression, _), .paused(let expression, _, _, _), .failed(let expression, _, _): expression
-        case .fixed: nil
-        }
-    }
-
     var resolvedSHA: String? {
         switch self {
         case .fixed(let sha): sha
-        case .following(_, let sha), .paused(_, let sha, _, _), .failed(_, let sha, _): sha
+        case .following(_, let sha),
+             .paused(_, let sha, _, _),
+             .stalled(_, let sha, _),
+             .failed(_, let sha, _): sha
         }
     }
 }

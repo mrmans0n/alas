@@ -283,6 +283,7 @@ struct ReviewSessionTabView: View {
             tabID: tabState.id,
             accessibilityPrefix: "review-session-revision",
             appState: appState,
+            followedTarget: trackedRevision?.target,
             isRefreshing: isLoading && trackedRevision != nil,
             onAcceptPendingCheckout: acceptPendingCheckout,
             onRetry: { loadGeneration += 1 }
@@ -650,10 +651,22 @@ struct ReviewSessionTabView: View {
         guard let worktree, case .trackedCommit(let revision) = storedRecord.target.payload else {
             return (storedRecord, false)
         }
-        let candidate = try await TrackedRevisionResolver.live.resolve(
-            at: worktree.path,
-            expression: revision.expression
-        )
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await TrackedRevisionResolver.live.resolve(
+                at: worktree.path,
+                target: revision.target
+            )
+        } catch {
+            guard case .stall(let stalled) = TrackedRevisionPolicy.evaluate(current: revision, error: error) else {
+                throw error
+            }
+            let target = storedRecord.target.updatingTrackedRevision(stalled, title: storedRecord.target.title)
+            return (
+                storedRecord.retargetingCommit(to: target, resolvedSHAChanged: false, now: now()),
+                true
+            )
+        }
         switch TrackedRevisionPolicy.evaluate(current: revision, candidate: candidate) {
         case .unchanged(let updated):
             let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
@@ -666,7 +679,7 @@ struct ReviewSessionTabView: View {
                 false
             )
         case .follow(let updated):
-            let target = storedRecord.target.updatingTrackedRevision(updated, title: "Review \(updated.expression)")
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: "Review \(updated.target.displayLabel)")
             return (
                 storedRecord.retargetingCommit(
                     to: target,
@@ -675,7 +688,7 @@ struct ReviewSessionTabView: View {
                 ),
                 false
             )
-        case .pause(let updated):
+        case .pause(let updated), .stall(let updated):
             let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
             return (
                 storedRecord.retargetingCommit(

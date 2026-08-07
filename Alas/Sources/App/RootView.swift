@@ -777,6 +777,19 @@ private struct RootGGPresentationHandlers: ViewModifier {
                 )
                 .environment(\.theme, state.themeStore.current)
             }
+            .sheet(
+                item: Binding(
+                    get: { state.pendingFollowStackEntry },
+                    set: { if $0 == nil { state.cancelFollowStackEntry() } }
+                )
+            ) { presentation in
+                GGFollowEntrySheet(
+                    presentation: presentation,
+                    onFollow: { state.confirmFollowStackEntry(ggID: $0) },
+                    onCancel: { state.cancelFollowStackEntry() }
+                )
+                .environment(\.theme, state.themeStore.current)
+            }
     }
 }
 

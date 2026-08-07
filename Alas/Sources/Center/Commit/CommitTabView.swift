@@ -36,7 +36,7 @@ struct CommitTabView: View {
 
     private var loadTaskID: String {
         if let tracked = tabState.revision.tracked {
-            return "\(tabState.id):\(tracked.expression):\(appState.revisionChangeGeneration(worktreeID: worktreeId))"
+            return "\(tabState.id):\(tracked.target.identityKey):\(appState.revisionChangeGeneration(worktreeID: worktreeId))"
         }
         return "\(tabState.id):\(sha)"
     }
@@ -285,14 +285,26 @@ struct CommitTabView: View {
         guard case .following(let tracked) = tabState.revision else {
             return (tabState.sha, nil, false)
         }
-        let candidate = try await revisionResolver.resolve(at: worktreePath, expression: tracked.expression)
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await revisionResolver.resolve(at: worktreePath, target: tracked.target)
+        } catch {
+            guard case .stall(let stalled) = TrackedRevisionPolicy.evaluate(current: tracked, error: error) else {
+                throw error
+            }
+            appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
+                $0.revision = .following(stalled)
+            }
+            let canReuseSnapshot = details?.info.sha == stalled.resolvedSHA && reviewSession != nil
+            return (stalled.resolvedSHA, nil, canReuseSnapshot)
+        }
         switch TrackedRevisionPolicy.evaluate(current: tracked, candidate: candidate) {
         case .unchanged(let revision):
             let canReuseSnapshot = details?.info.sha == revision.resolvedSHA && reviewSession != nil
             return (revision.resolvedSHA, revision, canReuseSnapshot)
         case .follow(let revision):
             return (revision.resolvedSHA, revision, false)
-        case .pause(let revision):
+        case .pause(let revision), .stall(let revision):
             appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
                 $0.revision = .following(revision)
             }

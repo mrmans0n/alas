@@ -43,8 +43,8 @@ struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresen
         make(.commit, [worktreeID, repositoryPath.standardizedFileURL.path, sha])
     }
 
-    static func trackedCommit(worktreeID: String, repositoryPath: URL, expression: String) -> Self {
-        make(.trackedCommit, [worktreeID, repositoryPath.standardizedFileURL.path, expression])
+    static func trackedCommit(worktreeID: String, repositoryPath: URL, targetKey: String) -> Self {
+        make(.trackedCommit, [worktreeID, repositoryPath.standardizedFileURL.path, targetKey])
     }
 
     static func commitRange(worktreeID: String, repositoryPath: URL, base: String, head: String) -> Self {

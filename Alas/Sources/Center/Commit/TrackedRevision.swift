@@ -29,59 +29,126 @@ struct TrackedRevisionCandidate: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+enum TrackedRevisionUnresolvedReason: String, Codable, Equatable, Hashable, Sendable {
+    /// The GG-ID is not in the worktree's current stack: it landed, it was
+    /// dropped, or a different stack is checked out.
+    case stackEntryMissing
+}
+
 struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
-    let expression: String
+    let target: TrackedRevisionTarget
     var baselineBranch: String
     var baselineHEAD: String
     var resolvedSHA: String
     var pendingCheckout: TrackedRevisionCandidate?
+    var unresolvedReason: TrackedRevisionUnresolvedReason?
 
     private enum CodingKeys: String, CodingKey {
+        case target
         case expression
         case baselineBranch
         case baselineHEAD
         case resolvedSHA
         case pendingCheckout
+        case unresolvedReason
     }
 
-    init?(expression: String, baselineBranch: String, baselineHEAD: String? = nil, resolvedSHA: String) {
-        let expression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !expression.isEmpty else { return nil }
-
-        self.expression = expression
+    init?(
+        target: TrackedRevisionTarget,
+        baselineBranch: String,
+        baselineHEAD: String? = nil,
+        resolvedSHA: String
+    ) {
+        guard let normalized = target.normalized() else { return nil }
+        self.target = normalized
         self.baselineBranch = baselineBranch
         self.baselineHEAD = baselineHEAD ?? resolvedSHA
         self.resolvedSHA = resolvedSHA
         self.pendingCheckout = nil
+        self.unresolvedReason = nil
+    }
+
+    init?(
+        expression: String,
+        baselineBranch: String,
+        baselineHEAD: String? = nil,
+        resolvedSHA: String
+    ) {
+        self.init(
+            target: .expression(expression),
+            baselineBranch: baselineBranch,
+            baselineHEAD: baselineHEAD,
+            resolvedSHA: resolvedSHA
+        )
     }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let expression = try container.decode(String.self, forKey: .expression)
+        let target: TrackedRevisionTarget
+        if let decoded = try container.decodeIfPresent(TrackedRevisionTarget.self, forKey: .target) {
+            target = decoded
+        } else {
+            // Records written before targets existed carry a bare expression.
+            target = .expression(try container.decode(String.self, forKey: .expression))
+        }
         let baselineBranch = try container.decode(String.self, forKey: .baselineBranch)
         let baselineHEAD = try container.decodeIfPresent(String.self, forKey: .baselineHEAD)
         let resolvedSHA = try container.decode(String.self, forKey: .resolvedSHA)
         guard var revision = Self(
-            expression: expression,
+            target: target,
             baselineBranch: baselineBranch,
             baselineHEAD: baselineHEAD,
             resolvedSHA: resolvedSHA
         ) else {
             throw DecodingError.dataCorruptedError(
-                forKey: .expression,
+                forKey: .target,
                 in: container,
-                debugDescription: "Tracked revision expression must not be empty."
+                debugDescription: "Tracked revision target must not be empty."
             )
         }
         revision.pendingCheckout = try container.decodeIfPresent(
             TrackedRevisionCandidate.self,
             forKey: .pendingCheckout
         )
+        revision.unresolvedReason = try container.decodeIfPresent(
+            TrackedRevisionUnresolvedReason.self,
+            forKey: .unresolvedReason
+        )
         self = revision
     }
 
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(target, forKey: .target)
+        // Legacy mirror: a build that predates targets reads this key. A
+        // stack entry degrades to a commit pinned at its last resolved SHA
+        // rather than failing to decode the whole record.
+        try container.encode(target.expressionValue ?? resolvedSHA, forKey: .expression)
+        try container.encode(baselineBranch, forKey: .baselineBranch)
+        try container.encode(baselineHEAD, forKey: .baselineHEAD)
+        try container.encode(resolvedSHA, forKey: .resolvedSHA)
+        try container.encodeIfPresent(pendingCheckout, forKey: .pendingCheckout)
+        try container.encodeIfPresent(unresolvedReason, forKey: .unresolvedReason)
+    }
+
     var dependsOnWorktreeHEAD: Bool {
-        Self.usesWorktreeHEADAlias(expression)
+        guard let expression = target.expressionValue else { return false }
+        return Self.usesWorktreeHEADAlias(expression)
+    }
+
+    var unresolvedMessage: String? {
+        switch unresolvedReason {
+        case .none:
+            return nil
+        case .stackEntryMissing:
+            return "Stack entry \(target.displayLabel) is not in the current stack."
+        }
+    }
+
+    func stalled(reason: TrackedRevisionUnresolvedReason) -> Self {
+        var revision = self
+        revision.unresolvedReason = reason
+        return revision
     }
 
     static func usesWorktreeHEADAlias(_ expression: String) -> Bool {
@@ -107,6 +174,7 @@ struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
         revision.baselineHEAD = candidate.headSHA
         revision.resolvedSHA = candidate.sha
         revision.pendingCheckout = nil
+        revision.unresolvedReason = nil
         return revision
     }
 
@@ -135,9 +203,21 @@ enum TrackedRevisionTransition: Equatable {
     case unchanged(TrackedRevision)
     case follow(TrackedRevision)
     case pause(TrackedRevision)
+    /// The target could not be resolved but the tab keeps its last commit
+    /// instead of erroring or unfollowing.
+    case stall(TrackedRevision)
 }
 
 enum TrackedRevisionPolicy {
+    /// Maps a resolve failure to a transition. Only a stack entry that left
+    /// the stack stalls; every other error stays on the caller's error path.
+    static func evaluate(current: TrackedRevision, error: any Error) -> TrackedRevisionTransition? {
+        guard let resolverError = error as? TrackedRevisionResolverError,
+              case .stackEntryNotFound = resolverError
+        else { return nil }
+        return .stall(current.stalled(reason: .stackEntryMissing))
+    }
+
     static func evaluate(
         current: TrackedRevision,
         candidate: TrackedRevisionCandidate
@@ -167,10 +247,16 @@ enum TrackedRevisionPolicy {
 struct TrackedRevisionResolver {
     var resolve: (URL, String) async throws -> String
     var branch: (URL) async throws -> String
+    var stack: (URL) async throws -> GGStack? = { _ in nil }
 
     static let live = TrackedRevisionResolver(
         resolve: { try await GitService().resolveRevision(at: $0, ref: $1) },
-        branch: { try await GitService().currentBranch(worktreePath: $0) }
+        branch: { try await GitService().currentBranch(worktreePath: $0) },
+        stack: { worktreePath in
+            try await GGStackCache.shared.stack(at: worktreePath) {
+                try await GGService().currentStack(worktreePath: worktreePath.path)
+            }
+        }
     )
 
     func resolve(at worktreePath: URL, expression: String) async throws -> TrackedRevisionCandidate {
@@ -219,10 +305,45 @@ struct TrackedRevisionResolver {
             try Task.checkCancellation()
         }
     }
+
+    func resolve(at worktreePath: URL, target: TrackedRevisionTarget) async throws -> TrackedRevisionCandidate {
+        switch target {
+        case .expression(let expression):
+            return try await resolve(at: worktreePath, expression: expression)
+        case .stackEntry(let ggID):
+            return try await resolveStackEntry(at: worktreePath, ggID: ggID)
+        }
+    }
+
+    private func resolveStackEntry(at worktreePath: URL, ggID: String) async throws -> TrackedRevisionCandidate {
+        while true {
+            let startingBranch = try await branch(worktreePath)
+            let startingHEAD = try await resolve(worktreePath, "HEAD")
+            guard let entry = try await stack(worktreePath)?
+                .entries
+                .first(where: { $0.ggId == ggID })
+            else {
+                throw TrackedRevisionResolverError.stackEntryNotFound(ggID)
+            }
+            // gg reports abbreviated SHAs; the rest of Alas carries full ones.
+            let resolvedSHA = try await resolve(worktreePath, entry.sha)
+            let endingBranch = try await branch(worktreePath)
+            let endingHEAD = try await resolve(worktreePath, "HEAD")
+            if startingBranch == endingBranch, startingHEAD == endingHEAD {
+                return TrackedRevisionCandidate(
+                    branch: endingBranch,
+                    sha: resolvedSHA,
+                    headSHA: endingHEAD
+                )
+            }
+            try Task.checkCancellation()
+        }
+    }
 }
 
 enum TrackedRevisionResolverError: LocalizedError, Equatable {
     case unsupportedReflogExpression(String)
+    case stackEntryNotFound(String)
 
     var errorDescription: String? {
         switch self {
@@ -232,6 +353,8 @@ enum TrackedRevisionResolverError: LocalizedError, Equatable {
             } else {
                 "Time-relative reflog expressions like @{\(selector)} are not supported for followed revisions."
             }
+        case .stackEntryNotFound(let ggID):
+            "Stack entry \(ggID) is not in the current stack."
         }
     }
 }
@@ -335,6 +458,9 @@ enum RevisionFollowPresentation: Equatable {
     case fixed(sha: String)
     case following(expression: String, resolvedSHA: String)
     case paused(expression: String, resolvedSHA: String, candidateSHA: String, message: String)
+    /// The followed target could not be resolved (e.g. a stack entry left
+    /// the stack), but the tab keeps its last commit instead of erroring.
+    case stalled(expression: String, resolvedSHA: String, message: String)
     case failed(expression: String, resolvedSHA: String, message: String)
 
     init(fixedSHA: String, revision: TrackedRevision?, refreshError: String?) {
@@ -344,22 +470,28 @@ enum RevisionFollowPresentation: Equatable {
         }
         if let pending = revision.pendingCheckout {
             self = .paused(
-                expression: revision.expression,
+                expression: revision.target.displayLabel,
                 resolvedSHA: Self.shortSHA(revision.resolvedSHA),
                 candidateSHA: Self.shortSHA(pending.sha),
                 message: pending.branch.isEmpty
                     ? "Paused: detached HEAD moved"
                     : "Paused: HEAD moved to \(pending.branch)"
             )
+        } else if let unresolvedMessage = revision.unresolvedMessage {
+            self = .stalled(
+                expression: revision.target.displayLabel,
+                resolvedSHA: Self.shortSHA(revision.resolvedSHA),
+                message: unresolvedMessage
+            )
         } else if let refreshError, !refreshError.isEmpty {
             self = .failed(
-                expression: revision.expression,
+                expression: revision.target.displayLabel,
                 resolvedSHA: Self.shortSHA(revision.resolvedSHA),
                 message: refreshError
             )
         } else {
             self = .following(
-                expression: revision.expression,
+                expression: revision.target.displayLabel,
                 resolvedSHA: Self.shortSHA(revision.resolvedSHA)
             )
         }

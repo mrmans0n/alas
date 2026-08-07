@@ -440,7 +440,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     }
 
     init(worktreeId: String, trackedRevision: TrackedRevision, title: String) {
-        self.id = Self.trackedID(worktreeId: worktreeId, expression: trackedRevision.expression)
+        self.id = Self.trackedID(worktreeId: worktreeId, targetKey: trackedRevision.target.identityKey)
         self.worktreeId = worktreeId
         self.viewID = id
         self.revision = .following(trackedRevision)
@@ -471,7 +471,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     }
 
     mutating func follow(_ revision: TrackedRevision) {
-        id = Self.trackedID(worktreeId: worktreeId, expression: revision.expression)
+        id = Self.trackedID(worktreeId: worktreeId, targetKey: revision.target.identityKey)
         self.revision = .following(revision)
     }
 
@@ -484,12 +484,12 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         "commit:\(worktreeId):\(sha)"
     }
 
-    private static func trackedID(worktreeId: String, expression: String) -> String {
-        "commit:\(worktreeId):tracked:\(trackedIDDigest(for: expression))"
+    private static func trackedID(worktreeId: String, targetKey: String) -> String {
+        "commit:\(worktreeId):tracked:\(trackedIDDigest(for: targetKey))"
     }
 
-    private static func trackedIDDigest(for expression: String) -> String {
-        SHA256.hash(data: Data(expression.utf8))
+    private static func trackedIDDigest(for targetKey: String) -> String {
+        SHA256.hash(data: Data(targetKey.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
     }
