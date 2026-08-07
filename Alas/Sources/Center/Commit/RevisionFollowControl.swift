@@ -171,7 +171,8 @@ struct RevisionFollowControl: View {
                 placeholder: "HEAD~3",
                 monospaced: true,
                 focusOnAppear: true,
-                onSubmit: { appState?.submitFollowRevisionEditor() }
+                onSubmit: { appState?.submitFollowRevisionEditor() },
+                isEnabled: editorRequest?.isSubmitting != true
             )
             if let error = editorRequest?.errorMessage, !error.isEmpty {
                 Text(error)

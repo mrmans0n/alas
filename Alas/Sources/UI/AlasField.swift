@@ -9,6 +9,7 @@ struct AlasField: View {
     var onSubmit: (() -> Void)? = nil
     var leadingIcon: String? = nil
     var inputFilter: GitRefNameInputFilter? = nil
+    var isEnabled: Bool = true
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -19,7 +20,8 @@ struct AlasField: View {
                 monospaced: monospaced,
                 focusOnAppear: focusOnAppear,
                 onSubmit: onSubmit,
-                inputFilter: inputFilter
+                inputFilter: inputFilter,
+                isEnabled: isEnabled
             )
             .alasFieldChrome(theme: theme)
         } else {
@@ -27,6 +29,7 @@ struct AlasField: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: monospaced ? .monospaced : .default))
                 .foregroundColor(theme.color("fg"))
+                .disabled(!isEnabled)
 
             if let leadingIcon = leadingIcon {
                 HStack(spacing: 6) {
@@ -65,6 +68,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     var focusOnAppear: Bool
     var onSubmit: (() -> Void)?
     var inputFilter: GitRefNameInputFilter?
+    var isEnabled: Bool
 
     func makeNSView(context: Context) -> AlasNSTextFieldView {
         let field = AlasNSTextFieldView()
@@ -81,11 +85,13 @@ private struct AlasNSTextField: NSViewRepresentable {
         field.target = context.coordinator
         field.action = #selector(Coordinator.action(_:))
         field.focusOnAppear = focusOnAppear
+        field.isEnabled = isEnabled
         return field
     }
 
     func updateNSView(_ nsView: AlasNSTextFieldView, context: Context) {
         context.coordinator.parent = self
+        nsView.isEnabled = isEnabled
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
