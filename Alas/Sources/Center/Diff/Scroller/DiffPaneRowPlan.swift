@@ -95,6 +95,7 @@ struct DiffPaneHunkRowToken: Equatable {
     let layoutMode: DiffLayoutMode
     let wrapLines: Bool
     let showWhitespace: Bool
+    let fileExtension: String
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let theme: Theme
@@ -159,6 +160,7 @@ enum DiffPaneRowPlanBuilder {
                 layoutMode: input.layoutMode,
                 wrapLines: input.wrapLines,
                 showWhitespace: input.showWhitespace,
+                fileExtension: input.fileExtension,
                 codeFontFamily: input.codeFontFamily,
                 codeFontSize: input.codeFontSize,
                 theme: input.theme,
@@ -335,9 +337,21 @@ struct DiffPaneHunkRow: View {
                     state.toggleCollapsedContext(in: group)
                 }
             }
-            if let stage = actions.stage { hunkActionButton(systemName: "plus.square", tooltip: "Stage hunk", action: stage) }
-            if let discard = actions.discard { hunkActionButton(systemName: "trash", tooltip: "Discard hunk", action: discard) }
-            if let dropFromCommit = actions.dropFromCommit { hunkActionButton(systemName: "minus.circle", tooltip: "Drop from commit", action: dropFromCommit) }
+            if actions.stage != nil {
+                hunkActionButton(systemName: "plus.square", tooltip: "Stage hunk") {
+                    state.actionRelay.hunkActions(for: group.sourceHunk).stage?()
+                }
+            }
+            if actions.discard != nil {
+                hunkActionButton(systemName: "trash", tooltip: "Discard hunk") {
+                    state.actionRelay.hunkActions(for: group.sourceHunk).discard?()
+                }
+            }
+            if actions.dropFromCommit != nil {
+                hunkActionButton(systemName: "minus.circle", tooltip: "Drop from commit") {
+                    state.actionRelay.hunkActions(for: group.sourceHunk).dropFromCommit?()
+                }
+            }
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 8)

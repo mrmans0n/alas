@@ -27,6 +27,7 @@ struct DiffPaneRowPlanTests {
             input(layoutMode: .stacked),
             input(wrapLines: true),
             input(showWhitespace: true),
+            input(fileExtension: "txt"),
             input(codeFontFamily: "Menlo"),
             input(codeFontSize: 15),
             input(theme: accentedTheme()),
@@ -136,6 +137,7 @@ struct DiffPaneRowPlanTests {
 
     private func input(
         model: DiffDisplayModel? = nil,
+        fileExtension: String = "swift",
         layoutMode: DiffLayoutMode = .split,
         wrapLines: Bool = false,
         showWhitespace: Bool = false,
@@ -152,7 +154,7 @@ struct DiffPaneRowPlanTests {
     ) -> DiffPaneRowPlanInput {
         DiffPaneRowPlanInput(
             model: model ?? self.model(),
-            fileExtension: "swift",
+            fileExtension: fileExtension,
             layoutMode: layoutMode,
             wrapLines: wrapLines,
             showWhitespace: showWhitespace,
