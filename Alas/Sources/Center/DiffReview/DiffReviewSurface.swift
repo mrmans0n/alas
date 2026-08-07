@@ -330,9 +330,10 @@ struct DiffReviewSurface: View {
             }
             .onChange(of: scrollCommand) { _, command in
                 guard let command else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                }
+                // Snap rather than animate: without a native scroll view we
+                // can't cheaply measure current offset for a distance-based
+                // heuristic, and this path is legacy fallback only.
+                scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
                 scrollCommand = DiffReviewScrollCommandConsumption.consume(
                     current: scrollCommand,
                     consumed: command

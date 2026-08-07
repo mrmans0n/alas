@@ -20,6 +20,7 @@ struct AppKitDiffReviewScrollerTests {
 
         #expect(request?.targetID == headerID)
         #expect(request?.alignment == .top)
+        #expect(request?.snapsWhenFar == true)
     }
 
     @Test func deferredFeedbackTargetsPlaceholderAtCenter() {
@@ -41,6 +42,7 @@ struct AppKitDiffReviewScrollerTests {
 
         #expect(request?.targetID == deferredPlan.placeholderByFileID[fileID])
         #expect(request?.alignment == .center)
+        #expect(request?.snapsWhenFar == false)
     }
 
     @Test func reviewCommandKindsUseDistinctGenerationsAndDoNotNeedRealizationDelay() {
