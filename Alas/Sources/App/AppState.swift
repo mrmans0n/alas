@@ -3200,6 +3200,7 @@ final class AppState {
         for path in changedPaths {
             GGStackSummaryStore.shared.summaries[path] = nil
         }
+        Task { await GGStackCache.shared.invalidate() }
     }
 
     func revisionChangeGeneration(worktreeID: String) -> Int {

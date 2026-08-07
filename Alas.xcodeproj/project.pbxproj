@@ -849,6 +849,7 @@
 		8E2FB28D4C7681611BC67537 /* WorkspaceLSPManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE809DBC1E614321EE793D00 /* WorkspaceLSPManager.swift */; };
 		8E8ABE6BBA778EEA4170423C /* MergeScrollCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7095EA2868EF619BA4202BDF /* MergeScrollCoordinator.swift */; };
 		8E988C41547B229AF19CBE31 /* ACPSessionPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A590E6B7A73546D38D4F95 /* ACPSessionPersistence.swift */; };
+		8EA82A5D99C02C5986486159 /* GGStackCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FAF0296378A7605107A7D96 /* GGStackCache.swift */; };
 		8ED9196CA54498198826E799 /* GGWorktreeMenuModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792D7045679FE1E12AAFA04 /* GGWorktreeMenuModelTests.swift */; };
 		8F4B6B83968BE4C1E6D0D912 /* AlasCLIRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA730D3A9214ED3ECD15C0ED /* AlasCLIRequestTests.swift */; };
 		8F5B93A115E4554430ADC0FD /* ChangesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1E14CFAC880D31CE8FBE8F /* ChangesPane.swift */; };
@@ -1539,6 +1540,7 @@
 		FD5B6E7F566A9D0BACD19267 /* DiffInlineCommentModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 729DDA22CA94FA0DC8810057 /* DiffInlineCommentModelTests.swift */; };
 		FD797B47C5EE0F82796A3733 /* LSPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028348C468E45161F567110A /* LSPInstallerTests.swift */; };
 		FD9F0F14E4EA5ACF408211A7 /* ACPTranscriptTilingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A981A28B0FED8C3D95B107 /* ACPTranscriptTilingController.swift */; };
+		FDAAE84A48C2AD650444141B /* GGStackCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83B6B0597FA2E0DF89580A60 /* GGStackCacheTests.swift */; };
 		FDB1BD021ED0D2C7247E42D5 /* RightPaneStateLoadOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C89163A30EA4D278E86959 /* RightPaneStateLoadOlderTests.swift */; };
 		FDE59101CBC2CA8CD6FFF91B /* ACPMCPExternalStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01291607F0A46E4A50104BB /* ACPMCPExternalStatus.swift */; };
 		FE1517EC14DCB1C29528C865 /* StatusParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */; };
@@ -1944,6 +1946,7 @@
 		3F4C58E8C0B1BC5B7CB2BBCB /* Code.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Code.swift; sourceTree = "<group>"; };
 		3F79A184C86BE6C6BF72EB57 /* ACPMessageList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageList.swift; sourceTree = "<group>"; };
 		3F8435ABAF423A6F5BC28E4C /* DiffPreferenceBindings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreferenceBindings.swift; sourceTree = "<group>"; };
+		3FAF0296378A7605107A7D96 /* GGStackCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackCache.swift; sourceTree = "<group>"; };
 		40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogChromeLayoutTests.swift; sourceTree = "<group>"; };
 		4068B3E83F9A82C2E3F8A6A1 /* OpenSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenSessions.swift; sourceTree = "<group>"; };
 		4069925EE709DD18AEA810B3 /* ShortcutResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutResolver.swift; sourceTree = "<group>"; };
@@ -2350,6 +2353,7 @@
 		8351793355009D8A73AA91A2 /* SSHCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCommand.swift; sourceTree = "<group>"; };
 		835D847AD52A2CEB36DD5022 /* LegacyHookSweepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyHookSweepTests.swift; sourceTree = "<group>"; };
 		83A8622BA130E8FA339EDCEB /* TabsManagerReviewRequestDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerReviewRequestDraftTests.swift; sourceTree = "<group>"; };
+		83B6B0597FA2E0DF89580A60 /* GGStackCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackCacheTests.swift; sourceTree = "<group>"; };
 		843E7D6E8972C01B3DC924F2 /* RemoteHostCapabilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHostCapabilitiesTests.swift; sourceTree = "<group>"; };
 		8451C5BCEE50F118F07CDD83 /* RightPaneStoreBaseBranchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneStoreBaseBranchTests.swift; sourceTree = "<group>"; };
 		84A01D6512394EF1C41782AD /* ACPMarkdownInlineTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownInlineTextView.swift; sourceTree = "<group>"; };
@@ -5288,6 +5292,7 @@
 				2F74F721E41ADB3EC7906DC1 /* GGServiceTests.swift */,
 				C8257A2ECCB938BA608A972A /* GGSplitCommitModelTests.swift */,
 				7C421FFAE27A92B2510D87C9 /* GGStackActionStateTests.swift */,
+				83B6B0597FA2E0DF89580A60 /* GGStackCacheTests.swift */,
 				59FC4FF152C92166C561D645 /* GGStackChipModelTests.swift */,
 				6C09F563CF8F2EC4EF2B42BC /* GGStackGateTests.swift */,
 				A948C5D9B5EB13DBAC21E538 /* GGStackModelsTests.swift */,
@@ -5601,6 +5606,7 @@
 				43E189D66411992DFC659CBF /* GGSplitCommitTabView.swift */,
 				8A811C3D697D29CF9267F2C5 /* GGSplitPreviewRowPlan.swift */,
 				2A9D7898F772DC2F10532A1F /* GGStackActionState.swift */,
+				3FAF0296378A7605107A7D96 /* GGStackCache.swift */,
 				E81D0FF9B67ADCA35679FF76 /* GGStackChip.swift */,
 				B6B7A6EC8A1372E76F0B934D /* GGStackCreateMode.swift */,
 				D7860DF249939BC7FC1EBD76 /* GGStackDrawer.swift */,
@@ -6380,6 +6386,7 @@
 				084E0061691FD9F495E8209B /* GGSplitCommitTabView.swift in Sources */,
 				792C4398DB584C1C56D8C23E /* GGSplitPreviewRowPlan.swift in Sources */,
 				F59B834AB41CDD4BBCA84A7B /* GGStackActionState.swift in Sources */,
+				8EA82A5D99C02C5986486159 /* GGStackCache.swift in Sources */,
 				985B3CFBBCB9AF3059192796 /* GGStackChip.swift in Sources */,
 				E5648509F3F1EA4297E856A1 /* GGStackCreateMode.swift in Sources */,
 				3AFEB19356A2BC5E7B6E1E4A /* GGStackDrawer.swift in Sources */,
@@ -7159,6 +7166,7 @@
 				1160B4B61A592EF469A2708A /* GGSplitPreviewRowPlanTests.swift in Sources */,
 				7528D9FD7DCE1D6F7CF70C3F /* GGSplitTabsManagerTests.swift in Sources */,
 				EE4A552DB5EF6559CA1A5AE0 /* GGStackActionStateTests.swift in Sources */,
+				FDAAE84A48C2AD650444141B /* GGStackCacheTests.swift in Sources */,
 				B8E2F8710E6B8A3CD1A23E49 /* GGStackChipModelTests.swift in Sources */,
 				0F118A7F54315A836A169B89 /* GGStackCreateModeTests.swift in Sources */,
 				2111C060CDF39B78FEFECB7A /* GGStackGateTests.swift in Sources */,
