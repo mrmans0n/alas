@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-08-07
+
+### ✨ Features
+
+- Make the ACP AppKit transcript scroller the only implementation (#987).
+- Improve followed revision controls (#983).
+
+### 🐛 Fixes
+
+- Preserve `zsh` run script exit statuses (#986).
+- Stop false cursor permission notifications (#985).
+- Honor the default launch surface for the `⌥⌘T` launcher shortcut (#981).
+- Expand the commit description scroller (#982).
+
+### ⚡ Performance
+
+- Cache diff syntax highlighting and hunk heights during scroll (#984).
+
 ## [0.14.4] - 2026-08-07
 
 ### ✨ Features
