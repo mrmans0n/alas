@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-08-07
+
+### ✨ Features
+
+- Migrate diff panes to the AppKit scroller (#980).
+
+### 🐛 Fixes
+
+- Recover cancelled `gg` stack refreshes (#979).
+
+### 🏗️ Internal
+
+- Add and fix manual release workflow publication.
+
 ## [0.14.3] - 2026-08-06
 
 ### ✨ Features
