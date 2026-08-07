@@ -33,6 +33,7 @@ struct CommitHeaderView: View {
                     ScrollView(.vertical) {
                         expandedBlock
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: Self.maxExpandedHeight)
             }

@@ -108,6 +108,15 @@ struct CommitHeaderViewTests {
         #expect(longController.view.descendantScrollViews().count == 1)
     }
 
+    @Test func overflowingDetailsScrollerFillsHeaderWidth() {
+        let body = Array(repeating: "A long commit message line", count: 100)
+            .joined(separator: "\n")
+        let controller = hostExpandedHeader(body: body)
+        let scrollView = try! #require(controller.view.descendantScrollViews().first)
+
+        #expect(scrollView.frame.width >= controller.view.bounds.width - 32)
+    }
+
     @Test func headerRowHasButtonAccessibilityTrait() {
         let details = makeDetails(body: "Body")
         var expanded = false
