@@ -110,6 +110,12 @@ private struct GGSplitPreviewImageToken: Equatable {
     let theme: Theme
 }
 
+private struct GGSplitPreviewHunkWrapperToken: Equatable {
+    let content: AppKitDiffRowEqualityToken
+    let topPadding: CGFloat
+    let bottomPadding: CGFloat
+}
+
 @MainActor
 enum GGSplitPreviewRowPlanBuilder {
     static func build(input: GGSplitPreviewRowPlanInput) -> AppKitDiffRowPlan {
@@ -139,6 +145,7 @@ enum GGSplitPreviewRowPlanBuilder {
             })
 
             let model = DiffDisplayModelBuilder.build(diff: file.diff, filePath: file.path)
+            let fusionStates = DiffPaneHunkFusionResolver.states(for: model.groups)
             let hunkPlan = DiffPaneRowPlanBuilder.build(
                 input: .init(
                     model: model,
@@ -155,14 +162,27 @@ enum GGSplitPreviewRowPlanBuilder {
                 state: input.presentationStore.state(previewID: input.previewID, filePath: file.path)
             )
             for (index, hunk) in hunkPlan.rows.enumerated() {
+                let topPadding = index == hunkPlan.rows.startIndex ? fusionStates.first?.outerTopPadding ?? 10 : 0
+                let bottomPadding = index == hunkPlan.rows.index(before: hunkPlan.rows.endIndex)
+                    ? fusionStates.last?.outerBottomPadding ?? 10
+                    : 0
                 rows.append(.init(
                     id: "\(prefix):hunk:\(index):\(hunk.id)",
                     ownerID: file.path,
-                    equalityToken: hunk.equalityToken,
-                    estimatedHeight: hunk.estimatedHeight,
+                    equalityToken: .init(GGSplitPreviewHunkWrapperToken(
+                        content: hunk.equalityToken,
+                        topPadding: topPadding,
+                        bottomPadding: bottomPadding
+                    )),
+                    estimatedHeight: hunk.estimatedHeight + topPadding + bottomPadding,
                     retention: hunk.retention
                 ) {
-                    AnyView(hunk.build().padding(.horizontal, 10))
+                    AnyView(
+                        hunk.build()
+                            .padding(.horizontal, 10)
+                            .padding(.top, topPadding)
+                            .padding(.bottom, bottomPadding)
+                    )
                 })
             }
         }

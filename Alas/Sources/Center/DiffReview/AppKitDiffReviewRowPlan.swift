@@ -36,6 +36,19 @@ struct AppKitDiffReviewActionPresence: Equatable {
     var hunkUnstageEnabled = false
 }
 
+private enum AppKitDiffReviewCardRowPosition: Equatable {
+    case only
+    case first
+    case middle
+    case last
+}
+
+private struct AppKitDiffReviewCardRowToken: Equatable {
+    let content: AppKitDiffRowEqualityToken
+    let position: AppKitDiffReviewCardRowPosition
+    let theme: Theme
+}
+
 struct AppKitDiffReviewRowToken: Equatable {
     let rowID: String
     let contentSignature: Int
@@ -313,6 +326,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         )
 
         for (index, input) in inputs.enumerated() {
+            let fileRowStartIndex = rows.count
             input.state.actionRelay.update(
                 stagedMutationActions: input.file.stagedMutationActions,
                 openFile: input.file.openFile
@@ -365,10 +379,10 @@ enum AppKitDiffReviewRowPlanBuilder {
                 appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID)
             }
 
-            if input.showsBottomSpacing,
-               !isDeferred,
-               input.file.imageProvider == nil,
-               input.file.displayModel != nil {
+            let fileRowEndIndex = rows.count
+            applyCardChrome(to: &rows, range: fileRowStartIndex..<fileRowEndIndex, input: input)
+
+            if input.showsBottomSpacing, eligibility[index].showsBottomSpacing {
                 append(&rows, id: AppKitDiffReviewRowID.spacing(fileID: fileID), input: input, signature: 0, height: 14) {
                     AnyView(Color.clear.frame(height: 14))
                 }
@@ -378,6 +392,29 @@ enum AppKitDiffReviewRowPlanBuilder {
             corePlan: .init(rows: rows), fallbackByTargetID: fallbackByTargetID,
             headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID
         )
+    }
+
+    private static func applyCardChrome(
+        to rows: inout [AppKitDiffRowSpec],
+        range: Range<Int>,
+        input: AppKitDiffReviewRowInput
+    ) {
+        guard !range.isEmpty else { return }
+        let lastIndex = range.upperBound - 1
+        for index in range {
+            let position: AppKitDiffReviewCardRowPosition
+            if range.count == 1 {
+                position = .only
+            } else if index == range.lowerBound {
+                position = .first
+            } else if index == lastIndex {
+                position = .last
+            } else {
+                position = .middle
+            }
+            let row = rows[index]
+            rows[index] = row.withReviewCardChrome(position: position, theme: input.theme)
+        }
     }
 
     private static func renderContext(for input: AppKitDiffReviewRowInput) -> DiffReviewRenderContext? {
@@ -834,6 +871,151 @@ struct AppKitDiffReviewHeaderRowBody: View {
         case .renamed, .copied: input.theme.color("accent")
         case .conflicted: input.theme.color("warn")
         case .modified, .unknown: input.theme.color("fg-dim")
+        }
+    }
+}
+
+private extension AppKitDiffRowSpec {
+    func withReviewCardChrome(
+        position: AppKitDiffReviewCardRowPosition,
+        theme: Theme
+    ) -> AppKitDiffRowSpec {
+        AppKitDiffRowSpec(
+            id: id,
+            ownerID: ownerID,
+            equalityToken: .init(AppKitDiffReviewCardRowToken(
+                content: equalityToken,
+                position: position,
+                theme: theme
+            )),
+            estimatedHeight: estimatedHeight,
+            retention: retention,
+            contextRowCount: contextRowCount
+        ) {
+            AnyView(AppKitDiffReviewCardRowChrome(position: position, theme: theme) {
+                build()
+            })
+        }
+    }
+}
+
+private struct AppKitDiffReviewCardRowChrome<Content: View>: View {
+    let position: AppKitDiffReviewCardRowPosition
+    let theme: Theme
+    let content: Content
+
+    init(
+        position: AppKitDiffReviewCardRowPosition,
+        theme: Theme,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.position = position
+        self.theme = theme
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .background(theme.color("bg-1"))
+            .clipShape(AppKitDiffReviewCardClipShape(position: position))
+            .overlay(
+                AppKitDiffReviewCardBorderShape(position: position)
+                    .stroke(theme.color("line"), lineWidth: 0.75)
+            )
+    }
+}
+
+private struct AppKitDiffReviewCardClipShape: Shape {
+    let position: AppKitDiffReviewCardRowPosition
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(CGFloat(8), rect.width / 2, rect.height / 2)
+        switch position {
+        case .only:
+            return RoundedRectangle(cornerRadius: radius).path(in: rect)
+        case .first:
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                control: CGPoint(x: rect.minX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                control: CGPoint(x: rect.maxX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.closeSubpath()
+            return path
+        case .middle:
+            return Rectangle().path(in: rect)
+        case .last:
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
+                control: CGPoint(x: rect.maxX, y: rect.maxY)
+            )
+            path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: rect.maxY - radius),
+                control: CGPoint(x: rect.minX, y: rect.maxY)
+            )
+            path.closeSubpath()
+            return path
+        }
+    }
+}
+
+private struct AppKitDiffReviewCardBorderShape: Shape {
+    let position: AppKitDiffReviewCardRowPosition
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(CGFloat(8), rect.width / 2, rect.height / 2)
+        switch position {
+        case .only:
+            return RoundedRectangle(cornerRadius: radius).path(in: rect)
+        case .first:
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                control: CGPoint(x: rect.minX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                control: CGPoint(x: rect.maxX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            return path
+        case .middle:
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            return path
+        case .last:
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + radius, y: rect.maxY),
+                control: CGPoint(x: rect.minX, y: rect.maxY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.maxY - radius),
+                control: CGPoint(x: rect.maxX, y: rect.maxY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            return path
         }
     }
 }

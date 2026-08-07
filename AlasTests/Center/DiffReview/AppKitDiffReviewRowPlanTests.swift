@@ -19,7 +19,7 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(first.corePlan.rows.allSatisfy { $0.ownerID == input.file.id.rawValue })
         #expect(first.corePlan.rows.contains { $0.id.hasSuffix(":header") })
         #expect(first.corePlan.rows.contains { $0.id.contains(":group:") })
-        #expect(first.corePlan.rows.contains { $0.id.hasSuffix(":spacing") })
+        #expect(!first.corePlan.rows.contains { $0.id.hasSuffix(":spacing") })
     }
 
     @Test func deferredFilesMapReviewTargetsToTheirPlaceholder() {
@@ -76,6 +76,22 @@ struct AppKitDiffReviewRowPlanTests {
             AppKitDiffReviewRowID.header(fileID: file.id),
             AppKitDiffReviewRowID.placeholder(fileID: file.id),
         ])
+    }
+
+    @Test func bottomSpacingFollowsEligibilityForImagePlaceholderAndTextFiles() {
+        let image = imageFile()
+        let placeholder = placeholderFile()
+        let text = textFile()
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: image, state: AppKitDiffReviewFileState(), theme: theme),
+            .init(file: placeholder, state: AppKitDiffReviewFileState(), theme: theme),
+            .init(file: text, state: AppKitDiffReviewFileState(), theme: theme),
+        ])
+        let ids = plan.corePlan.rows.map(\.id)
+
+        #expect(ids.contains(AppKitDiffReviewRowID.spacing(fileID: image.id)))
+        #expect(ids.contains(AppKitDiffReviewRowID.spacing(fileID: placeholder.id)))
+        #expect(!ids.contains(AppKitDiffReviewRowID.spacing(fileID: text.id)))
     }
 
     @Test func headerRowCarriesLegacyFileSectionAccessibilityMarker() throws {

@@ -102,6 +102,36 @@ struct GGSplitPreviewRowPlanTests {
         #expect(presentationStore.keysForTests == ["first-commit:Sources/First.swift"])
     }
 
+    @Test("text hunks preserve standalone pane outer vertical padding")
+    func textHunksPreserveOuterVerticalPadding() throws {
+        let previewFile = previewFile(path: "Sources/Padded.swift")
+        let plan = GGSplitPreviewRowPlanBuilder.build(input: input(
+            previewID: "remainder",
+            preview: .init(files: [previewFile], nonTextualFiles: []),
+            showsResultingImages: false,
+            imageStore: GGSplitPreviewImageStore()
+        ))
+        let hunk = try #require(plan.rows.first { $0.id.contains(":hunk:") })
+        let model = DiffDisplayModelBuilder.build(diff: previewFile.diff, filePath: previewFile.path)
+        let raw = try #require(DiffPaneRowPlanBuilder.build(
+            input: .init(
+                model: model,
+                fileExtension: LanguageRegistry.highlighterExtension(forPath: previewFile.path),
+                layoutMode: .stacked,
+                wrapLines: false,
+                showWhitespace: false,
+                codeFontFamily: "SF Mono",
+                codeFontSize: 13,
+                theme: try! ThemeStore().current,
+                allowsReviewLineSelection: false,
+                hunkActions: { _ in DiffPaneHunkActions() }
+            ),
+            state: DiffPanePresentationState()
+        ).rows.first)
+
+        #expect(hunk.estimatedHeight == raw.estimatedHeight + 20)
+    }
+
     private func input(
         previewID: String,
         preview: GGSplitPreview,

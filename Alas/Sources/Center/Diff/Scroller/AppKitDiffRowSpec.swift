@@ -16,6 +16,12 @@ struct AppKitDiffRowEqualityToken {
     }
 }
 
+extension AppKitDiffRowEqualityToken: Equatable {
+    static func == (lhs: AppKitDiffRowEqualityToken, rhs: AppKitDiffRowEqualityToken) -> Bool {
+        lhs.isEqual(to: rhs)
+    }
+}
+
 enum AppKitDiffRowRetention: Equatable {
     case recyclable
     case pinned
