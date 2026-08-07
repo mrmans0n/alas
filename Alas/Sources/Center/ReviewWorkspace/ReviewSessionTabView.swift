@@ -650,10 +650,22 @@ struct ReviewSessionTabView: View {
         guard let worktree, case .trackedCommit(let revision) = storedRecord.target.payload else {
             return (storedRecord, false)
         }
-        let candidate = try await TrackedRevisionResolver.live.resolve(
-            at: worktree.path,
-            target: revision.target
-        )
+        let candidate: TrackedRevisionCandidate
+        do {
+            candidate = try await TrackedRevisionResolver.live.resolve(
+                at: worktree.path,
+                target: revision.target
+            )
+        } catch {
+            guard case .stall(let stalled) = TrackedRevisionPolicy.evaluate(current: revision, error: error) else {
+                throw error
+            }
+            let target = storedRecord.target.updatingTrackedRevision(stalled, title: storedRecord.target.title)
+            return (
+                storedRecord.retargetingCommit(to: target, resolvedSHAChanged: false, now: now()),
+                false
+            )
+        }
         switch TrackedRevisionPolicy.evaluate(current: revision, candidate: candidate) {
         case .unchanged(let updated):
             let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
@@ -675,10 +687,6 @@ struct ReviewSessionTabView: View {
                 ),
                 false
             )
-        // A stall is only produced from a resolver error, which this
-        // candidate-only path does not handle. Keep the compatibility arm
-        // equivalent to pause so adding the transition does not alter review
-        // session behavior.
         case .pause(let updated), .stall(let updated):
             let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
             return (
