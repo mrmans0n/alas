@@ -94,6 +94,32 @@ struct GGSplitPreviewRowPlanInput {
     let presentationStore: GGSplitPreviewPresentationStore
 }
 
+enum GGSplitPreviewRowID {
+    static func fileHeader(previewID: String, path: String) -> String {
+        "gg-preview:\(previewID):file:\(path):header"
+    }
+
+    static func legacyFile(path: String) -> String { "gg-preview:legacy:file:\(path)" }
+    static func legacyImage(path: String) -> String { "gg-preview:legacy:image:\(path)" }
+    static func legacyOther(path: String) -> String { "gg-preview:legacy:other:\(path)" }
+}
+
+struct GGSplitPreviewScrollRequestCoordinator {
+    private var generation = 0
+
+    mutating func request(previewID: String, path: String) -> AppKitDiffScrollRequest {
+        generation += 1
+        return AppKitDiffScrollRequest(
+            targetID: GGSplitPreviewRowID.fileHeader(previewID: previewID, path: path),
+            fallbackID: nil,
+            alignment: .top,
+            animated: true,
+            generation: generation,
+            snapsWhenFar: true
+        )
+    }
+}
+
 private struct GGSplitPreviewHeaderToken: Equatable {
     let previewID: String
     let path: String
@@ -125,7 +151,7 @@ enum GGSplitPreviewRowPlanBuilder {
         for file in input.preview.files {
             let prefix = "gg-preview:\(input.previewID):file:\(file.path)"
             rows.append(.init(
-                id: "\(prefix):header",
+                id: GGSplitPreviewRowID.fileHeader(previewID: input.previewID, path: file.path),
                 ownerID: file.path,
                 equalityToken: .init(GGSplitPreviewHeaderToken(
                     previewID: input.previewID,

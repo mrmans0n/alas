@@ -37,6 +37,11 @@ enum GGSplitCommitFileGroupKind: Equatable {
     }
 }
 
+enum GGSplitCommitDestination: Equatable {
+    case newCommit
+    case originalCommit
+}
+
 struct GGSplitCommitFileGroup: Equatable, Identifiable {
     // A path can appear as both a selectable group and a remainder-only group
     // (e.g. text edits plus a metadata/chmod change on the same file), so the
@@ -81,10 +86,10 @@ extension GGSplitCommitValidationError: LocalizedError {
         switch self {
         case .unavailable: "Update GG to use native Split Commit"
         case .notLoaded: "Load the split plan before applying it."
-        case .emptySelection: "Select at least one hunk for the first commit."
-        case .allHunksSelected: "Leave at least one hunk for the remainder commit."
-        case .emptyFirstMessage: "Enter a message for the first commit."
-        case .emptyRemainderMessage: "Enter a message for the remainder commit."
+        case .emptySelection: "Select at least one hunk for the new commit."
+        case .allHunksSelected: "Leave at least one hunk for the original commit."
+        case .emptyFirstMessage: "Enter a message for the new commit."
+        case .emptyRemainderMessage: "Enter a message for the original commit."
         }
     }
 }
@@ -230,11 +235,26 @@ final class GGSplitCommitModel {
     }
 
     func toggleHunk(_ id: String) {
-        guard description?.hunks.contains(where: { $0.id == id }) == true else { return }
-        if selectedHunkIDs.contains(id) {
-            selectedHunkIDs.remove(id)
-        } else {
-            selectedHunkIDs.insert(id)
+        guard let destination = destination(for: id) else { return }
+        assignHunk(id, to: destination == .newCommit ? .originalCommit : .newCommit)
+    }
+
+    func destination(for id: String) -> GGSplitCommitDestination? {
+        guard description?.hunks.contains(where: { $0.id == id }) == true else { return nil }
+        return selectedHunkIDs.contains(id) ? .newCommit : .originalCommit
+    }
+
+    func assignHunk(_ id: String, to destination: GGSplitCommitDestination) {
+        guard self.destination(for: id) != nil else { return }
+        switch destination {
+        case .newCommit: selectedHunkIDs.insert(id)
+        case .originalCommit: selectedHunkIDs.remove(id)
+        }
+    }
+
+    func assignHunks(in group: GGSplitCommitFileGroup, to destination: GGSplitCommitDestination) {
+        for hunk in group.hunks {
+            assignHunk(hunk.id, to: destination)
         }
     }
 
