@@ -3324,10 +3324,22 @@ final class AppState {
     /// `rightPaneStore` (the same source `CenterPaneView`'s split-commit
     /// workflow gate reads) instead of recomputing it from disk on every
     /// call — this is invoked from SwiftUI view bodies, so it must stay
-    /// cheap. Falls back to `false` if the worktree's right pane state
-    /// hasn't been activated / seeded yet.
+    /// cheap. Commit and review-session tabs don't activate a right-pane
+    /// state on their own, so that cache can be unseeded even for a worktree
+    /// with an active gg stack; fall back to deriving the context directly
+    /// in that case rather than reporting unsupported.
     func ggFollowSupported(worktreeID: String) -> Bool {
-        rightPaneStore.activeState(worktreeId: worktreeID)?.ggContext.isActive ?? false
+        if let context = rightPaneStore.activeState(worktreeId: worktreeID)?.ggContext {
+            return context.isActive
+        }
+        guard let worktree = worktree(withId: worktreeID),
+              let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
+        else { return false }
+        return ggWorktreeContext(
+            project: project,
+            worktree: worktree,
+            branch: worktree.branch
+        ).isActive
     }
 
     private func followedStackEntryGGID(worktreeID: String, tabID: TabID) -> String? {
