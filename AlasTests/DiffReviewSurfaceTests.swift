@@ -332,6 +332,46 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func appKitReviewKeepsViewportWhenFirstComposerAppearsBelowFold() async throws {
+        let file = fileSection(
+            summary: summary(path: "Sources/ComposerReset.swift"),
+            displayModel: largeSingleGroupDisplayModel(rowCount: 120, filePath: "Sources/ComposerReset.swift")
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 260
+            )
+            let window = attachWindow(controller, width: 1_000, height: 260)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+
+            let scroller = try #require(appKitReviewScroller(in: controller.view))
+            // User-driven scroll: route through the clip view so bounds
+            // notifications remount the visible band like a real scroll does.
+            scroller.contentView.scroll(to: NSPoint(x: 0, y: 1_200))
+            scroller.reflectScrolledClipView(scroller.contentView)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.10))
+            await drainSwiftUI(controller.view)
+            let yBefore = scroller.scrollY
+            #expect(yBefore > 0)
+
+            try selectReviewLine(selectionIndex: 40, in: controller.view)
+            for _ in 0..<10 {
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+                await drainSwiftUI(controller.view)
+                if draftComposerTextView(in: controller.view) != nil { break }
+            }
+
+            let composer = try #require(draftComposerTextView(in: controller.view))
+            #expect(window.firstResponder === composer)
+            #expect(abs(scroller.scrollY - yBefore) < 250)
+        }
+    }
+
     @Test func appKitReviewWindowRoutesImageRetryAndStagedMutationActions() async throws {
         let imageLoader = AppKitImageRetryRecorder()
         let actions = AppKitReviewActionRecorder()

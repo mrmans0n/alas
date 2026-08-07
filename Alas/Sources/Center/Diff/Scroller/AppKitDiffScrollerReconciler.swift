@@ -91,6 +91,10 @@ final class AppKitDiffScrollerReconciler {
         if let anchoredY = tiling.viewportMinY(for: anchor) {
             scrollView.setScrollY(anchoredY, animated: false)
         }
+        // When the anchor cannot be resolved (row removed, or restructured so
+        // the id-matching row no longer holds the anchored content), preserve
+        // the absolute viewport position — clamped by the native scroll view
+        // if the document shrank — instead of snapping elsewhere.
         layoutVisibleRows()
     }
 

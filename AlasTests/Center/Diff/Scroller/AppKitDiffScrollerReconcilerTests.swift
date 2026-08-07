@@ -85,6 +85,46 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(abs(before - after) < 0.5)
     }
 
+    @Test("a replaced anchor row keeps the absolute viewport position")
+    func replacedAnchorRowKeepsAbsoluteViewportPosition() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("giant-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(500 * 3 + 250)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        let replaced = (0..<20).flatMap { index -> [AppKitDiffRowSpec] in
+            [spec("header-\(index)", height: 37)] + (0..<5).map { spec("seg-\(index)-\($0)", height: 92) }
+        }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(abs(stack.scrollView.scrollY - min(y, max(0, stack.tiling.documentHeight - stack.scrollView.viewportHeight))) < 0.5)
+    }
+
+    @Test("a restructured anchor row keeps the previous absolute viewport position")
+    func restructuredAnchorRowKeepsAbsoluteViewportPosition() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        // Viewport top exactly at a row boundary: the anchor row is `row-3`,
+        // a 500pt fused hunk row that the first-comment restructure replaces
+        // with a 37pt group header plus segment and composer rows.
+        let y = CGFloat(3 * 500)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        var replaced: [AppKitDiffRowSpec] = (0..<3).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-3", height: 37))
+        replaced += (0..<5).map { spec("seg-3-\($0)", height: 92) }
+        replaced += (4..<20).map { spec("row-\($0)", height: 500) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+    }
+
     @Test("unchanged plans do not perform another full apply")
     func unchangedPlanIsNoOp() {
         let stack = makeStack()
