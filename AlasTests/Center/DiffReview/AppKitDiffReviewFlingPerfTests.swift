@@ -124,7 +124,10 @@ struct AppKitDiffReviewFlingPerfTests {
                     defer { newLine += 1 }
                     return .init(kind: .add, text: text, oldNumber: nil, newNumber: newLine)
                 default:
-                    defer { oldLine += 1; newLine += 1 }
+                    defer {
+                        oldLine += 1
+                        newLine += 1
+                    }
                     return .init(kind: .context, text: text, oldNumber: oldLine, newNumber: newLine)
                 }
             }
