@@ -617,6 +617,7 @@ final class AppState {
     private(set) var reviewSessionRetargetGenerations: [String: Int] = [:]
     var followRevisionEditorRequest: FollowRevisionEditorRequest?
     private var followRevisionRequestGenerations: [String: Int] = [:]
+    private var followRevisionEditorGeneration = 0
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -3225,6 +3226,7 @@ final class AppState {
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
         let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
         let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
+        let editorGeneration = bumpFollowRevisionEditorGeneration()
         Task { @MainActor in
             let resolvedPrefill: String?
             if let prefill {
@@ -3236,7 +3238,8 @@ final class AppState {
                 worktreeID: worktreeID,
                 requestKey: requestKey,
                 requestGeneration: requestGeneration
-            ) else { return }
+            ), followRevisionEditorGeneration == editorGeneration
+            else { return }
             followRevisionEditorRequest = FollowRevisionEditorRequest(
                 worktreeID: worktreeID,
                 tabID: tabID,
@@ -3248,6 +3251,7 @@ final class AppState {
 
     func submitFollowRevisionEditor() {
         guard var request = followRevisionEditorRequest,
+              !request.isSubmitting,
               let expression = request.submissionExpression
         else { return }
         request.isSubmitting = true
@@ -3261,6 +3265,7 @@ final class AppState {
         _ = bumpFollowRevisionRequestGeneration(
             followRevisionRequestKey(worktreeID: request.worktreeID, tabID: request.tabID)
         )
+        _ = bumpFollowRevisionEditorGeneration()
         followRevisionEditorRequest = nil
     }
 
@@ -3408,6 +3413,11 @@ final class AppState {
         let next = followRevisionRequestGenerations[key, default: 0] + 1
         followRevisionRequestGenerations[key] = next
         return next
+    }
+
+    private func bumpFollowRevisionEditorGeneration() -> Int {
+        followRevisionEditorGeneration += 1
+        return followRevisionEditorGeneration
     }
 
     private func isCurrentFollowRevisionRequest(

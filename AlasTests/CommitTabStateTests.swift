@@ -578,6 +578,31 @@ struct RevisionFollowPresentationTests {
         ))
     }
 
+    @Test func checkoutPauseWinsOverRefreshFailure() throws {
+        var revision = try #require(TrackedRevision(
+            expression: "HEAD~3",
+            baselineBranch: "feature",
+            resolvedSHA: "current012345"
+        ))
+        revision = revision.withPendingCheckout(TrackedRevisionCandidate(
+            branch: "main",
+            sha: "candidate98765"
+        ))
+
+        let presentation = RevisionFollowPresentation(
+            fixedSHA: "ignored",
+            revision: revision,
+            refreshError: "unknown revision"
+        )
+
+        #expect(presentation == .paused(
+            expression: "HEAD~3",
+            resolvedSHA: "current012",
+            candidateSHA: "candidate9",
+            message: "Paused: HEAD moved to main"
+        ))
+    }
+
     @Test func detachedCheckoutPauseHasUsefulMessage() throws {
         var revision = try #require(TrackedRevision(
             expression: "HEAD",
@@ -663,5 +688,22 @@ struct RevisionFollowPresentationTests {
         )
 
         #expect(request.submissionExpression == nil)
+    }
+
+    @MainActor
+    @Test func submittingEditorRequestIgnoresRepeatSubmit() {
+        let state = AppState()
+        var request = FollowRevisionEditorRequest(
+            worktreeID: "wt",
+            tabID: "tab",
+            expression: "HEAD",
+            isEditing: false
+        )
+        request.isSubmitting = true
+        state.followRevisionEditorRequest = request
+
+        state.submitFollowRevisionEditor()
+
+        #expect(state.followRevisionEditorRequest == request)
     }
 }

@@ -342,13 +342,7 @@ enum RevisionFollowPresentation: Equatable {
             self = .fixed(sha: Self.shortSHA(fixedSHA))
             return
         }
-        if let refreshError, !refreshError.isEmpty {
-            self = .failed(
-                expression: revision.expression,
-                resolvedSHA: Self.shortSHA(revision.resolvedSHA),
-                message: refreshError
-            )
-        } else if let pending = revision.pendingCheckout {
+        if let pending = revision.pendingCheckout {
             self = .paused(
                 expression: revision.expression,
                 resolvedSHA: Self.shortSHA(revision.resolvedSHA),
@@ -356,6 +350,12 @@ enum RevisionFollowPresentation: Equatable {
                 message: pending.branch.isEmpty
                     ? "Paused: detached HEAD moved"
                     : "Paused: HEAD moved to \(pending.branch)"
+            )
+        } else if let refreshError, !refreshError.isEmpty {
+            self = .failed(
+                expression: revision.expression,
+                resolvedSHA: Self.shortSHA(revision.resolvedSHA),
+                message: refreshError
             )
         } else {
             self = .following(
