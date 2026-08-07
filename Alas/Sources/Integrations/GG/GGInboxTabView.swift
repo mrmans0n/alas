@@ -410,7 +410,12 @@ struct GGInboxTabView: View {
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
-                    .help("Open \(kind.reviewRequestLabel) \(kind.reviewRequestNumberPrefix)\(entry.prNumber)")
+                    .help(
+                        Text(
+                            verbatim: "Open \(kind.reviewRequestLabel) "
+                                + "\(kind.reviewRequestNumberPrefix)\(entry.prNumber)"
+                        )
+                    )
                 } else {
                     reviewReferenceLabel(entry.prNumber, kind: kind)
                 }
@@ -472,7 +477,7 @@ struct GGInboxTabView: View {
     }
 
     private func reviewReferenceLabel(_ number: Int, kind: CodeHostKind) -> some View {
-        Text("\(kind.reviewRequestNumberPrefix)\(number)")
+        Text(verbatim: "\(kind.reviewRequestNumberPrefix)\(number)")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundColor(theme.color("accent"))
     }
