@@ -1275,7 +1275,7 @@ final class MissionController {
     // tombstone guard against a real MissionController without fabricating
     // real concurrency.
     func replace(_ aggregate: MissionAggregate) {
-                guard !deletedMissionIDs.contains(aggregate.mission.id) else { return }
+        guard !deletedMissionIDs.contains(aggregate.mission.id) else { return }
         if let index = aggregates.firstIndex(where: { $0.mission.id == aggregate.mission.id }) {
             aggregates[index] = aggregate
         } else {
