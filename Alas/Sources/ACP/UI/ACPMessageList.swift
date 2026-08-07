@@ -89,7 +89,7 @@ struct ACPMessageList: View {
     /// reset to `max(0, count - tailWindow)` after hydration); the
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
-    private var visibleRows: [VisibleRow] {
+    private var visibleRows: [ACPTranscriptVisibleRow] {
         visibleRowsCache.rows(
             generation: transcript.messagesGeneration,
             head: transcript.visibleHead,
@@ -98,8 +98,8 @@ struct ACPMessageList: View {
         )
     }
 
-    private func buildVisibleRows() -> [VisibleRow] {
-        Self.visibleRows(
+    private func buildVisibleRows() -> [ACPTranscriptVisibleRow] {
+        ACPTranscriptVisibleRow.rows(
             messages: transcript.messages,
             visibleHead: transcript.visibleHead,
             visibleTail: transcript.visibleTailBound,
@@ -1226,28 +1226,6 @@ struct ACPMessageList: View {
         !isModernScrollTrackingAvailable
     }
 
-    struct VisibleRow: Identifiable, Equatable {
-        let index: Int
-        let stableId: String
-
-        var id: String { stableId }
-    }
-
-    static func visibleRows(
-        messages: [ACPMessage],
-        visibleHead: Int,
-        visibleTail: Int,
-        stableId: (ACPMessage) -> String
-    ) -> [VisibleRow] {
-        let head = min(visibleHead, messages.count)
-        let tail = max(head, min(visibleTail, messages.count))
-        return (head..<tail).compactMap { index in
-            let message = messages[index]
-            if case .plan = message { return nil }
-            return VisibleRow(index: index, stableId: stableId(message))
-        }
-    }
-
     struct VisibleMessageLookup {
         let ids: Set<String>
         let indexByStableId: [String: Int]
@@ -1592,7 +1570,7 @@ struct ACPMessageList: View {
     }
 
     @ViewBuilder
-    private func visibleRow(_ visibleRow: VisibleRow) -> some View {
+    private func visibleRow(_ visibleRow: ACPTranscriptVisibleRow) -> some View {
         if transcript.messages.indices.contains(visibleRow.index) {
             let message = transcript.messages[visibleRow.index]
             ACPTranscriptRowContent(
@@ -1917,46 +1895,6 @@ final class ACPRowFrameCache {
             changed = true
         }
         return changed
-    }
-}
-
-/// Non-observed memo for the window-sliced row list + id lookup. Keyed on
-/// (messages generation, window bounds); geometry callbacks hit this once
-/// per layout pass instead of rebuilding an O(rows) dictionary per row.
-/// See docs/plans/2026-07-17-acp-transcript-livelock-fix.md (Task 2).
-@MainActor
-final class ACPVisibleRowsCache {
-    private struct Key: Equatable {
-        let generation: UInt64
-        let head: Int
-        let tail: Int
-    }
-    private var key: Key?
-    private var rows: [ACPMessageList.VisibleRow] = []
-    private var lookup: ACPMessageList.VisibleMessageLookup?
-
-    func rows(
-        generation: UInt64, head: Int, tail: Int,
-        build: () -> [ACPMessageList.VisibleRow]
-    ) -> [ACPMessageList.VisibleRow] {
-        let k = Key(generation: generation, head: head, tail: tail)
-        if key != k {
-            rows = build()
-            lookup = nil
-            key = k
-        }
-        return rows
-    }
-
-    func lookup(
-        generation: UInt64, head: Int, tail: Int,
-        build: () -> [ACPMessageList.VisibleRow]
-    ) -> ACPMessageList.VisibleMessageLookup {
-        let r = rows(generation: generation, head: head, tail: tail, build: build)
-        if let lookup { return lookup }
-        let l = ACPMessageList.visibleMessageLookup(rows: r.map { ($0.index, $0.stableId) })
-        lookup = l
-        return l
     }
 }
 

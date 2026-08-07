@@ -8,9 +8,9 @@ struct ACPVisibleRowsCacheTests {
     func sameKeyReturnsCachedRowsWithoutRebuilding() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         let first = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -24,9 +24,9 @@ struct ACPVisibleRowsCacheTests {
     func bumpingGenerationRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -39,9 +39,9 @@ struct ACPVisibleRowsCacheTests {
     func changingHeadRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -54,9 +54,9 @@ struct ACPVisibleRowsCacheTests {
     func changingTailRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: 0, stableId: "a")]
+            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -69,11 +69,11 @@ struct ACPVisibleRowsCacheTests {
     func lookupMemoizedForSameKey() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
             return [
-                ACPMessageList.VisibleRow(index: 0, stableId: "a"),
-                ACPMessageList.VisibleRow(index: 1, stableId: "b")
+                ACPTranscriptVisibleRow(index: 0, stableId: "a"),
+                ACPTranscriptVisibleRow(index: 1, stableId: "b")
             ]
         }
 
@@ -91,9 +91,9 @@ struct ACPVisibleRowsCacheTests {
     func lookupRebuildsWhenKeyChanges() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPMessageList.VisibleRow] {
+        func build() -> [ACPTranscriptVisibleRow] {
             buildCount += 1
-            return [ACPMessageList.VisibleRow(index: buildCount - 1, stableId: "row-\(buildCount)")]
+            return [ACPTranscriptVisibleRow(index: buildCount - 1, stableId: "row-\(buildCount)")]
         }
 
         let first = cache.lookup(generation: 1, head: 0, tail: 1, build: build)

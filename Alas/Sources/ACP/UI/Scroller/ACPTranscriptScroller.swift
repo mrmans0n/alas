@@ -353,7 +353,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let rows = ACPMessageList.visibleRows(
+            let rows = ACPTranscriptVisibleRow.rows(
                 messages: transcript.messages,
                 visibleHead: transcript.visibleHead,
                 visibleTail: transcript.visibleTailBound,
@@ -388,7 +388,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         static func messageRow(
             host: ACPTranscriptScroller,
-            row: ACPMessageList.VisibleRow,
+            row: ACPTranscriptVisibleRow,
             message: ACPMessage
         ) -> some View {
             ACPTranscriptRowContent(
@@ -895,7 +895,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 head: host.transcript.visibleHead,
                 tail: host.transcript.visibleTailBound,
                 build: {
-                    ACPMessageList.visibleRows(
+                    ACPTranscriptVisibleRow.rows(
                         messages: host.transcript.messages,
                         visibleHead: host.transcript.visibleHead,
                         visibleTail: host.transcript.visibleTailBound,
@@ -975,7 +975,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 head: host.transcript.visibleHead,
                 tail: host.transcript.visibleTailBound,
                 build: {
-                    ACPMessageList.visibleRows(
+                    ACPTranscriptVisibleRow.rows(
                         messages: host.transcript.messages,
                         visibleHead: host.transcript.visibleHead,
                         visibleTail: host.transcript.visibleTailBound,

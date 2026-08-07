@@ -668,7 +668,7 @@ struct ACPMessageListPaginationTests {
             .agent(id: UUID(), messageId: "agent-1", StreamingText("new"))
         ]
 
-        let rows = ACPMessageList.visibleRows(
+        let rows = ACPTranscriptVisibleRow.rows(
             messages: messages,
             visibleHead: 1,
             visibleTail: messages.count,
@@ -676,7 +676,7 @@ struct ACPMessageListPaginationTests {
         )
 
         #expect(rows == [
-            ACPMessageList.VisibleRow(index: 2, stableId: "acp-agent:agent-1")
+            ACPTranscriptVisibleRow(index: 2, stableId: "acp-agent:agent-1")
         ])
     }
 
@@ -690,7 +690,7 @@ struct ACPMessageListPaginationTests {
             .user(id: UUID(), messageId: "user-4", text: "four", attachments: [])
         ]
 
-        let rows = ACPMessageList.visibleRows(
+        let rows = ACPTranscriptVisibleRow.rows(
             messages: messages,
             visibleHead: 1,
             visibleTail: 3,
