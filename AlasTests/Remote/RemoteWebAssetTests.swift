@@ -427,8 +427,8 @@ struct RemoteWebAssetTests {
     }
 
     // Regression (final branch review): native never renders a `.sending`
-    // queue item (ACPMessageList.shouldRenderQueueBubble returns false for
-    // it) — flushQueueIfIdle marks the head `.sending` while it's still in
+    // queue item (ACPTranscriptQueuePolicy.shouldRenderQueueBubble returns
+    // false for it) — flushQueueIfIdle marks the head `.sending` while it's still in
     // session.queue, and sendNow records the same prompt into the
     // transcript, so a `.sending` bubble here would double-show that text
     // for the whole duration of the queued turn. renderQueue() must filter

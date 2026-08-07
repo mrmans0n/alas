@@ -35,24 +35,24 @@ struct ACPMessageListPaginationTests {
 
     @Test("queue bubbles render pending items only")
     func queueBubblesRenderPendingItemsOnly() {
-        #expect(ACPMessageList.shouldRenderQueueBubble(status: .pending))
-        #expect(!ACPMessageList.shouldRenderQueueBubble(status: .sending))
+        #expect(ACPTranscriptQueuePolicy.shouldRenderQueueBubble(status: .pending))
+        #expect(!ACPTranscriptQueuePolicy.shouldRenderQueueBubble(status: .sending))
     }
 
     @Test("queue drops only accept pending items onto pending targets")
     func queueDropsOnlyAcceptPendingItemsOntoPendingTargets() {
-        #expect(ACPMessageList.canDropQueuedItem(sourceStatus: .pending, targetStatus: .pending))
-        #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: .sending, targetStatus: .pending))
-        #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: .pending, targetStatus: .sending))
-        #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: nil, targetStatus: .pending))
+        #expect(ACPTranscriptQueuePolicy.canDropQueuedItem(sourceStatus: .pending, targetStatus: .pending))
+        #expect(!ACPTranscriptQueuePolicy.canDropQueuedItem(sourceStatus: .sending, targetStatus: .pending))
+        #expect(!ACPTranscriptQueuePolicy.canDropQueuedItem(sourceStatus: .pending, targetStatus: .sending))
+        #expect(!ACPTranscriptQueuePolicy.canDropQueuedItem(sourceStatus: nil, targetStatus: .pending))
     }
 
     @Test("queue header count matches rendered queue bubbles")
     func queueHeaderCountMatchesRenderedQueueBubbles() {
-        #expect(ACPMessageList.queueHeaderCount(statuses: []) == 0)
-        #expect(ACPMessageList.queueHeaderCount(statuses: [.pending]) == 1)
-        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending]) == 0)
-        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending, .pending]) == 1)
+        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: []) == 0)
+        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.pending]) == 1)
+        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending]) == 0)
+        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending, .pending]) == 1)
     }
 
     @Test("content growth restores the tail when tail-follow is still enabled")

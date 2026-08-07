@@ -536,7 +536,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let queueHeaderCount = ACPMessageList.queueHeaderCount(statuses: session.queue.map(\.status))
+            let queueHeaderCount = ACPTranscriptQueuePolicy.queueHeaderCount(statuses: session.queue.map(\.status))
             if queueHeaderCount > 1 {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_header__",
@@ -550,7 +550,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
 
             for (idx, item) in session.queue.enumerated()
-            where ACPMessageList.shouldRenderQueueBubble(status: item.status) {
+            where ACPTranscriptQueuePolicy.shouldRenderQueueBubble(status: item.status) {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_\(item.id)",
                     // Beyond `item` (and theme/contentMaxWidth folded by
@@ -583,7 +583,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                       let uuid = UUID(uuidString: s),
                                       let src = session.queue.firstIndex(where: { $0.id == uuid })
                                 else { return false }
-                                guard ACPMessageList.canDropQueuedItem(
+                                guard ACPTranscriptQueuePolicy.canDropQueuedItem(
                                     sourceStatus: session.queue[src].status,
                                     targetStatus: item.status
                                 ) else { return false }

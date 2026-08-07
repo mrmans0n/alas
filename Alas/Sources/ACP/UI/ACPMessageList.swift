@@ -311,7 +311,7 @@ struct ACPMessageList: View {
                                 StreamingCaret().frame(width: 8, height: 14)
                                     .id("__streaming_caret__")
                             }
-                            let queueHeaderCount = Self.queueHeaderCount(
+                            let queueHeaderCount = ACPTranscriptQueuePolicy.queueHeaderCount(
                                 statuses: session.queue.map(\.status)
                             )
                             if queueHeaderCount > 1 {
@@ -319,7 +319,7 @@ struct ACPMessageList: View {
                                     .id("__queue_header__")
                             }
                             ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
-                                if Self.shouldRenderQueueBubble(status: item.status) {
+                                if ACPTranscriptQueuePolicy.shouldRenderQueueBubble(status: item.status) {
                                     ACPQueuedBubble(
                                         item: item,
                                         contentMaxWidth: contentMaxWidth,
@@ -334,7 +334,7 @@ struct ACPMessageList: View {
                                               let uuid = UUID(uuidString: s),
                                               let src = session.queue.firstIndex(where: { $0.id == uuid })
                                         else { return false }
-                                        guard Self.canDropQueuedItem(
+                                        guard ACPTranscriptQueuePolicy.canDropQueuedItem(
                                             sourceStatus: session.queue[src].status,
                                             targetStatus: item.status
                                         ) else { return false }
@@ -947,15 +947,6 @@ struct ACPMessageList: View {
         return .hidden
     }
 
-    nonisolated static func shouldRenderQueueBubble(status: QueuedPrompt.Status) -> Bool {
-        switch status {
-        case .pending:
-            return true
-        case .sending:
-            return false
-        }
-    }
-
     nonisolated static func shouldShowBottomPaginationSentinel(
         visibleTail: Int,
         messageCount: Int
@@ -982,19 +973,6 @@ struct ACPMessageList: View {
         guard isUserDriven else { return false }
         guard !isRestoring else { return false }
         return newMinY > previousMinY + ACPScrollDirectionClassifier.upwardEpsilon
-    }
-
-    nonisolated static func queueHeaderCount(statuses: [QueuedPrompt.Status]) -> Int {
-        statuses.reduce(0) { count, status in
-            count + (shouldRenderQueueBubble(status: status) ? 1 : 0)
-        }
-    }
-
-    nonisolated static func canDropQueuedItem(
-        sourceStatus: QueuedPrompt.Status?,
-        targetStatus: QueuedPrompt.Status
-    ) -> Bool {
-        sourceStatus == .pending && targetStatus == .pending
     }
 
     nonisolated static func shouldRestoreTailAfterContentGrowth(
@@ -1600,156 +1578,6 @@ struct ACPMessageList: View {
     }
 }
 
-/// A single transcript row's content, extracted from `ACPMessageList.body` so
-/// it can be gated with `.equatable()`. A full-list body re-eval (from a
-/// scroll/geometry pass) used to re-diff every visible row's deep modifier
-/// tree even when nothing about the row had changed — the dominant cost in
-/// the live-lock sample (`ModifiedViewList.applyNodes`,
-/// `LazySubviewPlacements.placeSubviews`). Gating on the render-relevant
-/// values below lets SwiftUI skip re-diffing a row's subtree entirely when
-/// they're unchanged. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md
-/// (Task 7) for the stale-closure audit backing the excluded fields below.
-struct ACPTranscriptRowContent: View, Equatable {
-    // Compared (render-relevant values):
-    let stableId: String
-    let messageIndex: Int
-    let message: ACPMessage
-    let contentMaxWidth: CGFloat
-    let typography: ACPChatTypography
-    let trustedImageRoot: URL?
-    // Excluded from equality — reference-stable for the session's lifetime
-    // (`transcript`/`session` are `let` properties on `ACPSession`, never
-    // reassigned), or closures whose behavior only depends on already-compared
-    // data:
-    // - `onOpenDiff` / queue callbacks capture stable host references
-    //   (`state`, `worktree`, `manager`, `sessionId`) wired once by
-    //   `ACPTabView`, not per-render-varying state.
-    // - `onLoadFullToolCallContent` is only ever invoked when
-    //   `tc.isContentTruncated` is true; that flag is intentionally excluded
-    //   from `ACPMessage.ToolCall`'s own `==`/`hash` (a row must stay equal
-    //   across the in-memory truncation boundary), but `truncateForOffWindow`
-    //   only fires on messages that are, at that same moment, leaving the
-    //   render window (`ACPTranscript.trimHiddenMessage`) — so the flag never
-    //   flips on a message that remains part of an already-rendered,
-    //   gate-compared row. When a row re-enters the window later it is
-    //   constructed fresh (no prior instance to gate against), so the current
-    //   `isContentTruncated` value is always picked up correctly.
-    // - `session.terminalHost` is itself a `let` (stable reference) on
-    //   `ACPSession`; the terminal card's own live output flows through a
-    //   nested `@ObservedObject var terminal: ACPTerminal` inside
-    //   `ACPTerminalTailView`, which keeps reacting independently of this
-    //   gate — the same pattern already relied on for streaming `StreamingText`
-    //   buffers inside `AgentMessageRow`. New terminal-id associations arrive
-    //   via `tc.terminalIds`, which IS part of `message` and thus compared.
-    let transcript: ACPTranscript
-    let session: ACPSession
-    let onOpenDiff: (String) -> Void
-    let onLoadFullToolCallContent: (String) async -> String?
-    let isForkEligible: Bool
-    let forkTargets: [ACPSessionForkTarget]
-    let onFork: (ACPForkMessageBoundary, String) -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        equalityKey(
-            stableId: lhs.stableId, message: lhs.message,
-            contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
-            trustedImageRoot: lhs.trustedImageRoot,
-            isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets
-        )
-        == equalityKey(
-            stableId: rhs.stableId, message: rhs.message,
-            contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
-            trustedImageRoot: rhs.trustedImageRoot,
-            isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets
-        )
-    }
-
-    /// Exposed so equality can be exercised in tests without constructing
-    /// (and rendering) a `View`.
-    static func equalityKey(
-        stableId: String,
-        message: ACPMessage,
-        contentMaxWidth: CGFloat,
-        typography: ACPChatTypography,
-        trustedImageRoot: URL?,
-        isForkEligible: Bool = false,
-        forkTargets: [ACPSessionForkTarget] = []
-    ) -> EqualityKey {
-        EqualityKey(
-            stableId: stableId, message: message, contentMaxWidth: contentMaxWidth,
-            typography: typography, trustedImageRoot: trustedImageRoot,
-            isForkEligible: isForkEligible, forkTargets: forkTargets
-        )
-    }
-
-    struct EqualityKey: Equatable {
-        let stableId: String
-        let message: ACPMessage
-        let contentMaxWidth: CGFloat
-        let typography: ACPChatTypography
-        let trustedImageRoot: URL?
-        let isForkEligible: Bool
-        let forkTargets: [ACPSessionForkTarget]
-    }
-
-    var body: some View {
-        switch message {
-        case .user(_, _, let text, let attachments, let delegatedSource):
-            ACPMessageGutter(
-                copySource: .text(text),
-                forkBoundary: forkBoundary(kind: .user),
-                forkTargets: forkTargets,
-                onFork: onFork
-            ) {
-                UserMessageRow(
-                    text: text,
-                    attachments: attachments,
-                    isDelegated: delegatedSource != nil,
-                    contentMaxWidth: contentMaxWidth,
-                    typography: typography
-                )
-            }
-        case .agent(_, _, let buf):
-            ACPMessageGutter(
-                copySource: .streaming(buf),
-                forkBoundary: forkBoundary(kind: .agent),
-                forkTargets: forkTargets,
-                onFork: onFork
-            ) {
-                AgentMessageRow(
-                    messageId: stableId,
-                    transcript: transcript,
-                    buffer: buf,
-                    typography: typography
-                )
-            }
-        case .thought(_, _, let buf):
-            ACPThoughtView(buffer: buf)
-        case .toolCall(let tc):
-            ACPToolCallCard(
-                toolCall: tc,
-                trustedImageRoot: trustedImageRoot,
-                loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
-                .environment(\.acpTerminalHost, session.terminalHost)
-        case .fileEdit(_, let edit):
-            ACPFileEditCard(edit: edit, onOpenDiff: onOpenDiff)
-        case .plan:
-            EmptyView()
-        case .systemNotice(_, let text):
-            ACPSystemNoticeView(text: text)
-        }
-    }
-
-    private func forkBoundary(kind: ACPForkMessageBoundary.Kind) -> ACPForkMessageBoundary? {
-        guard ACPMessageForkMenuPolicy.showsForkAction(
-            messageKind: message.kind,
-            isEligible: isForkEligible,
-            targetCount: forkTargets.count
-        ) else { return nil }
-        return ACPForkMessageBoundary(stableID: stableId, kind: kind)
-    }
-}
-
 private final class ACPWeakScrollViewRef {
     weak var scrollView: NSScrollView?
 }
@@ -2120,219 +1948,6 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
                 }
             }
         }
-    }
-}
-
-/// Maps an `NSEvent.EventType` to whether it represents a live user scroll
-/// gesture, used by `ACPScrollEventObserver` to decide if an upward bounds
-/// change is deliberate. Extracted as a pure function so the mapping is unit
-/// testable without a running event loop.
-///
-/// The set is deliberately narrow. `NSApp.currentEvent` reports the most
-/// recent app-wide event, not the cause of the bounds change, so any event
-/// type that also occurs away from scrolling would misattribute layout reflow
-/// during streaming and re-latch the false pause this guards against:
-///   - `.keyDown`: the transcript `ScrollView` never holds key focus here (the
-///     composer owns it), so keyboard paging can't scroll it; accepting it
-///     would catch composer typing during streaming.
-///   - `.leftMouseDown` / `.leftMouseUp`: a bare click can't be told apart from
-///     clicking a transcript control (expanding a card, the copy button) by
-///     type alone, so it would catch reflow that coincides with such a click.
-/// The covered cases (trackpad and dragging the scroller knob) only fire while
-/// actually scrolling, so they can't be confused with idle layout reflow.
-enum ACPUserScrollEvent {
-    /// `NSApp.currentEvent` lingers after the gesture ends; only treat it as
-    /// the cause of a bounds change when it happened within this window.
-    /// Trackpad momentum keeps emitting scrollWheel events, so live scrolling
-    /// stays fresh.
-    static let freshnessWindow: TimeInterval = 0.35
-
-    /// `NSEvent.timestamp` is seconds since system startup, the same
-    /// timebase as `ProcessInfo.processInfo.systemUptime` (per Apple's
-    /// documentation for `NSEvent.timestamp`), so the two are directly
-    /// comparable without conversion.
-    static func isFresh(
-        eventTimestamp: TimeInterval?,
-        now: TimeInterval,
-        window: TimeInterval = freshnessWindow
-    ) -> Bool {
-        guard let eventTimestamp else { return false }
-        return now - eventTimestamp <= window
-    }
-
-    static func isUserDriven(_ type: NSEvent.EventType?) -> Bool {
-        guard let type else { return false }
-        switch type {
-        case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
-            return true
-        default:
-            return false
-        }
-    }
-
-    static func isHeadPaginationDriven(
-        _ type: NSEvent.EventType?,
-        previousMinY: CGFloat? = nil,
-        newMinY: CGFloat? = nil,
-        isScrollbarTrackHit: Bool = false
-    ) -> Bool {
-        guard let type else { return false }
-        if isUserDriven(type) { return true }
-        // Track-click paging arrives as a plain mouse-down. Keep that out of
-        // tail-follow pause detection, and require both scrollbar provenance
-        // and actual upward geometry movement so tab/content clicks cannot
-        // reveal older rows during restore or layout.
-        guard type == .leftMouseDown, isScrollbarTrackHit, let previousMinY, let newMinY else {
-            return false
-        }
-        return newMinY < previousMinY - ACPScrollDirectionClassifier.upwardEpsilon
-    }
-
-    static func isScrollbarTrackMouseDown(_ event: NSEvent?) -> Bool {
-        guard let event, event.type == .leftMouseDown, let contentView = event.window?.contentView else {
-            return false
-        }
-        return isScrollbarView(contentView.hitTest(event.locationInWindow))
-    }
-
-    private static func isScrollbarView(_ view: NSView?) -> Bool {
-        var current = view
-        while let view = current {
-            if view is NSScroller { return true }
-            let className = NSStringFromClass(type(of: view)).lowercased()
-            if className.contains("scroller") || className.contains("scrollbar") {
-                return true
-            }
-            current = view.superview
-        }
-        return false
-    }
-}
-
-@MainActor
-final class ACPDelayedHoverVisibility: ObservableObject {
-    @Published private(set) var isVisible = false
-
-    private let hideDelayNanoseconds: UInt64
-    private var hideTask: Task<Void, Never>?
-
-    init(hideDelayNanoseconds: UInt64 = 350_000_000) {
-        self.hideDelayNanoseconds = hideDelayNanoseconds
-    }
-
-    deinit {
-        hideTask?.cancel()
-    }
-
-    func enter() {
-        hideTask?.cancel()
-        hideTask = nil
-        isVisible = true
-    }
-
-    func leave() {
-        hideTask?.cancel()
-        let delay = hideDelayNanoseconds
-        hideTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.isVisible = false
-                self?.hideTask = nil
-            }
-        }
-    }
-}
-
-// MARK: - User bubble (right-aligned)
-
-private struct UserMessageRow: View {
-    let text: String
-    let attachments: [ACPMessage.Attachment]
-    let isDelegated: Bool
-    let contentMaxWidth: CGFloat
-    let typography: ACPChatTypography
-    @Environment(\.theme) private var theme
-    var body: some View {
-        HStack {
-            Spacer(minLength: 40)
-            VStack(alignment: .trailing, spacing: 4) {
-                if isDelegated {
-                    Text("Delegated prompt")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(theme.color("fg-faint"))
-                }
-                if !attachments.isEmpty {
-                    let images = attachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
-                    let others = attachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }
-                    if !images.isEmpty {
-                        HStack(spacing: 6) {
-                            // Key by index, not uri: content-addressed staging
-                            // means the same image attached twice shares a uri,
-                            // and duplicate ForEach ids collapse the row.
-                            ForEach(Array(images.enumerated()), id: \.offset) { _, a in
-                                if let url = URL(string: a.uri) {
-                                    ACPImageThumbnail(fileURL: url)
-                                }
-                            }
-                        }
-                    }
-                    if !others.isEmpty {
-                        HStack(spacing: 4) {
-                            ForEach(others, id: \.uri) { a in
-                                FileChip(path: a.name ?? a.uri, lines: nil, iconSystemName: "at")
-                            }
-                        }
-                    }
-                }
-                ACPMarkdownText(raw: text, typography: typography)
-                    .padding(.vertical, 9)
-                    .padding(.horizontal, 13)
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                theme.color("accent").opacity(0.32),
-                                theme.color("accent").opacity(0.20)
-                            ],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    )
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
-                        )
-                    )
-                    .overlay(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
-                        )
-                        .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
-            }
-            .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-// MARK: - Agent prose (markdown-rendered, full-width)
-
-private struct AgentMessageRow: View {
-    let messageId: String
-    let transcript: ACPTranscript
-    @ObservedObject var buffer: StreamingText
-    let typography: ACPChatTypography
-    var body: some View {
-        ACPMarkdownText(
-            raw: buffer.value,
-            cache: transcript.markdownCache(forMessage: messageId),
-            knownAppendedSuffix: buffer.lastAppendedSuffix,
-            updateRevision: buffer.revision,
-            updateSourceID: ObjectIdentifier(buffer),
-            typography: typography
-        )
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
