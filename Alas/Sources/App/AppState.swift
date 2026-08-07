@@ -321,6 +321,7 @@ final class AppState {
     var isReviewPaletteOpen: Bool = false
     var isRunScriptPaletteOpen: Bool = false
     var pendingRunScriptCreation: RunScriptCreationPresentation?
+    var pendingFollowStackEntry: GGFollowEntryPresentation?
     var isKeyboardOverlayOpen: Bool {
         isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen || isReviewPaletteOpen || isRunScriptPaletteOpen
     }
@@ -3230,28 +3231,118 @@ final class AppState {
     }
 
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: TrackedRevisionTarget? = nil) {
+        switch FollowRevisionPromptRoute.route(
+            prefill: prefill,
+            stackEntrySupported: ggFollowSupported(worktreeID: worktreeID)
+        ) {
+        case .stackEntryPicker(let isEditing):
+            promptFollowStackEntry(worktreeID: worktreeID, tabID: tabID, isEditing: isEditing)
+        case .expressionPrompt(let expressionPrefill, let isEditing):
+            let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
+            let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
+            let editorGeneration = bumpFollowRevisionEditorGeneration()
+            Task { @MainActor in
+                let resolvedPrefill: String?
+                if let expressionPrefill {
+                    resolvedPrefill = expressionPrefill
+                } else {
+                    resolvedPrefill = await suggestedFollowRevisionPrefill(worktreeID: worktreeID, tabID: tabID)
+                }
+                guard isCurrentFollowRevisionRequest(
+                    worktreeID: worktreeID,
+                    requestKey: requestKey,
+                    requestGeneration: requestGeneration
+                ), followRevisionEditorGeneration == editorGeneration
+                else { return }
+                followRevisionEditorRequest = FollowRevisionEditorRequest(
+                    worktreeID: worktreeID,
+                    tabID: tabID,
+                    expression: resolvedPrefill ?? "",
+                    isEditing: isEditing
+                )
+            }
+        }
+    }
+
+    func promptFollowStackEntry(worktreeID: String, tabID: TabID, isEditing: Bool = false) {
         let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
         let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
-        let editorGeneration = bumpFollowRevisionEditorGeneration()
+        pendingFollowStackEntry = GGFollowEntryPresentation(
+            worktreeID: worktreeID,
+            tabID: tabID,
+            isEditing: isEditing,
+            state: .loading
+        )
+        guard let worktree = worktree(withId: worktreeID) else { return }
+        let currentGGID = followedStackEntryGGID(worktreeID: worktreeID, tabID: tabID)
+        let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
         Task { @MainActor in
-            let resolvedPrefill: String?
-            if let prefill {
-                resolvedPrefill = prefill.expressionValue
-            } else {
-                resolvedPrefill = await suggestedFollowRevisionPrefill(worktreeID: worktreeID, tabID: tabID)
+            let state: GGFollowEntryLoadState
+            do {
+                let stack = try await GGStackCache.shared.stack(at: worktree.path) {
+                    try await GGService().currentStack(worktreePath: worktree.path.path)
+                }
+                if let stack {
+                    state = .loaded(GGFollowEntryModel.make(
+                        entries: stack.entries,
+                        currentGGID: currentGGID,
+                        displayedSHA: displayedSHA
+                    ))
+                } else {
+                    state = .offStack
+                }
+            } catch {
+                state = .failed((error as? GGServiceError)?.userMessage ?? (error as NSError).localizedDescription)
             }
             guard isCurrentFollowRevisionRequest(
                 worktreeID: worktreeID,
                 requestKey: requestKey,
                 requestGeneration: requestGeneration
-            ), followRevisionEditorGeneration == editorGeneration
-            else { return }
-            followRevisionEditorRequest = FollowRevisionEditorRequest(
-                worktreeID: worktreeID,
-                tabID: tabID,
-                expression: resolvedPrefill ?? "",
-                isEditing: prefill != nil
-            )
+            ), pendingFollowStackEntry?.id == "\(worktreeID):\(tabID)" else { return }
+            pendingFollowStackEntry?.state = state
+        }
+    }
+
+    func confirmFollowStackEntry(ggID: String) {
+        guard let presentation = pendingFollowStackEntry else { return }
+        pendingFollowStackEntry = nil
+        followRevision(
+            worktreeID: presentation.worktreeID,
+            tabID: presentation.tabID,
+            target: .stackEntry(ggID: ggID)
+        )
+    }
+
+    func cancelFollowStackEntry() {
+        pendingFollowStackEntry = nil
+    }
+
+    /// Whether this worktree can follow stack entries at all: gg must be
+    /// installed, enabled for the project, and the branch stack-shaped.
+    func ggFollowSupported(worktreeID: String) -> Bool {
+        guard let worktree = worktree(withId: worktreeID),
+              let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
+        else { return false }
+        return ggWorktreeContext(
+            project: project,
+            worktree: worktree,
+            branch: worktree.branch
+        ).isActive
+    }
+
+    private func followedStackEntryGGID(worktreeID: String, tabID: TabID) -> String? {
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return nil }
+        switch tab {
+        case .commit(let state):
+            return state.revision.tracked?.target.ggID
+        case .reviewSession(let state):
+            let record = try? ReviewSessionStore().load(id: state.sessionID)
+            if case .trackedCommit(let revision) = record?.target.payload {
+                return revision.target.ggID
+            }
+            return nil
+        default:
+            return nil
         }
     }
 

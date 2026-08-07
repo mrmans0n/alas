@@ -86,3 +86,43 @@ enum GGFollowEntryLoadState: Equatable, Sendable {
     case offStack
     case failed(String)
 }
+
+struct GGFollowEntryPresentation: Equatable, Identifiable, Sendable {
+    let worktreeID: String
+    let tabID: TabID
+    let isEditing: Bool
+    var state: GGFollowEntryLoadState
+
+    var id: String { "\(worktreeID):\(tabID)" }
+
+    var selectedGGID: String? {
+        guard case .loaded(let model) = state else { return nil }
+        return model.canFollow ? model.selected?.ggID : nil
+    }
+}
+
+/// Which prompt "Follow…" / "Edit…" opens, given what the tab currently
+/// follows. Pure so the branch is testable without standing up tabs.
+enum FollowRevisionPromptRoute: Equatable {
+    case expressionPrompt(prefill: String?, isEditing: Bool)
+    case stackEntryPicker(isEditing: Bool)
+
+    static func route(
+        prefill: TrackedRevisionTarget?,
+        stackEntrySupported: Bool
+    ) -> FollowRevisionPromptRoute {
+        switch prefill {
+        case .none:
+            return .expressionPrompt(prefill: nil, isEditing: false)
+        case .expression(let expression):
+            return .expressionPrompt(prefill: expression, isEditing: true)
+        case .stackEntry:
+            // gg can go inactive under a tab that is already following an
+            // entry; fall back to the expression prompt with the usual
+            // suggested prefill rather than a picker that cannot load.
+            return stackEntrySupported
+                ? .stackEntryPicker(isEditing: true)
+                : .expressionPrompt(prefill: nil, isEditing: true)
+        }
+    }
+}
