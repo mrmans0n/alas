@@ -37,6 +37,19 @@ struct RevisionFollowControl: View {
                         .controlSize(.small)
                         .accessibilityIdentifier("\(accessibilityPrefix)-accept-checkout")
                 }
+            case .stalled(_, _, let message):
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("warn"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("\(accessibilityPrefix)-unresolved")
+                if let onRetry {
+                    Button("Retry", action: onRetry)
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("\(accessibilityPrefix)-unresolved-retry")
+                }
             case .failed(_, _, let message):
                 Text(message)
                     .font(.system(size: 11))
@@ -87,7 +100,8 @@ struct RevisionFollowControl: View {
         case .fixed(let sha):
             RevisionTetherView(expression: nil, resolvedSHA: sha)
         case .following(let expression, let resolvedSHA),
-             .failed(let expression, let resolvedSHA, _):
+             .failed(let expression, let resolvedSHA, _),
+             .stalled(let expression, let resolvedSHA, _):
             RevisionTetherView(expression: expression, resolvedSHA: resolvedSHA)
                 .accessibilityIdentifier("\(accessibilityPrefix)-following-label")
         case .paused(let expression, let resolvedSHA, let candidateSHA, _):
@@ -199,7 +213,7 @@ struct RevisionFollowControl: View {
     private var railColor: Color {
         switch presentation {
         case .failed: theme.color("del")
-        case .paused: theme.color("warn")
+        case .paused, .stalled: theme.color("warn")
         case .following: theme.color("accent")
         case .fixed: theme.color("line")
         }
@@ -250,7 +264,10 @@ struct RevisionTetherView: View {
 private extension RevisionFollowPresentation {
     var expression: String? {
         switch self {
-        case .following(let expression, _), .paused(let expression, _, _, _), .failed(let expression, _, _): expression
+        case .following(let expression, _),
+             .paused(let expression, _, _, _),
+             .stalled(let expression, _, _),
+             .failed(let expression, _, _): expression
         case .fixed: nil
         }
     }
@@ -258,7 +275,10 @@ private extension RevisionFollowPresentation {
     var resolvedSHA: String? {
         switch self {
         case .fixed(let sha): sha
-        case .following(_, let sha), .paused(_, let sha, _, _), .failed(_, let sha, _): sha
+        case .following(_, let sha),
+             .paused(_, let sha, _, _),
+             .stalled(_, let sha, _),
+             .failed(_, let sha, _): sha
         }
     }
 }

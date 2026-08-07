@@ -203,9 +203,21 @@ enum TrackedRevisionTransition: Equatable {
     case unchanged(TrackedRevision)
     case follow(TrackedRevision)
     case pause(TrackedRevision)
+    /// The target could not be resolved but the tab keeps its last commit
+    /// instead of erroring or unfollowing.
+    case stall(TrackedRevision)
 }
 
 enum TrackedRevisionPolicy {
+    /// Maps a resolve failure to a transition. Only a stack entry that left
+    /// the stack stalls; every other error stays on the caller's error path.
+    static func evaluate(current: TrackedRevision, error: any Error) -> TrackedRevisionTransition? {
+        guard let resolverError = error as? TrackedRevisionResolverError,
+              case .stackEntryNotFound = resolverError
+        else { return nil }
+        return .stall(current.stalled(reason: .stackEntryMissing))
+    }
+
     static func evaluate(
         current: TrackedRevision,
         candidate: TrackedRevisionCandidate
@@ -446,6 +458,9 @@ enum RevisionFollowPresentation: Equatable {
     case fixed(sha: String)
     case following(expression: String, resolvedSHA: String)
     case paused(expression: String, resolvedSHA: String, candidateSHA: String, message: String)
+    /// The followed target could not be resolved (e.g. a stack entry left
+    /// the stack), but the tab keeps its last commit instead of erroring.
+    case stalled(expression: String, resolvedSHA: String, message: String)
     case failed(expression: String, resolvedSHA: String, message: String)
 
     init(fixedSHA: String, revision: TrackedRevision?, refreshError: String?) {
@@ -461,6 +476,12 @@ enum RevisionFollowPresentation: Equatable {
                 message: pending.branch.isEmpty
                     ? "Paused: detached HEAD moved"
                     : "Paused: HEAD moved to \(pending.branch)"
+            )
+        } else if let unresolvedMessage = revision.unresolvedMessage {
+            self = .stalled(
+                expression: revision.target.displayLabel,
+                resolvedSHA: Self.shortSHA(revision.resolvedSHA),
+                message: unresolvedMessage
             )
         } else if let refreshError, !refreshError.isEmpty {
             self = .failed(

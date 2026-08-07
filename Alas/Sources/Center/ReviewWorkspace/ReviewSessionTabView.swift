@@ -675,7 +675,11 @@ struct ReviewSessionTabView: View {
                 ),
                 false
             )
-        case .pause(let updated):
+        // A stall is only produced from a resolver error, which this
+        // candidate-only path does not handle. Keep the compatibility arm
+        // equivalent to pause so adding the transition does not alter review
+        // session behavior.
+        case .pause(let updated), .stall(let updated):
             let target = storedRecord.target.updatingTrackedRevision(updated, title: storedRecord.target.title)
             return (
                 storedRecord.retargetingCommit(
