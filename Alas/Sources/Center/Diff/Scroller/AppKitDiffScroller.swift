@@ -67,6 +67,9 @@ struct AppKitDiffScroller: NSViewRepresentable {
             scrollView.onUserViewportChange = { [weak self] in
                 self?.userViewportDidChange()
             }
+            scrollView.onProgrammaticViewportChange = { [weak self] in
+                self?.reconciler?.layoutVisibleRows()
+            }
             scrollView.onViewportGeometryChange = { [weak self] in
                 self?.reconciler?.layoutVisibleRows()
             }
@@ -92,6 +95,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
         func dismantle() {
             guard let scrollView else { return }
             scrollView.onUserViewportChange = nil
+            scrollView.onProgrammaticViewportChange = nil
             scrollView.onViewportGeometryChange = nil
             scrollView.onContentWidthChange = nil
             pool.releaseAll()

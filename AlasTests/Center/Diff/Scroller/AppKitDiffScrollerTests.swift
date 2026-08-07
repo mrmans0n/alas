@@ -241,9 +241,15 @@ struct AppKitDiffScrollerTests {
     @Test("long animated navigation mounts the destination before completion")
     func animatedNavigationMountsDestination() async throws {
         var mountedAtCompletion = false
+        var mountedDuringAnimation = false
         let stack = makeStack(
             animatedScrollExecutorForTests: { scrollView, point, completion in
                 scrollView.contentView.setBoundsOrigin(point)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                mountedDuringAnimation = scrollView.flippedDocumentView.subviews.contains {
+                    ($0 as? AppKitDiffRowHostingView)?.representedRowID == "row-1900"
+                }
                 completion()
             }
         )
@@ -260,6 +266,7 @@ struct AppKitDiffScrollerTests {
             }
         )
 
+        #expect(mountedDuringAnimation)
         #expect(mountedAtCompletion)
         #expect(stack.coordinator.mountedRowIDsForTests.contains("row-1900"))
         #expect(stack.scrollView.scrollY > 70_000)
@@ -286,6 +293,7 @@ struct AppKitDiffScrollerTests {
 
         #expect(stack.coordinator.mountedRowIDsForTests.isEmpty)
         #expect(stack.scrollView.onUserViewportChange == nil)
+        #expect(stack.scrollView.onProgrammaticViewportChange == nil)
         #expect(stack.scrollView.onViewportGeometryChange == nil)
         #expect(stack.scrollView.onContentWidthChange == nil)
     }

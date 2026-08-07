@@ -19,6 +19,9 @@ final class AppKitDiffScrollView: NSScrollView {
     /// Called only for user-driven bounds movement. Programmatic adjustments
     /// intentionally do not feed back into row ownership.
     var onUserViewportChange: (() -> Void)?
+    /// Called for programmatic animated bounds movement so virtualization can
+    /// keep the visible band mounted without publishing active-owner changes.
+    var onProgrammaticViewportChange: (() -> Void)?
     /// Called when viewport height changes without a content-width change.
     var onViewportGeometryChange: (() -> Void)?
     /// Called when the first positive usable width arrives or when it changes.
@@ -46,9 +49,11 @@ final class AppKitDiffScrollView: NSScrollView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self,
-                      self.programmaticAdjustmentDepth == 0,
-                      self.programmaticAnimationDepth == 0 else { return }
+                guard let self, self.programmaticAdjustmentDepth == 0 else { return }
+                if self.programmaticAnimationDepth > 0 {
+                    self.onProgrammaticViewportChange?()
+                    return
+                }
                 self.onUserViewportChange?()
             }
         }
