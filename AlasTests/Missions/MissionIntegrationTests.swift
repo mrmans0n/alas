@@ -375,6 +375,27 @@ struct MissionIntegrationTests {
         #expect(harness.worktreeMutations.isEmpty)
     }
 
+    @Test("a stale replace call after delete cannot resurrect the Mission")
+    func staleReplaceAfterDeleteCannotResurrectMission() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        let staleAggregate = try #require(harness.controller.aggregate(id: id))
+
+        await harness.controller.delete(id)
+        #expect(harness.controller.aggregate(id: id) == nil)
+
+        // Simulate a publisher (coordinator notifyChanged, retry, or publish(id:))
+        // that had already read this aggregate before the delete landed and is
+        // only now calling replace(_:) with the stale value. The tombstone left
+        // by delete(_:) must reject this and keep the Mission gone.
+        harness.controller.replace(staleAggregate)
+
+        #expect(harness.controller.aggregate(id: id) == nil)
+        #expect(harness.controller.aggregates.isEmpty)
+    }
+
     @Test("deleteCompleted only removes Missions that are actually completed")
     func deleteCompletedSkipsUnfinishedMissions() async throws {
         let harness = try MissionIntegrationHarness(running: true)

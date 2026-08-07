@@ -107,6 +107,13 @@ final class MissionController {
     private var lifecycleMutations: Set<MissionID> = []
     @ObservationIgnored
     private var lifecycleWaiters: [MissionID: [CheckedContinuation<Void, Never>]] = [:]
+    // Tombstones ids removed via delete/deleteCompleted so a `replace(_:)` call
+    // from a publisher that raced the deletion (already holding a stale
+    // aggregate read before the row was removed) cannot resurrect it in
+    // `aggregates`. MissionIDs are UUIDs minted once and never reused, so this
+    // set is safe to grow unbounded for the life of the app session.
+    @ObservationIgnored
+    private var deletedMissionIDs: Set<MissionID> = []
     @ObservationIgnored
     private var sourceRefreshGenerations: [MissionID: Int] = [:]
     @ObservationIgnored
@@ -1258,10 +1265,15 @@ final class MissionController {
     }
 
     private func remove(id: MissionID) {
+        deletedMissionIDs.insert(id)
         aggregates.removeAll { $0.mission.id == id }
     }
 
-    private func replace(_ aggregate: MissionAggregate) {
+    // Not private: MissionIntegrationTests calls this directly to exercise the
+    // tombstone guard against a real MissionController without fabricating
+    // real concurrency.
+    func replace(_ aggregate: MissionAggregate) {
+                guard !deletedMissionIDs.contains(aggregate.mission.id) else { return }
         if let index = aggregates.firstIndex(where: { $0.mission.id == aggregate.mission.id }) {
             aggregates[index] = aggregate
         } else {
