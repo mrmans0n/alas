@@ -466,6 +466,7 @@ struct DiffPaneView: View {
     @State private var presentationState = DiffPanePresentationState()
     @State private var staticRowsWidth: CGFloat = 0
     @State private var appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
+    @State private var activeThreadReplanGeneration = 0
 
     init(
         model: DiffDisplayModel,
@@ -549,6 +550,9 @@ struct DiffPaneView: View {
             presentationState = DiffPanePresentationState()
             appKitScrollerEnabled = flagEnabled
         }
+        .onReceive(presentationState.$activeThreadID) { _ in
+            activeThreadReplanGeneration &+= 1
+        }
     }
 
     nonisolated static func usesAppKitScroller(
@@ -564,6 +568,7 @@ struct DiffPaneView: View {
 
     @ViewBuilder
     private var diffBody: some View {
+        let _ = activeThreadReplanGeneration
         let input = synchronizedRowPlanInput()
         if Self.usesAppKitScroller(
             flagEnabled: appKitScrollerEnabled,

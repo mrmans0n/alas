@@ -432,7 +432,8 @@ enum AppKitDiffReviewRowPlanBuilder {
                     id: groupID,
                     ownerID: input.file.id.rawValue,
                     equalityToken: hunk.equalityToken,
-                    estimatedHeight: hunk.estimatedHeight
+                    estimatedHeight: hunk.estimatedHeight,
+                    retention: hunk.retention
                 ) {
                     hunk.build()
                 })

@@ -58,6 +58,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
     private var renderBudgetSignal: Int?
     private var copyFeedbackCancellable: AnyCancellable?
     private var hunkPresentationCancellable: AnyCancellable?
+    private var hunkActiveThreadCancellable: AnyCancellable?
 
     init() {
         copyFeedbackCancellable = copyFeedback.$message.sink { [weak self] _ in
@@ -65,6 +66,9 @@ final class AppKitDiffReviewFileState: ObservableObject {
             self?.structuralDidChange.send()
         }
         hunkPresentationCancellable = hunkPresentationState.$expandedCollapsedRowIDs.sink { [weak self] _ in
+            self?.structuralDidChange.send()
+        }
+        hunkActiveThreadCancellable = hunkPresentationState.$activeThreadID.sink { [weak self] _ in
             self?.structuralDidChange.send()
         }
     }

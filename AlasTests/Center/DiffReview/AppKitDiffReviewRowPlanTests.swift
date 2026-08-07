@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Alas
@@ -155,6 +156,35 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(plan.corePlan.rows.first { $0.id == feedbackID }?.retention == .pinned)
         #expect(plan.corePlan.rows.first { $0.id == draftID }?.retention == .pinned)
         #expect(plan.corePlan.rows.first { $0.id == threadID }?.retention == .pinned)
+    }
+
+    @Test func consolidatedHunkRowsArePinnedWhileContainedThreadEditorIsActive() throws {
+        let file = textFile()
+        let thread = DiffInlineCommentThread(
+            id: "thread", filePath: file.summary.path, newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(file: file, threads: [thread], state: state, theme: theme)
+        let rowID = AppKitDiffReviewRowID.groupHeader(fileID: file.id, groupID: file.displayModel!.groups[0].id)
+        let resting = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == rowID })
+
+        state.hunkPresentationState.setThreadActive(thread.id, active: true)
+        let active = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == rowID })
+
+        #expect(resting.retention == .recyclable)
+        #expect(active.retention == .pinned)
+    }
+
+    @Test func nestedHunkActiveThreadChangesNotifyReviewStateStructure() {
+        let state = AppKitDiffReviewFileState()
+        var eventCount = 0
+        let cancellable = state.structuralDidChange.sink { eventCount += 1 }
+
+        state.hunkPresentationState.setThreadActive("thread", active: true)
+
+        #expect(eventCount > 0)
+        cancellable.cancel()
     }
 
     @Test func draftRowRebuildsWhenItsReviewTargetChanges() throws {
