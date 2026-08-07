@@ -137,6 +137,19 @@ final class AppKitDiffScrollView: NSScrollView {
         }
     }
 
+    /// Sets the scroll position without clamping to the document height.
+    /// Used during plan restructuring when the document height is still
+    /// based on estimates and the original viewport position may be beyond
+    /// the estimated document — clamping would move the viewport to the
+    /// estimated bottom, causing the wrong rows to be measured.
+    func setUnclampedScrollY(_ y: CGFloat) {
+        let point = NSPoint(x: contentView.bounds.origin.x, y: max(0, y))
+        guard abs(point.y - scrollY) > 0.01 else { return }
+        performProgrammatic {
+            contentView.setBoundsOrigin(point)
+        }
+    }
+
     private func clampedScrollY(_ y: CGFloat) -> CGFloat {
         min(max(0, y), max(0, contentHeight - viewportHeight))
     }

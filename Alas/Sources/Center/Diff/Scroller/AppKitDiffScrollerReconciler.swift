@@ -94,6 +94,7 @@ final class AppKitDiffScrollerReconciler {
             anchorRestructured = false
         }
 
+        let previousScrollY = scrollView.scrollY
         specsByID = nextSpecs
         orderedIDs = ids
         measuredHeights = nextMeasuredHeights
@@ -116,9 +117,18 @@ final class AppKitDiffScrollerReconciler {
         // + segment rows when the first comment composer appears), the
         // id-based anchor no longer refers to the same content — clamping into
         // the shrunken id-matching row would snap the viewport to its top.
-        // Preserve the absolute viewport position instead, clamped by the
-        // native scroll view if the document shrank.
+        // Restore the pre-reconcile absolute Y without clamping so
+        // layoutVisibleRows measures the correct band (the estimated document
+        // may be temporarily shorter than the original Y). After measurement
+        // updates the document height, setScrollY clamps against the real
+        // document.
+        if anchorRestructured {
+            scrollView.setUnclampedScrollY(previousScrollY)
+        }
         layoutVisibleRows()
+        if anchorRestructured {
+            scrollView.setScrollY(previousScrollY, animated: false)
+        }
     }
 
     func layoutVisibleRows() {

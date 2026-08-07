@@ -150,6 +150,30 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(abs(stack.scrollView.scrollY - clampedY) < 0.5)
     }
 
+    @Test("a restructured anchor row preserves absolute Y past short estimates")
+    func restructuredAnchorRowPreservesAbsoluteYPastShortEstimates() {
+        let stack = makeStack()
+        stack.reconciler.apply(
+            plan: .init(rows: (0..<20).map { spec("row-\($0)", height: 500) }),
+            contentWidth: stack.scrollView.contentWidth
+        )
+        let y = CGFloat(3 * 500 + 250)
+        stack.scrollView.setScrollY(y, animated: false)
+
+        // Restructure: the anchor row's contentSignature changes, and the
+        // replacement rows' estimates are collectively much shorter than the
+        // original — the estimated document is shorter than `y`. The absolute
+        // Y must still be preserved after measurement restores the document
+        // height.
+        var replaced: [AppKitDiffRowSpec] = (0..<3).map { spec("row-\($0)", height: 500) }
+        replaced.append(spec("row-3", token: 99, height: 37))
+        replaced += (0..<2).map { spec("seg-3-\($0)", height: 92) }
+        replaced += (4..<20).map { spec("row-\($0)", height: 500) }
+        stack.reconciler.apply(plan: .init(rows: replaced), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(abs(stack.scrollView.scrollY - y) < 0.5)
+    }
+
     @Test("unchanged plans do not perform another full apply")
     func unchangedPlanIsNoOp() {
         let stack = makeStack()
