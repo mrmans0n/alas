@@ -33,6 +33,10 @@ struct MissionSidebarModel: Equatable {
         .init(active: [], completed: [])
     }
 
+    var completedIDs: [MissionID] {
+        completed.map(\.id)
+    }
+
     nonisolated static func make(
         aggregates: [MissionAggregate],
         activeProjectIds: [String],
