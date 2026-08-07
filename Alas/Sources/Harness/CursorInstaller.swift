@@ -68,20 +68,12 @@ struct CursorInstaller: AgentInstaller, Sendable {
         events: [.attached], agent: .cursor, forwardStdinAsBody: false)
     private static let detached = AlasHookCommand.compositeCommand(
         events: [.detached], agent: .cursor, forwardStdinAsBody: false)
-    private static let permissionRequestAndContinue = AlasHookCommand.compositeCommand(
-        events: [.permissionRequest],
-        agent: .cursor,
-        forwardStdinAsBody: false,
-        stdoutResponse: #"{"continue":true}"#
-    )
 
     private func hooksByEvent() -> [String: [[String: Any]]] {
         [
             "sessionStart": [flatEntry(command: Self.attached)],
             "sessionEnd": [flatEntry(command: Self.detached)],
             "beforeSubmitPrompt": [flatEntry(command: Self.busy)],
-            "beforeShellExecution": [flatEntry(command: Self.permissionRequestAndContinue)],
-            "beforeMCPExecution": [flatEntry(command: Self.permissionRequestAndContinue)],
             "afterAgentResponse": [flatEntry(command: Self.awaitingInputAndNotify)],
             "stop": [flatEntry(command: Self.idleAndNotify)],
         ]

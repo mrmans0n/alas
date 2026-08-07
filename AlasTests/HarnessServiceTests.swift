@@ -144,7 +144,7 @@ struct HarnessServiceTests {
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .permissionRequest, agent: .cursor, sessionId: "s2", body: "Allow command?"),
+            makeEvent(event: .permissionRequest, agent: .codex, sessionId: "s2", body: "Allow command?"),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 
@@ -153,10 +153,26 @@ struct HarnessServiceTests {
 
         let summary = service.summary(forSessionIds: ["s1", "s2"])
         #expect(summary?.state == .awaiting)
-        #expect(summary?.agent == .cursor)
+        #expect(summary?.agent == .codex)
         #expect(summary?.primarySessionId == "s2")
         #expect(summary?.runningSessionCount == 1)
         #expect(summary?.awaitingSessionCount == 1)
+    }
+
+    @Test func cursorPermissionRequestIsTreatedAsBusyWithoutNotification() {
+        let (service, collector) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .awaitingInput, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .permissionRequest, agent: .cursor),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { true }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(collector.requests.isEmpty)
     }
 
     @Test func permissionRequestPostsPermissionNotificationWithFallbackBody() {
@@ -381,7 +397,7 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["session-1"]?.state == .awaitingInput)
     }
 
-    @Test func cursorIdleDebounce_isCancelledByPermissionRequest() async throws {
+    @Test func cursorIdleDebounce_isCancelledByLegacyPermissionRequest() async throws {
         let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
         service.handleSocketEvent(
             makeEvent(event: .busy, agent: .cursor),
@@ -396,10 +412,10 @@ struct HarnessServiceTests {
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 
-        await waitForActivity(service) { $0?.state == .permissionRequest }
+        await waitForActivity(service) { $0?.state == .busy }
         try await Task.sleep(nanoseconds: 150_000_000)
         await waitForMainQueue()
-        #expect(service.activityBySession["session-1"]?.state == .permissionRequest)
+        #expect(service.activityBySession["session-1"]?.state == .busy)
     }
 
     @Test func claudeIdle_isNotDebounced() {

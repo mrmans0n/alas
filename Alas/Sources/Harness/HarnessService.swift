@@ -127,10 +127,18 @@ final class HarnessService {
             }
 
         case .permissionRequest:
-            // Cancel pending cursor-idle debounce; permission requests are a real state change.
+            // Older Cursor installs reported every shell and MCP execution as
+            // a permission request. Cursor has no hook for actual approval
+            // prompts, so keep stale installs accurate until their hooks are
+            // updated.
             if event.agent == .cursor {
                 cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
                 pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
+                activityBySession[event.sessionId] = HarnessActivityState(
+                    agent: event.agent, state: .busy, pid: event.pid,
+                    lastBody: nil, updatedAt: Date()
+                )
+                return
             }
             activityBySession[event.sessionId] = HarnessActivityState(
                 agent: event.agent, state: .permissionRequest, pid: event.pid,
