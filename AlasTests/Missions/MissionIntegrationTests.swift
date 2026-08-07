@@ -396,6 +396,28 @@ struct MissionIntegrationTests {
         #expect(harness.controller.aggregates.isEmpty)
     }
 
+    @Test("a full load cannot resurrect a Mission tombstoned by a concurrent delete")
+    func loadCannotResurrectATombstonedMission() async throws {
+        let harness = try MissionIntegrationHarness(running: true)
+        let id = MissionID(rawValue: "mission-1")
+
+        await harness.controller.load()
+        let staleAggregate = try #require(harness.controller.aggregate(id: id))
+
+        await harness.controller.delete(id)
+        #expect(harness.controller.aggregate(id: id) == nil)
+
+        // Simulate persistence.list() having captured this row from before the
+        // deletion committed — e.g. a load() in flight during startup legacy
+        // reconciliation. The tombstone left by delete(_:) must reject it even
+        // though the store itself would (in this simulation) return it.
+        try await harness.persistence.insert(staleAggregate, allowDuplicate: true)
+        await harness.controller.load()
+
+        #expect(harness.controller.aggregate(id: id) == nil)
+        #expect(!harness.controller.aggregates.contains { $0.mission.id == id })
+    }
+
     @Test("deleteCompleted only removes Missions that are actually completed")
     func deleteCompletedSkipsUnfinishedMissions() async throws {
         let harness = try MissionIntegrationHarness(running: true)

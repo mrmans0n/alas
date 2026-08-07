@@ -177,7 +177,9 @@ final class MissionController {
         do {
             let loaded = try await persistence.list(includeCompleted: true)
             guard !Task.isCancelled else { return }
-            aggregates = Self.sorted(loaded)
+            // A delete(_:) that completes while this load is in flight must not have
+            // its result overwritten by a snapshot read before the deletion committed.
+            aggregates = Self.sorted(loaded.filter { !deletedMissionIDs.contains($0.mission.id) })
             loadState = .loaded
         } catch {
             guard !Task.isCancelled else { return }
