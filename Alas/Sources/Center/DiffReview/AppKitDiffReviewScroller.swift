@@ -142,8 +142,9 @@ struct AppKitDiffReviewScroller: View {
 
     var body: some View {
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: inputs)
+        let corePlan = plan.corePlan.withContentInsets(.init(top: 16, bottom: 16, left: 16, right: 16))
         AppKitDiffScroller(
-            plan: plan.corePlan,
+            plan: corePlan,
             scrollRequest: scrollRequest,
             onActiveOwnerChange: { rawValue in
                 guard let rawValue,

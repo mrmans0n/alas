@@ -193,6 +193,28 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(stack.tiling.row(withID: "row-150")?.ownerID == "file-150")
     }
 
+    @Test("content insets are part of the native document geometry")
+    func contentInsetsLayoutRowsInsideDocument() throws {
+        let stack = makeStack()
+        let insetPlan = plan(count: 2, height: 40)
+            .withContentInsets(.init(top: 12, bottom: 18, left: 14, right: 20))
+        stack.reconciler.apply(plan: insetPlan, contentWidth: stack.scrollView.contentWidth)
+
+        let firstView = try #require(stack.pool.mountedView(id: "row-0"))
+
+        #expect(stack.tiling.row(withID: "row-0")?.minY == 12)
+        #expect(stack.tiling.documentHeight == 110)
+        #expect(firstView.frame.minX == 14)
+        #expect(firstView.frame.width == stack.scrollView.contentWidth - 34)
+
+        stack.reconciler.apply(plan: plan(count: 2, height: 40), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(stack.tiling.row(withID: "row-0")?.minY == 0)
+        #expect(stack.tiling.documentHeight == 80)
+        #expect(firstView.frame.minX == 0)
+        #expect(firstView.frame.width == stack.scrollView.contentWidth)
+    }
+
     @Test("an intrinsic-size invalidation remeasures the mounted row")
     func intrinsicSizeInvalidationRemeasuresMountedRow() throws {
         let stack = makeStack()

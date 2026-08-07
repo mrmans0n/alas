@@ -31,8 +31,26 @@ struct AppKitDiffRowSpec {
     let build: () -> AnyView
 }
 
+struct AppKitDiffContentInsets: Equatable {
+    var top: CGFloat = 0
+    var bottom: CGFloat = 0
+    var left: CGFloat = 0
+    var right: CGFloat = 0
+
+    static let zero = AppKitDiffContentInsets()
+
+    var horizontal: CGFloat { left + right }
+}
+
 struct AppKitDiffRowPlan {
     let rows: [AppKitDiffRowSpec]
+    var contentInsets: AppKitDiffContentInsets = .zero
+
+    func withContentInsets(_ insets: AppKitDiffContentInsets) -> AppKitDiffRowPlan {
+        var copy = self
+        copy.contentInsets = insets
+        return copy
+    }
 }
 
 enum AppKitDiffScrollAlignment: Equatable {

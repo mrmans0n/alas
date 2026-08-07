@@ -24,7 +24,7 @@ final class AppKitDiffTilingController {
         var maxY: CGFloat { minY + height }
     }
 
-    private let metrics: Metrics
+    private var metrics: Metrics
     private var rows: [RowLayout] = []
     private var indexByID: [String: Int] = [:]
 
@@ -36,7 +36,10 @@ final class AppKitDiffTilingController {
 
     var rowCount: Int { rows.count }
 
-    func replaceAll(rows newRows: [Seed]) {
+    func replaceAll(rows newRows: [Seed], metrics newMetrics: Metrics? = nil) {
+        if let newMetrics {
+            metrics = newMetrics
+        }
         rows = newRows.map { .init(id: $0.id, ownerID: $0.ownerID, height: $0.height, minY: 0) }
         retile()
         rebuildIndex()

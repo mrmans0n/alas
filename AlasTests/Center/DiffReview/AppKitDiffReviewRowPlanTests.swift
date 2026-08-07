@@ -206,6 +206,38 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!localRow.equalityToken.isEqual(to: providerRow.equalityToken))
     }
 
+    @Test func headerRowRebuildsWhenSourceBadgeVisibilityChanges() throws {
+        let file = textFile(groupTitle: "Pull request")
+        let state = AppKitDiffReviewFileState()
+        let hidden = AppKitDiffReviewRowInput(file: file, state: state, theme: theme, showsSourceBadge: false)
+        let shown = AppKitDiffReviewRowInput(file: file, state: state, theme: theme, showsSourceBadge: true)
+        let hiddenHeader = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [hidden]).corePlan.rows.first {
+            $0.id == AppKitDiffReviewRowID.header(fileID: file.id)
+        })
+        let shownHeader = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [shown]).corePlan.rows.first {
+            $0.id == AppKitDiffReviewRowID.header(fileID: file.id)
+        })
+
+        #expect(!hiddenHeader.equalityToken.isEqual(to: shownHeader.equalityToken))
+    }
+
+    @Test func headerRowRebuildsWhenSourceBadgeTitleChanges() throws {
+        let base = textFile(groupTitle: "Pull request")
+        let changed = textFile(groupTitle: "Working tree")
+        let state = AppKitDiffReviewFileState()
+        let first = AppKitDiffReviewRowInput(file: base, state: state, theme: theme, showsSourceBadge: true)
+        let second = AppKitDiffReviewRowInput(file: changed, state: state, theme: theme, showsSourceBadge: true)
+        let firstHeader = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [first]).corePlan.rows.first {
+            $0.id == AppKitDiffReviewRowID.header(fileID: base.id)
+        })
+        let secondHeader = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [second]).corePlan.rows.first {
+            $0.id == AppKitDiffReviewRowID.header(fileID: changed.id)
+        })
+
+        #expect(base.id == changed.id)
+        #expect(!firstHeader.equalityToken.isEqual(to: secondHeader.equalityToken))
+    }
+
     @Test func draftRowRebuildsWhenItsAgentTargetsChange() throws {
         let file = textFile()
         let draft = draftComment(fileID: file.id)
@@ -482,7 +514,8 @@ struct AppKitDiffReviewRowPlanTests {
 
     private func textFile(
         path: String = "Sources/Example.swift",
-        contextProvider: DiffReviewContextProvider? = nil
+        contextProvider: DiffReviewContextProvider? = nil,
+        groupTitle: String? = nil
     ) -> DiffReviewFileSectionModel {
         let diff = ParsedDiff(hunks: [
             .init(header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: [
@@ -491,7 +524,7 @@ struct AppKitDiffReviewRowPlanTests {
             ]),
         ])
         let summary = DiffReviewFileSummary(
-            path: path, namespace: "review", groupID: nil, groupTitle: nil,
+            path: path, namespace: "review", groupID: nil, groupTitle: groupTitle,
             status: .modified, additions: 1, deletions: 1, isRenderable: true
         )
         return DiffReviewFileSectionModel(

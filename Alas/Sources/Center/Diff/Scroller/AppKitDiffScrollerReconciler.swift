@@ -13,6 +13,7 @@ final class AppKitDiffScrollerReconciler {
     private var orderedIDs: [String] = []
     private var measuredHeights: [String: CGFloat] = [:]
     private var contentWidth: CGFloat = 0
+    private var contentInsets: AppKitDiffContentInsets = .zero
     private var isReconciling = false
     private var deferredLayoutScheduled = false
     private var needsDeferredLayout = false
@@ -38,9 +39,11 @@ final class AppKitDiffScrollerReconciler {
 
     func apply(plan: AppKitDiffRowPlan, contentWidth width: CGFloat) {
         guard width > 0 else { return }
+        let rowContentWidth = max(0, width - plan.contentInsets.horizontal)
         let ids = plan.rows.map(\.id)
-        let widthChanged = width != contentWidth
-        let isUnchanged = !widthChanged && ids == orderedIDs && plan.rows.allSatisfy { spec in
+        let widthChanged = rowContentWidth != contentWidth
+        let insetsChanged = plan.contentInsets != contentInsets
+        let isUnchanged = !widthChanged && !insetsChanged && ids == orderedIDs && plan.rows.allSatisfy { spec in
             guard let current = specsByID[spec.id] else { return false }
             return current.equalityToken.isEqual(to: spec.equalityToken)
                 && current.ownerID == spec.ownerID
@@ -75,14 +78,15 @@ final class AppKitDiffScrollerReconciler {
         specsByID = nextSpecs
         orderedIDs = ids
         measuredHeights = nextMeasuredHeights
-        contentWidth = width
+        contentWidth = rowContentWidth
+        contentInsets = plan.contentInsets
         tiling.replaceAll(rows: plan.rows.map { spec in
             .init(
                 id: spec.id,
                 ownerID: spec.ownerID,
                 height: nextMeasuredHeights[spec.id] ?? max(0, spec.estimatedHeight)
             )
-        })
+        }, metrics: .init(topPadding: plan.contentInsets.top, bottomPadding: plan.contentInsets.bottom))
         scrollView.setDocumentHeight(tiling.documentHeight)
         if let anchoredY = tiling.viewportMinY(for: anchor) {
             scrollView.setScrollY(anchoredY, animated: false)
@@ -197,7 +201,12 @@ final class AppKitDiffScrollerReconciler {
                     geometryChanged = geometryChanged || abs(row.height - height) > 0.01
                 }
                 if let updatedRow = tiling.row(withID: id) {
-                    view.frame = NSRect(x: 0, y: updatedRow.minY, width: contentWidth, height: updatedRow.height)
+                    view.frame = NSRect(
+                        x: contentInsets.left,
+                        y: updatedRow.minY,
+                        width: contentWidth,
+                        height: updatedRow.height
+                    )
                 }
             }
             scrollView.setDocumentHeight(tiling.documentHeight)

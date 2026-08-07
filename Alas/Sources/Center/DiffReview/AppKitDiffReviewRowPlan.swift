@@ -693,6 +693,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         hasher.combine(input.file.summary.status)
         hasher.combine(input.file.summary.additions)
         hasher.combine(input.file.summary.deletions)
+        hasher.combine(input.showsSourceBadge)
+        hasher.combine(input.file.summary.groupTitle)
         return hasher.finalize()
     }
 
