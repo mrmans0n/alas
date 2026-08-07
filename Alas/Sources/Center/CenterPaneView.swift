@@ -193,14 +193,14 @@ struct CenterPaneView: View {
                     state.promptFollowRevision(worktreeID: worktree.id, tabID: id)
                 },
                 onEditRevision: { id in
-                    let prefill: String? = {
+                    let prefill: TrackedRevisionTarget? = {
                         switch tabs.first(where: { $0.id == id }) {
                         case .commit(let s):
-                            return s.revision.tracked?.expression
+                            return s.revision.tracked?.target
                         case .reviewSession(let s):
                             let record = try? ReviewSessionStore().load(id: s.sessionID)
                             if case .trackedCommit(let revision) = record?.target.payload {
-                                return revision.expression
+                                return revision.target
                             }
                             return nil
                         default:

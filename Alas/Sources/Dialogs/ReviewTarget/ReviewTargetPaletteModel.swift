@@ -557,7 +557,7 @@ final class ReviewTargetPaletteModel {
                 worktreeID: worktree.id,
                 repositoryPath: worktree.path,
                 revision: revision,
-                title: "Review \(revision.expression)"
+                title: "Review \(revision.target.displayLabel)"
             ),
             worktree
         )

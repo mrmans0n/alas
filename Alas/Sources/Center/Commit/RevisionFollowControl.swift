@@ -118,7 +118,7 @@ struct RevisionFollowControl: View {
                     appState?.promptFollowRevision(
                         worktreeID: worktreeID,
                         tabID: tabID,
-                        prefill: presentation.expression
+                        prefill: presentation.expression.map { .expression($0) }
                     )
                 }
                 .accessibilityIdentifier("\(accessibilityPrefix)-edit")

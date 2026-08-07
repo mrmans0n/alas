@@ -98,7 +98,7 @@ struct CommitTabStateTests {
             expression: "@feature", baselineBranch: "feature", resolvedSHA: "old"
         ))
 
-        #expect(headRelative.expression == "HEAD~3")
+        #expect(headRelative.target.identityKey == "HEAD~3")
         #expect(headRelative.dependsOnWorktreeHEAD)
         #expect(headAlias.dependsOnWorktreeHEAD)
         #expect(!namedRef.dependsOnWorktreeHEAD)
@@ -364,7 +364,7 @@ struct CommitTabStateTests {
 
         let revision = try JSONDecoder().decode(TrackedRevision.self, from: Data(json.utf8))
 
-        #expect(revision.expression == "HEAD~2")
+        #expect(revision.target.identityKey == "HEAD~2")
         #expect(revision.pendingCheckout == TrackedRevisionCandidate(branch: "main", sha: "new"))
         #expect(try JSONDecoder().decode(TrackedRevision.self, from: JSONEncoder().encode(revision)) == revision)
         #expect(throws: DecodingError.self) {

@@ -652,7 +652,7 @@ struct ReviewSessionTabView: View {
         }
         let candidate = try await TrackedRevisionResolver.live.resolve(
             at: worktree.path,
-            expression: revision.expression
+            target: revision.target
         )
         switch TrackedRevisionPolicy.evaluate(current: revision, candidate: candidate) {
         case .unchanged(let updated):
@@ -666,7 +666,7 @@ struct ReviewSessionTabView: View {
                 false
             )
         case .follow(let updated):
-            let target = storedRecord.target.updatingTrackedRevision(updated, title: "Review \(updated.expression)")
+            let target = storedRecord.target.updatingTrackedRevision(updated, title: "Review \(updated.target.displayLabel)")
             return (
                 storedRecord.retargetingCommit(
                     to: target,

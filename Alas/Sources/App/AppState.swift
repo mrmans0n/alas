@@ -3210,7 +3210,7 @@ final class AppState {
         reviewSessionRetargetGenerations[sessionID.rawValue, default: 0]
     }
 
-    func followRevision(worktreeID: String, tabID: TabID, expression: String) {
+    func followRevision(worktreeID: String, tabID: TabID, target: TrackedRevisionTarget) {
         let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
         let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
         Task { @MainActor in
@@ -3218,19 +3218,19 @@ final class AppState {
                 worktreeID: worktreeID,
                 requestKey: requestKey,
                 requestGeneration: requestGeneration,
-                expression: expression
+                target: target
             )
         }
     }
 
-    func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: String? = nil) {
+    func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: TrackedRevisionTarget? = nil) {
         let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
         let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)
         let editorGeneration = bumpFollowRevisionEditorGeneration()
         Task { @MainActor in
             let resolvedPrefill: String?
             if let prefill {
-                resolvedPrefill = prefill
+                resolvedPrefill = prefill.expressionValue
             } else {
                 resolvedPrefill = await suggestedFollowRevisionPrefill(worktreeID: worktreeID, tabID: tabID)
             }
@@ -3257,7 +3257,7 @@ final class AppState {
         request.isSubmitting = true
         request.errorMessage = nil
         followRevisionEditorRequest = request
-        followRevision(worktreeID: request.worktreeID, tabID: request.tabID, expression: expression)
+        followRevision(worktreeID: request.worktreeID, tabID: request.tabID, target: .expression(expression))
     }
 
     func dismissFollowRevisionEditor() {
@@ -3342,12 +3342,12 @@ final class AppState {
         worktreeID: String,
         requestKey: String,
         requestGeneration: Int,
-        expression: String
+        target: TrackedRevisionTarget
     ) async {
         guard let worktree = worktree(withId: worktreeID) else { return }
         let candidate: TrackedRevisionCandidate
         do {
-            candidate = try await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression)
+            candidate = try await TrackedRevisionResolver.live.resolve(at: worktree.path, target: target)
         } catch {
             guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
             else { return }
@@ -3359,7 +3359,7 @@ final class AppState {
             return
         }
         guard let revision = TrackedRevision(
-            expression: expression,
+            target: target,
             baselineBranch: candidate.branch,
             baselineHEAD: candidate.headSHA,
             resolvedSHA: candidate.sha
@@ -3369,7 +3369,7 @@ final class AppState {
             publishFollowRevisionError(
                 worktreeID: worktreeID,
                 requestKey: requestKey,
-                message: "Revision expression must not be empty."
+                message: "Revision target must not be empty."
             )
             return
         }
@@ -3462,7 +3462,7 @@ final class AppState {
               let result = TrackedRevisionRetargeter.follow(
                   record: record,
                   revision: revision,
-                  title: "Review \(revision.expression)",
+                  title: "Review \(revision.target.displayLabel)",
                   now: Date()
               )
         else { return }
@@ -3537,7 +3537,7 @@ final class AppState {
               let result = TrackedRevisionRetargeter.follow(
                   record: record,
                   revision: accepted,
-                  title: "Review \(accepted.expression)",
+                  title: "Review \(accepted.target.displayLabel)",
                   now: Date()
               )
         else { return }

@@ -96,9 +96,9 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
         title: String
     ) -> Self {
         let path = standardizedPath(repositoryPath)
-        let revisionDescription = "\(revision.expression) -> \(revision.resolvedSHA)"
+        let revisionDescription = "\(revision.target.displayLabel) -> \(revision.resolvedSHA)"
         return ReviewSessionTarget(
-            id: makeID(.trackedCommit, [worktreeID, path, revision.expression]),
+            id: makeID(.trackedCommit, [worktreeID, path, revision.target.identityKey]),
             kind: .trackedCommit,
             worktreeID: worktreeID,
             repositoryPath: standardizedURL(repositoryPath),
@@ -110,7 +110,7 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
             draftSessionID: .trackedCommit(
                 worktreeID: worktreeID,
                 repositoryPath: repositoryPath,
-                expression: revision.expression
+                targetKey: revision.target.identityKey
             ),
             payload: .trackedCommit(revision)
         )

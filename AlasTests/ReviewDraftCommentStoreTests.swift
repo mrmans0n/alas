@@ -166,7 +166,7 @@ return value + other
         let newID = ReviewDraftSessionID.trackedCommit(
             worktreeID: "wt",
             repositoryPath: URL(fileURLWithPath: "/repo"),
-            expression: "HEAD~3"
+            targetKey: "HEAD~3"
         )
         let existing = makeComment(
             id: "draft-1",
@@ -206,7 +206,7 @@ return value + other
         let newID = ReviewDraftSessionID.trackedCommit(
             worktreeID: "wt",
             repositoryPath: URL(fileURLWithPath: "/repo"),
-            expression: "HEAD~3"
+            targetKey: "HEAD~3"
         )
         let source = makeComment(
             id: "draft-1",
