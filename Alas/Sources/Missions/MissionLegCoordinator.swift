@@ -384,6 +384,11 @@ final class MissionLegCoordinator {
             return true
         } catch MissionStore.Error.missionCompleted {
             return false
+        } catch MissionStore.Error.missionNotFound {
+            // The Mission was deleted while its setup was in flight. Any worktree
+            // already created survives as an ordinary worktree; there is nothing
+            // left to persist and nothing to report.
+            return false
         } catch {
             if let failureCheckpoint {
                 await persistFailure(
