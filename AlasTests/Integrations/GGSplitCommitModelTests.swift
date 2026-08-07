@@ -66,6 +66,37 @@ struct GGSplitCommitModelTests {
         #expect(model.selectedHunkIDs.isEmpty)
     }
 
+    @Test func namedDestinationsMoveOnlyDescribedTextHunks() async throws {
+        let model = makeModel()
+        try await model.load()
+
+        #expect(model.destination(for: "h-2") == .originalCommit)
+        #expect(model.destination(for: "unknown") == nil)
+
+        model.assignHunk("h-2", to: .newCommit)
+        #expect(model.destination(for: "h-2") == .newCommit)
+        #expect(model.selectedHunkIDs == ["h-2"])
+
+        model.assignHunk("h-2", to: .originalCommit)
+        model.assignHunk("unknown", to: .newCommit)
+        #expect(model.destination(for: "h-2") == .originalCommit)
+        #expect(model.selectedHunkIDs.isEmpty)
+    }
+
+    @Test func assigningAFileMovesAllAndOnlyItsHunks() async throws {
+        let model = makeModel()
+        try await model.load()
+        let firstFile = try #require(model.fileGroups.first { $0.path == "Sources/A.swift" })
+
+        model.assignHunks(in: firstFile, to: .newCommit)
+        #expect(model.selectedHunkIDs == ["h-1", "h-2"])
+        #expect(model.firstPreview.files.map(\.path) == ["Sources/A.swift"])
+
+        model.assignHunks(in: firstFile, to: .originalCommit)
+        #expect(model.selectedHunkIDs.isEmpty)
+        #expect(model.remainderPreview.files.flatMap(\.hunkIDs) == ["h-1", "h-2", "h-3"])
+    }
+
     @Test func applyRequiresNonEmptyProperSubset() async throws {
         let model = GGSplitCommitModel(
             service: SplitServiceStub(description: .textualOnlyFixture),

@@ -22,6 +22,12 @@ struct GGSplitCommitTabView: View {
     @State private var appKitPreviewScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
     @State private var previewImageStore = GGSplitPreviewImageStore()
     @State private var previewPresentationStore = GGSplitPreviewPresentationStore()
+    @State private var activeDestination = GGSplitCommitDestination.newCommit
+    @State private var collapsedFileGroupIDs: Set<String> = []
+    @State private var previewScrollCoordinator = GGSplitPreviewScrollRequestCoordinator()
+    @State private var previewScrollRequest: AppKitDiffScrollRequest?
+    @State private var legacyScrollPath: String?
+    @State private var legacyScrollGeneration = 0
 
     init(
         tabState: GGSplitCommitTabState,
@@ -92,10 +98,9 @@ struct GGSplitCommitTabView: View {
             } else if model.description == nil {
                 loadFailure
             } else {
-                HStack(spacing: 0) {
+                HSplitView {
                     selectionPane
-                        .frame(minWidth: 240, idealWidth: 300, maxWidth: 380)
-                    Divider()
+                        .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
                     editorAndPreviews
                         .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -131,8 +136,14 @@ struct GGSplitCommitTabView: View {
 
     private var selectionPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Hunks")
-                .font(.headline)
+            HStack {
+                Text("Changes")
+                    .font(.headline)
+                Spacer()
+                Text("\(model.selectedHunkIDs.count) new · \(originalHunkCount) original")
+                    .font(.caption)
+                    .foregroundStyle(theme.color("fg-dim"))
+            }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             Divider()
@@ -148,105 +159,179 @@ struct GGSplitCommitTabView: View {
     }
 
     private func splitFileGroup(_ group: GGSplitCommitFileGroup) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: group.kind == .selectable ? "doc.text" : "doc")
-                    .foregroundStyle(theme.color("fg-dim"))
-                Text(group.path)
-                    .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
-                    .lineLimit(2)
-                    .textSelection(.enabled)
-                Spacer(minLength: 4)
-                if group.kind == .remainderOnly {
-                    Text("Remainder only")
+                if group.kind == .selectable {
+                    Button {
+                        if collapsedFileGroupIDs.contains(group.id) {
+                            collapsedFileGroupIDs.remove(group.id)
+                        } else {
+                            collapsedFileGroupIDs.insert(group.id)
+                        }
+                    } label: {
+                        Label {
+                            Text(group.path)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                        } icon: {
+                            Image(systemName: collapsedFileGroupIDs.contains(group.id) ? "chevron.right" : "chevron.down")
+                        }
+                        .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
+                    }
+                    .buttonStyle(.plain)
+                    .help(collapsedFileGroupIDs.contains(group.id) ? "Expand file" : "Collapse file")
+                    Spacer(minLength: 4)
+                    Menu("Assign all") {
+                        Button("New Commit") { assign(group, to: .newCommit) }
+                        Button("Original Commit") { assign(group, to: .originalCommit) }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .accessibilityIdentifier("gg-split-file-assign-\(group.id)")
+                } else {
+                    Label(group.path, systemImage: "doc")
+                        .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Text("Original only")
                         .font(.caption)
                         .foregroundStyle(theme.color("fg-dim"))
                 }
             }
+            .padding(12)
 
-            ForEach(group.hunks, id: \.id) { hunk in
-                Toggle(
-                    isOn: Binding(
-                        get: { model.selectedHunkIDs.contains(hunk.id) },
-                        set: { _ in
-                            model.toggleHunk(hunk.id)
-                            errorMessage = nil
-                            onDraftChange(model.draft)
-                        }
-                    )
-                ) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(hunk.header)
-                            .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
-                            .foregroundStyle(theme.color("fg"))
-                        Text(hunk.patch)
-                            .font(CenterTypography.codeFont(family: codeFontFamily, size: max(9, codeFontSize - 2)))
-                            .foregroundStyle(theme.color("fg-dim"))
-                            .lineLimit(4)
-                            .textSelection(.enabled)
-                    }
+            if group.kind == .selectable, !collapsedFileGroupIDs.contains(group.id) {
+                ForEach(group.hunks, id: \.id) { hunk in
+                    splitHunkRow(hunk)
                 }
-                .toggleStyle(.checkbox)
             }
         }
-        .padding(12)
+        .overlay(Divider(), alignment: .bottom)
+    }
+
+    private func splitHunkRow(_ hunk: GGSplitHunk) -> some View {
+        let destination = model.destination(for: hunk.id) ?? .originalCommit
+        return HStack(alignment: .top, spacing: 8) {
+            Button {
+                focusPreview(destination: destination, path: hunk.path)
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(hunk.header)
+                        .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
+                        .foregroundStyle(theme.color("fg"))
+                        .lineLimit(1)
+                    Text(hunk.patch)
+                        .font(CenterTypography.codeFont(family: codeFontFamily, size: max(9, codeFontSize - 2)))
+                        .foregroundStyle(theme.color("fg-dim"))
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show \(destination.title) preview for \(hunk.header)")
+
+            Button(destination.shortTitle) {
+                assign(hunk, to: destination.other)
+            }
+            .buttonStyle(.plain)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(destination == .newCommit ? theme.color("add") : theme.color("fg"))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(destination == .newCommit ? theme.color("add").opacity(0.14) : theme.color("bg-3"))
+            .clipShape(.capsule)
+            .help("Move to \(destination.other.title)")
+            .accessibilityLabel("Assigned to \(destination.title)")
+            .accessibilityHint("Moves this hunk to \(destination.other.title)")
+            .accessibilityIdentifier("gg-split-hunk-destination-\(hunk.id)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-1").opacity(0.35))
         .overlay(Divider(), alignment: .bottom)
     }
 
     private var editorAndPreviews: some View {
         VStack(spacing: 0) {
-            messageEditor
+            commitCards
             Divider()
-            VSplitView {
-                previewPane(title: "First commit", preview: model.firstPreview)
-                    .frame(minHeight: 180)
-                previewPane(
-                    title: "Remainder",
-                    preview: model.remainderPreview,
-                    showsResultingImages: true
-                )
-                    .frame(minHeight: 180)
-            }
+            previewPane(
+                destination: activeDestination,
+                preview: activePreview,
+                showsResultingImages: activeDestination == .originalCommit
+            )
             Divider()
             actionBar
         }
     }
 
-    private var messageEditor: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-            GridRow {
-                Text("First commit")
-                    .foregroundStyle(theme.color("fg-dim"))
-                TextField("Commit message", text: $model.firstMessage)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: model.firstMessage) {
-                        errorMessage = nil
-                        onDraftChange(model.draft)
-                    }
-            }
-            GridRow {
-                Text("Remainder")
-                    .foregroundStyle(theme.color("fg-dim"))
-                TextField("Commit message", text: $model.remainderMessage)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: model.remainderMessage) {
-                        errorMessage = nil
-                        onDraftChange(model.draft)
-                    }
-            }
+    private var commitCards: some View {
+        HStack(spacing: 10) {
+            commitCard(
+                destination: .newCommit,
+                message: $model.firstMessage,
+                preview: model.firstPreview
+            )
+            commitCard(
+                destination: .originalCommit,
+                message: $model.remainderMessage,
+                preview: model.remainderPreview
+            )
         }
         .padding(12)
         .background(theme.color("bg-2"))
     }
 
+    private func commitCard(
+        destination: GGSplitCommitDestination,
+        message: Binding<String>,
+        preview: GGSplitPreview
+    ) -> some View {
+        let isActive = activeDestination == destination
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                activeDestination = destination
+                previewScrollRequest = nil
+            } label: {
+                HStack {
+                    Text(destination.title)
+                        .font(.headline)
+                    Spacer()
+                    Text(contentSummary(for: preview))
+                        .font(.caption)
+                        .foregroundStyle(theme.color("fg-dim"))
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show \(destination.title) preview")
+            .accessibilityValue(isActive ? "Selected" : "Not selected")
+            .accessibilityIdentifier("gg-split-commit-card-\(destination.previewID)")
+
+            TextField("Commit message", text: message)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: message.wrappedValue) { draftDidChange() }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity)
+        .background(isActive ? theme.color("accent").opacity(0.09) : theme.color("bg-1"))
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isActive ? theme.color("accent") : theme.color("border"), lineWidth: isActive ? 2 : 1)
+        }
+    }
+
     private func previewPane(
-        title: String,
+        destination: GGSplitCommitDestination,
         preview: GGSplitPreview,
         showsResultingImages: Bool = false
     ) -> some View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(title)
+                Text(destination.title)
                     .font(.headline)
                 Spacer()
                 Text("\(preview.files.flatMap(\.hunkIDs).count) hunk\(preview.files.flatMap(\.hunkIDs).count == 1 ? "" : "s")")
@@ -263,7 +348,7 @@ struct GGSplitCommitTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 previewScrollSubtree(
-                    previewID: title,
+                    previewID: destination.previewID,
                     preview: preview,
                     showsResultingImages: showsResultingImages
                 )
@@ -300,9 +385,13 @@ struct GGSplitCommitTabView: View {
                     imageStore: previewImageStore,
                     presentationStore: previewPresentationStore
                 )),
-                scrollRequest: nil,
+                scrollRequest: previewScrollRequest,
                 onActiveOwnerChange: { _ in },
-                onScrollRequestCompletion: { _ in }
+                onScrollRequestCompletion: { generation in
+                    if previewScrollRequest?.generation == generation {
+                        previewScrollRequest = nil
+                    }
+                }
             )
         } else {
             legacyPreviewScroll(preview: preview, showsResultingImages: showsResultingImages)
@@ -314,29 +403,40 @@ struct GGSplitCommitTabView: View {
         showsResultingImages: Bool
     ) -> some View {
         let partition = GGResultingImagePreview.partition(preview.nonTextualFiles)
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(preview.files) { file in splitPreviewFile(file) }
-                if showsResultingImages, let targetSHA = model.targetSHA {
-                    ForEach(partition.imagePaths, id: \.self) { path in
-                        let key = GGSplitPreviewImageKey(
-                            worktreePath: worktreePath, revision: targetSHA, relativePath: path
-                        )
-                        GGSplitResultingImagePreview(
-                            key: key,
-                            state: previewImageStore.state(for: key),
-                            codeFontFamily: codeFontFamily,
-                            codeFontSize: codeFontSize
-                        )
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(preview.files) { file in
+                        splitPreviewFile(file)
+                            .id(file.path)
+                    }
+                    if showsResultingImages, let targetSHA = model.targetSHA {
+                        ForEach(partition.imagePaths, id: \.self) { path in
+                            let key = GGSplitPreviewImageKey(
+                                worktreePath: worktreePath, revision: targetSHA, relativePath: path
+                            )
+                            GGSplitResultingImagePreview(
+                                key: key,
+                                state: previewImageStore.state(for: key),
+                                codeFontFamily: codeFontFamily,
+                                codeFontSize: codeFontSize
+                            )
+                            .id(path)
+                        }
+                    }
+                    ForEach(partition.otherPaths, id: \.self) { path in
+                        Label(path, systemImage: "doc")
+                            .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
+                            .foregroundStyle(theme.color("fg-dim"))
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id(path)
                     }
                 }
-                ForEach(partition.otherPaths, id: \.self) { path in
-                    Label(path, systemImage: "doc")
-                        .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
-                        .foregroundStyle(theme.color("fg-dim"))
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            }
+            .onChange(of: legacyScrollGeneration) {
+                guard let legacyScrollPath else { return }
+                withAnimation { proxy.scrollTo(legacyScrollPath, anchor: .top) }
             }
         }
     }
@@ -390,6 +490,48 @@ struct GGSplitCommitTabView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(theme.color("bg-2"))
+    }
+
+    private var originalHunkCount: Int {
+        max(0, (model.description?.hunks.count ?? 0) - model.selectedHunkIDs.count)
+    }
+
+    private var activePreview: GGSplitPreview {
+        switch activeDestination {
+        case .newCommit: model.firstPreview
+        case .originalCommit: model.remainderPreview
+        }
+    }
+
+    private func contentSummary(for preview: GGSplitPreview) -> String {
+        let hunkCount = preview.files.flatMap(\.hunkIDs).count
+        let fileCount = Set(preview.files.map(\.path) + preview.nonTextualFiles).count
+        return "\(hunkCount) hunk\(hunkCount == 1 ? "" : "s") · \(fileCount) file\(fileCount == 1 ? "" : "s")"
+    }
+
+    private func assign(_ hunk: GGSplitHunk, to destination: GGSplitCommitDestination) {
+        model.assignHunk(hunk.id, to: destination)
+        draftDidChange()
+    }
+
+    private func assign(_ group: GGSplitCommitFileGroup, to destination: GGSplitCommitDestination) {
+        model.assignHunks(in: group, to: destination)
+        draftDidChange()
+    }
+
+    private func draftDidChange() {
+        errorMessage = nil
+        onDraftChange(model.draft)
+    }
+
+    private func focusPreview(destination: GGSplitCommitDestination, path: String) {
+        activeDestination = destination
+        previewScrollRequest = previewScrollCoordinator.request(
+            previewID: destination.previewID,
+            path: path
+        )
+        legacyScrollPath = path
+        legacyScrollGeneration += 1
     }
 
     private var loadFailure: some View {
@@ -447,6 +589,36 @@ struct GGSplitCommitTabView: View {
             } catch {
                 errorMessage = GGErrorPresentation.message(for: error)
             }
+        }
+    }
+}
+
+private extension GGSplitCommitDestination {
+    var title: String {
+        switch self {
+        case .newCommit: "New Commit"
+        case .originalCommit: "Original Commit"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .newCommit: "New"
+        case .originalCommit: "Original"
+        }
+    }
+
+    var previewID: String {
+        switch self {
+        case .newCommit: "new"
+        case .originalCommit: "original"
+        }
+    }
+
+    var other: Self {
+        switch self {
+        case .newCommit: .originalCommit
+        case .originalCommit: .newCommit
         }
     }
 }

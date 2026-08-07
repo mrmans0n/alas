@@ -70,6 +70,21 @@ struct GGSplitPreviewRowPlanTests {
         #expect(!GGSplitCommitTabView.usesAppKitPreviewScroller(flagEnabled: false))
     }
 
+    @Test("file navigation targets stable pane-scoped headers with fresh generations")
+    func fileNavigationRequests() {
+        var coordinator = GGSplitPreviewScrollRequestCoordinator()
+
+        let first = coordinator.request(previewID: "new", path: "Sources/App.swift")
+        let second = coordinator.request(previewID: "original", path: "Sources/App.swift")
+
+        #expect(first.targetID == "gg-preview:new:file:Sources/App.swift:header")
+        #expect(first.fallbackID == nil)
+        #expect(first.alignment == .top)
+        #expect(first.animated)
+        #expect(second.targetID == "gg-preview:original:file:Sources/App.swift:header")
+        #expect(second.generation == first.generation + 1)
+    }
+
     @Test("text hunk state survives a preview rebuild and is pruned with its file")
     func textStateRetentionAndPruning() {
         let imageStore = GGSplitPreviewImageStore()
