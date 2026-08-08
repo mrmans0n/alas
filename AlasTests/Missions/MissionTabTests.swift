@@ -846,6 +846,26 @@ struct MissionTabTests {
         #expect(subview(withAccessibilityIdentifier: "mission-leg-destination", in: host.view) != nil)
     }
 
+    // Break caught: a global Mission selected while no worktree is visible in
+    // the active Space must fill the center pane below its tab strip instead
+    // of collapsing to the tab strip's intrinsic height.
+    @Test func globalMissionFillsFallbackCenterPane() async throws {
+        let fixture = try MissionNavigationFixture(hidden: false, includeWorktree: true)
+        await fixture.state.missions.load()
+        _ = try fixture.state.openMission(id: fixture.aggregate.mission.id).get()
+        let view = RootView(state: fixture.state)
+        let host = NSHostingController(rootView: view)
+
+        host.view.frame = NSRect(x: 0, y: 0, width: 1_200, height: 700)
+        host.view.layoutSubtreeIfNeeded()
+
+        let header = try #require(subview(withAccessibilityIdentifier: "mission-header-repository", in: host.view))
+        let missionScrollView = try #require(nearestScrollView(above: header))
+        let frame = missionScrollView.convert(missionScrollView.bounds, to: host.view)
+        #expect(frame.height > 600)
+        #expect(frame.minY >= 30)
+    }
+
     // Break caught: an unopened Mission must present a loading state instead
     // of being indistinguishable from a loaded but unavailable record.
     @Test func missionTabShowsLoadingBeforeMissionSnapshotLoads() throws {
@@ -1008,6 +1028,16 @@ private func subview(withAccessibilityIdentifier identifier: String, in view: NS
     return view.subviews.lazy.compactMap {
         subview(withAccessibilityIdentifier: identifier, in: $0)
     }.first
+}
+
+@MainActor
+private func nearestScrollView(above view: NSView) -> NSScrollView? {
+    var candidate: NSView? = view
+    while let current = candidate {
+        if let scrollView = current as? NSScrollView { return scrollView }
+        candidate = current.superview
+    }
+    return nil
 }
 
 @MainActor
