@@ -392,7 +392,6 @@ struct PairedTextEditor: NSViewRepresentable {
             width: scrollView.contentSize.width,
             height: CGFloat.greatestFiniteMagnitude
         )
-        textView.minSize = .zero
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
@@ -406,6 +405,7 @@ struct PairedTextEditor: NSViewRepresentable {
         }
         scrollView.documentView = textView
         context.coordinator.textView = textView
+        synchronizeLayout(of: textView, in: scrollView)
         applyConfiguration(to: textView)
         return scrollView
     }
@@ -413,6 +413,7 @@ struct PairedTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? PairedDelimiterTextView else { return }
+        synchronizeLayout(of: textView, in: scrollView)
         applyConfiguration(to: textView)
         context.coordinator.synchronizeFocus(for: textView)
     }
@@ -440,6 +441,21 @@ struct PairedTextEditor: NSViewRepresentable {
         textView.isSelectable = isEnabled
         textView.textContainerInset = textContainerInset
         textView.setAccessibilityPlaceholderValue(placeholder)
+    }
+
+    private func synchronizeLayout(of textView: PairedDelimiterTextView, in scrollView: NSScrollView) {
+        let viewport = scrollView.contentView.bounds.size
+        let width = max(viewport.width, scrollView.contentSize.width, textView.frame.width)
+        let height = max(viewport.height, scrollView.contentSize.height)
+        textView.minSize = NSSize(width: 0, height: height)
+        textView.textContainer?.containerSize = NSSize(
+            width: width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.frame.size = NSSize(
+            width: width,
+            height: max(textView.frame.height, height)
+        )
     }
 
     private static func clamped(_ range: NSRange, in text: String) -> NSRange {

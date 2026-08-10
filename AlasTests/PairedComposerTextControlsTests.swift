@@ -143,6 +143,10 @@ struct PairedComposerTextControlsTests {
         await drain(controller.view)
 
         let textView = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
+        let scrollView = try #require(textView.enclosingScrollView)
+        #expect(textView.minSize.height >= scrollView.contentView.bounds.height)
+        #expect(textView.frame.height >= scrollView.contentView.bounds.height)
+
         textView.setSelectedRange(NSRange(location: 5, length: 0))
         textView.insertText("{", replacementRange: NSRange(location: NSNotFound, length: 0))
 

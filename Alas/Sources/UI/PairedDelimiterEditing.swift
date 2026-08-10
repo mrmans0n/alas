@@ -64,7 +64,7 @@ enum PairedDelimiterEditing {
 
     private static func character(at location: Int, in string: NSString) -> Character? {
         guard location >= 0, location < string.length else { return nil }
-        return Character(string.substring(with: NSRange(location: location, length: 1)))
+        return Character(string.substring(with: string.rangeOfComposedCharacterSequence(at: location)))
     }
 
     private static func character(before location: Int, in string: NSString) -> Character? {

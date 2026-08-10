@@ -65,6 +65,20 @@ struct PairedDelimiterEditingTests {
         )
     }
 
+    @Test(arguments: [
+        0,
+        ("𝒙" as NSString).length,
+    ])
+    func symmetricDelimiterAdjacentToSupplementaryPlaneIdentifierUsesNativeInsertion(location: Int) {
+        #expect(
+            PairedDelimiterEditing.resolve(
+                insertedText: "'",
+                in: "𝒙",
+                selectedRange: NSRange(location: location, length: 0)
+            ) == .native
+        )
+    }
+
     @Test func selectedSymmetricDelimiterWrapsSelection() {
         #expect(
             PairedDelimiterEditing.resolve(
