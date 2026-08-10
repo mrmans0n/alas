@@ -117,6 +117,7 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         if let tv = nsView.documentView as? ACPNSTextView {
             tv.dismissFloatingPanels()
+            tv.undoManager?.removeAllActions()
         }
     }
 

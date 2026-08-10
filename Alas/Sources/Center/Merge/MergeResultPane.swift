@@ -138,6 +138,10 @@ struct MergeResultPane: NSViewRepresentable {
         coordinator.contentTopInset = textView.textContainerInset.height
     }
 
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        (scroll.documentView as? NSTextView)?.undoManager?.removeAllActions()
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

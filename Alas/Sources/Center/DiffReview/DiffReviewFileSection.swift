@@ -1151,6 +1151,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
         textView.onKeyboardAction = nil
         textView.onWindowChanged = nil
+        textView.undoManager?.removeAllActions()
         textView.delegate = nil
     }
 
