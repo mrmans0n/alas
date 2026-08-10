@@ -57,15 +57,24 @@ struct PairedReviewComposerSurfaceTests {
         window.orderOut(nil)
     }
 
-    @Test func verdictSummarySubmitReceivesWrappedSelection() async throws {
-        let capture = VerdictSubmitCapture()
+    @Test func providerReplyEmptyEditorPreservesReplyLabelAndMinimumHeight() async throws {
+        let model = ProviderReplyCapture(body: "")
+        let controller = NSHostingController(rootView: ProviderReplyCaptureHarness(model: model))
+        let window = attach(controller)
+        await drain(controller.view)
+
+        let replyEditor = try #require(firstEditableTextView(in: controller.view))
+        let scrollView = try #require(replyEditor.enclosingScrollView)
+
+        #expect(scrollView.frame.height >= 32)
+        #expect(replyEditor.accessibilityPlaceholderValue() == "Reply")
+        window.orderOut(nil)
+    }
+
+    @Test func verdictSummaryEditorWrapsSelectedText() async throws {
         let controller = NSHostingController(
             rootView: VerdictSheet(
-                pendingCount: 1,
-                onSubmit: { verdict, body in
-                    capture.verdict = verdict
-                    capture.body = body
-                }
+                pendingCount: 1
             )
             .environment(\.theme, try! ThemeStore().current)
         )
@@ -75,41 +84,17 @@ struct PairedReviewComposerSurfaceTests {
         let editor = try #require(firstEditableTextView(in: controller.view))
         editor.insertText("verdict summary", replacementRange: NSRange(location: NSNotFound, length: 0))
         wrapSelection(in: editor)
-        try pressAccessibilityElement(
-            withIdentifier: "verdict-submit-review",
-            in: controller.view
-        )
 
-        #expect(capture.verdict == .comment)
-        #expect(capture.body == "`verdict summary`")
+        #expect(editor.string == "`verdict summary`")
         window.orderOut(nil)
     }
 
-    @Test func verdictSummaryDisabledRequestChangesDoesNotSubmitEmptySummary() async throws {
-        let capture = VerdictSubmitCapture()
-        let controller = NSHostingController(
-            rootView: VerdictSheet(
-                pendingCount: 1,
-                initialVerdict: .requestChanges,
-                onSubmit: { verdict, body in
-                    capture.verdict = verdict
-                    capture.body = body
-                }
-            )
-            .environment(\.theme, try! ThemeStore().current)
-        )
-        let window = attach(controller, height: 420)
-        await drain(controller.view)
-
-        let didSubmit = accessibilityElementPerformsPress(
-            withIdentifier: "verdict-submit-review",
-            in: controller.view
-        )
-
-        #expect(!didSubmit)
-        #expect(capture.verdict == nil)
-        #expect(capture.body == nil)
-        window.orderOut(nil)
+    @Test func verdictSummaryRequestChangesRequiresNonEmptySummary() {
+        #expect(!VerdictSheet.canSubmit(verdict: .requestChanges, summaryBody: ""))
+        #expect(!VerdictSheet.canSubmit(verdict: .requestChanges, summaryBody: " \n\t "))
+        #expect(VerdictSheet.canSubmit(verdict: .requestChanges, summaryBody: "needs work"))
+        #expect(VerdictSheet.canSubmit(verdict: .comment, summaryBody: ""))
+        #expect(VerdictSheet.canSubmit(verdict: .approve, summaryBody: ""))
     }
 
     @Test func providerPublishSummaryBindingReceivesWrappedSelectionAndPreservesDisabledState() async throws {
@@ -188,36 +173,6 @@ struct PairedReviewComposerSurfaceTests {
         textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 
-    private func pressAccessibilityElement(withIdentifier identifier: String, in view: NSView) throws {
-        let pressed = accessibilityElementPerformsPress(withIdentifier: identifier, in: view)
-        #expect(pressed)
-        if !pressed {
-            throw SurfaceTestError.elementDidNotPress(identifier)
-        }
-    }
-
-    private func accessibilityElementPerformsPress(withIdentifier identifier: String, in view: NSView) -> Bool {
-        allSubviews(of: view)
-            .filter { $0.accessibilityIdentifier() == identifier }
-            .contains { $0.accessibilityPerformPress() }
-    }
-
-    private func allSubviews(of view: NSView) -> [NSView] {
-        [view] + view.subviews.flatMap(allSubviews)
-    }
-
-    private func waitForSubview(withAccessibilityIdentifier identifier: String, in view: NSView) async throws {
-        for _ in 0..<20 {
-            view.layoutSubtreeIfNeeded()
-            if subview(withAccessibilityIdentifier: identifier, in: view) != nil {
-                return
-            }
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
-            await Task.yield()
-        }
-        try #require(subview(withAccessibilityIdentifier: identifier, in: view))
-    }
-
     private func waitForTextView(containing text: String, in view: NSView) async throws -> NSTextView {
         for _ in 0..<20 {
             view.layoutSubtreeIfNeeded()
@@ -228,13 +183,6 @@ struct PairedReviewComposerSurfaceTests {
             await Task.yield()
         }
         return try #require(textView(containing: text, in: view))
-    }
-
-    private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
-        if view.accessibilityIdentifier() == identifier {
-            return view
-        }
-        return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
     }
 
     private func keyEvent(characters: String, modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
@@ -251,10 +199,6 @@ struct PairedReviewComposerSurfaceTests {
             keyCode: 0
         ))
     }
-}
-
-private enum SurfaceTestError: Error {
-    case elementDidNotPress(String)
 }
 
 @MainActor
@@ -329,10 +273,14 @@ private struct InlineCommentCardCaptureHarness: View {
 
 @MainActor
 private final class ProviderReplyCapture: ObservableObject {
-    @Published var editorState = DiffReviewInlineFeedbackReplyEditorState(
-        isReplying: true,
-        body: "provider reply"
-    )
+    @Published var editorState: DiffReviewInlineFeedbackReplyEditorState
+
+    init(body: String = "provider reply") {
+        editorState = DiffReviewInlineFeedbackReplyEditorState(
+            isReplying: true,
+            body: body
+        )
+    }
 }
 
 @MainActor
@@ -372,12 +320,6 @@ private struct ProviderReplyCaptureHarness: View {
         .frame(width: 480)
         .environment(\.theme, try! ThemeStore().current)
     }
-}
-
-@MainActor
-private final class VerdictSubmitCapture {
-    var verdict: ReviewVerdict?
-    var body: String?
 }
 
 @MainActor

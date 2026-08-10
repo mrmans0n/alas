@@ -115,6 +115,7 @@ struct CommitMessageEditorView: View {
             font: .systemFont(ofSize: 12.5, weight: .medium),
             textColor: NSColor(theme.color("fg")),
             isEnabled: !(busy || editorDisabled),
+            focusRingType: .none,
             isFocused: Binding(
                 get: { focused == .subject },
                 set: { value in

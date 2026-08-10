@@ -2433,11 +2433,24 @@ struct DiffReviewInlineFeedbackCard: View {
                 PairedTextEditor(
                     text: replyEditorBinding.body,
                     font: .systemFont(ofSize: 11.5),
-                    textColor: NSColor(theme.color("fg"))
+                    textColor: NSColor(theme.color("fg")),
+                    placeholder: "Reply"
                 )
+                    .frame(minHeight: 32, maxHeight: 96)
                     .padding(7)
                     .background(theme.color("bg-1"))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(alignment: .topLeading) {
+                        if replyEditorBinding.wrappedValue.body.isEmpty {
+                            Text("Reply")
+                                .font(.system(size: 11.5))
+                                .foregroundColor(theme.color("fg-muted"))
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 9)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .accessibilityLabel("Reply")
                     .accessibilityIdentifier("diff-review-inline-feedback-reply-\(item.id)")
 
                 HStack(spacing: 6) {

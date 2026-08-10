@@ -176,7 +176,13 @@ struct DiffInlineCommentCard: View {
                         font: .systemFont(ofSize: 11),
                         isFocused: Binding(
                             get: { focusedEditor == .reply },
-                            set: { focusedEditor = $0 ? .reply : nil }
+                            set: { value in
+                                if value {
+                                    focusedEditor = .reply
+                                } else if focusedEditor == .reply {
+                                    focusedEditor = nil
+                                }
+                            }
                         )
                     )
                         .frame(minHeight: 60)
@@ -274,12 +280,18 @@ struct DiffInlineCommentCard: View {
                     .foregroundColor(.primary)
                 PairedTextEditor(
                     text: editorStateBinding.editDraft,
-                    font: .systemFont(ofSize: 11),
-                    isFocused: Binding(
-                        get: { focusedEditor == .edit(comment.id) },
-                        set: { focusedEditor = $0 ? .edit(comment.id) : nil }
+                        font: .systemFont(ofSize: 11),
+                        isFocused: Binding(
+                            get: { focusedEditor == .edit(comment.id) },
+                            set: { value in
+                                if value {
+                                    focusedEditor = .edit(comment.id)
+                                } else if focusedEditor == .edit(comment.id) {
+                                    focusedEditor = nil
+                                }
+                            }
+                        )
                     )
-                )
                     .frame(minHeight: 60)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)

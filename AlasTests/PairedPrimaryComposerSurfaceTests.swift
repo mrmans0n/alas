@@ -62,6 +62,7 @@ struct PairedPrimaryComposerSurfaceTests {
         draftChanges.removeAll()
 
         let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        #expect(field.focusRingType == .default)
         #expect(window.makeFirstResponder(field))
         let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
         let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)

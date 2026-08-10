@@ -22,8 +22,12 @@ struct VerdictSheet: View {
         _verdict = State(initialValue: initialVerdict)
     }
 
-    private var canSubmit: Bool {
+    static func canSubmit(verdict: ReviewVerdict, summaryBody: String) -> Bool {
         verdict != .requestChanges || !summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canSubmit: Bool {
+        Self.canSubmit(verdict: verdict, summaryBody: summaryBody)
     }
 
     var body: some View {
@@ -62,15 +66,7 @@ struct VerdictSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
-                .background(
-                    VerdictSheetPressMarker(
-                        identifier: "verdict-submit-review",
-                        label: "Submit review",
-                        isEnabled: canSubmit
-                    ) {
-                        onSubmit(verdict, summaryBody)
-                    }
-                )
+                .accessibilityIdentifier("verdict-submit-review")
                 .disabled(!canSubmit)
 
                 Button("Cancel") {
@@ -120,45 +116,5 @@ struct VerdictSheet: View {
         }
         .buttonStyle(.plain)
         .help(label)
-    }
-}
-
-private struct VerdictSheetPressMarker: NSViewRepresentable {
-    let identifier: String
-    let label: String
-    let isEnabled: Bool
-    let action: () -> Void
-
-    func makeNSView(context: Context) -> VerdictSheetPressView {
-        let view = VerdictSheetPressView(frame: .zero)
-        view.setAccessibilityElement(true)
-        view.setAccessibilityIdentifier(identifier)
-        view.setAccessibilityLabel(label)
-        view.setAccessibilityRole(.button)
-        view.setAccessibilityEnabled(isEnabled)
-        view.isPressEnabled = isEnabled
-        view.action = action
-        return view
-    }
-
-    func updateNSView(_ view: VerdictSheetPressView, context: Context) {
-        view.setAccessibilityElement(true)
-        view.setAccessibilityIdentifier(identifier)
-        view.setAccessibilityLabel(label)
-        view.setAccessibilityRole(.button)
-        view.setAccessibilityEnabled(isEnabled)
-        view.isPressEnabled = isEnabled
-        view.action = action
-    }
-}
-
-private final class VerdictSheetPressView: NSView {
-    var isPressEnabled = true
-    var action: () -> Void = {}
-
-    override func accessibilityPerformPress() -> Bool {
-        guard isPressEnabled else { return false }
-        action()
-        return true
     }
 }

@@ -73,6 +73,7 @@ struct PairedTextField: NSViewRepresentable {
     var isBezeled: Bool
     var drawsBackground: Bool
     var bezelStyle: NSTextField.BezelStyle?
+    var focusRingType: NSFocusRingType
     var isFocused: Binding<Bool>?
     var onSubmit: (() -> Void)?
 
@@ -86,6 +87,7 @@ struct PairedTextField: NSViewRepresentable {
         isBezeled: Bool = false,
         drawsBackground: Bool = false,
         bezelStyle: NSTextField.BezelStyle? = nil,
+        focusRingType: NSFocusRingType = .default,
         isFocused: Binding<Bool>? = nil,
         onSubmit: (() -> Void)? = nil
     ) {
@@ -98,6 +100,7 @@ struct PairedTextField: NSViewRepresentable {
         self.isBezeled = isBezeled
         self.drawsBackground = drawsBackground
         self.bezelStyle = bezelStyle
+        self.focusRingType = focusRingType
         self.isFocused = isFocused
         self.onSubmit = onSubmit
     }
@@ -108,7 +111,6 @@ struct PairedTextField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PairedTextFieldBackingView {
         let field = PairedTextFieldBackingView()
-        field.focusRingType = .none
         field.usesSingleLineMode = true
         field.cell?.wraps = false
         field.cell?.isScrollable = true
@@ -148,6 +150,7 @@ struct PairedTextField: NSViewRepresentable {
         field.isBordered = isBordered
         field.isBezeled = isBezeled
         field.drawsBackground = drawsBackground
+        field.focusRingType = focusRingType
         if let bezelStyle {
             field.bezelStyle = bezelStyle
         }
@@ -346,6 +349,7 @@ struct PairedTextEditor: NSViewRepresentable {
     var isEnabled: Bool
     var isFocused: Binding<Bool>?
     var textContainerInset: NSSize
+    var placeholder: String?
 
     init(
         text: Binding<String>,
@@ -353,7 +357,8 @@ struct PairedTextEditor: NSViewRepresentable {
         textColor: NSColor = .labelColor,
         isEnabled: Bool = true,
         isFocused: Binding<Bool>? = nil,
-        textContainerInset: NSSize = .zero
+        textContainerInset: NSSize = .zero,
+        placeholder: String? = nil
     ) {
         _text = text
         self.font = font
@@ -361,6 +366,7 @@ struct PairedTextEditor: NSViewRepresentable {
         self.isEnabled = isEnabled
         self.isFocused = isFocused
         self.textContainerInset = textContainerInset
+        self.placeholder = placeholder
     }
 
     func makeCoordinator() -> Coordinator {
@@ -433,6 +439,7 @@ struct PairedTextEditor: NSViewRepresentable {
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.textContainerInset = textContainerInset
+        textView.setAccessibilityPlaceholderValue(placeholder)
     }
 
     private static func clamped(_ range: NSRange, in text: String) -> NSRange {
