@@ -92,6 +92,16 @@ enum ACPMarkdownInlineRenderer {
         ).string
     }
 
+    static func cleanAttributedString(_ source: String) -> AttributedString {
+        let plan = makePlan(source)
+        var text = plan.markdownSource
+        for image in plan.images {
+            text = text.replacingOccurrences(of: image.placeholder, with: image.alt)
+        }
+        text = removingSubscriptMarkers(from: text, markers: plan.subscriptMarkers)
+        return ACPMarkdownText.inlineMarkdown(text)
+    }
+
     static func makeAttributedString(
         source: String,
         theme: Theme,

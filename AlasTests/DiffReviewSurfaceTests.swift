@@ -4445,6 +4445,36 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "Please fix this.") != nil)
     }
 
+    @Test func summaryRailEllipsizesMultiblockFeedbackPreview() {
+        let fileID = DiffReviewFileID(namespace: "github", path: "Sources/App.swift")
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-multiblock",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Paragraph one with enough text to wrap across lines.\n\nParagraph two with enough text to wrap across lines.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
+            evidenceItemID: "thread-multiblock"
+        )
+        var collapsed = false
+        let view = ReviewDraftSummaryRail(
+            comments: [],
+            bundle: ReviewFeedbackBundle(
+                target: ReviewFeedbackTarget(title: "PR", repositoryPath: nil, providerDescription: nil, sourceDescription: "Diff review"),
+                comments: []
+            ),
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            inlineFeedbackByFileID: [fileID: [feedback]]
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 320, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-thread-multiblock", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Paragraph two") != nil)
+    }
+
     @Test func summaryRailOmitsGitHubFeedbackSectionWhenEmpty() {
         var collapsed = false
         let view = ReviewDraftSummaryRail(

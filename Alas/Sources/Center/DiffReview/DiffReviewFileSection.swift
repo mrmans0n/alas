@@ -1781,6 +1781,28 @@ enum DiffReviewInlineFeedbackMarkdown {
     }
 
     @MainActor
+    static func inlineMarkdown(_ source: String) -> AttributedString {
+        var result = AttributedString()
+        for block in ACPMarkdownText.parse(source) {
+            let (text, literal) = {
+            switch block {
+            case .heading(_, let text), .paragraph(let text), .quote(let text):
+                return (text, false)
+            case .taskList(let items):
+                return (items.map { "[\($0.isChecked ? "x" : " ")] \($0.text)" }.joined(separator: " "), false)
+            case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
+                return (body, true)
+            case .table(let header, let rows):
+                return (([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " "), false)
+            }
+            }()
+            if !result.characters.isEmpty { result.append(AttributedString("\n")) }
+            result.append(literal ? AttributedString(text) : ACPMarkdownInlineRenderer.cleanAttributedString(text))
+        }
+        return result
+    }
+
+    @MainActor
     static func plainText(_ source: String) -> String {
         ACPMarkdownText.parse(source).compactMap { block -> String? in
             switch block {
