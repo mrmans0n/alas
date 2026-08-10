@@ -106,6 +106,16 @@ struct GitServiceStackCommitTests {
         }
     }
 
+    @Test func parserRejectsNumstatWithExtraTabSeparatedField() {
+        let sha = String(repeating: "e", count: 40)
+
+        #expect(throws: StackCommitInfoError.malformedRecord) {
+            try GitService.parseStackCommitInfoRecords(
+                record(sha: sha, shortSHA: "eeeeeee", numstat: "1\t0\tfile.txt\textra")
+            )
+        }
+    }
+
     @Test func parserCountsBinaryNumstatAsChangedFileWithoutLines() throws {
         let sha = String(repeating: "c", count: 40)
         let infos = try GitService.parseStackCommitInfoRecords(

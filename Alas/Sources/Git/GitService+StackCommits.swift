@@ -74,7 +74,7 @@ extension GitService {
                 guard !trimmedLine.isEmpty else { continue }
 
                 let numstat = trimmedLine.split(separator: "\t", omittingEmptySubsequences: false)
-                guard numstat.count >= 3,
+                guard numstat.count == 3,
                       let additions = Self.stackCommitNumstatCount(numstat[0]),
                       let removals = Self.stackCommitNumstatCount(numstat[1])
                 else {
