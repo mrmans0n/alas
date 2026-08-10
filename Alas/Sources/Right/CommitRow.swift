@@ -10,12 +10,19 @@ struct CommitRow: View {
         case review
     }
 
+    enum CopyContextMenuAction: Hashable {
+        case copySHA
+        case copyMessage
+        case copyGGID(String)
+    }
+
     let commit: CommitInfo
     let isLast: Bool
     var isHistorical: Bool = false
     let onSelect: () -> Void
     let onCopySHA: () -> Void
     var onCopyMessage: (() -> Void)? = nil
+    var ggID: String? = nil
     var onOpenRemote: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
     var onReview: (() -> Void)? = nil
@@ -70,8 +77,16 @@ struct CommitRow: View {
             if onEdit != nil || onReview != nil {
                 Divider()
             }
-            Button("Copy Commit SHA") { copySHA() }
-            Button("Copy Commit Message") { copyMessage() }
+            ForEach(Self.copyContextMenuActions(ggID: ggID), id: \.self) { action in
+                switch action {
+                case .copySHA:
+                    Button("Copy Commit SHA") { copySHA() }
+                case .copyMessage:
+                    Button("Copy Commit Message") { copyMessage() }
+                case .copyGGID(let ggID):
+                    Button("Copy GG-ID") { copyGGID(ggID) }
+                }
+            }
             if let onOpenRemote {
                 Button("Open Commit on Remote") { onOpenRemote() }
             }
@@ -133,6 +148,14 @@ struct CommitRow: View {
         }
         if canReview {
             actions.append(.review)
+        }
+        return actions
+    }
+
+    static func copyContextMenuActions(ggID: String?) -> [CopyContextMenuAction] {
+        var actions: [CopyContextMenuAction] = [.copySHA, .copyMessage]
+        if let ggID {
+            actions.append(.copyGGID(ggID))
         }
         return actions
     }
@@ -282,5 +305,10 @@ struct CommitRow: View {
             Clipboard.copy(commit.fullMessage)
         }
         copyFeedback.show("Copied message")
+    }
+
+    private func copyGGID(_ ggID: String) {
+        Clipboard.copy(ggID)
+        copyFeedback.show("Copied GG-ID")
     }
 }

@@ -101,6 +101,23 @@ struct GGStackGateTests {
         #expect(!GGStackGate.isStackShaped(commits: []))
     }
 
+    @Test func extractsFirstValidGGIDTrailerValue() {
+        let body = "Details.\n\n  GG-ID:   c-first   \nGG-ID: c-second"
+
+        #expect(GGCommitMetadata.ggID(in: body) == "c-first")
+    }
+
+    @Test func rejectsInvalidGGIDTrailerCandidates() {
+        #expect(GGCommitMetadata.ggID(in: "mentions GG-ID: inline") == nil)
+        #expect(GGCommitMetadata.ggID(in: "GG-ID:   ") == nil)
+        #expect(GGCommitMetadata.ggID(in: "gg-id: c-lowercase") == nil)
+        #expect(GGCommitMetadata.ggID(in: "") == nil)
+    }
+
+    @Test func emptyGGIDTrailerDoesNotMakeCommitStackShaped() {
+        #expect(!GGStackGate.isStackShaped(commits: [commit(body: "GG-ID:   ")]))
+    }
+
     private func makeRepo(rebaseInProgress: Bool) throws -> String {
         let dir = NSTemporaryDirectory() + "gg-op-" + UUID().uuidString
         let gitDir = dir + "/.git"
