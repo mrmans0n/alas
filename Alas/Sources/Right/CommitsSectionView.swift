@@ -123,7 +123,7 @@ struct CommitsSectionView: View {
             SectionHeader(
                 role: ggStack == nil ? .commits : .stack,
                 title: Self.sectionTitle(ggStack: ggStack),
-                count: totalCount,
+                count: Self.sectionCount(primary: commits, older: olderCommits),
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
             ) {
@@ -158,9 +158,9 @@ struct CommitsSectionView: View {
         }
     }
 
-    private var totalCount: Int? {
-        let n = commits.count + olderCommits.count
-        return n == 0 ? nil : n
+    static func sectionCount(primary: [CommitInfo], older: [CommitInfo]) -> Int? {
+        let count = primary.count + older.count
+        return count == 0 ? nil : count
     }
 
     /// A section's identity follows the active stack rather than the current
@@ -168,6 +168,11 @@ struct CommitsSectionView: View {
     /// or filtered-to-empty stacks.
     static func sectionTitle(ggStack: GGStack?) -> String {
         ggStack?.name ?? "Commits"
+    }
+
+    static func genericGitActionsAllowed(for entry: GGStackEntry?, in stack: GGStack?) -> Bool {
+        guard let entry, let stack else { return true }
+        return stack.relation(for: entry) != .aboveCurrent
     }
 
     static func rowBatches(count: Int) -> [Range<Int>] {
@@ -212,6 +217,11 @@ struct CommitsSectionView: View {
             ForEach(Self.rowBatches(for: commits)) { batch in
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(commits[batch.range]) { commit in
+                        let entry = ggStack?.entry(matchingCommitSHA: commit.sha)
+                        let allowsGenericGitActions = Self.genericGitActionsAllowed(for: entry, in: ggStack)
+                        let remote = entry == nil
+                            ? (rps.commitsNeedPush ? nil : rps.primaryCommitRemote)
+                            : rps.commitRemote
                         CommitRow(
                             commit: commit,
                             isLast: commit.id == commits.last?.id && olderCommits.isEmpty,
@@ -219,17 +229,18 @@ struct CommitsSectionView: View {
                             onCopySHA: { onCopySHA(commit) },
                             onCopyMessage: { Clipboard.copy(commit.fullMessage) },
                             ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
-                            onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
-                            onEdit: { onEdit(commit) },
+                            onOpenRemote: openRemoteAction(for: commit, remote: remote),
+                            onEdit: allowsGenericGitActions ? { onEdit(commit) } : nil,
                             onReview: { onReview(commit) },
-                            onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-                            onRevert: { rps.runRevert(sha: commit.sha) },
+                            onCherryPick: allowsGenericGitActions ? { rps.requestCherryPick(sha: commit.sha) } : nil,
+                            onRevert: allowsGenericGitActions ? { rps.runRevert(sha: commit.sha) } : nil,
                             ggMenu: ggMenu(for: commit),
                             onGGAction: { action in onGGAction(action, commit) },
                             onGGOpenPR: ggOpenReviewRequestAction(for: commit).map { action in
                                 { onGGAction(action, commit) }
                             },
-                            stackEntry: ggStack?.entry(matchingCommitSHA: commit.sha),
+                            stackEntry: entry,
+                            currentPositionIndicator: entry.flatMap { ggStack?.currentPositionIndicator(for: $0) },
                             codeHostKind: stackCodeHostKind
                         )
                     }

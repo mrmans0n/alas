@@ -313,7 +313,7 @@ struct ChangesTabView: View {
             )
             Divider().opacity(0.4)
             CommitsSectionView(
-                commits: rps.commits,
+                commits: rps.commitsForDisplay,
                 olderCommits: rps.olderCommits,
                 comparisonRef: rps.comparisonRef,
                 hasMoreOlder: rps.hasMoreOlder,

@@ -86,4 +86,51 @@ struct CommitsSectionTitleTests {
             pausedGGOperation: GGPausedOperation(pausedBy: .sync)
         ))
     }
+
+    @Test func genericGitActionsAreHiddenOnlyAboveTheKnownCurrentStackPosition() {
+        let stack = GGStack(
+            name: "stack",
+            base: "main",
+            totalCommits: 4,
+            syncedCommits: 0,
+            currentPosition: 2,
+            behindBase: nil,
+            entries: [
+                GGStackEntry(position: 1, sha: "one", title: "one"),
+                GGStackEntry(position: 2, sha: "two", title: "two", isCurrent: true),
+                GGStackEntry(position: 3, sha: "three", title: "three"),
+                GGStackEntry(position: 4, sha: "four", title: "four"),
+            ]
+        )
+
+        #expect(!CommitsSectionView.genericGitActionsAllowed(for: stack.entries[3], in: stack))
+        #expect(!CommitsSectionView.genericGitActionsAllowed(for: stack.entries[2], in: stack))
+        #expect(CommitsSectionView.genericGitActionsAllowed(for: stack.entries[1], in: stack))
+        #expect(CommitsSectionView.genericGitActionsAllowed(for: stack.entries[0], in: stack))
+    }
+
+    @Test func unknownStackPositionKeepsGenericGitActionsAvailable() {
+        let entry = GGStackEntry(position: 1, sha: "one", title: "one")
+        let stack = GGStack(
+            name: "stack",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: 0,
+            currentPosition: nil,
+            behindBase: nil,
+            entries: [entry]
+        )
+
+        #expect(CommitsSectionView.genericGitActionsAllowed(for: entry, in: stack))
+        #expect(CommitsSectionView.genericGitActionsAllowed(for: nil, in: stack))
+        #expect(CommitsSectionView.genericGitActionsAllowed(for: entry, in: nil))
+    }
+
+    @Test func sectionCountIncludesPrimaryAndOlderRows() {
+        let primary = [commit(sha: "one"), commit(sha: "two"), commit(sha: "three"), commit(sha: "four")]
+        let older = [commit(sha: "five"), commit(sha: "six")]
+
+        #expect(CommitsSectionView.sectionCount(primary: primary, older: older) == 6)
+        #expect(CommitsSectionView.sectionCount(primary: [], older: []) == nil)
+    }
 }
