@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+enum DiffReviewRailTooltip {
+    static func text(for file: DiffReviewFileSummary) -> String {
+        file.path
+    }
+}
+
 struct DiffReviewRail: View {
     let session: DiffReviewSessionModel
     @Binding var selectedFileID: DiffReviewFileID
@@ -10,6 +16,25 @@ struct DiffReviewRail: View {
     let onSelectFile: (DiffReviewFileID) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var filterQuery = ""
+
+    init(
+        session: DiffReviewSessionModel,
+        selectedFileID: Binding<DiffReviewFileID>,
+        collapsed: Binding<Bool>,
+        displayControls: DiffReviewDisplayControlBindings? = nil,
+        threads: [ReviewThread] = [],
+        filterQuery: String = "",
+        onSelectFile: @escaping (DiffReviewFileID) -> Void
+    ) {
+        self.session = session
+        _selectedFileID = selectedFileID
+        _collapsed = collapsed
+        self.displayControls = displayControls
+        self.threads = threads
+        _filterQuery = State(initialValue: filterQuery)
+        self.onSelectFile = onSelectFile
+    }
 
     // MARK: - Thread counts
 
@@ -23,6 +48,10 @@ struct DiffReviewRail: View {
 
     private var resolvedThreadTotal: Int {
         threads.filter { $0.isResolved }.count
+    }
+
+    private var filteredSession: DiffReviewSessionModel {
+        DiffReviewRailFilter.session(session, matching: filterQuery)
     }
 
     var body: some View {
@@ -40,13 +69,28 @@ struct DiffReviewRail: View {
     }
 
     private var expandedBody: some View {
-        VStack(spacing: 0) {
+        let visibleSession = filteredSession
+        return VStack(spacing: 0) {
             expandedHeader
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(DiffReviewRailRows.rows(for: session)) { row in
-                            expandedRow(row)
+                        if DiffReviewRailFilter.isActive(filterQuery), visibleSession.files.isEmpty {
+                            Text("No matching files")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.color("fg-faint"))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 18)
+                                .background(
+                                    DiffReviewAccessibilityMarker(
+                                        identifier: "diff-review-rail-filter-empty",
+                                        label: "No matching files"
+                                    )
+                                )
+                        } else {
+                            ForEach(DiffReviewRailRows.rows(for: visibleSession)) { row in
+                                expandedRow(row)
+                            }
                         }
                     }
                     .padding(.horizontal, 8)
@@ -95,7 +139,8 @@ struct DiffReviewRail: View {
     }
 
     private var collapsedBody: some View {
-        VStack(spacing: 8) {
+        let visibleFiles = filteredSession.files
+        return VStack(spacing: 8) {
             collapseButton
                 .padding(.top, 8)
             Divider()
@@ -104,7 +149,7 @@ struct DiffReviewRail: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 6) {
-                        ForEach(session.files) { file in
+                        ForEach(visibleFiles) { file in
                             collapsedMarker(for: file)
                                 .id(file.id.rawValue)
                         }
@@ -146,6 +191,8 @@ struct DiffReviewRail: View {
             if let displayControls {
                 DiffReviewDisplayControls(bindings: displayControls)
             }
+
+            DiffReviewRailFilterField(text: $filterQuery)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -313,7 +360,7 @@ struct DiffReviewRail: View {
                 }
             }
         )
-        .help(file.path)
+        .help(DiffReviewRailTooltip.text(for: file))
     }
 
     private func collapsedMarker(for file: DiffReviewFileSummary) -> some View {
@@ -360,7 +407,7 @@ struct DiffReviewRail: View {
                 }
             }
         )
-        .help(file.path)
+        .help(DiffReviewRailTooltip.text(for: file))
     }
 
     private func threadBadge(_ count: Int) -> some View {
@@ -397,6 +444,53 @@ struct DiffReviewRail: View {
         case .modified, .unknown:
             theme.color("fg-dim")
         }
+    }
+}
+
+private struct DiffReviewRailFilterField: View {
+    @Binding var text: String
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-dim"))
+                .accessibilityHidden(true)
+            TextField("Filter files…", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg"))
+                .autocorrectionDisabled(true)
+                .accessibilityIdentifier("diff-review-rail-filter-field")
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear file filter")
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "diff-review-rail-filter-clear",
+                        label: "Clear file filter"
+                    )
+                )
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(theme.color("bg-1"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .compositingGroup()
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

@@ -117,6 +117,76 @@ struct DiffReviewModelsTests {
         #expect(ids.contains("file:staged:staged:Sources/App.swift"))
     }
 
+    @Test func railFilterFuzzyMatchesFullRelativePathsWithoutReorderingFiles() {
+        let firstMatch = summary(path: "Sources/Auth/LoginView.swift")
+        let skipped = summary(path: "Sources/EditorView.swift")
+        let secondMatch = summary(path: "Tests/Auth/LoginViewTests.swift")
+        let session = DiffReviewSessionModel(
+            files: [firstMatch, skipped, secondMatch],
+            groupsEnabled: false
+        )
+
+        let filtered = DiffReviewRailFilter.session(session, matching: "AUTHLOGIN")
+
+        #expect(filtered.files.map(\.id) == [firstMatch.id, secondMatch.id])
+    }
+
+    @Test func railFilterTreatsWhitespaceOnlyQueryAsInactive() {
+        let session = DiffReviewSessionModel(files: [
+            summary(path: "Sources/App.swift"),
+            summary(path: "Tests/AppTests.swift"),
+        ], groupsEnabled: false)
+
+        let filtered = DiffReviewRailFilter.session(session, matching: "  \n\t ")
+
+        #expect(filtered == session)
+        #expect(!DiffReviewRailFilter.isActive("  \n\t "))
+    }
+
+    @Test func railFilterPrunesEmptyGroupsDirectoriesAndDividers() {
+        let session = DiffReviewSessionModel(files: [
+            summary(
+                path: "Sources/Auth/LoginView.swift",
+                namespace: "unstaged",
+                groupID: "unstaged",
+                groupTitle: "Unstaged"
+            ),
+            summary(
+                path: "Sources/EditorView.swift",
+                namespace: "unstaged",
+                groupID: "unstaged",
+                groupTitle: "Unstaged"
+            ),
+            summary(
+                path: "Tests/Auth/LoginViewTests.swift",
+                namespace: "staged",
+                groupID: "staged",
+                groupTitle: "Staged"
+            ),
+            summary(
+                path: "Docs/ReleaseNotes.md",
+                namespace: "other",
+                groupID: "other",
+                groupTitle: "Other"
+            ),
+        ], groupsEnabled: true)
+
+        let filtered = DiffReviewRailFilter.session(session, matching: "authlogin")
+        let rows = DiffReviewRailRows.rows(for: filtered)
+
+        #expect(filtered.groups.map(\.id) == ["unstaged", "staged"])
+        #expect(filtered.groups.map(\.fileCount) == [1, 1])
+        #expect(rows.map(\.id) == [
+            "source:unstaged",
+            "directory:unstaged:Sources/Auth:0",
+            "file:unstaged:unstaged:Sources/Auth/LoginView.swift",
+            "divider:unstaged",
+            "source:staged",
+            "directory:staged:Tests/Auth:0",
+            "file:staged:staged:Tests/Auth/LoginViewTests.swift",
+        ])
+    }
+
     @Test func fileSummaryCodableRoundTripDerivesIdentityFromNamespaceAndPath() throws {
         let data = Data("""
         {

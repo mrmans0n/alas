@@ -580,6 +580,77 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-selected-\(files[1].id.rawValue)", in: controller.view) != nil)
     }
 
+    @Test func railFilterNarrowsNavigationWithoutChangingSelectionAndPersistsAcrossCollapse() async {
+        let files = [
+            summary(path: "Sources/App/AlphaView.swift", additions: 4, deletions: 1),
+            summary(path: "Tests/BetaTests.swift", status: .added, additions: 12, deletions: 0),
+        ]
+        let model = DiffReviewRailHarnessModel(selectedFileID: files[0].id)
+        let controller = host(
+            DiffReviewRailHarness(
+                session: DiffReviewSessionModel(files: files, groupsEnabled: false),
+                model: model,
+                filterQuery: "beta"
+            )
+            .environment(\.theme, theme()),
+            width: 280,
+            height: 500
+        )
+        await drainSwiftUI(controller.view)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: controller.view) != nil)
+        #expect(model.selectedFileID == files[0].id)
+
+        model.collapsed = true
+        await drainSwiftUI(controller.view)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-\(files[0].id.rawValue)", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-\(files[1].id.rawValue)", in: controller.view) != nil)
+
+        model.collapsed = false
+        await drainSwiftUI(controller.view)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: controller.view) != nil)
+    }
+
+    @Test func railFilterShowsEmptyStateAndUnfilteredRailRestoresAllFiles() async {
+        let files = [
+            summary(path: "Sources/App/AlphaView.swift"),
+            summary(path: "Tests/BetaTests.swift"),
+        ]
+        let model = DiffReviewRailHarnessModel(selectedFileID: files[0].id)
+        let controller = host(
+            DiffReviewRailHarness(
+                session: DiffReviewSessionModel(files: files, groupsEnabled: false),
+                model: model,
+                filterQuery: "missing"
+            )
+            .environment(\.theme, theme()),
+            width: 280,
+            height: 500
+        )
+        await drainSwiftUI(controller.view)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-filter-empty", in: controller.view) != nil)
+
+        let unfilteredController = host(
+            DiffReviewRailHarness(
+                session: DiffReviewSessionModel(files: files, groupsEnabled: false),
+                model: model
+            )
+            .environment(\.theme, theme()),
+            width: 280,
+            height: 500
+        )
+        await drainSwiftUI(unfilteredController.view)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-filter-empty", in: unfilteredController.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: unfilteredController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: unfilteredController.view) != nil)
+    }
+
+    @Test func railFileTooltipUsesRelativePath() {
+        let file = summary(path: "Sources/Deeply/Nested/FeatureView.swift")
+        #expect(DiffReviewRailTooltip.text(for: file) == "Sources/Deeply/Nested/FeatureView.swift")
+    }
+
     @Test func railSelectedFileRowsUseSidebarSelectionTreatment() {
         #expect(DiffReviewRailSelectedRowStyle.backgroundToken == "bg-4")
         #expect(DiffReviewRailSelectedRowStyle.fileDepthIndent == 6)
@@ -4851,6 +4922,33 @@ struct DiffReviewSurfaceTests {
             return label
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
+    }
+}
+
+@MainActor
+@Observable
+private final class DiffReviewRailHarnessModel {
+    var selectedFileID: DiffReviewFileID
+    var collapsed = false
+
+    init(selectedFileID: DiffReviewFileID) {
+        self.selectedFileID = selectedFileID
+    }
+}
+
+private struct DiffReviewRailHarness: View {
+    let session: DiffReviewSessionModel
+    @Bindable var model: DiffReviewRailHarnessModel
+    var filterQuery = ""
+
+    var body: some View {
+        DiffReviewRail(
+            session: session,
+            selectedFileID: $model.selectedFileID,
+            collapsed: $model.collapsed,
+            filterQuery: filterQuery,
+            onSelectFile: { model.selectedFileID = $0 }
+        )
     }
 }
 

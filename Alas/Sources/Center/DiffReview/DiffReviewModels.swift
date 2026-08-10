@@ -511,6 +511,29 @@ struct DiffReviewRailRow: Equatable, Identifiable {
     let kind: Kind
 }
 
+enum DiffReviewRailFilter {
+    static func session(
+        _ session: DiffReviewSessionModel,
+        matching query: String
+    ) -> DiffReviewSessionModel {
+        let query = normalizedQuery(query)
+        guard !query.isEmpty else { return session }
+
+        let files = session.files.filter { file in
+            FuzzyMatch.score(query: query, target: file.path) != nil
+        }
+        return DiffReviewSessionModel(files: files, groupsEnabled: session.groupsEnabled)
+    }
+
+    static func isActive(_ query: String) -> Bool {
+        !normalizedQuery(query).isEmpty
+    }
+
+    private static func normalizedQuery(_ query: String) -> String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 enum DiffReviewRailRows {
     static func rows(for session: DiffReviewSessionModel) -> [DiffReviewRailRow] {
         if !session.groupsEnabled {
