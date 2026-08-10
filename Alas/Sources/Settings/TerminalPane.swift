@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct TerminalPane: View {
@@ -49,10 +50,11 @@ struct TerminalPane: View {
                 SettingsGroup(title: "Startup scripts") {
                     SettingsRow(name: "Run on session open",
                                 desc: "Executed in every new terminal pane after the shell starts.") {
-                        TextEditor(text: state.bind(\.terminal.startupScript))
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(theme.color("fg"))
-                            .scrollContentBackground(.hidden)
+                        PairedTextEditor(
+                            text: state.bind(\.terminal.startupScript),
+                            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                            textColor: NSColor(theme.color("fg"))
+                        )
                             .frame(minHeight: 80)
                             .padding(8)
                             .background(theme.color("bg-0"))
@@ -60,10 +62,11 @@ struct TerminalPane: View {
                     }
                     SettingsRow(name: "Run on worktree create",
                                 desc: "Executed once after a worktree is created.") {
-                        TextEditor(text: state.bind(\.terminal.worktreeCreateScript))
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(theme.color("fg"))
-                            .scrollContentBackground(.hidden)
+                        PairedTextEditor(
+                            text: state.bind(\.terminal.worktreeCreateScript),
+                            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                            textColor: NSColor(theme.color("fg"))
+                        )
                             .frame(minHeight: 60)
                             .padding(8)
                             .background(theme.color("bg-0"))

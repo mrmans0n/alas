@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Shared layout for prompt-editor windows (Commit, Merge Resolve all,
@@ -25,9 +26,10 @@ struct PromptEditorBody: View {
                         .font(.system(size: 12.5))
                         .foregroundColor(theme.color("fg-dim"))
                 }
-                TextEditor(text: $draftPrompt)
-                    .font(.system(size: 12, design: .monospaced))
-                    .scrollContentBackground(.hidden)
+                PairedTextEditor(
+                    text: $draftPrompt,
+                    font: .monospacedSystemFont(ofSize: 12, weight: .regular)
+                )
                     .background(theme.color("bg-2"))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
