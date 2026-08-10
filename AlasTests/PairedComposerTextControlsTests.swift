@@ -66,6 +66,23 @@ struct PairedComposerTextControlsTests {
         #expect(markedTextView.string == "(")
     }
 
+    @Test func nativeTextInsertionBypassesSingleDelimiterPairing() {
+        let emptyInsertion = makePairedTextView()
+        emptyInsertion.performNativeTextInsertion {
+            emptyInsertion.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        #expect(emptyInsertion.string == "(")
+        #expect(emptyInsertion.selectedRange() == NSRange(location: 1, length: 0))
+
+        let selectedInsertion = makePairedTextView(text: "value")
+        selectedInsertion.setSelectedRange(NSRange(location: 0, length: 5))
+        selectedInsertion.performNativeTextInsertion {
+            selectedInsertion.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        #expect(selectedInsertion.string == "`")
+        #expect(selectedInsertion.selectedRange() == NSRange(location: 1, length: 0))
+    }
+
     @Test func pairedInsertionIsOneUndoableEdit() {
         let textView = makePairedTextView(text: "value")
         let window = NSWindow(

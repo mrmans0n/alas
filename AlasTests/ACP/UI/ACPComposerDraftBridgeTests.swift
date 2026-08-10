@@ -548,6 +548,17 @@ struct ACPComposerDraftBridgeTests {
         #expect(typingFont.pointSize == 13)
     }
 
+    @Test("plain paste insertion bypasses single delimiter pairing")
+    func plainPasteInsertionBypassesSingleDelimiterPairing() {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+
+        let inserted = textView.insertPlainText("(")
+
+        #expect(inserted)
+        #expect(textView.string == "(")
+        #expect(textView.selectedRange() == NSRange(location: 1, length: 0))
+    }
+
     @Test("plain paste insertion replaces selected text with normalized styling")
     func plainPasteInsertionReplacesSelectionWithNormalizedStyling() throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))

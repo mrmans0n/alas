@@ -1048,7 +1048,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         )
         let attrs = baseTypingAttributes
         typingAttributes = attrs
-        insertText(text, replacementRange: boundedRange)
+        performNativeTextInsertion {
+            insertText(text, replacementRange: boundedRange)
+        }
         typingAttributes = attrs
         return true
     }

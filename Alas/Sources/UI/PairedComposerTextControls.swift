@@ -2,8 +2,13 @@ import AppKit
 import SwiftUI
 
 class PairedDelimiterTextView: NSTextView {
+    private var bypassesPairedDelimiterResolution = false
+
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        guard !hasMarkedText(), let insertedText = Self.plainText(from: insertString) else {
+        guard !bypassesPairedDelimiterResolution,
+              !hasMarkedText(),
+              let insertedText = Self.plainText(from: insertString)
+        else {
             super.insertText(insertString, replacementRange: replacementRange)
             return
         }
@@ -42,6 +47,18 @@ class PairedDelimiterTextView: NSTextView {
         case .native:
             super.insertText(insertString, replacementRange: replacementRange)
         }
+    }
+
+    override func paste(_ sender: Any?) {
+        performNativeTextInsertion {
+            super.paste(sender)
+        }
+    }
+
+    func performNativeTextInsertion(_ insert: () -> Void) {
+        bypassesPairedDelimiterResolution = true
+        defer { bypassesPairedDelimiterResolution = false }
+        insert()
     }
 
     private static func plainText(from value: Any) -> String? {
