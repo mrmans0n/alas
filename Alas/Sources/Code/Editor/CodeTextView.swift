@@ -13,16 +13,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         case dismiss
     }
 
-    private static let pairedDelimiters: [Character: Character] = [
-        "(": ")",
-        "[": "]",
-        "{": "}",
-        "\"": "\"",
-        "'": "'",
-        "`": "`"
-    ]
-
-    private static let closingDelimiters: Set<Character> = [")", "]", "}"]
+    private static let indentationClosingDelimiters: Set<Character> = [")", "]", "}"]
 
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
@@ -235,7 +226,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private func editForCharacter(_ character: Character, at range: NSRange) -> MultiCursorEdit? {
         // Closing delimiter dedent
-        if Self.closingDelimiters.contains(character),
+        if Self.indentationClosingDelimiters.contains(character),
            indentationMode == .bracketAware,
            let edit = IndentationHelper.closingDelimiterEdit(in: string, selectedRange: range, delimiter: character, mode: indentationMode) {
             return MultiCursorEdit(
@@ -245,31 +236,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             )
         }
 
-        // Paired delimiter
-        if let closing = Self.pairedDelimiters[character] {
-            if shouldInsertPair(opening: character, closing: closing, range: range) {
-                let current = string as NSString
-                let selectedText = range.length > 0 ? current.substring(with: range) : ""
-                let replacement = "\(character)\(selectedText)\(closing)"
-                let resultingSelection: NSRange
-                if range.length > 0 {
-                    resultingSelection = NSRange(location: range.location + 1, length: range.length)
-                } else {
-                    resultingSelection = NSRange(location: range.location + 1, length: 0)
-                }
-                return MultiCursorEdit(originalRange: range, replacement: replacement, resultingSelection: resultingSelection)
-            }
-            if character == closing, range.length == 0, nextCharacter(at: range.location) == character {
-                return MultiCursorEdit(originalRange: range, replacement: "", resultingSelection: NSRange(location: range.location + 1, length: 0))
-            }
-        }
-
-        // Closing delimiter step-over (non-paired)
-        if Self.closingDelimiters.contains(character), range.length == 0, nextCharacter(at: range.location) == character {
+        switch PairedDelimiterEditing.resolve(insertedText: String(character), in: string, selectedRange: range) {
+        case let .wrap(opening, closing), let .insertPair(opening, closing):
+            let current = string as NSString
+            let selectedText = range.length > 0 ? current.substring(with: range) : ""
+            return MultiCursorEdit(
+                originalRange: range,
+                replacement: "\(opening)\(selectedText)\(closing)",
+                resultingSelection: NSRange(location: range.location + 1, length: range.length)
+            )
+        case .stepOver:
             return MultiCursorEdit(originalRange: range, replacement: "", resultingSelection: NSRange(location: range.location + 1, length: 0))
+        case .native:
+            return nil
         }
-
-        return nil
     }
 
     // MARK: - Text insertion overrides
@@ -327,7 +307,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         }
 
         // NEW: Closing delimiter dedent for whitespace-only lines
-        if Self.closingDelimiters.contains(character),
+        if Self.indentationClosingDelimiters.contains(character),
            indentationMode == .bracketAware,
            let edit = IndentationHelper.closingDelimiterEdit(in: string, selectedRange: range, delimiter: character, mode: indentationMode) {
             insertTextAfterTextEdit(edit.replacement, replacementRange: edit.replacementRange)
@@ -335,20 +315,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
 
-        if let closing = Self.pairedDelimiters[character] {
-            if shouldInsertPair(opening: character, closing: closing, range: range) {
-                insertPairedDelimiter(opening: character, closing: closing, replacementRange: range)
-                return
-            }
-            if character == closing, range.length == 0, nextCharacter(at: range.location) == character {
-                setSelectedRange(NSRange(location: range.location + 1, length: 0))
-                return
-            }
-        }
-
-        if Self.closingDelimiters.contains(character), range.length == 0, nextCharacter(at: range.location) == character {
+        switch PairedDelimiterEditing.resolve(insertedText: text, in: string, selectedRange: range) {
+        case let .wrap(opening, closing), let .insertPair(opening, closing):
+            insertPairedDelimiter(opening: opening, closing: closing, replacementRange: range)
+            return
+        case .stepOver:
             setSelectedRange(NSRange(location: range.location + 1, length: 0))
             return
+        case .native:
+            break
         }
 
         insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
@@ -894,11 +869,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private func insertPairedDelimiter(opening: Character, closing: Character, replacementRange range: NSRange) {
         let current = string as NSString
-        if opening == closing, range.length == 0, nextCharacter(at: range.location) == closing {
-            setSelectedRange(NSRange(location: range.location + 1, length: 0))
-            return
-        }
-
         let selectedText = range.length > 0 ? current.substring(with: range) : ""
         let replacement = "\(opening)\(selectedText)\(closing)"
         insertTextAfterTextEdit(replacement, replacementRange: range)
@@ -910,22 +880,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         }
     }
 
-    private func shouldInsertPair(opening: Character, closing: Character, range: NSRange) -> Bool {
-        guard opening == closing, range.length == 0 else { return true }
-
-        if isEscapedByBackslash(at: range.location) { return false }
-        if isIdentifierLike(characterBefore: range.location) { return false }
-        if isIdentifierLike(characterAfter: range.location) { return false }
-
-        return true
-    }
-
-    private func nextCharacter(at location: Int) -> Character? {
-        let nsString = string as NSString
-        guard location < nsString.length else { return nil }
-        return Character(nsString.substring(with: NSRange(location: location, length: 1)))
-    }
-
     private func previousCharacter(before location: Int) -> Character? {
         guard location > 0 else { return nil }
         let nsString = string as NSString
@@ -933,25 +887,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         return Character(nsString.substring(with: NSRange(location: location - 1, length: 1)))
     }
 
-    private func isIdentifierLike(characterBefore location: Int) -> Bool {
-        guard let character = previousCharacter(before: location) else { return false }
-        return character.isLetter || character.isNumber || character == "_"
-    }
-
-    private func isIdentifierLike(characterAfter location: Int) -> Bool {
-        guard let character = nextCharacter(at: location) else { return false }
-        return character.isLetter || character.isNumber || character == "_"
-    }
-
-    private func isEscapedByBackslash(at location: Int) -> Bool {
-        var cursor = location
-        var backslashCount = 0
-        while previousCharacter(before: cursor) == "\\" {
-            backslashCount += 1
-            cursor -= 1
-        }
-        return backslashCount % 2 == 1
-    }
 }
 
 extension CodeTextView {
