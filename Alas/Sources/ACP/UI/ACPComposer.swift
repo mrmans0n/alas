@@ -563,7 +563,7 @@ extension NSAttributedString.Key {
     static let imageAttachmentMime = NSAttributedString.Key("alas.acp.imageAttachmentMime")
 }
 
-final class ACPNSTextView: NSTextView {
+final class ACPNSTextView: PairedDelimiterTextView {
     weak var coordinator: ACPInputField.Coordinator?
     private var chatTypography: ACPChatTypography = .default
 
