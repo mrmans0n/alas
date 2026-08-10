@@ -1253,7 +1253,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     }
 }
 
-private final class ReviewDraftComposerNSTextView: NSTextView {
+private final class ReviewDraftComposerNSTextView: PairedDelimiterTextView {
     var onKeyboardAction: (@MainActor (ReviewDraftComposerKeyboardAction) -> Void)?
     var onWindowChanged: (@MainActor () -> Void)?
 
@@ -2430,10 +2430,11 @@ struct DiffReviewInlineFeedbackCard: View {
         let availability = actions.availability(item, file)
         if replyEditorBinding.wrappedValue.isReplying {
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Reply", text: replyEditorBinding.body, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(theme.color("fg"))
+                PairedTextEditor(
+                    text: replyEditorBinding.body,
+                    font: .systemFont(ofSize: 11.5),
+                    textColor: NSColor(theme.color("fg"))
+                )
                     .padding(7)
                     .background(theme.color("bg-1"))
                     .clipShape(RoundedRectangle(cornerRadius: 5))

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct VerdictSheet: View {
@@ -8,6 +9,22 @@ struct VerdictSheet: View {
     @State private var verdict: ReviewVerdict = .comment
     @State private var summaryBody = ""
     @Environment(\.theme) private var theme
+
+    init(
+        pendingCount: Int,
+        initialVerdict: ReviewVerdict = .comment,
+        onSubmit: @escaping (ReviewVerdict, String) -> Void = { _, _ in },
+        onCancel: @escaping () -> Void = {}
+    ) {
+        self.pendingCount = pendingCount
+        self.onSubmit = onSubmit
+        self.onCancel = onCancel
+        _verdict = State(initialValue: initialVerdict)
+    }
+
+    private var canSubmit: Bool {
+        verdict != .requestChanges || !summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -26,9 +43,11 @@ struct VerdictSheet: View {
                 Text(verdict == .requestChanges ? "Summary (required)" : "Summary (optional)")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.color("fg-dim"))
-                TextEditor(text: $summaryBody)
-                    .font(.system(size: 12))
-                    .scrollContentBackground(.hidden)
+                PairedTextEditor(
+                    text: $summaryBody,
+                    font: .systemFont(ofSize: 12),
+                    textColor: NSColor(theme.color("fg"))
+                )
                     .frame(minHeight: 80)
                     .background(theme.color("bg-1"))
                     .overlay(
@@ -43,7 +62,16 @@ struct VerdictSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
-                .disabled(verdict == .requestChanges && summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .background(
+                    VerdictSheetPressMarker(
+                        identifier: "verdict-submit-review",
+                        label: "Submit review",
+                        isEnabled: canSubmit
+                    ) {
+                        onSubmit(verdict, summaryBody)
+                    }
+                )
+                .disabled(!canSubmit)
 
                 Button("Cancel") {
                     onCancel()
@@ -92,5 +120,45 @@ struct VerdictSheet: View {
         }
         .buttonStyle(.plain)
         .help(label)
+    }
+}
+
+private struct VerdictSheetPressMarker: NSViewRepresentable {
+    let identifier: String
+    let label: String
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> VerdictSheetPressView {
+        let view = VerdictSheetPressView(frame: .zero)
+        view.setAccessibilityElement(true)
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isPressEnabled = isEnabled
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: VerdictSheetPressView, context: Context) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isPressEnabled = isEnabled
+        view.action = action
+    }
+}
+
+private final class VerdictSheetPressView: NSView {
+    var isPressEnabled = true
+    var action: () -> Void = {}
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isPressEnabled else { return false }
+        action()
+        return true
     }
 }
