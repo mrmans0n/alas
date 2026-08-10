@@ -94,7 +94,6 @@ struct PairedComposerTextControlsTests {
             submitCount += 1
         })
         let window = attach(controller, size: NSSize(width: 360, height: 120))
-        defer { ComposerControlRetainer.retain(window, controller) }
         await drain(controller.view)
 
         let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
@@ -114,6 +113,13 @@ struct PairedComposerTextControlsTests {
         #expect(field.stringValue == "`value`")
         #expect(model.text == "`value`")
         #expect(editor.selectedRange() == NSRange(location: 1, length: 5))
+        #expect(editor.undoManager?.canUndo == true)
+
+        editor.undoManager?.undo()
+        await drain(controller.view)
+
+        #expect(editor.string == "value")
+        #expect(model.text == "value")
 
         field.sendAction(field.action, to: field.target)
         #expect(submitCount == 1)
@@ -126,13 +132,14 @@ struct PairedComposerTextControlsTests {
         model.isFocused = true
         await drain(controller.view)
         #expect(window.firstResponder === window.fieldEditor(false, for: field))
+
+        await dismantle(model: model, controller: controller, window: window)
     }
 
     @Test func textEditorSynchronizesExternalConfigurationAndDisabledState() async throws {
         let model = ComposerControlModel(text: "start", isFocused: false)
         let controller = NSHostingController(rootView: PairedTextEditorHarness(model: model))
         let window = attach(controller, size: NSSize(width: 360, height: 180))
-        defer { ComposerControlRetainer.retain(window, controller) }
         await drain(controller.view)
 
         let textView = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
@@ -163,13 +170,14 @@ struct PairedComposerTextControlsTests {
         #expect(window.makeFirstResponder(sink))
         await drain(controller.view)
         #expect(model.isFocused == false)
+
+        await dismantle(model: model, controller: controller, window: window)
     }
 
     @Test func textFieldUpdatesExternalConfigurationAndDisabledState() async throws {
         let model = ComposerControlModel(text: "initial", isFocused: false)
         let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
         let window = attach(controller, size: NSSize(width: 360, height: 120))
-        defer { ComposerControlRetainer.retain(window, controller) }
         await drain(controller.view)
 
         let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
@@ -185,6 +193,62 @@ struct PairedComposerTextControlsTests {
         #expect(field.font?.pointSize == 16)
         #expect(field.textColor == .systemBlue)
         #expect(field.isEnabled == false)
+
+        await dismantle(model: model, controller: controller, window: window)
+    }
+
+    @Test func updatingInactiveFieldDoesNotTouchSiblingFieldEditor() async throws {
+        let firstModel = ComposerControlModel(text: "alpha", isFocused: false)
+        let secondModel = ComposerControlModel(text: "bravo", isFocused: true)
+        let controller = NSHostingController(rootView: TwoPairedTextFieldsHarness(
+            firstModel: firstModel,
+            secondModel: secondModel
+        ))
+        let window = attach(controller, size: NSSize(width: 360, height: 120))
+        await drain(controller.view)
+
+        let fields = subviews(of: PairedTextFieldBackingView.self, in: controller.view)
+        #expect(fields.count == 2)
+        let firstField = try #require(fields.first { $0.stringValue == "alpha" })
+        let secondField = try #require(fields.first { $0.stringValue == "bravo" })
+        let secondEditor = try #require(secondField.currentEditor() as? NSTextView)
+        #expect(window.firstResponder === secondEditor)
+        secondEditor.setSelectedRange(NSRange(location: 1, length: 3))
+
+        firstModel.text = "alpha updated"
+        firstModel.fontSize = 17
+        await drain(controller.view)
+
+        #expect(firstField.stringValue == "alpha updated")
+        #expect(secondField.currentEditor() === secondEditor)
+        #expect(window.firstResponder === secondEditor)
+        #expect(secondEditor.string == "bravo")
+        #expect(secondEditor.selectedRange() == NSRange(location: 1, length: 3))
+        #expect(secondModel.isFocused)
+
+        firstModel.isPresented = false
+        secondModel.isPresented = false
+        await drain(controller.view)
+        #expect(firstField.delegate == nil)
+        #expect(secondField.delegate == nil)
+        #expect(window.firstResponder !== secondEditor)
+    }
+
+    @Test func representablesDismantleWithoutRetainingHost() async throws {
+        let model = ComposerControlModel(text: "lifecycle", isFocused: false)
+        let controller = NSHostingController(rootView: PairedControlLifecycleHarness(model: model))
+        await drain(controller.view)
+
+        let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        let editor = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
+
+        model.isPresented = false
+        await drain(controller.view)
+
+        #expect(field.delegate == nil)
+        #expect(editor.delegate == nil)
+        #expect(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view) == nil)
+        #expect(firstSubview(of: PairedDelimiterTextView.self, in: controller.view) == nil)
     }
 
     private func makePairedTextView(text: String = "") -> PairedDelimiterTextView {
@@ -216,8 +280,20 @@ struct PairedComposerTextControlsTests {
         return window
     }
 
+    private func dismantle<Content: View>(
+        model: ComposerControlModel,
+        controller: NSHostingController<Content>,
+        window: NSWindow
+    ) async {
+        model.isPresented = false
+        await drain(controller.view)
+        #expect(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view) == nil)
+        #expect(firstSubview(of: PairedDelimiterTextView.self, in: controller.view) == nil)
+        withExtendedLifetime(window) {}
+    }
+
     private func drain(_ view: NSView) async {
-        for _ in 0..<6 {
+        for _ in 0..<12 {
             view.layoutSubtreeIfNeeded()
             try? await Task.sleep(nanoseconds: 1_000_000)
             await Task.yield()
@@ -231,14 +307,11 @@ struct PairedComposerTextControlsTests {
         }
         return nil
     }
-}
 
-@MainActor
-private final class ComposerControlRetainer {
-    private static var retainedObjects: [AnyObject] = []
-
-    static func retain(_ objects: AnyObject...) {
-        retainedObjects.append(contentsOf: objects)
+    private func subviews<T: NSView>(of type: T.Type, in view: NSView) -> [T] {
+        var matches = view.subviews.compactMap { $0 as? T }
+        matches.append(contentsOf: view.subviews.flatMap { subviews(of: type, in: $0) })
+        return matches
     }
 }
 
@@ -249,6 +322,7 @@ private final class ComposerControlModel: ObservableObject {
     @Published var isEnabled = true
     @Published var fontSize: CGFloat = 13
     @Published var textColor = NSColor.labelColor
+    @Published var isPresented = true
 
     init(text: String, isFocused: Bool) {
         self.text = text
@@ -263,16 +337,18 @@ private struct PairedTextFieldHarness: View {
 
     var body: some View {
         VStack {
-            PairedTextField(
-                text: $model.text,
-                placeholder: "Compose",
-                font: .systemFont(ofSize: model.fontSize),
-                textColor: model.textColor,
-                isEnabled: model.isEnabled,
-                isFocused: $model.isFocused,
-                onSubmit: onSubmit
-            )
-            .frame(height: 28)
+            if model.isPresented {
+                PairedTextField(
+                    text: $model.text,
+                    placeholder: "Compose",
+                    font: .systemFont(ofSize: model.fontSize),
+                    textColor: model.textColor,
+                    isEnabled: model.isEnabled,
+                    isFocused: $model.isFocused,
+                    onSubmit: onSubmit
+                )
+                .frame(height: 28)
+            }
             ComposerFocusSinkRepresentable()
         }
     }
@@ -284,16 +360,63 @@ private struct PairedTextEditorHarness: View {
 
     var body: some View {
         VStack {
-            PairedTextEditor(
+            if model.isPresented {
+                PairedTextEditor(
+                    text: $model.text,
+                    font: .systemFont(ofSize: model.fontSize),
+                    textColor: model.textColor,
+                    isEnabled: model.isEnabled,
+                    isFocused: $model.isFocused,
+                    textContainerInset: NSSize(width: 7, height: 9)
+                )
+                .frame(height: 100)
+            }
+            ComposerFocusSinkRepresentable()
+        }
+    }
+}
+
+@MainActor
+private struct TwoPairedTextFieldsHarness: View {
+    let firstModel: ComposerControlModel
+    let secondModel: ComposerControlModel
+
+    var body: some View {
+        VStack {
+            PairedTextFieldLeaf(model: firstModel)
+            PairedTextFieldLeaf(model: secondModel)
+        }
+    }
+}
+
+@MainActor
+private struct PairedControlLifecycleHarness: View {
+    @ObservedObject var model: ComposerControlModel
+
+    var body: some View {
+        if model.isPresented {
+            VStack {
+                PairedTextField(text: $model.text)
+                PairedTextEditor(text: $model.text)
+            }
+        }
+    }
+}
+
+@MainActor
+private struct PairedTextFieldLeaf: View {
+    @ObservedObject var model: ComposerControlModel
+
+    var body: some View {
+        if model.isPresented {
+            PairedTextField(
                 text: $model.text,
                 font: .systemFont(ofSize: model.fontSize),
                 textColor: model.textColor,
                 isEnabled: model.isEnabled,
-                isFocused: $model.isFocused,
-                textContainerInset: NSSize(width: 7, height: 9)
+                isFocused: $model.isFocused
             )
-            .frame(height: 100)
-            ComposerFocusSinkRepresentable()
+            .frame(height: 28)
         }
     }
 }

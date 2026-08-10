@@ -121,9 +121,15 @@ struct PairedTextField: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ field: PairedTextFieldBackingView, coordinator: Coordinator) {
+        let window = field.window
+        let editor = field.currentEditor()
+        coordinator.stopObservingUndoManager()
         field.onWindowChanged = nil
         field.delegate = nil
         field.target = nil
+        if let editor, window?.firstResponder === editor {
+            window?.makeFirstResponder(nil)
+        }
     }
 
     private func applyConfiguration(to field: NSTextField, coordinator: Coordinator) {
@@ -160,6 +166,8 @@ struct PairedTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: PairedTextField
         private var isApplyingPairedEdit = false
+        private weak var observedUndoManager: UndoManager?
+        private var undoObservers: [NSObjectProtocol] = []
 
         init(_ parent: PairedTextField) {
             self.parent = parent
@@ -214,6 +222,7 @@ struct PairedTextField: NSViewRepresentable {
                     string: String(closing),
                     attributes: textView.typingAttributes
                 ))
+                observeUndoChanges(for: control as? NSTextField, textView: textView)
                 apply(replacement, to: textView, range: affectedCharRange)
                 textView.setSelectedRange(NSRange(
                     location: affectedCharRange.location + 1,
@@ -226,6 +235,7 @@ struct PairedTextField: NSViewRepresentable {
                     string: String(opening) + String(closing),
                     attributes: textView.typingAttributes
                 )
+                observeUndoChanges(for: control as? NSTextField, textView: textView)
                 apply(replacement, to: textView, range: affectedCharRange)
                 textView.setSelectedRange(NSRange(location: affectedCharRange.location + 1, length: 0))
                 return false
@@ -253,10 +263,37 @@ struct PairedTextField: NSViewRepresentable {
         }
 
         func fieldEditor(for field: NSTextField) -> NSTextView? {
-            guard let window = field.window,
-                  window.firstResponder === field || window.firstResponder === window.fieldEditor(false, for: field)
-            else { return nil }
-            return window.fieldEditor(false, for: field) as? NSTextView
+            field.currentEditor() as? NSTextView
+        }
+
+        func stopObservingUndoManager() {
+            for observer in undoObservers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            undoObservers.removeAll()
+            observedUndoManager = nil
+        }
+
+        private func observeUndoChanges(for field: NSTextField?, textView: NSTextView) {
+            guard let field, let undoManager = textView.undoManager,
+                  observedUndoManager !== undoManager
+            else { return }
+
+            stopObservingUndoManager()
+            observedUndoManager = undoManager
+            for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+                undoObservers.append(NotificationCenter.default.addObserver(
+                    forName: name,
+                    object: undoManager,
+                    queue: .main
+                ) { [weak self, weak field] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, let field else { return }
+                        let value = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+                        self.updateText(value)
+                    }
+                })
+            }
         }
 
         private func apply(_ replacement: NSAttributedString, to textView: NSTextView, range: NSRange) {
@@ -361,9 +398,13 @@ struct PairedTextEditor: NSViewRepresentable {
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         guard let textView = scrollView.documentView as? PairedTextEditorBackingView else { return }
+        let window = textView.window
         textView.onWindowChanged = nil
         textView.delegate = nil
         coordinator.textView = nil
+        if window?.firstResponder === textView {
+            window?.makeFirstResponder(nil)
+        }
     }
 
     private func applyConfiguration(to textView: PairedDelimiterTextView) {
