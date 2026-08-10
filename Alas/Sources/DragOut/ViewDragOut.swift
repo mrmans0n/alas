@@ -36,7 +36,7 @@ extension View {
 private final class DragOutState: ObservableObject {
     var armed = false
     var began = false
-    var resolveTask: Task<URL?, Never>?
+    var resolveTask: Task<DragOutPreparedItem?, Never>?
     var beginTask: Task<Void, Never>?
 
     /// Called when the gesture ends without a drag ever lifting (a plain
@@ -67,7 +67,7 @@ private struct DragOutModifier: ViewModifier {
                     if !state.armed, travel >= DragOutActivation.prefetchDistance {
                         state.armed = true
                         if let payload = payload() {
-                            state.resolveTask = Task { await payload.resolve() }
+                            state.resolveTask = Task { await payload.prepare() }
                         }
                     }
                     guard !state.began,
@@ -77,12 +77,12 @@ private struct DragOutModifier: ViewModifier {
                     state.began = true
                     let state = state
                     state.beginTask = Task { @MainActor in
-                        guard let url = await resolveTask.value, !Task.isCancelled,
+                        guard let prepared = await resolveTask.value, !Task.isCancelled,
                               let event = NSApp.currentEvent,
                               event.type == .leftMouseDragged || event.type == .leftMouseDown,
                               let view = event.window?.contentView
                         else { return }        // no reset: onEnded will clean up
-                        DragOutSession.shared.begin(url: url, event: event, in: view)
+                        DragOutSession.shared.begin(prepared: prepared, event: event, in: view)
                         state.reset()          // only here — onEnded won't fire
                     }
                 }

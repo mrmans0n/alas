@@ -804,6 +804,7 @@
 		85B8A8B929BD4ED4DC21FEDD /* ACPDelayedHoverVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE3D3BB0A631D42AD22DBE0F /* ACPDelayedHoverVisibility.swift */; };
 		85C7E65296AB9500FF52060A /* session-update-plan.json in Resources */ = {isa = PBXBuildFile; fileRef = 7094534860369BA79FC5A877 /* session-update-plan.json */; };
 		85EAA2D64D794E045BDF7532 /* MergeAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C14BF0C745544F99CB3C6006 /* MergeAgentTests.swift */; };
+		861DC3733D8F7A5339C3489E /* AlasDropPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23CC75D28C2EE22D16E24964 /* AlasDropPayload.swift */; };
 		864B31874E286ED036347975 /* ACPLaunchSpecNpmPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BDB3231FFACC0398F973876 /* ACPLaunchSpecNpmPackageTests.swift */; };
 		86718F7E55531B8E4356D7D1 /* PaneTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2943FBB1D6371EFAC9BBE68 /* PaneTree.swift */; };
 		86759BF3DE64FFAA4FE98822 /* ACPPromptCapabilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2D7EA3F2B69C0A8D2F8F8A5 /* ACPPromptCapabilitiesTests.swift */; };
@@ -1771,6 +1772,7 @@
 		2379C3F8504AD2EE73130AC4 /* LSPInstallProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstallProgressSheet.swift; sourceTree = "<group>"; };
 		239125BB939233233D405EB8 /* ACPChipStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChipStateTests.swift; sourceTree = "<group>"; };
 		2392A88D394E21DAB8C6EF33 /* ConflictMarkerParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictMarkerParser.swift; sourceTree = "<group>"; };
+		23CC75D28C2EE22D16E24964 /* AlasDropPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasDropPayload.swift; sourceTree = "<group>"; };
 		23FECFF5D8673A3A8E7A1431 /* DiffSelectableTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffSelectableTextView.swift; sourceTree = "<group>"; };
 		2440A9DE95B4F783AA69A355 /* ShortcutBindingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutBindingTests.swift; sourceTree = "<group>"; };
 		2449596651B3FE84E8E3832B /* CodeHostProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHostProviderTests.swift; sourceTree = "<group>"; };
@@ -5072,6 +5074,7 @@
 		B7F55BCF5A6A07CC612FB354 /* DragOut */ = {
 			isa = PBXGroup;
 			children = (
+				23CC75D28C2EE22D16E24964 /* AlasDropPayload.swift */,
 				38228AE1419253ADBC80E226 /* DragOutPayload.swift */,
 				4610C65B69BD08EF8DF12311 /* DragOutSession.swift */,
 				12DA5ED8195BBE603DFC5B61 /* RevisionSnapshotCache.swift */,
@@ -6203,6 +6206,7 @@
 				29806D50EECB300991471A7C /* AlasCLIRequest.swift in Sources */,
 				DC8458FA4C5FCC854BB46B96 /* AlasCLIReviewTargetResolver.swift in Sources */,
 				00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */,
+				861DC3733D8F7A5339C3489E /* AlasDropPayload.swift in Sources */,
 				24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */,
 				9CCB74669051D30EF12FE306 /* AlasGhostty.App.swift in Sources */,
 				8744A1DB40A1EC0D01D4C895 /* AlasGhostty.Config.swift in Sources */,

@@ -13,7 +13,65 @@ struct DragOutPayloadTests {
     @Test func workingTreeFileJoinsTheWorktreePath() {
         let root = URL(fileURLWithPath: "/tmp/wt")
         let payload = DragOutPayload.workingTreeFile(worktreePath: root, relativePath: "a/b.txt")
-        #expect(payload == .onDisk(URL(fileURLWithPath: "/tmp/wt/a/b.txt")))
+        #expect(payload == .onDisk(
+            URL(fileURLWithPath: "/tmp/wt/a/b.txt"),
+            insertion: .file(relativePath: "a/b.txt", absolutePath: "/tmp/wt/a/b.txt")
+        ))
+    }
+
+    @Test func dropPayloadRoundTripsWithoutLosingPathForms() throws {
+        let original = AlasDropPayload.file(
+            relativePath: "Sources/drag me.swift",
+            absolutePath: "/tmp/work tree/Sources/drag me.swift"
+        )
+
+        let encoded = try #require(original.encoded())
+        #expect(AlasDropPayload.decode(encoded) == original)
+    }
+
+    @Test func dropPayloadRejectsMalformedData() {
+        #expect(AlasDropPayload.decode(Data("not-json".utf8)) == nil)
+    }
+
+    @Test func missingWorkingTreeFileStillPreparesAnInternalPath() async throws {
+        let dir = try makeTempDir("missing-internal")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let payload = DragOutPayload.workingTreeFile(worktreePath: dir, relativePath: "gone.txt")
+
+        let prepared = try #require(await payload.prepare())
+        #expect(prepared.dropPayload == .file(
+            relativePath: "gone.txt",
+            absolutePath: dir.appendingPathComponent("gone.txt").path
+        ))
+        #expect(prepared.fileURL == nil)
+        #expect(prepared.publicText == nil)
+    }
+
+    @Test func remoteWorkingTreeFilePreparesAsInternalTextOnly() async throws {
+        let dir = try makeTempDir("remote-internal")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        RemoteHostRegistry.shared.register(root: dir.path, host: "example")
+        defer { RemoteHostRegistry.shared.unregister(root: dir.path) }
+
+        let payload = DragOutPayload.workingTreeFile(worktreePath: dir, relativePath: "a.txt")
+        let prepared = try #require(await payload.prepare())
+
+        #expect(prepared.dropPayload == .file(
+            relativePath: "a.txt",
+            absolutePath: dir.appendingPathComponent("a.txt").path
+        ))
+        #expect(prepared.fileURL == nil)
+        #expect(prepared.publicText == nil)
+    }
+
+    @Test func fullSHAHasInternalAndPublicTextRepresentations() async throws {
+        let sha = "0123456789abcdef0123456789abcdef01234567"
+
+        let prepared = try #require(await DragOutPayload.commitSHA(sha).prepare())
+
+        #expect(prepared.dropPayload == .commitSHA(sha))
+        #expect(prepared.fileURL == nil)
+        #expect(prepared.publicText == sha)
     }
 
     @Test func trackedStashFileUsesTheStashSHA() {
