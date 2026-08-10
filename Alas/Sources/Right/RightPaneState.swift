@@ -440,8 +440,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 },
                 refreshStack: { [weak self] in
                     guard let self else { return }
-                    self.ggStackCommitsKey = nil
-                    await self.refreshGGStack()
+                    await self.reevaluateGGGate().value
                 },
                 refreshGitChanges: { [weak self] in await self?.refresh() },
                 refreshProviderReviews: { [weak self] in await self?.refresh(forceReviewLoopRemote: true) },

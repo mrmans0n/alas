@@ -226,6 +226,86 @@ private final class ReentrantSyncFakeGGRunner: GGCommandRunning, @unchecked Send
     }
 }
 
+/// Provides the three real calls made by a sync mutation: preflight stack
+/// read, sync output, and post-sync stack refresh. The post-sync refresh
+/// remains suspended until cancellation so a replacement gate refresh can
+/// prove it owns that work through `ggStackRefreshTask`.
+private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
+    private let preflightResult = ProcessResult(
+        exitCode: 0,
+        stdout: GGStackModelsTests.fixture,
+        stderr: ""
+    )
+    private let replacementResult = ProcessResult(
+        exitCode: 0,
+        stdout: GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "replacement-stack"
+        ),
+        stderr: ""
+    )
+    private let syncSummary = #"{"event":"summary"}"#
+
+    private var lsCallCount = 0
+    private var postSyncReadSuspended = false
+    private var postSyncReadCancellationObserved = false
+    private var postSyncReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var postSyncReadContinuation: CheckedContinuation<ProcessResult, Error>?
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        if args == ["sync", "--json"] || args == ["sync", "--jsonl"] {
+            return ProcessResult(exitCode: 0, stdout: syncSummary, stderr: "")
+        }
+        guard args == ["ls", "--json"] else {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+        }
+        lsCallCount += 1
+        switch lsCallCount {
+        case 1:
+            return preflightResult
+        case 2:
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    postSyncReadSuspended = true
+                    postSyncReadContinuation = continuation
+                    let waiters = postSyncReadWaiters
+                    postSyncReadWaiters.removeAll()
+                    for waiter in waiters { waiter.resume() }
+                }
+            } onCancel: {
+                Task { await self.cancelPostSyncRead() }
+            }
+        case 3:
+            return replacementResult
+        default:
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected stack read")
+        }
+    }
+
+    func waitUntilPostSyncReadSuspends() async {
+        if postSyncReadSuspended { return }
+        await withCheckedContinuation { postSyncReadWaiters.append($0) }
+    }
+
+    func didObservePostSyncReadCancellation() -> Bool {
+        postSyncReadCancellationObserved
+    }
+
+    func releasePostSyncRead() {
+        postSyncReadContinuation?.resume(returning: replacementResult)
+        postSyncReadContinuation = nil
+    }
+
+    private func cancelPostSyncRead() {
+        postSyncReadCancellationObserved = true
+        postSyncReadContinuation?.resume(throwing: CancellationError())
+        postSyncReadContinuation = nil
+    }
+}
+
 private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
@@ -1843,6 +1923,30 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
         #expect(state.ggActionState.syncProgress.isEmpty)
+    }
+
+    @Test func postMutationStackRefreshIsCancelledByReplacementRefresh() async {
+        let worktree = makeWorktree()
+        let runner = PostMutationRefreshCancellationRunner()
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "s", count: 40), stackShaped: true),
+        ]
+
+        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        await runner.waitUntilPostSyncReadSuspends()
+
+        await state.reevaluateGGGate().value
+
+        #expect(await runner.didObservePostSyncReadCancellation())
+        #expect(state.ggStack?.name == "replacement-stack")
+        #expect(state.ggActionState.inFlightAction == nil)
+        #expect(state.ggActionState.lastActionSummary == "Synced")
+        #expect(state.ggActionState.syncProgress.isEmpty)
+
+        await runner.releasePostSyncRead()
     }
 
     @Test func repeatedSyncInvocationIsSilentlyIgnoredAtUIBoundary() async throws {
