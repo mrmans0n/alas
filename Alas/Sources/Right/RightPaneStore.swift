@@ -341,12 +341,15 @@ final class RightPaneStore {
     func refreshActiveGGPresentationForProjectRevision(
         projectId: String
     ) -> Task<Void, Never>? {
+        let projectStates = states.values.filter { $0.worktree.projectId == projectId }
+        for state in projectStates {
+            state.ggStackCommitsKey = nil
+        }
         guard let activeId,
               let state = states[activeId],
               state.worktree.projectId == projectId,
               state.ggContext.isActive
         else { return nil }
-        state.ggStackCommitsKey = nil
         return Task { @MainActor in
             await state.refreshGGStack()
         }

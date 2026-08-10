@@ -1414,6 +1414,48 @@ struct RightPaneGGStackTests {
         app.stopProjectGitWatcher(projectId: project.id)
     }
 
+    @Test func projectRevisionInvalidatesInactiveCachedGGPresentation() async throws {
+        let store = RightPaneStore()
+        let inactiveWorktree = makeWorktree()
+        let activeWorktree = makeWorktree()
+        let inactive = store.state(
+            for: inactiveWorktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        let active = store.state(
+            for: activeWorktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+
+        inactive.stop()
+        active.stop()
+        inactive.ggContext = .active(stackName: "agent-inbox")
+        inactive.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+        inactive.ggStackCommitsKey = inactive.currentGGStackCommitsKey
+        inactive.ggStackLoadState = .loaded
+        active.ggService = GGService(runner: CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        ))
+        active.ggContext = .active(stackName: "agent-inbox")
+        active.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        active.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+        installFakeGGStackLoader(on: active)
+
+        let task = try #require(store.refreshActiveGGPresentationForProjectRevision(
+            projectId: inactiveWorktree.projectId
+        ))
+        await task.value
+
+        #expect(inactive.ggStackCommitsKey == nil)
+        #expect(store.ggStackSnapshotForWorktreePath(
+            inactiveWorktree.path.path,
+            effectiveContext: .active(stackName: "agent-inbox")
+        )?.loadState == .loading)
+        #expect(active.ggStackLoadState == .loaded)
+    }
+
     /// `reevaluateGGGate()` must clear stale stack state immediately when the
     /// gate flips closed (e.g. the Settings master toggle goes off), rather
     /// than waiting for the next watcher-driven refresh. `reevaluateGGGate()`
