@@ -130,6 +130,31 @@ private final class RecordingUndoMarkerStore: GGUndoMarkerStoring, @unchecked Se
     }
 }
 
+private actor FirstRefreshSuspension {
+    private var didSuspend = false
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var completion: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        guard !didSuspend else { return }
+        didSuspend = true
+        let waiters = suspensionWaiters
+        suspensionWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        await withCheckedContinuation { completion = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        if didSuspend { return }
+        await withCheckedContinuation { suspensionWaiters.append($0) }
+    }
+
+    func resume() {
+        completion?.resume()
+        completion = nil
+    }
+}
+
 @MainActor
 private final class GGMutationHarness {
     enum Refresh: Equatable {
@@ -1411,6 +1436,47 @@ struct GGMutationCoordinatorTests {
         #expect(harness.service.requests == [.undo(operationID: candidate.id)])
         #expect(harness.coordinator.undoCandidate == nil)
         #expect(harness.markers.operationID(worktreeId: "wt") == nil)
+    }
+
+    @Test func completedUndoDoesNotClearNewerUndoCandidateAfterRefresh() async throws {
+        let undoneOperation = GGOperationSummary(
+            id: "op_undone", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:undone", "reorder"],
+            stackName: "feature", touchedRemote: false, isUndoable: true
+        )
+        let newerOperation = GGOperationSummary(
+            id: "op_newer", kind: "squash", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:test-1", "sc"],
+            stackName: "feature", touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        harness.markers.set(operationID: undoneOperation.id, worktreeId: "wt")
+        harness.service.operationLists = [
+            [undoneOperation],
+            [undoneOperation],
+            [newerOperation],
+        ]
+        await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+        let refresh = FirstRefreshSuspension()
+        harness.onRefreshStack = { await refresh.suspend() }
+
+        let undoTask = try #require(harness.coordinator.startApplying(
+            .undo(operationID: undoneOperation.id),
+            confirmedAgainst: nil
+        ))
+        await refresh.waitUntilSuspended()
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: newerOperation))
+        #expect(harness.markers.operationID(worktreeId: "wt") == newerOperation.id)
+
+        await refresh.resume()
+        try await undoTask.value
+
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: newerOperation))
+        #expect(harness.markers.operationID(worktreeId: "wt") == newerOperation.id)
     }
 
     @Test func lastDropPersistsNoStackEvidenceBeforeRefreshReconcilesUndo() async throws {

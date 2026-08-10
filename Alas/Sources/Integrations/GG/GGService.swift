@@ -78,9 +78,9 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 
     private static func isStackQuery(_ args: [String]) -> Bool {
-        args.indices.dropLast().contains { index in
-            args[index] == "ls" && args[args.index(after: index)] == "--json"
-        }
+        let commandIndex = args.first == "--client-operation-id" ? 2 : 0
+        guard args.indices.contains(commandIndex), args[commandIndex] == "ls" else { return false }
+        return args[args.index(after: commandIndex)...].contains("--json")
     }
 
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the

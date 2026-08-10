@@ -34,7 +34,9 @@ struct GGServiceTests {
             (["ls", "--json", "--client-operation-id", "alas:1"], Process.defaultTimeout),
             (["sync", "--json"], 600),
             (["sync", "--help"], 600),
-            (["ls"], 600)
+            (["ls"], 600),
+            (["land", "--until", "ls", "--json", "--no-clean"], 600),
+            (["--client-operation-id", "alas:1", "land", "--until", "ls", "--json", "--no-clean"], 600)
         ]
 
         for (args, expectedTimeout) in cases {

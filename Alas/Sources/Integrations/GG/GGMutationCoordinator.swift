@@ -290,9 +290,8 @@ final class GGMutationCoordinator {
             reconcilePausedState(after: request, error: nil)
             releaseAction()
             await refresh(after: request, result: result)
-            if request.isUndo {
-                undoCandidate = nil
-                undoMarkerStore.clear(worktreeId: worktreeId)
+            if case .undo(let operationID) = request {
+                clearUndoCandidate(forOperationID: operationID)
             }
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
@@ -623,6 +622,15 @@ final class GGMutationCoordinator {
             worktreeId: worktreeId
         )
         undoCandidate = GGUndoCandidate(operation: newest)
+    }
+
+    private func clearUndoCandidate(forOperationID operationID: String) {
+        if undoCandidate?.operationID == operationID {
+            undoCandidate = nil
+        }
+        if undoMarkerStore.marker(worktreeId: worktreeId)?.operationID == operationID {
+            undoMarkerStore.clear(worktreeId: worktreeId)
+        }
     }
 }
 
