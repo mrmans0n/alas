@@ -440,8 +440,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 },
                 refreshStack: { [weak self] in
                     guard let self else { return }
-                    self.ggStackCommitsKey = nil
-                    await self.refreshGGStack()
+                    await self.reevaluateGGGate().value
                 },
                 refreshGitChanges: { [weak self] in await self?.refresh() },
                 refreshProviderReviews: { [weak self] in await self?.refresh(forceReviewLoopRemote: true) },
@@ -1580,33 +1579,44 @@ final class RightPaneState: GGSplitCommitServicing {
         runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
     }
 
-    private func runGGMutation(_ request: GGMutationRequest, confirmedAgainst identity: GGStackIdentity? = nil) {
+    @discardableResult
+    func runGGMutation(
+        _ request: GGMutationRequest,
+        confirmedAgainst identity: GGStackIdentity? = nil
+    ) -> Task<Void, Never>? {
         guard let operation = ggMutationCoordinator.startApplying(
             request,
             confirmedAgainst: identity
-        ) else { return }
-        Task { @MainActor in
+        ) else { return nil }
+        let actionGeneration = ggActionState.actionGeneration
+        return Task { @MainActor in
             do {
                 try await operation.value
             } catch {
-                if ggActionState.lastError == nil {
-                    ggActionState.setError(GGErrorPresentation.message(for: error))
-                }
+                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
             }
         }
     }
 
-    private func runGGMutation(_ prepared: GGPreparedMutation) {
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
-        Task { @MainActor in
+    @discardableResult
+    func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
+        let actionGeneration = ggActionState.actionGeneration
+        return Task { @MainActor in
             do {
                 try await operation.value
             } catch {
-                if ggActionState.lastError == nil {
-                    ggActionState.setError(GGErrorPresentation.message(for: error))
-                }
+                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
             }
         }
+    }
+
+    private func publishGGMutationPresentationError(
+        _ error: Error,
+        forActionGeneration generation: UInt
+    ) {
+        guard ggActionState.shouldPublishError(forActionGeneration: generation) else { return }
+        ggActionState.setError(GGErrorPresentation.message(for: error))
     }
 
     func markSnapshotUnknown() {

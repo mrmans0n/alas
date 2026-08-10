@@ -128,6 +128,7 @@ final class GGMutationCoordinator {
         }
         do {
             let newest = try await service.listUndoOperations(worktreePath: worktreePath, limit: 1).first
+            guard undoMarkerStore.marker(worktreeId: worktreeId) == marker else { return }
             guard let newest,
                   newest.id == marker.operationID,
                   newest.matchesUndoScope(currentStackName: currentStackName, marker: marker),
@@ -144,6 +145,7 @@ final class GGMutationCoordinator {
             }
             undoCandidate = GGUndoCandidate(operation: newest)
         } catch {
+            guard undoMarkerStore.marker(worktreeId: worktreeId) == marker else { return }
             undoCandidate = nil
         }
     }
@@ -213,7 +215,10 @@ final class GGMutationCoordinator {
         confirmedAgainst identity: GGStackIdentity?,
         confirmedWith confirmation: GGMutationConfirmation?
     ) async throws {
-        defer {
+        var didReleaseAction = false
+        func releaseAction() {
+            guard !didReleaseAction else { return }
+            didReleaseAction = true
             activeRequest = nil
             actionState.endAction(request.actionKind)
             if request == .sync,
@@ -222,6 +227,7 @@ final class GGMutationCoordinator {
                 actionState.clearSyncProgress()
             }
         }
+        defer { releaseAction() }
 
         let isRecoveryRequest = request == .continueOperation || request == .abortOperation
         let snapshot: GGStackSnapshot?
@@ -284,10 +290,10 @@ final class GGMutationCoordinator {
             )
             recordSummary(for: request, result: result)
             reconcilePausedState(after: request, error: nil)
+            releaseAction()
             await refresh(after: request, result: result)
-            if request.isUndo {
-                undoCandidate = nil
-                undoMarkerStore.clear(worktreeId: worktreeId)
+            if case .undo(let operationID) = request {
+                clearUndoCandidate(forOperationID: operationID)
             }
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
@@ -304,6 +310,7 @@ final class GGMutationCoordinator {
                 }
                 if actionState.lastError == nil { actionState.setError(error.userMessage) }
             }
+            releaseAction()
             await refresh(after: request, result: .none)
             if toleratesMalformedRemoteOutput { return }
             throw error
@@ -311,6 +318,7 @@ final class GGMutationCoordinator {
             reconcilePausedState(after: request, error: error)
             if request == .sync { actionState.markSyncTerminalFailure() }
             actionState.setError(error.localizedDescription)
+            releaseAction()
             await refresh(after: request, result: .none)
             throw error
         }
@@ -616,6 +624,15 @@ final class GGMutationCoordinator {
             worktreeId: worktreeId
         )
         undoCandidate = GGUndoCandidate(operation: newest)
+    }
+
+    private func clearUndoCandidate(forOperationID operationID: String) {
+        if undoCandidate?.operationID == operationID {
+            undoCandidate = nil
+        }
+        if undoMarkerStore.marker(worktreeId: worktreeId)?.operationID == operationID {
+            undoMarkerStore.clear(worktreeId: worktreeId)
+        }
     }
 }
 

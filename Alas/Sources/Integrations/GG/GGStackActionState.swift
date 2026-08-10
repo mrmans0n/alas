@@ -31,6 +31,7 @@ final class GGStackActionState {
     private(set) var lastError: String?
     private(set) var pausedOperation: GGPausedOperation?
     private(set) var lastActionSummary: String?
+    @ObservationIgnored private(set) var actionGeneration: UInt = 0
 
     /// Returns false when another action is already running (one at a time).
     func beginAction(_ action: GGStackActionKind) -> Bool {
@@ -39,6 +40,7 @@ final class GGStackActionState {
         if syncHasTerminalFailure { syncHasTerminalFailure = false }
         if lastError != nil { lastError = nil }
         if lastActionSummary != nil { lastActionSummary = nil }
+        actionGeneration &+= 1
         inFlightAction = action
         return true
     }
@@ -52,6 +54,9 @@ final class GGStackActionState {
     func clearSyncProgress() { if !syncProgress.isEmpty { syncProgress = [] } }
     func markSyncTerminalFailure() {
         if inFlightAction == .sync, !syncHasTerminalFailure { syncHasTerminalFailure = true }
+    }
+    func shouldPublishError(forActionGeneration generation: UInt) -> Bool {
+        actionGeneration == generation && lastError == nil
     }
     func setError(_ message: String) { lastError = message }
     func clearError() { if lastError != nil { lastError = nil } }

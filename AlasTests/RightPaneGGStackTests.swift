@@ -226,6 +226,174 @@ private final class ReentrantSyncFakeGGRunner: GGCommandRunning, @unchecked Send
     }
 }
 
+/// Provides the three real calls made by a sync mutation: preflight stack
+/// read, sync output, and post-sync stack refresh. The post-sync refresh
+/// remains suspended until cancellation so a replacement gate refresh can
+/// prove it owns that work through `ggStackRefreshTask`.
+private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
+    private let preflightResult = ProcessResult(
+        exitCode: 0,
+        stdout: GGStackModelsTests.fixture,
+        stderr: ""
+    )
+    private let replacementResult = ProcessResult(
+        exitCode: 0,
+        stdout: GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "replacement-stack"
+        ),
+        stderr: ""
+    )
+    private let syncSummary = #"{"event":"summary"}"#
+
+    private var lsCallCount = 0
+    private var postSyncReadSuspended = false
+    private var postSyncReadCancellationObserved = false
+    private var postSyncReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var postSyncReadCancellationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var postSyncReadContinuation: CheckedContinuation<ProcessResult, Error>?
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        if args == ["sync", "--json"] || args == ["sync", "--jsonl"] {
+            return ProcessResult(exitCode: 0, stdout: syncSummary, stderr: "")
+        }
+        guard args == ["ls", "--json"] else {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+        }
+        lsCallCount += 1
+        switch lsCallCount {
+        case 1:
+            return preflightResult
+        case 2:
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    postSyncReadSuspended = true
+                    postSyncReadContinuation = continuation
+                    let waiters = postSyncReadWaiters
+                    postSyncReadWaiters.removeAll()
+                    for waiter in waiters { waiter.resume() }
+                }
+            } onCancel: {
+                Task { await self.cancelPostSyncRead() }
+            }
+        case 3:
+            return replacementResult
+        default:
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected stack read")
+        }
+    }
+
+    func waitUntilPostSyncReadSuspends() async {
+        if postSyncReadSuspended { return }
+        await withCheckedContinuation { postSyncReadWaiters.append($0) }
+    }
+
+    func didObservePostSyncReadCancellation() -> Bool {
+        postSyncReadCancellationObserved
+    }
+
+    func waitUntilPostSyncReadCancellationIsObserved() async {
+        if postSyncReadCancellationObserved { return }
+        await withCheckedContinuation { postSyncReadCancellationWaiters.append($0) }
+    }
+
+    func releasePostSyncRead() {
+        postSyncReadContinuation?.resume(returning: replacementResult)
+        postSyncReadContinuation = nil
+    }
+
+    private func cancelPostSyncRead() {
+        postSyncReadCancellationObserved = true
+        let waiters = postSyncReadCancellationWaiters
+        postSyncReadCancellationWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        postSyncReadContinuation?.resume(throwing: CancellationError())
+        postSyncReadContinuation = nil
+    }
+}
+
+/// Drives a failed mutation through its suspended post-mutation refresh while
+/// a replacement mutation is already running.
+private actor StaleMutationFailureRunner: GGCommandRunning {
+    private let stackResult = ProcessResult(
+        exitCode: 0,
+        stdout: GGStackModelsTests.fixture,
+        stderr: ""
+    )
+    private var stackReadCount = 0
+    private var syncCount = 0
+    private var firstRefreshSuspended = false
+    private var secondSyncSuspended = false
+    private var firstRefreshWaiters: [CheckedContinuation<Void, Never>] = []
+    private var secondSyncWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstRefreshContinuation: CheckedContinuation<ProcessResult, Error>?
+    private var secondSyncContinuation: CheckedContinuation<ProcessResult, Error>?
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        if args == ["sync", "--help"] {
+            return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        if args == ["sync", "--json"] || args == ["sync", "--jsonl"] {
+            syncCount += 1
+            if syncCount == 1 {
+                return ProcessResult(exitCode: 1, stdout: "", stderr: "mutation A failed")
+            }
+            return try await withCheckedThrowingContinuation { continuation in
+                secondSyncSuspended = true
+                secondSyncContinuation = continuation
+                let waiters = secondSyncWaiters
+                secondSyncWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        }
+        guard args == ["ls", "--json"] else {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+        }
+        stackReadCount += 1
+        switch stackReadCount {
+        case 1, 3, 4:
+            return stackResult
+        case 2:
+            return try await withCheckedThrowingContinuation { continuation in
+                firstRefreshSuspended = true
+                firstRefreshContinuation = continuation
+                let waiters = firstRefreshWaiters
+                firstRefreshWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        default:
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected stack read")
+        }
+    }
+
+    func waitUntilFirstRefreshSuspends() async {
+        if firstRefreshSuspended { return }
+        await withCheckedContinuation { firstRefreshWaiters.append($0) }
+    }
+
+    func waitUntilSecondSyncSuspends() async {
+        if secondSyncSuspended { return }
+        await withCheckedContinuation { secondSyncWaiters.append($0) }
+    }
+
+    func finishFirstRefresh() {
+        firstRefreshContinuation?.resume(returning: stackResult)
+        firstRefreshContinuation = nil
+    }
+
+    func finishSecondSync() {
+        secondSyncContinuation?.resume(returning: ProcessResult(
+            exitCode: 0,
+            stdout: #"{"event":"summary"}"#,
+            stderr: ""
+        ))
+        secondSyncContinuation = nil
+    }
+}
+
 private final class ConflictAfterSyncRunner: GGCommandRunning, @unchecked Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
@@ -1843,6 +2011,67 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
         #expect(state.ggActionState.syncProgress.isEmpty)
+    }
+
+    @Test func postMutationStackRefreshIsCancelledByReplacementRefresh() async {
+        let worktree = makeWorktree()
+        let runner = PostMutationRefreshCancellationRunner()
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "s", count: 40), stackShaped: true),
+        ]
+
+        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        await runner.waitUntilPostSyncReadSuspends()
+
+        await state.reevaluateGGGate().value
+
+        await runner.waitUntilPostSyncReadCancellationIsObserved()
+        #expect(await runner.didObservePostSyncReadCancellation())
+        #expect(state.ggStack?.name == "replacement-stack")
+        #expect(state.ggActionState.inFlightAction == nil)
+        #expect(state.ggActionState.lastActionSummary == "Synced")
+        #expect(state.ggActionState.syncProgress.isEmpty)
+
+        await runner.releasePostSyncRead()
+    }
+
+    @Test func staleMutationFailureDoesNotOverwriteNewerActionState() async throws {
+        let worktree = makeWorktree()
+        let runner = StaleMutationFailureRunner()
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "s", count: 40), stackShaped: true),
+        ]
+
+        let mutationA = try #require(state.runGGMutation(.sync))
+        await runner.waitUntilFirstRefreshSuspends()
+
+        let mutationB = try #require(state.runGGMutation(.sync))
+        await runner.waitUntilSecondSyncSuspends()
+        #expect(state.ggActionState.inFlightAction == .sync)
+        #expect(state.ggActionState.lastActionSummary == nil)
+        #expect(state.ggActionState.syncProgress.isEmpty)
+        #expect(state.ggActionState.lastError == nil)
+
+        await runner.finishFirstRefresh()
+        await mutationA.value
+
+        #expect(state.ggActionState.inFlightAction == .sync)
+        #expect(state.ggActionState.lastActionSummary == nil)
+        #expect(state.ggActionState.syncProgress.isEmpty)
+        #expect(state.ggActionState.lastError == nil)
+
+        await runner.finishSecondSync()
+        await mutationB.value
+
+        #expect(state.ggActionState.lastActionSummary == "Synced")
+        #expect(state.ggActionState.syncProgress.isEmpty)
+        #expect(state.ggActionState.lastError == nil)
     }
 
     @Test func repeatedSyncInvocationIsSilentlyIgnoredAtUIBoundary() async throws {

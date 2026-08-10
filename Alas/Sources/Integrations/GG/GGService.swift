@@ -37,20 +37,50 @@ extension GGCommandRunning {
 }
 
 struct ProcessGGCommandRunner: GGCommandRunning {
+    typealias ProcessLaunch = @Sendable (
+        _ executable: String,
+        _ args: [String],
+        _ cwd: URL?,
+        _ env: [String: String]?,
+        _ timeout: TimeInterval
+    ) async throws -> ProcessResult
+
     private static let commandTimeout: TimeInterval = 600
+    private let processLaunch: ProcessLaunch
+
+    init(
+        processLaunch: @escaping ProcessLaunch = { executable, args, cwd, env, timeout in
+            try await Process.run(
+                executable,
+                args: args,
+                cwd: cwd,
+                env: env,
+                timeout: timeout
+            )
+        }
+    ) {
+        self.processLaunch = processLaunch
+    }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
-        try await Process.run(
+        let timeout = Self.isStackQuery(args) ? Process.defaultTimeout : Self.commandTimeout
+        return try await processLaunch(
             "/usr/bin/env",
-            args: ["gg"] + args,
-            cwd: cwd,
-            env: Process.gitEnv(),
-            timeout: Self.commandTimeout
+            ["gg"] + args,
+            cwd,
+            Process.gitEnv(),
+            timeout
         )
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
         Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: Self.commandTimeout)
+    }
+
+    private static func isStackQuery(_ args: [String]) -> Bool {
+        let commandIndex = args.first == "--client-operation-id" ? 2 : 0
+        guard args.indices.contains(commandIndex), args[commandIndex] == "ls" else { return false }
+        return args[args.index(after: commandIndex)...].contains("--json")
     }
 
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the
