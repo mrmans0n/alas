@@ -1780,7 +1780,7 @@ enum DiffReviewInlineFeedbackMarkdown {
         )
     }
 
-    static func inlineMarkdown(_ source: String) -> NSAttributedString {
+    static func inlineMarkdown(_ source: String) -> AttributedString {
         ACPMarkdownText.inlineMarkdown(source)
     }
 
