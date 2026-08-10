@@ -200,6 +200,11 @@ struct CommitsSectionView: View {
         rps.ggCommitSelectionIsStale
     }
 
+    static func contextMenuGGID(for commit: CommitInfo, ggModeEnabled: Bool) -> String? {
+        guard ggModeEnabled else { return nil }
+        return GGCommitMetadata.ggID(in: commit.body)
+    }
+
     @ViewBuilder
     private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
@@ -213,6 +218,7 @@ struct CommitsSectionView: View {
                             onSelect: { onSelect(commit) },
                             onCopySHA: { onCopySHA(commit) },
                             onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+                            ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
                             onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
                             onEdit: { onEdit(commit) },
                             onReview: { onReview(commit) },
@@ -251,6 +257,7 @@ struct CommitsSectionView: View {
                             onSelect: { onSelect(commit) },
                             onCopySHA: { onCopySHA(commit) },
                             onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+                            ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
                             onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
                             onReview: { onReview(commit) },
                             onCherryPick: { rps.requestCherryPick(sha: commit.sha) },

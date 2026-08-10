@@ -67,6 +67,37 @@ struct CommitRowTests {
         #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: false) == [.edit])
     }
 
+    @Test func contextMenuPlacesGGIDAfterCommitMessage() {
+        #expect(CommitRow.copyContextMenuActions(ggID: "c-abc123") == [
+            .copySHA,
+            .copyMessage,
+            .copyGGID("c-abc123"),
+        ])
+        #expect(CommitRow.copyContextMenuActions(ggID: nil) == [
+            .copySHA,
+            .copyMessage,
+        ])
+    }
+
+    @Test func commitGGIDIsEligibleOnlyWhileGGModeIsActive() {
+        let commit = CommitInfo(
+            sha: "deadbeef1234567890abcdef1234567890abcdef",
+            shortSha: "deadbee",
+            author: "Nacho Lopez",
+            authorInitials: "NL",
+            date: Date(),
+            subject: "Wire stack identity copy",
+            body: "Details.\n\nGG-ID: c-abc123",
+            conventionalTag: nil,
+            filesChanged: 1,
+            insertions: 2,
+            deletions: 0
+        )
+
+        #expect(CommitsSectionView.contextMenuGGID(for: commit, ggModeEnabled: true) == "c-abc123")
+        #expect(CommitsSectionView.contextMenuGGID(for: commit, ggModeEnabled: false) == nil)
+    }
+
     @Test func ggContextMenuUsesStackedDiffsNameAndSharedIcon() {
         #expect(CommitRow.ggContextMenuTitle == "Stacked Diffs (GG)")
         #expect(CommitRow.ggContextMenuSystemImage == "square.stack.3d.up")

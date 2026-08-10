@@ -1,5 +1,21 @@
 import Foundation
 
+enum GGCommitMetadata {
+    static func ggID(in body: String) -> String? {
+        for line in body.split(whereSeparator: \.isNewline) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            guard trimmedLine.hasPrefix("GG-ID:") else { continue }
+
+            let value = trimmedLine.dropFirst("GG-ID:".count)
+                .trimmingCharacters(in: .whitespaces)
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+}
+
 /// Pure gating logic for the stacked-diffs integration. UI renders only
 /// when every gate passes: master toggle → gg installed → per-project
 /// mode → the current branch is actually stack-shaped.
@@ -136,10 +152,6 @@ enum GGStackGate {
     /// Gate 4: any commit ahead of base carries a `GG-ID:` trailer line.
     /// Pure check over already-loaded commit bodies — no extra git call.
     static func isStackShaped(commits: [CommitInfo]) -> Bool {
-        commits.contains { commit in
-            commit.body.split(whereSeparator: \.isNewline).contains {
-                $0.trimmingCharacters(in: .whitespaces).hasPrefix("GG-ID:")
-            }
-        }
+        commits.contains { GGCommitMetadata.ggID(in: $0.body) != nil }
     }
 }
