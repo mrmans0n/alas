@@ -87,6 +87,8 @@ struct PairedDelimiterEditingTests {
 
     @Test(arguments: [
         NSRange(location: NSNotFound, length: 0),
+        NSRange(location: -1, length: 0),
+        NSRange(location: 0, length: -1),
         NSRange(location: 6, length: 0),
         NSRange(location: 4, length: 2),
     ])

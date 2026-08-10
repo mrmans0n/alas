@@ -49,7 +49,11 @@ enum PairedDelimiterEditing {
     }
 
     private static func isValid(_ range: NSRange, in string: NSString) -> Bool {
-        range.location != NSNotFound && range.location <= string.length && range.length <= string.length - range.location
+        range.location != NSNotFound
+            && range.location >= 0
+            && range.length >= 0
+            && range.location <= string.length
+            && range.length <= string.length - range.location
     }
 
     private static func shouldInsertSymmetricPair(at location: Int, in string: NSString) -> Bool {
