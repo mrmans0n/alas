@@ -71,6 +71,10 @@ struct AppKitDiffReviewRowToken: Equatable {
     let focusedFeedbackID: String?
     let focusedDraftCommentID: String?
     let activeThreadID: String?
+    let inlineFeedbackReplying: Bool
+    let draftCommentEditing: Bool
+    let threadReplying: Bool
+    let editingThreadCommentID: String?
     let draftComposerFocused: Bool
     let actionPresence: AppKitDiffReviewActionPresence
 }
@@ -505,7 +509,8 @@ enum AppKitDiffReviewRowPlanBuilder {
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
                         append(
                             &rows, id: threadID, input: input, signature: String(reflecting: thread).hashValue,
-                            height: 112, retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable
+                            height: 112, retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable,
+                            threadEditorState: input.state.threadCommentEditors[thread.id]
                         ) {
                             AnyView(AppKitDiffReviewThreadRowBody(thread: thread, rows: segment.rows, input: input))
                         }
@@ -579,7 +584,8 @@ enum AppKitDiffReviewRowPlanBuilder {
                 input: input,
                 signature: String(reflecting: thread).hashValue,
                 height: 112,
-                retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable
+                retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable,
+                threadEditorState: input.state.threadCommentEditors[thread.id]
             ) {
                 AnyView(AppKitDiffReviewImageThreadRowBody(thread: thread, input: input))
             }
@@ -634,6 +640,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             &rows, id: id, input: input, signature: accessorySignature(item, contextRows: contextRows), height: 96,
             retention: input.state.activeInlineFeedbackEditorID == item.id ? .pinned : .recyclable,
             inlineAvailability: input.state.actionRelay.inlineFeedbackAvailability(for: item, file: input.file.summary),
+            inlineFeedbackReplying: input.state.inlineFeedbackReplyEditors[item.id]?.isReplying ?? false,
             contextRowCount: contextRows?.count
         ) {
             AnyView(AppKitDiffReviewInlineFeedbackRowBody(item: item, input: input, rows: contextRows))
@@ -657,6 +664,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             draftAgentTargets: (input.draftCommentActions ?? input.state.actionRelay.draftCommentActionsForRow)
                 .agentTargets(),
             reviewFeedbackTarget: input.reviewFeedbackTarget,
+            draftCommentEditing: input.state.draftCommentEditors[comment.id]?.isEditing ?? false,
             contextRowCount: contextRows?.count
         ) {
             AnyView(AppKitDiffReviewDraftCommentRowBody(comment: comment, input: input, rows: contextRows))
@@ -700,6 +708,9 @@ enum AppKitDiffReviewRowPlanBuilder {
         draftAvailability: ReviewDraftCommentActionAvailability? = nil,
         draftAgentTargets: [ReviewFeedbackAgentTarget] = [],
         reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
+        inlineFeedbackReplying: Bool = false,
+        draftCommentEditing: Bool = false,
+        threadEditorState: DiffInlineCommentCardEditorState? = nil,
         includesActiveHighlight: Bool = false,
         contextRowCount: Int? = nil,
         build: @escaping () -> AnyView
@@ -721,6 +732,10 @@ enum AppKitDiffReviewRowPlanBuilder {
             focusedFeedbackID: input.focusedFeedbackID,
             focusedDraftCommentID: input.focusedDraftCommentID,
             activeThreadID: input.state.activeThreadID,
+            inlineFeedbackReplying: inlineFeedbackReplying,
+            draftCommentEditing: draftCommentEditing,
+            threadReplying: threadEditorState?.isComposerOpen ?? false,
+            editingThreadCommentID: threadEditorState?.editingCommentID,
             draftComposerFocused: input.state.isDraftComposerFocused,
             actionPresence: input.actionPresence
         )

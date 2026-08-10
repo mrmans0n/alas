@@ -212,6 +212,36 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(plan.corePlan.rows.first { $0.id == threadID }?.retention == .pinned)
     }
 
+    @Test func editorModeChangesInvalidateTheirHostedRows() throws {
+        let file = textFile()
+        let feedback = feedback(line: 1)
+        let draft = draftComment(fileID: file.id)
+        let thread = DiffInlineCommentThread(
+            id: "thread", filePath: file.summary.path, newLine: 1, isOldSide: false,
+            isResolved: false, isOutdated: false, comments: []
+        )
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(
+            file: file, inlineFeedback: [feedback], draftComments: [draft], threads: [thread],
+            state: state, theme: theme
+        )
+        let feedbackID = AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: feedback.id, fileID: file.id))
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        let threadID = AppKitDiffReviewRowID.thread(fileID: file.id, threadID: thread.id)
+        let resting = AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan
+
+        state.bindingForInlineFeedbackReplyEditor(feedback.id).wrappedValue.isReplying = true
+        state.bindingForDraftCommentEditor(draft.id).wrappedValue.isEditing = true
+        state.bindingForThreadCommentEditor(thread.id).wrappedValue.editingCommentID = "comment"
+        let editing = AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan
+
+        for rowID in [feedbackID, draftID, threadID] {
+            let restingRow = try #require(resting.rows.first { $0.id == rowID })
+            let editingRow = try #require(editing.rows.first { $0.id == rowID })
+            #expect(!restingRow.equalityToken.isEqual(to: editingRow.equalityToken))
+        }
+    }
+
     @Test func consolidatedHunkRowsArePinnedWhileContainedThreadEditorIsActive() throws {
         let file = textFile()
         let thread = DiffInlineCommentThread(

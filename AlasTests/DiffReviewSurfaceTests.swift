@@ -272,6 +272,56 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func appKitReviewWindowOpensRestoredDraftCommentEditor() async throws {
+        let file = fileSection(
+            summary: summary(path: "Sources/RestoredDraft.swift"),
+            displayModel: displayModel()
+        )
+        let comment = draftComment(
+            id: "restored-draft",
+            fileID: file.id,
+            path: file.summary.path,
+            startLine: 2
+        )
+        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
+        model.draftCommentsByFileID = [file.id: [comment]]
+        model.draftCommentActions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }
+        )
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 500
+            )
+            let window = attachWindow(controller, width: 1_000, height: 500)
+            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+            await drainSwiftUI(controller.view)
+
+            #expect(pressAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-restored-draft",
+                in: controller.view
+            ))
+            await drainSwiftUI(controller.view)
+
+            #expect(subview(
+                withAccessibilityIdentifier: "diff-review-draft-comment-action-save-restored-draft",
+                in: controller.view
+            ) != nil)
+        }
+    }
+
     @Test func appKitReviewWindowExpandsContextThroughRenderedControl() async throws {
         let summary = summary(path: "Sources/ContextControl.swift")
         let file = fileSection(
@@ -5099,6 +5149,7 @@ private final class AppKitReviewSurfaceWindowModel {
     var whitespace = false
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
+    var draftCommentActions = ReviewDraftCommentActions()
     var inlineFeedbackCommand: DiffReviewInlineFeedbackScrollCommand?
     var draftCommentCommand: DiffReviewDraftCommentScrollCommand?
 
@@ -5125,7 +5176,8 @@ private struct AppKitReviewSurfaceWindowHarness: View {
             inlineFeedbackByFileID: model.inlineFeedbackByFileID,
             inlineFeedbackScrollCommand: model.inlineFeedbackCommand,
             draftCommentsByFileID: model.draftCommentsByFileID,
-            draftCommentScrollCommand: model.draftCommentCommand
+            draftCommentScrollCommand: model.draftCommentCommand,
+            draftCommentActions: model.draftCommentActions
         )
     }
 }
