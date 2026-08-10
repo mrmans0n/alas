@@ -27,6 +27,36 @@ private struct FakeGGRunner: GGCommandRunning {
 }
 
 struct GGServiceTests {
+    @Test func processRunnerUsesShortTimeoutOnlyForStackQueries() async throws {
+        let cases: [([String], TimeInterval)] = [
+            (["ls", "--json"], Process.defaultTimeout),
+            (["--client-operation-id", "alas:1", "ls", "--json"], Process.defaultTimeout),
+            (["ls", "--json", "--client-operation-id", "alas:1"], Process.defaultTimeout),
+            (["sync", "--json"], 600),
+            (["sync", "--help"], 600),
+            (["ls"], 600)
+        ]
+
+        for (args, expectedTimeout) in cases {
+            let invocation = ProcessLaunchInvocation()
+            let runner = ProcessGGCommandRunner { executable, launchArgs, cwd, _, timeout in
+                invocation.record(
+                    executable: executable,
+                    args: launchArgs,
+                    cwd: cwd,
+                    timeout: timeout
+                )
+                return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+            }
+
+            _ = try await runner.run(args: args, cwd: nil)
+
+            #expect(invocation.executable == "/usr/bin/env")
+            #expect(invocation.args == ["gg"] + args)
+            #expect(invocation.timeout == expectedTimeout)
+        }
+    }
+
     @Test func probeVersionParsesOutput() async {
         let runner = FakeGGRunner(
             result: ProcessResult(exitCode: 0, stdout: "gg 0.9.8\n", stderr: "")
@@ -88,5 +118,28 @@ struct GGServiceTests {
         #expect(GGServiceError.map(exitCode: 127, stderr: "anything") == .cliMissing)
         #expect(GGServiceError.map(exitCode: 1, stderr: "  boom \n") == .commandFailed(stderr: "boom"))
         #expect(GGServiceError.map(exitCode: 2, stderr: "") == .commandFailed(stderr: ""))
+    }
+}
+
+private final class ProcessLaunchInvocation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: (executable: String, args: [String], cwd: URL?, timeout: TimeInterval)?
+
+    var executable: String? {
+        lock.withLock { value?.executable }
+    }
+
+    var args: [String]? {
+        lock.withLock { value?.args }
+    }
+
+    var timeout: TimeInterval? {
+        lock.withLock { value?.timeout }
+    }
+
+    func record(executable: String, args: [String], cwd: URL?, timeout: TimeInterval) {
+        lock.withLock {
+            value = (executable: executable, args: args, cwd: cwd, timeout: timeout)
+        }
     }
 }
