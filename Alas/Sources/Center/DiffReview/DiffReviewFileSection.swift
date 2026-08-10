@@ -1782,7 +1782,19 @@ enum DiffReviewInlineFeedbackMarkdown {
 
     @MainActor
     static func inlineMarkdown(_ source: String) -> AttributedString {
-        ACPMarkdownText.inlineMarkdown(plainText(source))
+        let flattened = ACPMarkdownText.parse(source).map { block in
+            switch block {
+            case .heading(_, let text), .paragraph(let text), .quote(let text):
+                return text
+            case .taskList(let items):
+                return items.map(\.text).joined(separator: " ")
+            case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
+                return body
+            case .table(let header, let rows):
+                return ([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " ")
+            }
+        }.joined(separator: "\n")
+        return ACPMarkdownText.inlineMarkdown(flattened)
     }
 
     @MainActor
