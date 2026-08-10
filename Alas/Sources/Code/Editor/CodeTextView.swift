@@ -886,7 +886,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         guard location <= nsString.length else { return nil }
         return Character(nsString.substring(with: NSRange(location: location - 1, length: 1)))
     }
-
 }
 
 extension CodeTextView {
