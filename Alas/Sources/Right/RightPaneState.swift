@@ -2899,7 +2899,7 @@ final class RightPaneState: GGSplitCommitServicing {
         let cursor: String
         if let last = olderCommits.last {
             cursor = last.sha
-        } else if let last = commits.last {
+        } else if let last = commitsForDisplay.last {
             cursor = last.sha
         } else {
             cursor = "HEAD"
@@ -2913,8 +2913,8 @@ final class RightPaneState: GGSplitCommitServicing {
                 count: 20
             )
             let cursorStillValid = (olderCommits.last?.sha == cursor)
-                || (olderCommits.isEmpty && commits.last?.sha == cursor)
-                || (olderCommits.isEmpty && commits.isEmpty && cursor == "HEAD")
+                || (olderCommits.isEmpty && commitsForDisplay.last?.sha == cursor)
+                || (olderCommits.isEmpty && commitsForDisplay.isEmpty && cursor == "HEAD")
             guard cursorStillValid else { return }
             self.olderCommits.append(contentsOf: page)
             if page.count < 20 {

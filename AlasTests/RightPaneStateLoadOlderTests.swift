@@ -75,6 +75,26 @@ struct RightPaneStateLoadOlderTests {
         #expect(state.olderCommits[0].subject == "c25")
     }
 
+    @Test func hydratedGGDisplayRowsProvideTheFirstOlderHistoryCursor() async throws {
+        let repo = try await makeBranchAhead(base: 25, ahead: 3)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = RightPaneState(worktree: makeWorktree(at: repo, branch: "feature"), baseBranch: "main")
+        await state.refresh()
+        let displayedStack = state.commits
+        state.ggStackDisplayCommits = displayedStack
+        state.ggStackLoadState = .loaded
+        state.commits = []
+
+        await state.loadOlder()
+
+        let displayedSHAs = Set(state.commitsForDisplay.map(\.sha))
+        let olderSHAs = Set(state.olderCommits.map(\.sha))
+        #expect(state.olderCommits.count == 20)
+        #expect(state.olderCommits.first?.subject == "c25")
+        #expect(displayedSHAs.intersection(olderSHAs).isEmpty)
+        #expect(displayedSHAs.union(olderSHAs).count == 23)
+    }
+
     @Test func branchFetchMarksLoadingAndPublishesCompleteInitialList() async throws {
         let fixture = try await makeRepoWithRemoteBranches()
         defer {
