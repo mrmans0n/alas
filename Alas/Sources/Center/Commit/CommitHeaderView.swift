@@ -30,10 +30,11 @@ struct CommitHeaderView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     ScrollView(.vertical) {
                         expandedBlock
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: Self.maxExpandedHeight)
+                .frame(maxWidth: .infinity, maxHeight: Self.maxExpandedHeight, alignment: .leading)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
