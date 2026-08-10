@@ -28,6 +28,7 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
     var newestOperation: GGOperationSummary?
     var operationLists: [[GGOperationSummary]] = []
     var operationListCallCount = 0
+    var onListUndoOperations: (() async -> Void)?
     var restackPreview = GGRestackResult(
         stackName: "feature", totalEntries: 2, entriesRestacked: 1, entriesOK: 1,
         dryRun: true,
@@ -62,11 +63,15 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
     }
 
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary] {
-        defer { operationListCallCount += 1 }
+        let operations: [GGOperationSummary]
         if !operationLists.isEmpty {
-            return operationLists[min(operationListCallCount, operationLists.count - 1)]
+            operations = operationLists[min(operationListCallCount, operationLists.count - 1)]
+        } else {
+            operations = newestOperation.map { [$0] } ?? []
         }
-        return newestOperation.map { [$0] } ?? []
+        operationListCallCount += 1
+        await onListUndoOperations?()
+        return operations
     }
 
     func previewRestack(worktreePath: String) async throws -> GGRestackResult {
@@ -137,6 +142,38 @@ private actor FirstRefreshSuspension {
 
     func suspend() async {
         guard !didSuspend else { return }
+        didSuspend = true
+        let waiters = suspensionWaiters
+        suspensionWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        await withCheckedContinuation { completion = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        if didSuspend { return }
+        await withCheckedContinuation { suspensionWaiters.append($0) }
+    }
+
+    func resume() {
+        completion?.resume()
+        completion = nil
+    }
+}
+
+private actor UndoOperationListSuspension {
+    private let suspensionCall: Int
+    private var callCount = 0
+    private var didSuspend = false
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var completion: CheckedContinuation<Void, Never>?
+
+    init(suspendOnCall suspensionCall: Int) {
+        self.suspensionCall = suspensionCall
+    }
+
+    func suspend() async {
+        callCount += 1
+        guard callCount == suspensionCall else { return }
         didSuspend = true
         let waiters = suspensionWaiters
         suspensionWaiters.removeAll()
@@ -1130,6 +1167,49 @@ struct GGMutationCoordinatorTests {
 
         #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: matching))
         #expect(harness.service.operationListCallCount == 1)
+    }
+
+    @Test func staleUndoRestoreDoesNotOverwriteNewerMutationCandidate() async throws {
+        let restoredOperation = GGOperationSummary(
+            id: "op_restored", kind: "reorder", status: .completed, createdAtMs: 1,
+            args: ["--client-operation-id", "alas:restored", "reorder"],
+            stackName: "feature", touchedRemote: false, isUndoable: true
+        )
+        let newerOperation = GGOperationSummary(
+            id: "op_newer", kind: "squash", status: .completed, createdAtMs: 2,
+            args: ["--client-operation-id", "alas:test-1", "sc"],
+            stackName: "feature", touchedRemote: false, isUndoable: true
+        )
+        let harness = GGMutationHarness(
+            stacks: [stack(head: "a")], supportsClientOperationID: true
+        )
+        harness.markers.set(operationID: restoredOperation.id, worktreeId: "wt")
+        harness.service.operationLists = [
+            [restoredOperation],
+            [restoredOperation],
+            [newerOperation],
+        ]
+        let listSuspension = UndoOperationListSuspension(suspendOnCall: 2)
+        harness.service.onListUndoOperations = { await listSuspension.suspend() }
+        harness.onRefreshStack = {
+            await harness.coordinator.restoreUndoCandidate(currentStackName: "feature")
+        }
+
+        let undoTask = try #require(harness.coordinator.startApplying(
+            .undo(operationID: restoredOperation.id),
+            confirmedAgainst: nil
+        ))
+        await listSuspension.waitUntilSuspended()
+
+        try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: newerOperation))
+        #expect(harness.markers.operationID(worktreeId: "wt") == newerOperation.id)
+
+        await listSuspension.resume()
+        try await undoTask.value
+
+        #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: newerOperation))
+        #expect(harness.markers.operationID(worktreeId: "wt") == newerOperation.id)
     }
 
     @Test func relaunchClearsMarkerWhenNewestOperationDoesNotMatch() async {

@@ -128,6 +128,7 @@ final class GGMutationCoordinator {
         }
         do {
             let newest = try await service.listUndoOperations(worktreePath: worktreePath, limit: 1).first
+            guard undoMarkerStore.marker(worktreeId: worktreeId) == marker else { return }
             guard let newest,
                   newest.id == marker.operationID,
                   newest.matchesUndoScope(currentStackName: currentStackName, marker: marker),
@@ -144,6 +145,7 @@ final class GGMutationCoordinator {
             }
             undoCandidate = GGUndoCandidate(operation: newest)
         } catch {
+            guard undoMarkerStore.marker(worktreeId: worktreeId) == marker else { return }
             undoCandidate = nil
         }
     }
