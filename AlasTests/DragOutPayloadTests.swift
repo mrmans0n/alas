@@ -41,6 +41,17 @@ struct DragOutPayloadTests {
         #expect(AlasDropPayload.decode(encoded) == nil)
     }
 
+    @Test func dropPayloadRejectsFilePathWithTerminalControlCharacters() throws {
+        let payload = AlasDropPayload.file(
+            relativePath: "Sources/unsafe.swift",
+            absolutePath: "/tmp/worktree/unsafe\u{03}.swift"
+        )
+
+        let encoded = try #require(payload.encoded())
+
+        #expect(AlasDropPayload.decode(encoded) == nil)
+    }
+
     @Test func missingWorkingTreeFileStillPreparesAnInternalPath() async throws {
         let dir = try makeTempDir("missing-internal")
         defer { try? FileManager.default.removeItem(at: dir) }

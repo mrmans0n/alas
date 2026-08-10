@@ -35,13 +35,26 @@ enum AlasDropPayload: Codable, Equatable, Sendable {
     }
 
     private var isValid: Bool {
-        guard case .commitSHA(let sha) = self else { return true }
-        return (sha.count == 40 || sha.count == 64)
-            && sha.unicodeScalars.allSatisfy { scalar in
-                (48 ... 57).contains(scalar.value)
-                    || (65 ... 70).contains(scalar.value)
-                    || (97 ... 102).contains(scalar.value)
-            }
+        switch self {
+        case .file(let relativePath, let absolutePath):
+            return !relativePath.containsTerminalControlCharacter
+                && !absolutePath.containsTerminalControlCharacter
+        case .commitSHA(let sha):
+            return (sha.count == 40 || sha.count == 64)
+                && sha.unicodeScalars.allSatisfy { scalar in
+                    (48 ... 57).contains(scalar.value)
+                        || (65 ... 70).contains(scalar.value)
+                        || (97 ... 102).contains(scalar.value)
+                }
+        }
+    }
+}
+
+private extension String {
+    var containsTerminalControlCharacter: Bool {
+        unicodeScalars.contains { scalar in
+            (0 ... 31).contains(scalar.value) || (127 ... 159).contains(scalar.value)
+        }
     }
 }
 
