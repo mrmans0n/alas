@@ -64,6 +64,17 @@ struct ACPMentionPickerTests {
         #expect(result.first?.hasDirectoryPath == true)
     }
 
+    @Test("keeps case-distinct candidates")
+    func keepsCaseDistinctCandidates() {
+        let root = URL(fileURLWithPath: "/tmp/project")
+        let uppercase = root.appendingPathComponent("Sources/Foo.swift")
+        let lowercase = root.appendingPathComponent("Sources/foo.swift")
+
+        let result = MentionFuzzy.deduplicated(files: [uppercase, lowercase], relativeTo: root)
+
+        #expect(result == [uppercase, lowercase])
+    }
+
     @Test("keyboard navigation stays within the available results")
     func keyboardNavigationClamps() {
         #expect(MentionPickerNavigation.move(from: 0, by: -1, count: 3) == 0)

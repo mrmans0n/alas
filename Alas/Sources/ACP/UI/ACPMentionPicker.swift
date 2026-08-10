@@ -217,7 +217,7 @@ enum MentionFuzzy {
         var result: [URL] = []
         var indices: [String: Int] = [:]
         for file in files {
-            let path = relativePath(for: file, root: root).lowercased()
+            let path = relativePath(for: file, root: root)
             if let index = indices[path] {
                 if file.hasDirectoryPath { result[index] = file }
             } else {
