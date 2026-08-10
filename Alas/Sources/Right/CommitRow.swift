@@ -243,6 +243,7 @@ struct CommitRow: View {
                 }
                 .pointingHandCursor()
                 .help("Click to copy SHA")
+                .dragOut { .commitSHA(commit.sha) }
             avatar
             Text(relativeTime(commit.date))
                 .font(.system(size: 10.5))

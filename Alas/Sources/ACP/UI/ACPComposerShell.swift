@@ -101,6 +101,7 @@ struct ACPComposer: View {
     /// triggers under the current mapping.
     let sendOnEnter: Bool
     let focusRequest: Int
+    let dropRouter: ACPComposerDropRouter
     let placement: ACPComposerPlacement
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
@@ -120,6 +121,7 @@ struct ACPComposer: View {
         agentLookup: @escaping (String) -> AgentDefinition?,
         sendOnEnter: Bool,
         focusRequest: Int = 0,
+        dropRouter: ACPComposerDropRouter,
         placement: ACPComposerPlacement = .bottom,
         contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth,
         typography: ACPChatTypography = .default,
@@ -133,6 +135,7 @@ struct ACPComposer: View {
         self.agentLookup = agentLookup
         self.sendOnEnter = sendOnEnter
         self.focusRequest = focusRequest
+        self.dropRouter = dropRouter
         self.placement = placement
         self.contentMaxWidth = contentMaxWidth
         self.typography = typography
@@ -212,6 +215,7 @@ struct ACPComposer: View {
                 composer: composer,
                 worktreeRoot: worktreeRoot,
                 actions: actions,
+                dropRouter: dropRouter,
                 isFocused: $inputFocused,
                 focusRequest: focusRequest,
                 sendOnEnter: sendOnEnter,

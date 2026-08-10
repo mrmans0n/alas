@@ -67,6 +67,7 @@ struct CommitHeaderView: View {
                 }
                 .pointingHandCursor()
                 .help("Click to copy SHA")
+                .dragOut { .commitSHA(details.info.sha) }
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(details.info.author)
                 .font(.system(size: 11))
@@ -123,12 +124,13 @@ struct CommitHeaderView: View {
                     HStack(spacing: 4) {
                         Text("parent" + (details.parents.count > 1 ? "s" : "") + ":")
                         ForEach(Array(details.parents.enumerated()), id: \.offset) { index, parent in
-                            Text(parent)
+                            Text(parent.prefix(7))
                                 .onTapGesture {
                                     copyToPasteboard(parent, feedback: "Copied SHA")
                                 }
                                 .pointingHandCursor()
                                 .help("Click to copy SHA")
+                                .dragOut { .commitSHA(parent) }
                             if index < details.parents.count - 1 {
                                 Text(" ")
                             }

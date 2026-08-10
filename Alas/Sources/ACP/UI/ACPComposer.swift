@@ -16,6 +16,7 @@ struct ACPInputField: NSViewRepresentable {
     @ObservedObject var composer: ACPComposerState
     let worktreeRoot: URL
     let actions: ACPComposerActions
+    let dropRouter: ACPComposerDropRouter
     @Binding var isFocused: Bool
     let focusRequest: Int
     /// True when ⏎ should submit with `.auto` intent (the default mapping
@@ -52,6 +53,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
         textView.insertionPointColor = NSColor.controlAccentColor
         context.coordinator.textView = textView
+        dropRouter.attach(textView)
         context.coordinator.onImageError = onImageError
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         context.coordinator.restoreInitialDraft(into: textView)
@@ -116,6 +118,7 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.isFocused.wrappedValue = false
         coordinator.flushPendingRestyleNow()
         if let tv = nsView.documentView as? ACPNSTextView {
+            coordinator.dropRouter.detach(tv)
             tv.dismissFloatingPanels()
         }
     }
@@ -146,7 +149,8 @@ struct ACPInputField: NSViewRepresentable {
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
             onSubmit: onSubmit,
-            filesProvider: filesProvider
+            filesProvider: filesProvider,
+            dropRouter: dropRouter
         )
     }
 
@@ -168,6 +172,7 @@ struct ACPInputField: NSViewRepresentable {
         let onDraftClear: () -> Void
         let onSubmit: ACPComposerSubmitHandler
         let filesProvider: (@Sendable () async -> [URL])?
+        let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
@@ -208,7 +213,8 @@ struct ACPInputField: NSViewRepresentable {
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
             onSubmit: @escaping ACPComposerSubmitHandler,
-            filesProvider: (@Sendable () async -> [URL])? = nil
+            filesProvider: (@Sendable () async -> [URL])? = nil,
+            dropRouter: ACPComposerDropRouter = ACPComposerDropRouter()
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
@@ -221,6 +227,7 @@ struct ACPInputField: NSViewRepresentable {
             self.onDraftClear = onDraftClear
             self.onSubmit = onSubmit
             self.filesProvider = filesProvider
+            self.dropRouter = dropRouter
         }
 
         func textDidBeginEditing(_ notification: Notification) {

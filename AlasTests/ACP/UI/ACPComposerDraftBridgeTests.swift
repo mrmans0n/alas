@@ -779,6 +779,85 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "before after")
     }
 
+    @Test("file drop router inserts the relative path at the retained selection")
+    func fileDropRouterInsertsRelativePathAtSelection() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))
+        let window = NSWindow(contentRect: textView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = textView
+        let sink = NSTextField()
+        window.contentView?.addSubview(sink)
+        #expect(window.makeFirstResponder(sink))
+        textView.string = "Review old now"
+        textView.setSelectedRange(NSRange(location: 7, length: 3))
+        var changedDrafts: [ACPComposerDraft] = []
+        var submitCount = 0
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            focusRequest: 0,
+            sendOnEnter: true,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: {},
+            onSubmit: { _, _, _, _, _ in
+                submitCount += 1
+                return true
+            }
+        )
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+        textView.delegate = coordinator
+        let router = ACPComposerDropRouter()
+        router.attach(textView)
+
+        let inserted = router.insert(.file(
+            relativePath: "Sources/App State.swift",
+            absolutePath: "/tmp/worktree/Sources/App State.swift"
+        ), enabled: true)
+
+        #expect(inserted)
+        #expect(textView.string == "Review Sources/App State.swift now")
+        #expect(textView.selectedRange() == NSRange(location: 30, length: 0))
+        #expect(window.firstResponder === textView)
+        #expect(changedDrafts.last == ACPComposerDraft(segments: [
+            .text("Review Sources/App State.swift now")
+        ]))
+        #expect(submitCount == 0)
+        let (_, attachments) = ACPInputField.Coordinator.extract(textView.attributedString())
+        #expect(attachments.isEmpty)
+    }
+
+    @Test("drop router inserts the full commit SHA")
+    func dropRouterInsertsFullCommitSHA() {
+        let sha = "0123456789abcdef0123456789abcdef01234567"
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))
+        textView.string = "Inspect "
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        let router = ACPComposerDropRouter()
+        router.attach(textView)
+
+        #expect(router.insert(.commitSHA(sha), enabled: true))
+        #expect(textView.string == "Inspect \(sha)")
+    }
+
+    @Test("disabled or malformed drops do not change the composer")
+    func disabledOrMalformedDropsAreRejected() {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))
+        textView.string = "Keep me"
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        let router = ACPComposerDropRouter()
+        router.attach(textView)
+
+        #expect(!router.insert(.commitSHA("deadbeef"), enabled: false))
+        #expect(!router.insert(encoded: Data("not-json".utf8), enabled: true))
+        #expect(textView.string == "Keep me")
+    }
+
+    @Test("unmounted drop router rejects insertion")
+    func unmountedDropRouterRejectsInsertion() {
+        let router = ACPComposerDropRouter()
+        #expect(!router.insert(.commitSHA("deadbeef"), enabled: true))
+    }
+
     private final class EditingHookDelegate: NSObject, NSTextViewDelegate {
         struct Change: Equatable {
             let range: NSRange
