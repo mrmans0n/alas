@@ -2048,10 +2048,10 @@ struct RightPaneGGStackTests {
             commit(sha: String(repeating: "s", count: 40), stackShaped: true),
         ]
 
-        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        let mutationA = try #require(state.runGGMutation(.sync))
         await runner.waitUntilFirstRefreshSuspends()
 
-        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        let mutationB = try #require(state.runGGMutation(.sync))
         await runner.waitUntilSecondSyncSuspends()
         #expect(state.ggActionState.inFlightAction == .sync)
         #expect(state.ggActionState.lastActionSummary == nil)
@@ -2059,9 +2059,7 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.lastError == nil)
 
         await runner.finishFirstRefresh()
-        for _ in 0..<100 where state.ggActionState.lastError == nil {
-            await Task.yield()
-        }
+        await mutationA.value
 
         #expect(state.ggActionState.inFlightAction == .sync)
         #expect(state.ggActionState.lastActionSummary == nil)
@@ -2069,9 +2067,7 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.lastError == nil)
 
         await runner.finishSecondSync()
-        for _ in 0..<500 where state.ggActionState.inFlightAction != nil {
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await mutationB.value
 
         #expect(state.ggActionState.lastActionSummary == "Synced")
         #expect(state.ggActionState.syncProgress.isEmpty)

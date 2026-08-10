@@ -1579,13 +1579,17 @@ final class RightPaneState: GGSplitCommitServicing {
         runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
     }
 
-    private func runGGMutation(_ request: GGMutationRequest, confirmedAgainst identity: GGStackIdentity? = nil) {
+    @discardableResult
+    func runGGMutation(
+        _ request: GGMutationRequest,
+        confirmedAgainst identity: GGStackIdentity? = nil
+    ) -> Task<Void, Never>? {
         guard let operation = ggMutationCoordinator.startApplying(
             request,
             confirmedAgainst: identity
-        ) else { return }
+        ) else { return nil }
         let actionGeneration = ggActionState.actionGeneration
-        Task { @MainActor in
+        return Task { @MainActor in
             do {
                 try await operation.value
             } catch {
@@ -1594,10 +1598,11 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
-    private func runGGMutation(_ prepared: GGPreparedMutation) {
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
+    @discardableResult
+    func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
         let actionGeneration = ggActionState.actionGeneration
-        Task { @MainActor in
+        return Task { @MainActor in
             do {
                 try await operation.value
             } catch {
