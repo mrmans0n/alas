@@ -22,6 +22,18 @@ struct ACPToolCallCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.acpTerminalHost) private var terminalHost
 
+    init(
+        toolCall: ACPMessage.ToolCall,
+        trustedImageRoot: URL? = nil,
+        loadFullContent: ((String) async -> String?)? = nil,
+        initiallyExpanded: Bool = false
+    ) {
+        self.toolCall = toolCall
+        self.trustedImageRoot = trustedImageRoot
+        self.loadFullContent = loadFullContent
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -144,15 +156,13 @@ struct ACPToolCallCard: View {
                 .background(theme.color("bg-0").opacity(0.55))
             } else {
                 if !displayContent.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        ACPSyntaxHighlightedText(
-                            text: displayContent,
-                            explicitLanguage: displayContentLanguage,
-                            fontSize: 11.5
-                        )
-                            .padding(.horizontal, 12).padding(.vertical, 10)
-                    }
-                    .background(theme.color("bg-0").opacity(0.55))
+                    ACPSyntaxHighlightedText(
+                        text: displayContent,
+                        explicitLanguage: displayContentLanguage,
+                        fontSize: 11.5
+                    )
+                        .padding(.horizontal, 12).padding(.vertical, 10)
+                        .background(theme.color("bg-0").opacity(0.55))
                 }
                 if !toolCall.assets.isEmpty {
                     assetBody
