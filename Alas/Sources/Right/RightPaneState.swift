@@ -1584,28 +1584,34 @@ final class RightPaneState: GGSplitCommitServicing {
             request,
             confirmedAgainst: identity
         ) else { return }
+        let actionGeneration = ggActionState.actionGeneration
         Task { @MainActor in
             do {
                 try await operation.value
             } catch {
-                if ggActionState.lastError == nil {
-                    ggActionState.setError(GGErrorPresentation.message(for: error))
-                }
+                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
             }
         }
     }
 
     private func runGGMutation(_ prepared: GGPreparedMutation) {
         guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
+        let actionGeneration = ggActionState.actionGeneration
         Task { @MainActor in
             do {
                 try await operation.value
             } catch {
-                if ggActionState.lastError == nil {
-                    ggActionState.setError(GGErrorPresentation.message(for: error))
-                }
+                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
             }
         }
+    }
+
+    private func publishGGMutationPresentationError(
+        _ error: Error,
+        forActionGeneration generation: UInt
+    ) {
+        guard ggActionState.shouldPublishError(forActionGeneration: generation) else { return }
+        ggActionState.setError(GGErrorPresentation.message(for: error))
     }
 
     func markSnapshotUnknown() {
