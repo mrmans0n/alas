@@ -139,12 +139,16 @@ struct MergeResultPane: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
-        (scroll.documentView as? NSTextView)?.undoManager?.removeAllActions()
+        coordinator.editorUndoManager.removeAllActions()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        let editorUndoManager = UndoManager()
+
+        func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
+
         struct CacheKey: Equatable {
             let rows: [MergeRegionVisualLayout.VisualRow]
             let conflictRanges: [MergeRegionVisualLayout.VisualConflictRange]

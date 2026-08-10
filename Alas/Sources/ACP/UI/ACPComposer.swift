@@ -117,7 +117,7 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         if let tv = nsView.documentView as? ACPNSTextView {
             tv.dismissFloatingPanels()
-            tv.undoManager?.removeAllActions()
+            coordinator.editorUndoManager.removeAllActions()
         }
     }
 
@@ -152,6 +152,7 @@ struct ACPInputField: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        let editorUndoManager = UndoManager()
         let worktreeRoot: URL
         let initialDraft: ACPComposerDraft
         var isFocused: Binding<Bool>
@@ -178,6 +179,8 @@ struct ACPInputField: NSViewRepresentable {
         var onImageError: ((ACPImageStaging.StagingError) -> Void)?
         private var restoringDraft = false
         private var lastSyncedDraft: ACPComposerDraft
+
+        func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
         private var pendingImageFileInsertions = 0
