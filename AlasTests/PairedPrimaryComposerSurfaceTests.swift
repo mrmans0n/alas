@@ -36,14 +36,15 @@ struct PairedPrimaryComposerSurfaceTests {
     @Test func ggSplitMessageInvokesDraftChangeAfterPairedEdit() async throws {
         let model = GGSplitMessageModel(message: "split")
         var draftChanges: [String] = []
-        let controller = NSHostingController(rootView: GGSplitMessageHarness(model: model) {
+        let controller = NSHostingController(rootView: GGSplitMessageHarness(model: model, theme: try! ThemeStore().current) {
             draftChanges.append(model.message)
         })
         let window = attach(controller)
         await drain(controller.view)
 
         let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
-        let editor = try #require(field.currentEditor() as? NSTextView)
+        #expect(window.makeFirstResponder(field))
+        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
         let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
         editor.setSelectedRange(NSRange(location: 0, length: 5))
         #expect(!coordinator.control(
@@ -103,17 +104,19 @@ private struct ReviewRequestComposerHarness: View {
     let theme: Theme
 
     var body: some View {
-        CommitMessageEditorView(
-            subject: $model.title,
+        ReviewRequestMessageEditor(
+            title: $model.title,
             bodyText: $model.body,
             aiToolId: .constant(""),
-            title: "GitHub Pull Request",
+            editorTitle: "GitHub Pull Request",
             busy: false,
             error: nil,
             availableAgents: [],
             onGenerate: {},
             primaryAction: CommitPrimaryAction(label: "Create Pull Request", isEnabled: true, handler: {}),
-            iconName: "branch"
+            editorDisabled: false,
+            onDismissError: {},
+            accessory: nil
         )
         .environment(\.theme, theme)
     }
@@ -131,15 +134,11 @@ private final class GGSplitMessageModel: ObservableObject {
 @MainActor
 private struct GGSplitMessageHarness: View {
     @ObservedObject var model: GGSplitMessageModel
+    let theme: Theme
     let draftDidChange: () -> Void
 
     var body: some View {
-        PairedTextField(
-            text: $model.message,
-            placeholder: "Commit message",
-            isFocused: .constant(true)
-        )
-        .frame(height: 22)
-        .onChange(of: model.message) { draftDidChange() }
+        GGSplitCommitMessageEditor(message: $model.message, onDraftChange: draftDidChange)
+            .environment(\.theme, theme)
     }
 }

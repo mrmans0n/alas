@@ -311,22 +311,10 @@ struct GGSplitCommitTabView: View {
             .accessibilityValue(isActive ? "Selected" : "Not selected")
             .accessibilityIdentifier("gg-split-commit-card-\(destination.previewID)")
 
-            PairedTextField(
-                text: message,
-                placeholder: "Commit message",
-                font: .systemFont(ofSize: NSFont.systemFontSize),
-                textColor: NSColor(theme.color("fg")),
-                isEnabled: !isApplying
+            GGSplitCommitMessageEditor(
+                message: message,
+                onDraftChange: draftDidChange
             )
-                .padding(.horizontal, 6)
-                .frame(height: 22)
-                .background(theme.color("field-bg"))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(theme.color("border"), lineWidth: 1)
-                )
-                .onChange(of: message.wrappedValue) { draftDidChange() }
         }
         .padding(10)
         .frame(maxWidth: .infinity)
@@ -604,6 +592,27 @@ struct GGSplitCommitTabView: View {
                 errorMessage = GGErrorPresentation.message(for: error)
             }
         }
+    }
+}
+
+struct GGSplitCommitMessageEditor: View {
+    @Binding var message: String
+    let onDraftChange: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        PairedTextField(
+            text: $message,
+            placeholder: "Commit message",
+            font: .systemFont(ofSize: NSFont.systemFontSize),
+            textColor: NSColor(theme.color("fg")),
+            isBordered: true,
+            isBezeled: true,
+            drawsBackground: true,
+            bezelStyle: .roundedBezel
+        )
+        .onChange(of: message) { onDraftChange() }
     }
 }
 

@@ -69,6 +69,10 @@ struct PairedTextField: NSViewRepresentable {
     var font: NSFont
     var textColor: NSColor
     var isEnabled: Bool
+    var isBordered: Bool
+    var isBezeled: Bool
+    var drawsBackground: Bool
+    var bezelStyle: NSTextField.BezelStyle?
     var isFocused: Binding<Bool>?
     var onSubmit: (() -> Void)?
 
@@ -78,6 +82,10 @@ struct PairedTextField: NSViewRepresentable {
         font: NSFont = .systemFont(ofSize: NSFont.systemFontSize),
         textColor: NSColor = .labelColor,
         isEnabled: Bool = true,
+        isBordered: Bool = false,
+        isBezeled: Bool = false,
+        drawsBackground: Bool = false,
+        bezelStyle: NSTextField.BezelStyle? = nil,
         isFocused: Binding<Bool>? = nil,
         onSubmit: (() -> Void)? = nil
     ) {
@@ -86,6 +94,10 @@ struct PairedTextField: NSViewRepresentable {
         self.font = font
         self.textColor = textColor
         self.isEnabled = isEnabled
+        self.isBordered = isBordered
+        self.isBezeled = isBezeled
+        self.drawsBackground = drawsBackground
+        self.bezelStyle = bezelStyle
         self.isFocused = isFocused
         self.onSubmit = onSubmit
     }
@@ -96,9 +108,6 @@ struct PairedTextField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PairedTextFieldBackingView {
         let field = PairedTextFieldBackingView()
-        field.isBordered = false
-        field.isBezeled = false
-        field.drawsBackground = false
         field.focusRingType = .none
         field.usesSingleLineMode = true
         field.cell?.wraps = false
@@ -136,6 +145,12 @@ struct PairedTextField: NSViewRepresentable {
         field.placeholderString = placeholder
         field.font = font
         field.textColor = textColor
+        field.isBordered = isBordered
+        field.isBezeled = isBezeled
+        field.drawsBackground = drawsBackground
+        if let bezelStyle {
+            field.bezelStyle = bezelStyle
+        }
         field.isEnabled = isEnabled
         field.isEditable = isEnabled
         field.isSelectable = isEnabled
