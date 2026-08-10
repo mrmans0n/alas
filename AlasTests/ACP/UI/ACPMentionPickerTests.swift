@@ -34,6 +34,55 @@ struct ACPMentionPickerTests {
         #expect(matches.first == root.appendingPathComponent("Sources/App.swift"))
     }
 
+    @Test("ranks an exact relative path ahead of a scattered fuzzy match")
+    func exactRelativePathWins() {
+        let root = URL(fileURLWithPath: "/tmp/project")
+        let expected = root.appendingPathComponent("ab/cd", isDirectory: true)
+        let files = [
+            root.appendingPathComponent("A_B/C_D", isDirectory: true),
+            expected,
+        ]
+
+        let matches = MentionFuzzy.rank(files: files, query: "ab/cd", limit: 10, relativeTo: root)
+
+        #expect(matches.first == expected)
+    }
+
+    @Test("deduplicates candidates by relative path and preserves directory URLs")
+    func deduplicatesCandidates() {
+        let root = URL(fileURLWithPath: "/tmp/project")
+        let fileShapedDirectory = root.appendingPathComponent("packages/common/core")
+        let directory = root.appendingPathComponent("packages/common/core", isDirectory: true)
+        let sibling = root.appendingPathComponent("packages/common/other", isDirectory: true)
+
+        let result = MentionFuzzy.deduplicated(
+            files: [fileShapedDirectory, sibling, directory],
+            relativeTo: root
+        )
+
+        #expect(result == [directory, sibling])
+        #expect(result.first?.hasDirectoryPath == true)
+    }
+
+    @Test("keeps case-distinct candidates")
+    func keepsCaseDistinctCandidates() {
+        let root = URL(fileURLWithPath: "/tmp/project")
+        let uppercase = root.appendingPathComponent("Sources/Foo.swift")
+        let lowercase = root.appendingPathComponent("Sources/foo.swift")
+
+        let result = MentionFuzzy.deduplicated(files: [uppercase, lowercase], relativeTo: root)
+
+        #expect(result == [uppercase, lowercase])
+    }
+
+    @Test("keyboard navigation stays within the available results")
+    func keyboardNavigationClamps() {
+        #expect(MentionPickerNavigation.move(from: 0, by: -1, count: 3) == 0)
+        #expect(MentionPickerNavigation.move(from: 0, by: 1, count: 3) == 1)
+        #expect(MentionPickerNavigation.move(from: 2, by: 1, count: 3) == 2)
+        #expect(MentionPickerNavigation.move(from: 0, by: 1, count: 0) == 0)
+    }
+
     @Test("collectFiles includes directories alongside files, flagged as directories")
     func collectFilesIncludesDirectories() throws {
         let root = try makeTempTree([

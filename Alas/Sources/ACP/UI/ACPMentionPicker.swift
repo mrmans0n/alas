@@ -19,6 +19,7 @@ struct ACPMentionPickerView: View {
     @State private var isIndexing: Bool = true
     @State private var rankTask: Task<Void, Never>?
     @State private var rankGeneration: Int = 0
+    @State private var scrollOnHighlightChange = false
 
     private let maxDisplay = 80
 
@@ -37,7 +38,6 @@ struct ACPMentionPickerView: View {
         )
         .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
         .onAppear { populateFiles() }
-        .onKeyPress { press in handleKey(press) }
     }
 
     private var search: some View {
@@ -50,7 +50,9 @@ struct ACPMentionPickerView: View {
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
                 .onAppear { searchFocused = true }
+                .onKeyPress { press in handleKey(press) }
                 .onChange(of: query) { _, _ in
+                    scrollOnHighlightChange = false
                     highlight = 0
                     rescheduleRank()
                 }
@@ -87,6 +89,8 @@ struct ACPMentionPickerView: View {
                 .padding(.vertical, 4)
             }
             .onChange(of: highlight) { _, new in
+                guard scrollOnHighlightChange else { return }
+                scrollOnHighlightChange = false
                 guard ranked.indices.contains(new) else { return }
                 proxy.scrollTo(ranked[new], anchor: .center)
             }
@@ -125,28 +129,37 @@ struct ACPMentionPickerView: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            if hovering { highlight = idx }
+            if hovering {
+                scrollOnHighlightChange = false
+                highlight = idx
+            }
         }
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        let count = ranked.count
         switch press.key {
         case .escape:
             onCancel()
             return .handled
         case .upArrow:
-            highlight = max(0, highlight - 1)
+            moveHighlight(by: -1)
             return .handled
         case .downArrow:
-            highlight = min(max(0, count - 1), highlight + 1)
+            moveHighlight(by: 1)
             return .handled
-        case .return:
+        case .return, .tab:
             if ranked.indices.contains(highlight) { onPick(ranked[highlight]) }
             return .handled
         default:
             return .ignored
         }
+    }
+
+    private func moveHighlight(by offset: Int) {
+        let next = MentionPickerNavigation.move(from: highlight, by: offset, count: ranked.count)
+        guard next != highlight else { return }
+        scrollOnHighlightChange = true
+        highlight = next
     }
 
     private func populateFiles() {
@@ -161,7 +174,7 @@ struct ACPMentionPickerView: View {
                     MentionFuzzy.collectFiles(under: root, limit: 5000)
                 }.value
             }
-            allFiles = files
+            allFiles = MentionFuzzy.deduplicated(files: files, relativeTo: worktreeRoot)
             isIndexing = false
             rescheduleRank()
         }
@@ -191,9 +204,30 @@ struct ACPMentionPickerView: View {
     }
 }
 
+enum MentionPickerNavigation {
+    static func move(from index: Int, by offset: Int, count: Int) -> Int {
+        min(max(0, count - 1), max(0, index + offset))
+    }
+}
+
 // MARK: - Fuzzy matching
 
 enum MentionFuzzy {
+    static func deduplicated(files: [URL], relativeTo root: URL) -> [URL] {
+        var result: [URL] = []
+        var indices: [String: Int] = [:]
+        for file in files {
+            let path = relativePath(for: file, root: root)
+            if let index = indices[path] {
+                if file.hasDirectoryPath { result[index] = file }
+            } else {
+                indices[path] = result.count
+                result.append(file)
+            }
+        }
+        return result
+    }
+
     static func collectFiles(under root: URL, limit: Int) -> [URL] {
         var out: [URL] = []
         let skipDirs: Set<String> = [
@@ -269,15 +303,22 @@ enum MentionFuzzy {
             .map(String.init)
         guard !tokens.isEmpty else { return Array(files.prefix(limit)) }
 
-        var scored: [(url: URL, score: Double, relativePath: String)] = []
+        let normalizedQuery = query.lowercased()
+        var scored: [(url: URL, pathPriority: Int, score: Double, relativePath: String)] = []
         for f in files {
             let relativePath = relativePath(for: f, root: root)
             guard let score = score(file: f, relativePath: relativePath, tokens: tokens) else {
                 continue
             }
-            scored.append((f, score, relativePath))
+            let normalizedPath = relativePath.lowercased()
+            let pathPriority = normalizedPath == normalizedQuery ? 3
+                : normalizedPath.hasPrefix(normalizedQuery) ? 2
+                : normalizedPath.contains(normalizedQuery) ? 1
+                : 0
+            scored.append((f, pathPriority, score, relativePath))
         }
         scored.sort {
+            if $0.pathPriority != $1.pathPriority { return $0.pathPriority > $1.pathPriority }
             if $0.score != $1.score { return $0.score > $1.score }
             if $0.relativePath.count != $1.relativePath.count {
                 return $0.relativePath.count < $1.relativePath.count
