@@ -561,8 +561,9 @@ struct ReviewDraftSummaryRail: View {
             }
             .lineLimit(1)
 
-            Text(DiffReviewInlineFeedbackMarkdown.plainText(item.bodyPreview))
-                .font(.system(size: 11))
+            Text(AttributedString(
+                DiffReviewInlineFeedbackMarkdown.inlineMarkdown(item.bodyPreview)
+            ))
                 .lineLimit(6)
                 .truncationMode(.tail)
         }
