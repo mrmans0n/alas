@@ -33,6 +33,14 @@ struct DragOutPayloadTests {
         #expect(AlasDropPayload.decode(Data("not-json".utf8)) == nil)
     }
 
+    @Test func dropPayloadRejectsCommitSHAWithTerminalControlCharacters() throws {
+        let payload = AlasDropPayload.commitSHA("0123456789abcdef0123456789abcdef01234567\nrm -rf /")
+
+        let encoded = try #require(payload.encoded())
+
+        #expect(AlasDropPayload.decode(encoded) == nil)
+    }
+
     @Test func missingWorkingTreeFileStillPreparesAnInternalPath() async throws {
         let dir = try makeTempDir("missing-internal")
         defer { try? FileManager.default.removeItem(at: dir) }

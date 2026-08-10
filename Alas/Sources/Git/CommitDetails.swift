@@ -4,7 +4,7 @@ struct CommitDetails: Equatable {
     let info: CommitInfo
     let body: String          // commit message minus the subject line; "" if none
     let authorEmail: String
-    let parents: [String]     // short shas of parent commits, in git order
+    let parents: [String]     // full shas of parent commits, in git order
     let files: [CommitChangedFile]
 }
 

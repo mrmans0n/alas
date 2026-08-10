@@ -14,7 +14,10 @@ enum AlasDropPayload: Codable, Equatable, Sendable {
     }
 
     static func decode(_ data: Data) -> AlasDropPayload? {
-        try? JSONDecoder().decode(Self.self, from: data)
+        guard let payload = try? JSONDecoder().decode(Self.self, from: data), payload.isValid else {
+            return nil
+        }
+        return payload
     }
 
     var agentText: String {
@@ -29,6 +32,16 @@ enum AlasDropPayload: Codable, Equatable, Sendable {
         case .file(_, let absolutePath): POSIXShellArgument.escape(absolutePath)
         case .commitSHA(let sha): sha
         }
+    }
+
+    private var isValid: Bool {
+        guard case .commitSHA(let sha) = self else { return true }
+        return (sha.count == 40 || sha.count == 64)
+            && sha.unicodeScalars.allSatisfy { scalar in
+                (48 ... 57).contains(scalar.value)
+                    || (65 ... 70).contains(scalar.value)
+                    || (97 ... 102).contains(scalar.value)
+            }
     }
 }
 

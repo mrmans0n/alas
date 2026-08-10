@@ -950,7 +950,6 @@ extension GitService {
 
         let parents = parentsField
             .split(separator: " ")
-            .map { String($0).prefix(7) }
             .map(String.init)
 
         // Files: two separate diff-tree calls.

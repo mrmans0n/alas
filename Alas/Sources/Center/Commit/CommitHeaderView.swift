@@ -124,7 +124,7 @@ struct CommitHeaderView: View {
                     HStack(spacing: 4) {
                         Text("parent" + (details.parents.count > 1 ? "s" : "") + ":")
                         ForEach(Array(details.parents.enumerated()), id: \.offset) { index, parent in
-                            Text(parent)
+                            Text(parent.prefix(7))
                                 .onTapGesture {
                                     copyToPasteboard(parent, feedback: "Copied SHA")
                                 }
