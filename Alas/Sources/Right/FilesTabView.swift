@@ -157,7 +157,12 @@ struct FilesTabView: View {
                     .buttonStyle(.plain)
                     .contextMenu { contextMenu(for: terminal) }
                     .dragOut {
-                        worktreeRoot.map { DragOutPayload.onDisk($0.appendingPathComponent(terminal.path)) }
+                        worktreeRoot.map {
+                            DragOutPayload.workingTreeFile(
+                                worktreePath: $0,
+                                relativePath: terminal.path
+                            )
+                        }
                     }
                     if open && canExpand {
                         switch terminal.childrenState {
@@ -212,7 +217,12 @@ struct FilesTabView: View {
                 .buttonStyle(.plain)
                 .contextMenu { contextMenu(for: node) }
                 .dragOut {
-                    worktreeRoot.map { DragOutPayload.onDisk($0.appendingPathComponent(node.path)) }
+                    worktreeRoot.map {
+                        DragOutPayload.workingTreeFile(
+                            worktreePath: $0,
+                            relativePath: node.path
+                        )
+                    }
                 }
             )
         }

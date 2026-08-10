@@ -67,6 +67,7 @@ struct CommitHeaderView: View {
                 }
                 .pointingHandCursor()
                 .help("Click to copy SHA")
+                .dragOut { .commitSHA(details.info.sha) }
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(details.info.author)
                 .font(.system(size: 11))
@@ -129,6 +130,7 @@ struct CommitHeaderView: View {
                                 }
                                 .pointingHandCursor()
                                 .help("Click to copy SHA")
+                                .dragOut { .commitSHA(parent) }
                             if index < details.parents.count - 1 {
                                 Text(" ")
                             }
