@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 /// Structured text that Alas drag sources can hand to Alas-owned input views.
 /// Public pasteboard flavors remain separate so internal targets never need to
@@ -15,10 +16,21 @@ enum AlasDropPayload: Codable, Equatable, Sendable {
     static func decode(_ data: Data) -> AlasDropPayload? {
         try? JSONDecoder().decode(Self.self, from: data)
     }
+
+    var agentText: String {
+        switch self {
+        case .file(let relativePath, _): relativePath
+        case .commitSHA(let sha): sha
+        }
+    }
 }
 
 extension NSPasteboard.PasteboardType {
     static let alasDropPayload = NSPasteboard.PasteboardType("io.nlopez.alas.drop-payload")
+}
+
+extension UTType {
+    static let alasDropPayload = UTType(exportedAs: NSPasteboard.PasteboardType.alasDropPayload.rawValue)
 }
 
 /// All representations available when a drag lifts. `dropPayload` is private

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ACPSessionAttachFreshness {
     static func isFresh(restoredFromPersistence: Bool, remoteSessionId: String?) -> Bool {
@@ -102,6 +103,7 @@ private struct ACPSessionView: View {
     @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
     @State private var composerFocusRequest: Int = 0
+    @StateObject private var composerDropRouter = ACPComposerDropRouter()
 
     private var adapterTarget: ACPAdapterTarget {
         guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
@@ -250,8 +252,31 @@ private struct ACPSessionView: View {
                 .frame(width: chatProxy.size.width, height: chatProxy.size.height)
                 .animation(emptyStateAnimation, value: isNewEmptySession)
                 .animation(emptyStateAnimation, value: isFirstRunConnecting)
+                .onDrop(of: [.alasDropPayload], isTargeted: nil, perform: handleDrop)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !isMirror,
+              composerDropRouter.isAttached,
+              let provider = providers.first(where: {
+                  $0.hasItemConformingToTypeIdentifier(UTType.alasDropPayload.identifier)
+              })
+        else { return false }
+
+        provider.loadDataRepresentation(
+            forTypeIdentifier: UTType.alasDropPayload.identifier
+        ) { data, _ in
+            guard let data else { return }
+            Task { @MainActor in
+                _ = composerDropRouter.insert(
+                    encoded: data,
+                    enabled: !manager.isMirror(sessionId: sessionId)
+                )
+            }
+        }
+        return true
     }
 
     private func chatSurface(contentMaxWidth: CGFloat) -> some View {
@@ -460,6 +485,7 @@ private struct ACPSessionView: View {
             agentLookup: { state.agent(id: $0) },
             sendOnEnter: state.config.harness.acpSendOnEnter,
             focusRequest: composerFocusRequest,
+            dropRouter: composerDropRouter,
             placement: placement,
             contentMaxWidth: contentMaxWidth,
             typography: typography ?? chatTypography,
