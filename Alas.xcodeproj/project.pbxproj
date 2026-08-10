@@ -272,6 +272,7 @@
 		2D6004EEFF10BA1E2B1357B9 /* SettingsSectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92F018C967A8D1421D83A06 /* SettingsSectionTests.swift */; };
 		2D63742A552F72DC6BEBF7DC /* WorktreeCreationCompletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3CA4AD69CDACE0D41821742 /* WorktreeCreationCompletion.swift */; };
 		2D80BC255AB24FA274617553 /* ReviewRequestPromptEditorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07A17183B064CAB5EB5D5C11 /* ReviewRequestPromptEditorWindow.swift */; };
+		2DA2C2F546AF919D2DE4A41D /* GitService+StackCommits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DCCB2F0B68844EA336A5433 /* GitService+StackCommits.swift */; };
 		2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */; };
 		2DDF8175D7490F505AED7DF4 /* WebSocketFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF919734A34EEB87FA61FE07 /* WebSocketFrameTests.swift */; };
 		2DE20AB5DAEF233BE008E5AA /* RepoSelectorRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */; };
@@ -968,6 +969,7 @@
 		9ED684E261871342BA6DFAC9 /* MergeWordDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72970A1D2817539DB5243058 /* MergeWordDiffTests.swift */; };
 		9FD539228216762192A02C69 /* DialogChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEDACEB27E6AF219054496E /* DialogChrome.swift */; };
 		9FDF577BDD6D5C47635229DE /* ACPSessionByteAccountingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52B5F3FFF8AEF13BC48DCFBD /* ACPSessionByteAccountingTests.swift */; };
+		9FE6B05DF450CFD427AD24A2 /* GitServiceStackCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */; };
 		A0012CF058E580908B5348BC /* AppKitDiffTilingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B2725002A4349D9E5D1432 /* AppKitDiffTilingController.swift */; };
 		A00B9173561A37FD3B409BA9 /* GGCommandRunningStreamingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B58B29E5D4E497CEA3CE9BA /* GGCommandRunningStreamingTests.swift */; };
 		A01CDDEB7E0F6B2C1D3D0794 /* AddMissionLegDialogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2C385F7CAAA65DB82ABC48F /* AddMissionLegDialogTests.swift */; };
@@ -1846,6 +1848,7 @@
 		2D904085EDE14D7C09A6BC9A /* AgentPathResolveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPathResolveTests.swift; sourceTree = "<group>"; };
 		2D911D138AF8A0E99191C862 /* ACPLaunchPathResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPLaunchPathResolverTests.swift; sourceTree = "<group>"; };
 		2DCB7DA8B6EA8CF8B98EA267 /* ACPAuthFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAuthFailure.swift; sourceTree = "<group>"; };
+		2DCCB2F0B68844EA336A5433 /* GitService+StackCommits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+StackCommits.swift"; sourceTree = "<group>"; };
 		2DD6714E62064D5438AAE139 /* MemoryDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDiagnosticsTests.swift; sourceTree = "<group>"; };
 		2DDE190423707662BDC8E6EA /* RemoteRepoValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRepoValidator.swift; sourceTree = "<group>"; };
 		2E14E781F0E1127387A06907 /* RemoteTerminalScriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalScriptTests.swift; sourceTree = "<group>"; };
@@ -2886,6 +2889,7 @@
 		DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorRow.swift; sourceTree = "<group>"; };
 		DA89D4C70102BCF7B6B2450B /* ACPManagedAdapterDescriptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPManagedAdapterDescriptor.swift; sourceTree = "<group>"; };
 		DAA7CD14A8FA2D335A59B062 /* HTTPRequestParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPRequestParser.swift; sourceTree = "<group>"; };
+		DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStackCommitTests.swift; sourceTree = "<group>"; };
 		DB3A201BB87075FB20E88FBC /* NewRunScriptDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewRunScriptDialog.swift; sourceTree = "<group>"; };
 		DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDetailsTests.swift; sourceTree = "<group>"; };
 		DB94BF97B7E1E0C78DDDE441 /* FileContextMenuActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileContextMenuActionsTests.swift; sourceTree = "<group>"; };
@@ -3509,6 +3513,7 @@
 				B9749FB435319F01F9E70D08 /* GitServiceMergeTests.swift */,
 				1BB00E2F151520DC02B80BD4 /* GitServicePullTests.swift */,
 				FFB1CCDE2E4D85A46E6CFB1A /* GitServiceReviewRequestDraftTests.swift */,
+				DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */,
 				C2CA853E91C240B7B5551859 /* GitServiceStagedTests.swift */,
 				6DF0AEE54BDB4FC4FD5E02F4 /* GitServiceStagingTests.swift */,
 				1B218326D14AA360C7476D43 /* GitServiceStashTests.swift */,
@@ -3851,6 +3856,7 @@
 				5B9583B34B9AAD4454C558E5 /* GitService+Pull.swift */,
 				764489A630CC6D79FCE0A26A /* GitService+ReviewLoop.swift */,
 				0EE97D2D6875CD6A1DBF4DE9 /* GitService+ReviewRequestDraft.swift */,
+				2DCCB2F0B68844EA336A5433 /* GitService+StackCommits.swift */,
 				D2F90D03073708AA01531533 /* GitService+Staging.swift */,
 				8F3F67549BDACF73DFC2E477 /* GitService+Stash.swift */,
 				27A92711BC1D9A78D8A80561 /* GitTypes.swift */,
@@ -6455,6 +6461,7 @@
 				74F193BC4B2A1BD5AD58C6DA /* GitService+Pull.swift in Sources */,
 				5846A180EB68D905E9775401 /* GitService+ReviewLoop.swift in Sources */,
 				C70D6BEC5321C16B70301CBF /* GitService+ReviewRequestDraft.swift in Sources */,
+				2DA2C2F546AF919D2DE4A41D /* GitService+StackCommits.swift in Sources */,
 				0A480D9D7CE5BB837D7BCA13 /* GitService+Staging.swift in Sources */,
 				94FE17D9014F666C293EEFBE /* GitService+Stash.swift in Sources */,
 				12035048B950CE0197604F89 /* GitService.swift in Sources */,
@@ -7237,6 +7244,7 @@
 				7BD8965290B1F007B0E99BCF /* GitServiceMergeTests.swift in Sources */,
 				B8BF059C5C2090AFBB56A5BC /* GitServicePullTests.swift in Sources */,
 				4D9A57C74B314FA3570B0406 /* GitServiceReviewRequestDraftTests.swift in Sources */,
+				9FE6B05DF450CFD427AD24A2 /* GitServiceStackCommitTests.swift in Sources */,
 				478863759224A2278123B7B9 /* GitServiceStagedTests.swift in Sources */,
 				CB27451157E1BF95BE47248A /* GitServiceStagingTests.swift in Sources */,
 				4135B5BC24856ED442E39069 /* GitServiceStashTests.swift in Sources */,
