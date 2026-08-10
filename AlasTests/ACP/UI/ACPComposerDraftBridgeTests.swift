@@ -7,6 +7,33 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("dismantling the composer preserves window undo actions")
+    func dismantlingComposerPreservesWindowUndoActions() {
+        let textView = ACPNSTextView()
+        textView.allowsUndo = true
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        textView.delegate = coordinator
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+        let windowUndoManager = window.undoManager!
+
+        textView.undoManager?.registerUndo(withTarget: textView) { _ in }
+        windowUndoManager.registerUndo(withTarget: window) { _ in }
+        #expect(textView.undoManager?.canUndo == true)
+
+        ACPInputField.dismantleNSView(scrollView, coordinator: coordinator)
+
+        #expect(textView.undoManager?.canUndo == false)
+        #expect(windowUndoManager.canUndo == true)
+    }
+
     @Test("editing lifecycle updates composer focus binding")
     func editingLifecycleUpdatesFocusBinding() {
         var focused = false

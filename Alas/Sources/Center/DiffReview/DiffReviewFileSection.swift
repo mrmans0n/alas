@@ -1151,6 +1151,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
         textView.onKeyboardAction = nil
         textView.onWindowChanged = nil
+        coordinator.editorUndoManager.removeAllActions()
         textView.delegate = nil
     }
 
@@ -1164,9 +1165,12 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+        let editorUndoManager = UndoManager()
         var parent: ReviewDraftComposerTextEditor
         weak var textView: NSTextView?
         private var latestFulfilledFocusRequestGeneration = 0
+
+        func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
         private var scheduledFocusRequestGeneration: Int?
         private var scheduledFocusTask: Task<Void, Never>?
 
