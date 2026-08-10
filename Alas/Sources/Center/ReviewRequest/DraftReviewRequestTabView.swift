@@ -298,9 +298,20 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var titleField: some View {
-        TextField("Title", text: $title)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12.5, weight: .medium))
+        PairedTextField(
+            text: $title,
+            placeholder: "Title",
+            font: .systemFont(ofSize: 12.5, weight: .medium),
+            textColor: NSColor(theme.color("fg")),
+            isEnabled: !(busy || tabState.createdURL != nil),
+            isFocused: Binding(
+                get: { focused == .title },
+                set: { value in
+                    if value { focused = .title }
+                    else if focused == .title { focused = nil }
+                }
+            )
+        )
             .foregroundColor(theme.color("fg"))
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -321,15 +332,23 @@ struct DraftReviewRequestTabView: View {
                     .padding(-2)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .focused($focused, equals: .title)
-            .disabled(busy || tabState.createdURL != nil)
     }
 
     private var bodyEditor: some View {
-        TextEditor(text: $bodyText)
-            .font(.system(size: 12, design: .monospaced))
+        PairedTextEditor(
+            text: $bodyText,
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            textColor: NSColor(theme.color("fg")),
+            isEnabled: !(busy || tabState.createdURL != nil),
+            isFocused: Binding(
+                get: { focused == .body },
+                set: { value in
+                    if value { focused = .body }
+                    else if focused == .body { focused = nil }
+                }
+            )
+        )
             .frame(minHeight: 90, maxHeight: 180)
-            .scrollContentBackground(.hidden)
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             .background(theme.color("field-bg"))
@@ -349,8 +368,6 @@ struct DraftReviewRequestTabView: View {
                     .padding(-2)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .focused($focused, equals: .body)
-            .disabled(busy || tabState.createdURL != nil)
     }
 
     private var contextBrowser: some View {

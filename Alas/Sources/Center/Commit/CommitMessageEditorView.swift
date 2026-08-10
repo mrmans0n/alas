@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct CommitMessageEditorView: View {
@@ -108,9 +109,20 @@ struct CommitMessageEditorView: View {
     }
 
     private var subjectField: some View {
-        TextField("Subject", text: $subject)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12.5, weight: .medium))
+        PairedTextField(
+            text: $subject,
+            placeholder: "Subject",
+            font: .systemFont(ofSize: 12.5, weight: .medium),
+            textColor: NSColor(theme.color("fg")),
+            isEnabled: !(busy || editorDisabled),
+            isFocused: Binding(
+                get: { focused == .subject },
+                set: { value in
+                    if value { focused = .subject }
+                    else if focused == .subject { focused = nil }
+                }
+            )
+        )
             .foregroundColor(theme.color("fg"))
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -131,15 +143,23 @@ struct CommitMessageEditorView: View {
                     .padding(-2)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .focused($focused, equals: .subject)
-            .disabled(busy || editorDisabled)
     }
 
     private var bodyField: some View {
-        TextEditor(text: $bodyText)
-            .font(.system(size: 12, design: .monospaced))
+        PairedTextEditor(
+            text: $bodyText,
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            textColor: NSColor(theme.color("fg")),
+            isEnabled: !(busy || editorDisabled),
+            isFocused: Binding(
+                get: { focused == .body },
+                set: { value in
+                    if value { focused = .body }
+                    else if focused == .body { focused = nil }
+                }
+            )
+        )
             .frame(minHeight: 70, maxHeight: 150)
-            .scrollContentBackground(.hidden)
             .padding(.horizontal, 6).padding(.vertical, 4)
             .background(theme.color("field-bg"))
             .overlay(
@@ -158,8 +178,6 @@ struct CommitMessageEditorView: View {
                     .padding(-2)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .focused($focused, equals: .body)
-            .disabled(busy || editorDisabled)
     }
 
     /// Render the modifier + key glyphs of a `KeyboardShortcut` for display

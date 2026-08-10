@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct GGSplitCommitTabView: View {
@@ -310,8 +311,21 @@ struct GGSplitCommitTabView: View {
             .accessibilityValue(isActive ? "Selected" : "Not selected")
             .accessibilityIdentifier("gg-split-commit-card-\(destination.previewID)")
 
-            TextField("Commit message", text: message)
-                .textFieldStyle(.roundedBorder)
+            PairedTextField(
+                text: message,
+                placeholder: "Commit message",
+                font: .systemFont(ofSize: NSFont.systemFontSize),
+                textColor: NSColor(theme.color("fg")),
+                isEnabled: !isApplying
+            )
+                .padding(.horizontal, 6)
+                .frame(height: 22)
+                .background(theme.color("field-bg"))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(theme.color("border"), lineWidth: 1)
+                )
                 .onChange(of: message.wrappedValue) { draftDidChange() }
         }
         .padding(10)
