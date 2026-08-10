@@ -562,8 +562,8 @@ struct ReviewDraftSummaryRail: View {
             .lineLimit(1)
 
             DiffReviewInlineFeedbackMarkdown.view(item.bodyPreview)
-                .frame(maxHeight: 80, alignment: .top)
-                .clipped()
+                .lineLimit(6)
+                .truncationMode(.tail)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
