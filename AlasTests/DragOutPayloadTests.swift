@@ -74,6 +74,27 @@ struct DragOutPayloadTests {
         #expect(prepared.publicText == sha)
     }
 
+    @Test func terminalPathLeavesShellSafeAbsolutePathUnchanged() {
+        let payload = AlasDropPayload.file(
+            relativePath: "Sources/App.swift",
+            absolutePath: "/tmp/worktree/Sources/App.swift"
+        )
+        #expect(payload.terminalText == "/tmp/worktree/Sources/App.swift")
+    }
+
+    @Test func terminalPathQuotesSpacesAndEmbeddedSingleQuotes() {
+        let payload = AlasDropPayload.file(
+            relativePath: "Sources/it's here.swift",
+            absolutePath: "/tmp/work tree/Sources/it's here.swift"
+        )
+        #expect(payload.terminalText == "'/tmp/work tree/Sources/it'\\''s here.swift'")
+    }
+
+    @Test func terminalSHAIsInsertedVerbatim() {
+        let sha = "0123456789abcdef0123456789abcdef01234567"
+        #expect(AlasDropPayload.commitSHA(sha).terminalText == sha)
+    }
+
     @Test func trackedStashFileUsesTheStashSHA() {
         let root = URL(fileURLWithPath: "/tmp/wt")
         let stash = GitStash(ref: "stash@{0}", subject: "wip", relativeTime: "1m", sha: "abc")

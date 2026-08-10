@@ -148,6 +148,7 @@ extension AlasGhostty {
 
             // Enable layer-backed rendering. We'll configure the layer in makeBackingLayer().
             wantsLayer = true
+            registerForDraggedTypes([.alasDropPayload])
 
             // The surface config passes `self` as userdata so C callbacks can recover us.
             let selfPtr = Unmanaged.passUnretained(self).toOpaque()
@@ -173,6 +174,7 @@ extension AlasGhostty {
             self.app = nil
             super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
             wantsLayer = true
+            registerForDraggedTypes([.alasDropPayload])
             self.cSurface = nil
             self.surfaceIO = testIO
         }
@@ -281,6 +283,32 @@ extension AlasGhostty {
             ))
         }
 
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            canHandleAlasDrop(from: sender.draggingPasteboard) ? .copy : []
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            handleAlasDrop(from: sender.draggingPasteboard)
+        }
+
+        private func canHandleAlasDrop(from pasteboard: NSPasteboard) -> Bool {
+            guard surfaceIO != nil,
+                  let data = pasteboard.data(forType: .alasDropPayload)
+            else { return false }
+            return AlasDropPayload.decode(data) != nil
+        }
+
+        @discardableResult
+        func handleAlasDrop(from pasteboard: NSPasteboard) -> Bool {
+            guard let io = surfaceIO,
+                  let data = pasteboard.data(forType: .alasDropPayload),
+                  let payload = AlasDropPayload.decode(data)
+            else { return false }
+            window?.makeFirstResponder(self)
+            io.sendText(payload.terminalText)
+            return true
+        }
+
         // Ghostty performs its own Metal rendering; we just trigger a draw call.
         override func draw(_ dirtyRect: NSRect) {
             cSurface.map { ghostty_surface_draw($0) }
@@ -314,11 +342,7 @@ extension AlasGhostty {
 
         /// Inject text directly into the PTY (e.g. for paste or synthetic input).
         func sendText(_ text: String) {
-            guard let surface = cSurface else { return }
-            let bytes = text.utf8.count
-            text.withCString { ptr in
-                ghostty_surface_text(surface, ptr, UInt(bytes))
-            }
+            surfaceIO?.sendText(text)
         }
 
         /// Apply a cursor shape from a Ghostty mouse_shape action.
@@ -363,7 +387,7 @@ extension AlasGhostty {
         // MARK: - Keyboard events
 
         override func keyDown(with event: NSEvent) {
-            guard let surface = cSurface, let io = surfaceIO else { return }
+            guard let surface = cSurface, surfaceIO != nil else { return }
 
             let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 

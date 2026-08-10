@@ -23,6 +23,32 @@ enum AlasDropPayload: Codable, Equatable, Sendable {
         case .commitSHA(let sha): sha
         }
     }
+
+    var terminalText: String {
+        switch self {
+        case .file(_, let absolutePath): POSIXShellArgument.escape(absolutePath)
+        case .commitSHA(let sha): sha
+        }
+    }
+}
+
+enum POSIXShellArgument {
+    static func escape(_ value: String) -> String {
+        guard !value.isEmpty else { return "''" }
+        if value.unicodeScalars.allSatisfy(isSafe) {
+            return value
+        }
+        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func isSafe(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 48 ... 57, 65 ... 90, 97 ... 122:
+            return true
+        default:
+            return "_@%+=:,./-".unicodeScalars.contains(scalar)
+        }
+    }
 }
 
 extension NSPasteboard.PasteboardType {

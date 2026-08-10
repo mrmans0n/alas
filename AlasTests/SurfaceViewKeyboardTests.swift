@@ -428,6 +428,61 @@ struct SurfaceViewKeyboardTests {
         )])
     }
 
+    @Test @MainActor func alasPathDropTargetsOnlyTheReceivingPaneAndFocusesIt() throws {
+        let firstIO = FakeGhosttySurfaceIO()
+        let secondIO = FakeGhosttySurfaceIO()
+        let first = AlasGhostty.SurfaceView(testIO: firstIO)
+        let second = AlasGhostty.SurfaceView(testIO: secondIO)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let window = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        container.addSubview(first)
+        container.addSubview(second)
+        #expect(window.makeFirstResponder(first))
+        let pasteboard = NSPasteboard(name: .init("alas-terminal-drop-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        let payload = AlasDropPayload.file(
+            relativePath: "Sources/App State.swift",
+            absolutePath: "/tmp/work tree/Sources/App State.swift"
+        )
+        pasteboard.setData(try #require(payload.encoded()), forType: .alasDropPayload)
+
+        #expect(second.handleAlasDrop(from: pasteboard))
+        #expect(firstIO.calls.isEmpty)
+        #expect(secondIO.calls == [.text("'/tmp/work tree/Sources/App State.swift'")])
+        #expect(window.firstResponder === second)
+    }
+
+    @Test @MainActor func alasSHADropSendsFullSHAWithoutANewline() throws {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let pasteboard = NSPasteboard(name: .init("alas-terminal-sha-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        let sha = "0123456789abcdef0123456789abcdef01234567"
+        pasteboard.setData(
+            try #require(AlasDropPayload.commitSHA(sha).encoded()),
+            forType: .alasDropPayload
+        )
+
+        #expect(view.handleAlasDrop(from: pasteboard))
+        #expect(io.calls == [.text(sha)])
+    }
+
+    @Test @MainActor func malformedOrUnrelatedTerminalDropsAreIgnored() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let malformed = NSPasteboard(name: .init("alas-terminal-malformed-\(UUID().uuidString)"))
+        malformed.clearContents()
+        malformed.setData(Data("not-json".utf8), forType: .alasDropPayload)
+        let unrelated = NSPasteboard(name: .init("alas-terminal-unrelated-\(UUID().uuidString)"))
+        unrelated.clearContents()
+        unrelated.setString("do not inject", forType: .string)
+
+        #expect(!view.handleAlasDrop(from: malformed))
+        #expect(!view.handleAlasDrop(from: unrelated))
+        #expect(io.calls.isEmpty)
+    }
+
     // MARK: - Dead-key pipeline tests
 
     @Test @MainActor func keyDown_aggregatesInsertTextIntoAccumulator() {
