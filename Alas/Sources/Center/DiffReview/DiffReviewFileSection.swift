@@ -1794,7 +1794,7 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return ([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " ")
             }
         }.joined(separator: "\n")
-        return ACPMarkdownText.inlineMarkdown(flattened)
+        return ACPMarkdownInlineRenderer.cleanAttributedString(flattened)
     }
 
     @MainActor
