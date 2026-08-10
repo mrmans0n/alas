@@ -1780,8 +1780,9 @@ enum DiffReviewInlineFeedbackMarkdown {
         )
     }
 
+    @MainActor
     static func inlineMarkdown(_ source: String) -> AttributedString {
-        ACPMarkdownText.inlineMarkdown(source)
+        ACPMarkdownText.inlineMarkdown(plainText(source))
     }
 
     @MainActor
