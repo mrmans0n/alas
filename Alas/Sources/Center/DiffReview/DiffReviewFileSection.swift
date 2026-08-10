@@ -1918,7 +1918,7 @@ struct ReviewDraftCommentCard: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(reply.author.displayName)
                                     .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(theme.color("fg-faint"))
+                                    .foregroundColor(theme.color("accent"))
                                 DiffReviewInlineFeedbackMarkdown.view(
                                     reply.bodyMarkdown,
                                     noninteractiveTapAction: selectWhenNotEditing
@@ -1928,7 +1928,7 @@ struct ReviewDraftCommentCard: View {
                             .padding(.leading, 8)
                             .overlay(alignment: .leading) {
                                 RoundedRectangle(cornerRadius: 1)
-                                    .fill(theme.color("line"))
+                                    .fill(theme.color("accent"))
                                     .frame(width: 2)
                             }
                         }
