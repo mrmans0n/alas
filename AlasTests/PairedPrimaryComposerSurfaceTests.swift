@@ -33,30 +33,49 @@ struct PairedPrimaryComposerSurfaceTests {
         window.orderOut(nil)
     }
 
-    @Test func ggSplitMessageInvokesDraftChangeAfterPairedEdit() async throws {
-        let model = GGSplitMessageModel(message: "split")
+    @Test func ggSplitCardInvokesDraftChangeAfterPairedEdit() async throws {
+        let service = GGSplitSurfaceService()
+        let model = GGSplitCommitModel(
+            service: service,
+            target: GGSplitCommitTarget(worktreeId: "wt", targetGGID: "change-2", targetSHA: "abc123"),
+            capabilities: GGCapabilities(structuredSplit: true, keepCurrentUnstack: true),
+            workflowAvailable: true
+        )
+        try await model.load()
         var draftChanges: [String] = []
-        let controller = NSHostingController(rootView: GGSplitMessageHarness(model: model, theme: try! ThemeStore().current) {
-            draftChanges.append(model.message)
-        })
+        let controller = NSHostingController(rootView: GGSplitCommitTabView(
+            tabState: GGSplitCommitTabState(worktreeId: "wt", targetGGID: "change-2", targetSHA: "abc123"),
+            worktreePath: URL(fileURLWithPath: "/tmp"),
+            capabilities: GGCapabilities(structuredSplit: true, keepCurrentUnstack: true),
+            workflowAvailable: true,
+            hasBlockingGitOperation: false,
+            model: model,
+            codeFontFamily: "Menlo",
+            codeFontSize: 12,
+            onCancel: {},
+            onDraftChange: { draft in draftChanges.append(draft.firstMessage) }
+        )
+        .environment(\.theme, try! ThemeStore().current))
         let window = attach(controller)
         await drain(controller.view)
+        await drain(controller.view)
+        draftChanges.removeAll()
 
         let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
         #expect(window.makeFirstResponder(field))
         let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
         let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
-        editor.setSelectedRange(NSRange(location: 0, length: 5))
+        editor.setSelectedRange(NSRange(location: 0, length: 12))
         #expect(!coordinator.control(
             field,
             textView: editor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: 5),
+            shouldChangeCharactersIn: NSRange(location: 0, length: 12),
             replacementString: "`")
         )
         await drain(controller.view)
 
-        #expect(model.message == "`split`")
-        #expect(draftChanges == ["`split`"])
+        #expect(model.firstMessage == "`First commit`")
+        #expect(draftChanges == ["`First commit`"])
         window.orderOut(nil)
     }
 
@@ -123,22 +142,28 @@ private struct ReviewRequestComposerHarness: View {
 }
 
 @MainActor
-private final class GGSplitMessageModel: ObservableObject {
-    @Published var message: String
+private final class GGSplitSurfaceService: GGSplitCommitServicing {
+    private let description = GGSplitDescription(
+        version: 1,
+        planToken: "split-v1-token",
+        target: GGSplitTargetIdentity(ggID: "change-2", sha: "abc123", tree: "tree123"),
+        hunks: [GGSplitHunk(id: "h-1", path: "Sources/A.swift", header: "@@ -1 +1 @@", patch: "-old\n+new\n")],
+        nonTextualFiles: [],
+        firstMessage: "First commit",
+        remainderMessage: "Remainder commit"
+    )
 
-    init(message: String) {
-        self.message = message
+    func loadDescription(target: GGSplitCommitTarget) async throws -> GGSplitLoadedDescription {
+        GGSplitLoadedDescription(
+            description: description,
+            stackIdentity: GGStackIdentity(stackName: "stack", base: "main", headSHA: "head", operationID: nil)
+        )
     }
-}
 
-@MainActor
-private struct GGSplitMessageHarness: View {
-    @ObservedObject var model: GGSplitMessageModel
-    let theme: Theme
-    let draftDidChange: () -> Void
-
-    var body: some View {
-        GGSplitCommitMessageEditor(message: $model.message, onDraftChange: draftDidChange)
-            .environment(\.theme, theme)
-    }
+    func applySplit(
+        planURL: URL,
+        target: GGSplitTargetIdentity,
+        planToken: String,
+        confirmedAgainst identity: GGStackIdentity
+    ) async throws {}
 }

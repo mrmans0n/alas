@@ -11,6 +11,7 @@ struct GGSplitCommitTabView: View {
     let codeFontSize: CGFloat
     let onCancel: () -> Void
     let onDraftChange: (GGSplitCommitDraft) -> Void
+    let loadsOnAppear: Bool
 
     @Environment(\.theme) private var theme
     @State private var model: GGSplitCommitModel
@@ -52,6 +53,7 @@ struct GGSplitCommitTabView: View {
         self.codeFontSize = codeFontSize
         self.onCancel = onCancel
         self.onDraftChange = onDraftChange
+        self.loadsOnAppear = true
         _model = State(initialValue: GGSplitCommitModel(
             service: rightPaneState,
             target: GGSplitCommitTarget(
@@ -63,6 +65,32 @@ struct GGSplitCommitTabView: View {
             workflowAvailable: workflowAvailable && !hasBlockingGitOperation,
             initialDraft: initialDraft
         ))
+    }
+
+    init(
+        tabState: GGSplitCommitTabState,
+        worktreePath: URL,
+        capabilities: GGCapabilities,
+        workflowAvailable: Bool,
+        hasBlockingGitOperation: Bool,
+        model: GGSplitCommitModel,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        onCancel: @escaping () -> Void,
+        onDraftChange: @escaping (GGSplitCommitDraft) -> Void
+    ) {
+        self.tabState = tabState
+        self.worktreePath = worktreePath
+        self.capabilities = capabilities
+        self.workflowAvailable = workflowAvailable
+        self.hasBlockingGitOperation = hasBlockingGitOperation
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.onCancel = onCancel
+        self.onDraftChange = onDraftChange
+        self.loadsOnAppear = false
+        _model = State(initialValue: model)
+        _isLoading = State(initialValue: false)
     }
 
     var body: some View {
@@ -80,7 +108,11 @@ struct GGSplitCommitTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
-        .task(id: tabState.id) { await load() }
+        .task(id: tabState.id) {
+            if loadsOnAppear {
+                await load()
+            }
+        }
         .onReceive(
             NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
         ) { _ in
