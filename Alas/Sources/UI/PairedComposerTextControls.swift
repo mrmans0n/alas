@@ -201,6 +201,7 @@ struct PairedTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: PairedTextField
         private var isApplyingPairedEdit = false
+        private var isApplyingNativePaste = false
         private weak var observedUndoManager: UndoManager?
         private var undoObservers: [NSObjectProtocol] = []
 
@@ -233,6 +234,7 @@ struct PairedTextField: NSViewRepresentable {
             replacementString: String?
         ) -> Bool {
             guard !isApplyingPairedEdit,
+                  !isApplyingNativePaste,
                   parent.isEnabled,
                   !textView.hasMarkedText(),
                   let replacementString
@@ -282,6 +284,17 @@ struct PairedTextField: NSViewRepresentable {
             case .native:
                 return true
             }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSText.paste(_:)) else { return false }
+            isApplyingNativePaste = true
+            defer {
+                isApplyingNativePaste = false
+                updateText(textView.string)
+            }
+            textView.paste(nil)
+            return true
         }
 
         func synchronizeFocus(for field: NSTextField) {

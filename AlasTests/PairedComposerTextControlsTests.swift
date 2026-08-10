@@ -153,6 +153,28 @@ struct PairedComposerTextControlsTests {
         await dismantle(model: model, controller: controller, window: window)
     }
 
+    @Test func textFieldPasteBypassesSingleDelimiterPairing() async throws {
+        let model = ComposerControlModel(text: "", isFocused: true)
+        let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
+        let window = attach(controller, size: NSSize(width: 360, height: 120))
+        await drain(controller.view)
+
+        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
+        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
+        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("(", forType: .string)
+        defer { NSPasteboard.general.clearContents() }
+
+        #expect(coordinator.control(field, textView: editor, doCommandBy: #selector(NSText.paste(_:))))
+
+        #expect(field.stringValue == "(")
+        #expect(model.text == "(")
+        #expect(editor.selectedRange() == NSRange(location: 1, length: 0))
+
+        await dismantle(model: model, controller: controller, window: window)
+    }
+
     @Test func textEditorSynchronizesExternalConfigurationAndDisabledState() async throws {
         let model = ComposerControlModel(text: "start", isFocused: false)
         let controller = NSHostingController(rootView: PairedTextEditorHarness(model: model))
