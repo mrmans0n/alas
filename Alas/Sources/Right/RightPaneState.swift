@@ -129,6 +129,10 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Current gg stack for this worktree's branch; nil when inactive or when
     /// gg reports that the active context has no stack metadata.
     var ggStack: GGStack? = nil
+    var ggStackDisplayCommits: [CommitInfo] = []
+    var commitsForDisplay: [CommitInfo] {
+        ggStackLoadState == .loaded ? ggStackDisplayCommits : commits
+    }
     var ggEffectiveConfig: GGEffectiveConfig = .defaults
     var ggContext: GGWorktreeContext = .inactive(reason: .policyOff)
     var ggStackLoadState: GGStackLoadState = .inactive
@@ -164,6 +168,11 @@ final class RightPaneState: GGSplitCommitServicing {
     /// .forReviewLoopBase`, computed in `performRefresh`), which never
     /// resolves to upstream and so always reflects true stack membership.
     @ObservationIgnored var ggStackSourceCommits: [CommitInfo] = []
+    @ObservationIgnored
+    var ggStackCommitLoader: @MainActor (URL, [String]) async throws -> [String: CommitInfo] = {
+        worktree, shas in
+        try await GitService().stackCommitInfos(at: worktree, shas: shas)
+    }
     /// SHA-set key of the last commits list gg was queried for. `gg ls
     /// --json` hits the forge API (best-effort PR-state refresh), and
     /// performRefresh fires continuously from the file watcher — so only
@@ -960,6 +969,7 @@ final class RightPaneState: GGSplitCommitServicing {
             ggStackCommitsKey = nil
             ggStackLoadState = .inactive
             if ggStack != nil { ggStack = nil }
+            if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
@@ -983,6 +993,7 @@ final class RightPaneState: GGSplitCommitServicing {
             return
         }
         let previousStack = ggStack
+        let previousDisplayCommits = ggStackDisplayCommits
         let previousKey = ggStackCommitsKey
         let previousLoadState = ggStackLoadState
         let previousSummary = GGStackSummaryStore.shared.summaries[worktree.path.path]
@@ -996,11 +1007,13 @@ final class RightPaneState: GGSplitCommitServicing {
                     && (previousLoadState == .loaded || previousLoadState == .empty)
                 if canRestorePreviousSnapshot {
                     ggStack = previousStack
+                    ggStackDisplayCommits = previousDisplayCommits
                     ggStackCommitsKey = previousKey
                     ggStackLoadState = previousLoadState
                     GGStackSummaryStore.shared.summaries[worktree.path.path] = previousSummary
                 } else {
                     ggStack = nil
+                    ggStackDisplayCommits = []
                     ggStackCommitsKey = nil
                     ggStackLoadState = .failed(
                         "Stack refresh was interrupted. Retry to load it again."
@@ -1012,12 +1025,20 @@ final class RightPaneState: GGSplitCommitServicing {
         ggStackLoadState = .loading
         ggStackCommitsKey = nil
         if ggStack != nil { ggStack = nil }
+        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
         ggMutationCoordinator.suspendUndoCandidate()
         do {
             let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
+            let displayCommits: [CommitInfo]
+            if let stack, !stack.entries.isEmpty {
+                let infos = try await ggStackCommitLoader(worktree.path, stack.entries.map(\.sha))
+                displayCommits = try stack.projectCommits(infos)
+            } else {
+                displayCommits = []
+            }
             // A newer refresh, or a `markSnapshotUnknown()` invalidation,
             // superseded this one — its own `refreshGGStack` call (or the
             // invalidation's own reset) will write the current state;
@@ -1028,6 +1049,7 @@ final class RightPaneState: GGSplitCommitServicing {
             else { return }
             ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
+            ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
             ggStackLoadState = stackIsEmpty ? .empty : .loaded
             let summary = stackIsEmpty ? nil : stack?.summary
@@ -1058,6 +1080,7 @@ final class RightPaneState: GGSplitCommitServicing {
             else { return }
             ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }
+            if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
             }
@@ -1642,6 +1665,7 @@ final class RightPaneState: GGSplitCommitServicing {
         ggStackSourceCommits = []
         ggStackCommitsKey = nil
         if ggStack != nil { ggStack = nil }
+        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
         ggStackLoadState = ggContext.isActive ? .loading : .inactive
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil

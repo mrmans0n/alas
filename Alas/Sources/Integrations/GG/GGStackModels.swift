@@ -123,6 +123,59 @@ struct GGStack: Decodable, Equatable {
     func entry(matchingCommitSHA sha: String) -> GGStackEntry? {
         entries.first { sha.hasPrefix($0.sha) || $0.sha.hasPrefix(sha) }
     }
+
+    func projectCommits(_ infosBySHA: [String: CommitInfo]) throws -> [CommitInfo] {
+        try entries.sorted { $0.position > $1.position }.map { entry in
+            guard let info = infosBySHA.first(where: {
+                $0.key.hasPrefix(entry.sha) || entry.sha.hasPrefix($0.key)
+            })?.value else {
+                throw GGStackCommitProjectionError.missingCommit(sha: entry.sha)
+            }
+            return info
+        }
+    }
+
+    func relation(for entry: GGStackEntry) -> GGStackCommitRelation {
+        guard entries.contains(where: { $0.id == entry.id }),
+              let currentPosition,
+              entries.contains(where: { $0.position == currentPosition && $0.isCurrent })
+        else { return .unknown }
+        if entry.position > currentPosition { return .aboveCurrent }
+        if entry.position == currentPosition, entry.isCurrent { return .current }
+        return .belowCurrent
+    }
+
+    func currentPositionIndicator(for entry: GGStackEntry) -> GGCurrentPositionIndicator? {
+        guard relation(for: entry) == .current,
+              let currentPosition,
+              currentPosition < totalCommits,
+              totalCommits == entries.count
+        else { return nil }
+        return GGCurrentPositionIndicator(
+            text: "Current · \(currentPosition) of \(totalCommits)",
+            accessibilityLabel: "Current GG commit, position \(currentPosition) of \(totalCommits)"
+        )
+    }
+}
+
+enum GGStackCommitRelation: Equatable {
+    case aboveCurrent
+    case current
+    case belowCurrent
+    case unknown
+}
+
+struct GGCurrentPositionIndicator: Equatable {
+    let text: String
+    let accessibilityLabel: String
+}
+
+enum GGStackCommitProjectionError: Error, Equatable, LocalizedError {
+    case missingCommit(sha: String)
+
+    var errorDescription: String? {
+        "One or more GG stack commits are unavailable locally."
+    }
 }
 
 enum GGPRState: String, Equatable {
