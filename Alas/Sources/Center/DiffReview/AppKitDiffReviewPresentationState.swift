@@ -137,21 +137,40 @@ final class AppKitDiffReviewFileState: ObservableObject {
     func bindingForInlineFeedbackReplyEditor(_ id: String) -> Binding<DiffReviewInlineFeedbackReplyEditorState> {
         Binding(
             get: { self.inlineFeedbackReplyEditors[id] ?? DiffReviewInlineFeedbackReplyEditorState() },
-            set: { self.inlineFeedbackReplyEditors[id] = $0 }
+            set: { newValue in
+                let previous = self.inlineFeedbackReplyEditors[id] ?? DiffReviewInlineFeedbackReplyEditorState()
+                self.inlineFeedbackReplyEditors[id] = newValue
+                if previous.isReplying != newValue.isReplying {
+                    self.structuralDidChange.send()
+                }
+            }
         )
     }
 
     func bindingForDraftCommentEditor(_ id: String) -> Binding<ReviewDraftCommentEditorState> {
         Binding(
             get: { self.draftCommentEditors[id] ?? ReviewDraftCommentEditorState() },
-            set: { self.draftCommentEditors[id] = $0 }
+            set: { newValue in
+                let previous = self.draftCommentEditors[id] ?? ReviewDraftCommentEditorState()
+                self.draftCommentEditors[id] = newValue
+                if previous.isEditing != newValue.isEditing {
+                    self.structuralDidChange.send()
+                }
+            }
         )
     }
 
     func bindingForThreadCommentEditor(_ id: String) -> Binding<DiffInlineCommentCardEditorState> {
         Binding(
             get: { self.threadCommentEditors[id] ?? DiffInlineCommentCardEditorState() },
-            set: { self.threadCommentEditors[id] = $0 }
+            set: { newValue in
+                let previous = self.threadCommentEditors[id] ?? DiffInlineCommentCardEditorState()
+                self.threadCommentEditors[id] = newValue
+                if previous.isComposerOpen != newValue.isComposerOpen
+                    || previous.editingCommentID != newValue.editingCommentID {
+                    self.structuralDidChange.send()
+                }
+            }
         )
     }
 

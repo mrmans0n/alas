@@ -216,6 +216,25 @@ struct AppKitDiffReviewPresentationStateTests {
         _ = cancellable
     }
 
+    @Test func editorModeChangesAreStructuralButEditorTypingIsNot() {
+        let state = AppKitDiffReviewFileState()
+        var changes = 0
+        let cancellable = state.structuralDidChange.sink { changes += 1 }
+
+        state.bindingForDraftCommentEditor("draft").wrappedValue.editingBody = "draft body"
+        state.bindingForInlineFeedbackReplyEditor("feedback").wrappedValue.body = "reply body"
+        state.bindingForThreadCommentEditor("thread").wrappedValue.replyDraft = "thread reply"
+        state.bindingForThreadCommentEditor("thread").wrappedValue.editDraft = "thread edit"
+        #expect(changes == 0)
+
+        state.bindingForDraftCommentEditor("draft").wrappedValue.isEditing = true
+        state.bindingForInlineFeedbackReplyEditor("feedback").wrappedValue.isReplying = true
+        state.bindingForThreadCommentEditor("thread").wrappedValue.isComposerOpen = true
+        state.bindingForThreadCommentEditor("thread").wrappedValue.editingCommentID = "comment"
+        #expect(changes == 4)
+        _ = cancellable
+    }
+
     @Test func presentationStoreForwardsCopyFeedbackChanges() {
         let store = AppKitDiffReviewPresentationStore()
         let state = store.state(for: fileModel())
