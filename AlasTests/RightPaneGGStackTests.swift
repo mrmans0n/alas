@@ -68,6 +68,9 @@ enum GGStackClassificationFixture: CaseIterable, Sendable {
 
     var isEmpty: Bool { self != .populated }
     var hasStack: Bool { self != .nilStack }
+    var isMalformed: Bool {
+        self == .zeroTotalWithEntry || self == .positiveTotalWithoutEntries
+    }
 
     var json: String {
         guard self != .nilStack else {
@@ -593,8 +596,18 @@ struct RightPaneGGStackErrorPresentationTests {
 @MainActor
 struct RightPaneGGStackTests {
     private struct MemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile?
+
+        init(projectsFile: ProjectsFile? = nil) {
+            self.projectsFile = projectsFile
+        }
+
         func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
     }
 
     private func makeWorktree() -> Worktree {
@@ -1119,6 +1132,19 @@ struct RightPaneGGStackTests {
 
         await state.refreshGGStack()
 
+        if fixture.isMalformed {
+            #expect(state.ggStack == nil)
+            #expect(state.ggStackLoadState == .failed("GG returned incomplete or inconsistent stack metadata."))
+            #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
+            #expect(ChangesTabView.ggNewStackCommitDisabledReason(
+                contextIsActive: state.ggContext.isActive,
+                stackLoadState: state.ggStackLoadState,
+                stack: state.ggStack,
+                currentHeadSHA: state.currentHeadSHA
+            ) == "Retry loading the GG stack.")
+            return
+        }
+
         #expect((state.ggStack != nil) == fixture.hasStack)
         #expect((state.ggStackLoadState == .empty) == fixture.isEmpty)
         #expect((GGStackSummaryStore.shared.summaries[worktree.path.path] == nil) == fixture.isEmpty)
@@ -1311,6 +1337,81 @@ struct RightPaneGGStackTests {
         state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
         await state.refreshGGStack()
         #expect(runner.callCount == 2)
+    }
+
+    @Test func projectRevisionWatcherReloadsAnUpperEntryWhenReachableCommitsAreUnchanged() async throws {
+        let project = ProjectConfig(
+            id: "test-project",
+            name: "Test",
+            path: "/repo",
+            color: "blue",
+            addedAt: .now
+        )
+        let worktree = makeWorktree()
+        let gitDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-upper-stack-watch-\(UUID().uuidString)/.git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent()) }
+        let watcher = ProjectGitWatcher(
+            repoPath: URL(fileURLWithPath: project.path),
+            resolvedGitDir: gitDir,
+            resolvedWorktreeRoot: worktree.path,
+            headDebounceInterval: 0.01,
+            headDebounceMaxWait: 0.05,
+            topologyDebounceInterval: 0.01,
+            topologyDebounceMaxWait: 0.05,
+            startStreamOverride: { _, _ in }
+        )
+        let app = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
+            projectGitWatcherFactory: { _ in watcher }
+        )
+        app.projectsManager.insertOptimisticWorktree(worktree)
+        app.projectsManager.setOperationState(id: worktree.id, state: nil)
+        let state = app.rightPaneStore.state(
+            for: worktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        state.stop()
+
+        let lowerSnapshot = GGStackModelsTests.fixture
+            .replacingOccurrences(of: #""current_position": 3"#, with: #""current_position": 1"#)
+            .replacingOccurrences(of: #""is_current": true"#, with: #""is_current": false"#)
+            .replacingOccurrences(
+                of: #""ci_status": "success", "is_current": false"#,
+                with: #""ci_status": "success", "is_current": true"#
+            )
+        let rewrittenUpperSnapshot = lowerSnapshot.replacingOccurrences(of: "ccccccc", with: "ddddddd")
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("agent-inbox", ProcessResult(exitCode: 0, stdout: lowerSnapshot, stderr: "")),
+                ("agent-inbox", ProcessResult(exitCode: 0, stdout: rewrittenUpperSnapshot, stderr: "")),
+            ],
+            suspendedCalls: []
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+        installFakeGGStackLoader(on: state)
+
+        await state.refreshGGStack()
+        #expect(state.ggStackDisplayCommits.first?.shortSha == "ccccccc")
+        let unchangedReachableKey = state.currentGGStackCommitsKey
+
+        app.startProjectGitWatcher(for: project)
+        watcher.processEvents([gitDir.appendingPathComponent("refs/remotes/origin/upper-entry").path])
+        for _ in 0..<500 where await runner.lsCallCount < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        for _ in 0..<500 where state.ggStackDisplayCommits.first?.shortSha != "ddddddd" {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(state.currentGGStackCommitsKey == unchangedReachableKey)
+        #expect(await runner.lsCallCount == 2)
+        #expect(state.ggStackDisplayCommits.first?.shortSha == "ddddddd")
+        app.stopProjectGitWatcher(projectId: project.id)
     }
 
     /// `reevaluateGGGate()` must clear stale stack state immediately when the
@@ -2111,7 +2212,7 @@ struct RightPaneGGStackTests {
     @Test func postMutationStackRefreshIsCancelledByReplacementRefresh() async {
         let worktree = makeWorktree()
         let runner = PostMutationRefreshCancellationRunner()
-        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        let state = makeState(worktree: worktree)
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
         state.ggStackSourceCommits = [

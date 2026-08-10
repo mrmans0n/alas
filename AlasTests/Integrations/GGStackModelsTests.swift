@@ -167,6 +167,104 @@ struct GGStackModelsTests {
         #expect(tipStack.currentPositionIndicator(for: tip) == nil)
     }
 
+    @Test func projectionRejectsMalformedStackShapeBeforeHydration() {
+        let full1 = String(repeating: "a", count: 40)
+        let full2 = String(repeating: "b", count: 40)
+        let info = [
+            full1: commit(sha: full1),
+            full2: commit(sha: full2),
+        ]
+        let malformedEntries: [[GGStackEntry]] = [
+            [
+                GGStackEntry(position: 1, sha: "aaaaaaa", title: "one"),
+            ],
+            [
+                GGStackEntry(position: 1, sha: "aaaaaaa", title: "one"),
+                GGStackEntry(position: 1, sha: "bbbbbbb", title: "two"),
+            ],
+            [
+                GGStackEntry(position: 0, sha: "aaaaaaa", title: "one"),
+                GGStackEntry(position: 2, sha: "bbbbbbb", title: "two"),
+            ],
+            [
+                GGStackEntry(position: 1, sha: "", title: "one"),
+                GGStackEntry(position: 2, sha: "bbbbbbb", title: "two"),
+            ],
+            [
+                GGStackEntry(position: 1, sha: "aaaaaaa", title: "one"),
+                GGStackEntry(position: 2, sha: "aaaaaaa", title: "two"),
+            ],
+        ]
+
+        for (index, entries) in malformedEntries.enumerated() {
+            let total = index == 0 ? 2 : entries.count
+            let stack = GGStack(
+                name: "stack", base: "main", totalCommits: total, syncedCommits: 0,
+                currentPosition: nil, behindBase: nil, entries: entries
+            )
+            #expect(throws: GGStackCommitProjectionError.malformedStack) {
+                _ = try stack.projectCommits(info)
+            }
+        }
+    }
+
+    @Test func projectionRequiresOneDistinctResolvedCommitPerEntry() {
+        let full = String(repeating: "a", count: 40)
+        let ambiguous = GGStack(
+            name: "stack", base: "main", totalCommits: 2, syncedCommits: 0,
+            currentPosition: nil, behindBase: nil,
+            entries: [
+                GGStackEntry(position: 1, sha: "aaaaaaa", title: "one"),
+                GGStackEntry(position: 2, sha: "aaaaaaaa", title: "two"),
+            ]
+        )
+        #expect(throws: GGStackCommitProjectionError.malformedStack) {
+            _ = try ambiguous.projectCommits([full: commit(sha: full)])
+        }
+
+        let single = GGStack(
+            name: "stack", base: "main", totalCommits: 1, syncedCommits: 0,
+            currentPosition: nil, behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "aaaaaaa", title: "one")]
+        )
+        #expect(throws: GGStackCommitProjectionError.malformedStack) {
+            _ = try single.projectCommits(["": commit(sha: full), full: commit(sha: full)])
+        }
+    }
+
+    @Test func indicatorRequiresValidPositionRangeAndOneMatchingCurrentEntry() {
+        let sha1 = String(repeating: "a", count: 7)
+        let sha2 = String(repeating: "b", count: 7)
+        let invalidCurrentPositions = [0, -1, 3]
+        for currentPosition in invalidCurrentPositions {
+            let current = GGStackEntry(position: 1, sha: sha1, title: "one", isCurrent: true)
+            let stack = GGStack(
+                name: "stack", base: "main", totalCommits: 2, syncedCommits: 0,
+                currentPosition: currentPosition, behindBase: nil,
+                entries: [current, GGStackEntry(position: 2, sha: sha2, title: "two")]
+            )
+            #expect(stack.relation(for: current) == .unknown)
+            #expect(stack.currentPositionIndicator(for: current) == nil)
+        }
+
+        let first = GGStackEntry(position: 1, sha: sha1, title: "one", isCurrent: true)
+        let duplicateCurrent = GGStack(
+            name: "stack", base: "main", totalCommits: 2, syncedCommits: 0,
+            currentPosition: 1, behindBase: nil,
+            entries: [first, GGStackEntry(position: 2, sha: sha2, title: "two", isCurrent: true)]
+        )
+        #expect(duplicateCurrent.relation(for: first) == .unknown)
+        #expect(duplicateCurrent.currentPositionIndicator(for: first) == nil)
+
+        let duplicatePosition = GGStack(
+            name: "stack", base: "main", totalCommits: 2, syncedCommits: 0,
+            currentPosition: 1, behindBase: nil,
+            entries: [first, GGStackEntry(position: 1, sha: sha2, title: "two")]
+        )
+        #expect(duplicatePosition.relation(for: first) == .unknown)
+        #expect(duplicatePosition.currentPositionIndicator(for: first) == nil)
+    }
+
     private func commit(sha: String) -> CommitInfo {
         CommitInfo(
             sha: sha,

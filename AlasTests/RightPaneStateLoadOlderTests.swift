@@ -2,6 +2,51 @@ import Testing
 import Foundation
 @testable import Alas
 
+private final class LoadOlderStackRunner: GGCommandRunning, @unchecked Sendable {
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+    }
+}
+
+private actor DelayedStackHydration {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func load(_ shas: [String]) async -> [String: CommitInfo] {
+        started = true
+        let waiters = startWaiters
+        startWaiters = []
+        for waiter in waiters { waiter.resume() }
+        await withCheckedContinuation { releaseContinuation = $0 }
+        return Dictionary(uniqueKeysWithValues: shas.map { sha in
+            let fullSHA = sha + String(repeating: "0", count: 40 - sha.count)
+            return (fullSHA, CommitInfo(
+                sha: fullSHA,
+                shortSha: sha,
+                author: "Test",
+                authorInitials: "T",
+                date: .now,
+                subject: sha,
+                conventionalTag: nil,
+                filesChanged: 0,
+                insertions: 0,
+                deletions: 0
+            ))
+        })
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 @MainActor
 @Suite(.serialized)
 struct RightPaneStateLoadOlderTests {
@@ -93,6 +138,34 @@ struct RightPaneStateLoadOlderTests {
         #expect(state.olderCommits.first?.subject == "c25")
         #expect(displayedSHAs.intersection(olderSHAs).isEmpty)
         #expect(displayedSHAs.union(olderSHAs).count == 23)
+    }
+
+    @Test func loadingGGPresentationDisablesPaginationAndDropsRowsFromThePreviousSource() async throws {
+        let repo = try await makeBranchAhead(base: 25, ahead: 3)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = RightPaneState(worktree: makeWorktree(at: repo, branch: "feature"), baseBranch: "main")
+        await state.refresh()
+        await state.loadOlder()
+        #expect(state.olderCommits.count == 20)
+
+        let hydration = DelayedStackHydration()
+        state.ggService = GGService(runner: LoadOlderStackRunner())
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = state.commits
+        state.ggStackCommitLoader = { _, shas in await hydration.load(shas) }
+
+        let refresh = Task { @MainActor in await state.refreshGGStack() }
+        await hydration.waitUntilStarted()
+        #expect(state.ggStackLoadState == .loading)
+
+        await state.loadOlder()
+
+        #expect(state.olderCommits.isEmpty)
+        #expect(state.hasMoreOlder)
+        await hydration.release()
+        await refresh.value
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.olderCommits.isEmpty)
     }
 
     @Test func branchFetchMarksLoadingAndPublishesCompleteInitialList() async throws {

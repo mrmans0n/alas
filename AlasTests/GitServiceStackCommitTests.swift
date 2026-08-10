@@ -127,6 +127,24 @@ struct GitServiceStackCommitTests {
         #expect(infos[sha]?.deletions == 0)
     }
 
+    @Test func parserRejectsMixedBinaryAndNumericNumstatOrMissingPath() {
+        let sha = String(repeating: "f", count: 40)
+        let malformedNumstats = [
+            "-\t1\tfile.txt",
+            "1\t-\tfile.txt",
+            "1\t0\t",
+            "-\t-\t",
+        ]
+
+        for numstat in malformedNumstats {
+            #expect(throws: StackCommitInfoError.malformedRecord) {
+                try GitService.parseStackCommitInfoRecords(
+                    record(sha: sha, shortSHA: "fffffff", numstat: numstat)
+                )
+            }
+        }
+    }
+
     @Test func parserRejectsDuplicateResolvedSHAs() {
         let sha = String(repeating: "d", count: 40)
         let duplicate = record(sha: sha, shortSHA: "ddddddd") + record(sha: sha, shortSHA: "ddddddd")

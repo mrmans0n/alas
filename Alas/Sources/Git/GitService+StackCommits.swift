@@ -70,15 +70,28 @@ extension GitService {
             var insertions = 0
             var deletions = 0
             for line in sections[1].split(separator: "\n", omittingEmptySubsequences: false) {
-                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-                guard !trimmedLine.isEmpty else { continue }
+                guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
 
-                let numstat = trimmedLine.split(separator: "\t", omittingEmptySubsequences: false)
-                guard numstat.count == 3,
-                      let additions = Self.stackCommitNumstatCount(numstat[0]),
-                      let removals = Self.stackCommitNumstatCount(numstat[1])
-                else {
+                let numstat = line.split(separator: "\t", omittingEmptySubsequences: false)
+                guard numstat.count == 3, !numstat[2].isEmpty else {
                     throw StackCommitInfoError.malformedRecord
+                }
+                let additions: Int
+                let removals: Int
+                if numstat[0] == "-" || numstat[1] == "-" {
+                    guard numstat[0] == "-", numstat[1] == "-" else {
+                        throw StackCommitInfoError.malformedRecord
+                    }
+                    additions = 0
+                    removals = 0
+                } else {
+                    guard let parsedAdditions = Self.stackCommitNumstatCount(numstat[0]),
+                          let parsedRemovals = Self.stackCommitNumstatCount(numstat[1])
+                    else {
+                        throw StackCommitInfoError.malformedRecord
+                    }
+                    additions = parsedAdditions
+                    removals = parsedRemovals
                 }
                 filesChanged += 1
                 insertions += additions
@@ -106,7 +119,6 @@ extension GitService {
     }
 
     private static func stackCommitNumstatCount(_ value: Substring) -> Int? {
-        if value == "-" { return 0 }
         guard let count = Int(value), count >= 0 else { return nil }
         return count
     }

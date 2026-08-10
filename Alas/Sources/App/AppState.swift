@@ -3207,6 +3207,7 @@ final class AppState {
     private func handleProjectRevisionChange(projectId: String) {
         bumpRevisionGenerationForProject(projectId: projectId)
         invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
+        rightPaneStore.refreshActiveGGPresentationForProjectRevision(projectId: projectId)
     }
 
     /// Invalidation itself is a fast, in-memory actor call, but it's still
