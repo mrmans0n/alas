@@ -92,7 +92,7 @@ enum PairedDelimiterEditing {
 }
 ```
 
-Use `NSString` for bounds and adjacent-character reads. Check an opener before generic closer step-over so symmetric delimiters retain their current behavior.
+Use `NSString` for bounds and adjacent-character reads. When a symmetric delimiter already appears immediately after an empty caret, resolve closer step-over before empty-pair insertion so the existing editor behavior is preserved.
 
 - [ ] **Step 4: Refactor `CodeTextView` to consume semantic actions**
 
