@@ -590,8 +590,12 @@ struct GGMutationCoordinatorTests {
             stack: try #require(harness.stacks[0].stack),
             action: harness.actionState
         )
-        #expect(model.syncProgress?.liveStatus == nil)
-        #expect(model.syncProgress?.showsSpinner == false)
+        #expect(harness.coordinator.activeRequest == nil)
+        #expect(harness.actionState.inFlightAction == nil)
+        #expect(harness.actionState.lastActionSummary == "Synced")
+        #expect(harness.actionState.syncProgress.isEmpty)
+        #expect(model.syncProgress == nil)
+        #expect(model.primaryActions.first(where: { $0.kind == .sync })?.isInFlight == false)
 
         resumeRefresh?.resume()
         try await task.value
@@ -618,8 +622,8 @@ struct GGMutationCoordinatorTests {
             stack: try #require(harness.stacks[0].stack),
             action: harness.actionState
         )
-        #expect(harness.coordinator.activeRequest == .sync)
-        #expect(harness.actionState.inFlightAction == .sync)
+        #expect(harness.coordinator.activeRequest == nil)
+        #expect(harness.actionState.inFlightAction == nil)
         #expect(harness.actionState.lastError == "sync failed")
         #expect(harness.actionState.syncHasTerminalFailure)
         #expect(model.syncProgress?.liveStatus == nil)
