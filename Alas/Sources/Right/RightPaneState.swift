@@ -1138,6 +1138,37 @@ final class RightPaneState: GGSplitCommitServicing {
         await coordinator.restoreUndoCandidate(currentStackName: ggStack?.name)
     }
 
+    /// Supersedes every prior stack refresh and clears its published
+    /// presentation. Active callers may atomically install a replacement
+    /// refresh; quiescent callers leave the state invalidated for activation.
+    @MainActor
+    @discardableResult
+    func invalidateGGPresentation(
+        startingRefresh shouldRefresh: Bool
+    ) -> Task<Void, Never>? {
+        // Advance ownership before cancellation: a direct/untracked caller may
+        // ignore cancellation, but its generation guard must still reject the
+        // response after this presentation is invalidated.
+        ggStackRefreshGeneration &+= 1
+        ggStackRefreshTask?.cancel()
+        ggStackRefreshTask = nil
+        invalidateOlderHistoryForDisplaySourceChange()
+        ggStackCommitsKey = nil
+        if ggStack != nil { ggStack = nil }
+        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
+        ggStackLoadState = ggContext.isActive ? .loading : .inactive
+        if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+        }
+        guard shouldRefresh else { return nil }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.refreshGGStack()
+        }
+        ggStackRefreshTask = task
+        return task
+    }
+
     /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
     /// than waiting for the next watcher-driven refresh. Resets the
     /// commits-key so the gate is fully re-evaluated even when commits are
@@ -1147,8 +1178,7 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     @discardableResult
     func reevaluateGGGate() -> Task<Void, Never> {
-        ggStackCommitsKey = nil
-        ggStackRefreshTask?.cancel()
+        invalidateGGPresentation(startingRefresh: false)
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.refreshGGStack()
@@ -1684,20 +1714,12 @@ final class RightPaneState: GGSplitCommitServicing {
         indexFingerprint = ""
         fileTree = []
         commits = []
-        invalidateOlderHistoryForDisplaySourceChange()
         // gg stack state is derived from commits above — reset it here too,
         // and cancel any in-flight load, so a delayed or failed refresh
         // after this invalidation can't leave a stale "Stack · …"
         // header/sidebar badge rendered against the now-empty commit list.
-        ggStackRefreshTask?.cancel()
         ggStackSourceCommits = []
-        ggStackCommitsKey = nil
-        if ggStack != nil { ggStack = nil }
-        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
-        ggStackLoadState = ggContext.isActive ? .loading : .inactive
-        if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
-            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
-        }
+        invalidateGGPresentation(startingRefresh: false)
         comparisonRef = nil
         commitRemote = nil
         primaryCommitRemote = nil

@@ -3353,12 +3353,17 @@ final class AppState {
 
     func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
         bumpRevisionGenerationForProject(projectId: projectId)
-        let changedPaths = projectsManager.applyHeadUpdates(
+        let reportedPaths = Set(branchByWorktreePath.keys.map {
+            Self.canonicalWorktreePath($0.path)
+        })
+        projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
         )
-        for path in changedPaths {
-            GGStackSummaryStore.shared.summaries[path] = nil
+        for worktree in projectsManager.worktrees(projectId: projectId)
+            where reportedPaths.contains(Self.canonicalWorktreePath(worktree.path.path))
+        {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
         invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
         rightPaneStore.refreshActiveGGPresentationForHeadUpdates(

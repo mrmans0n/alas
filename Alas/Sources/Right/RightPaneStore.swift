@@ -365,16 +365,14 @@ final class RightPaneStore {
     private func refreshActiveGGPresentation(
         invalidating affectedStates: [RightPaneState]
     ) -> Task<Void, Never>? {
+        var activeRefresh: Task<Void, Never>?
         for state in affectedStates {
-            state.ggStackCommitsKey = nil
+            let shouldRefresh = state.worktree.id == activeId && state.ggContext.isActive
+            if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
+                activeRefresh = task
+            }
         }
-        guard let activeId,
-              let state = affectedStates.first(where: { $0.worktree.id == activeId }),
-              state.ggContext.isActive
-        else { return nil }
-        return Task { @MainActor in
-            await state.refreshGGStack()
-        }
+        return activeRefresh
     }
 
     private static func canonicalWorktreePath(_ url: URL) -> String {
@@ -454,16 +452,15 @@ final class RightPaneStore {
         guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
             return nil
         }
-        let liveBranchIdentity = Self.normalizedGGBranchIdentity(liveBranch)
-        let cachedBranchIdentity = Self.normalizedGGBranchIdentity(state.currentBranch)
         let loadState: GGStackLoadState
-        let recoveredDetachedContext = !effectiveContext.isActive
-            && effectiveContext.permitsCurrentStackQuery
-            && liveBranchIdentity.isEmpty
-            && cachedBranchIdentity == liveBranchIdentity
-            && state.ggContext.isActive
-            && state.ggStackLoadState == .loaded
-        if state.ggStackLoadState == .loaded,
+        let recoveredDetachedContext = Self.canUseRecoveredDetachedContext(
+            state: state,
+            branchContext: effectiveContext,
+            liveBranch: liveBranch
+        )
+        if !effectiveContext.isActive && !recoveredDetachedContext {
+            loadState = .inactive
+        } else if state.ggStackLoadState == .loaded,
            (state.ggStackCommitsKey != state.currentGGStackCommitsKey
             || (state.ggContext != effectiveContext && !recoveredDetachedContext))
         {
@@ -485,17 +482,29 @@ final class RightPaneStore {
         branchContext: GGWorktreeContext,
         liveBranch: String
     ) -> GGWorktreeContext {
-        let liveBranchIdentity = Self.normalizedGGBranchIdentity(liveBranch)
-        guard !branchContext.isActive,
-              branchContext.permitsCurrentStackQuery,
-              let state = states.values.first(where: { $0.worktree.path.path == path }),
-              liveBranchIdentity.isEmpty,
-              Self.normalizedGGBranchIdentity(state.currentBranch) == liveBranchIdentity,
-              state.ggContext.isActive,
-              state.ggStackLoadState == .loaded,
+        guard let state = states.values.first(where: { $0.worktree.path.path == path }),
+              Self.canUseRecoveredDetachedContext(
+                  state: state,
+                  branchContext: branchContext,
+                  liveBranch: liveBranch
+              ),
               state.ggStackCommitsKey == state.currentGGStackCommitsKey
         else { return branchContext }
         return state.ggContext
+    }
+
+    private static func canUseRecoveredDetachedContext(
+        state: RightPaneState,
+        branchContext: GGWorktreeContext,
+        liveBranch: String
+    ) -> Bool {
+        let liveBranchIdentity = normalizedGGBranchIdentity(liveBranch)
+        return !branchContext.isActive
+            && branchContext.permitsCurrentStackQuery
+            && liveBranchIdentity.isEmpty
+            && normalizedGGBranchIdentity(state.currentBranch) == liveBranchIdentity
+            && state.ggContext.isActive
+            && state.ggStackLoadState == .loaded
     }
 
     private static func normalizedGGBranchIdentity(_ branch: String) -> String {

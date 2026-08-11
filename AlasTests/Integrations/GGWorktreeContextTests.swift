@@ -303,6 +303,46 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(GGStackSummaryStore.shared.summaries[path.path] == nil)
     }
 
+    @Test func sameLabelDetachedHeadUpdateClearsOnlyReportedSidebarSummary() {
+        let project = ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: "/tmp/alas-detached-summary-project",
+            color: "teal",
+            addedAt: .now
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let changedPath = URL(fileURLWithPath: "/tmp/alas-detached-summary-changed")
+        let unchangedPath = URL(fileURLWithPath: "/tmp/alas-detached-summary-unchanged")
+        for path in [changedPath, unchangedPath] {
+            state.projectsManager.insertOptimisticWorktree(Worktree(
+                id: Worktree.makeId(path: path),
+                projectId: project.id,
+                name: "(detached)",
+                branch: "(detached)",
+                path: path,
+                status: .clean,
+                lastActivity: .now
+            ))
+        }
+        let changedSummary = GGStackSummary(merged: 1, total: 2)
+        let unchangedSummary = GGStackSummary(merged: 2, total: 3)
+        GGStackSummaryStore.shared.summaries[changedPath.path] = changedSummary
+        GGStackSummaryStore.shared.summaries[unchangedPath.path] = unchangedSummary
+        defer {
+            GGStackSummaryStore.shared.summaries[changedPath.path] = nil
+            GGStackSummaryStore.shared.summaries[unchangedPath.path] = nil
+        }
+
+        state.handleProjectHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [changedPath: "(detached)"]
+        )
+
+        #expect(GGStackSummaryStore.shared.summaries[changedPath.path] == nil)
+        #expect(GGStackSummaryStore.shared.summaries[unchangedPath.path] == unchangedSummary)
+    }
+
     @Test func fullTopologyRefreshClearsCachedSidebarSummaryWhenBranchChanges() async throws {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-summary-topology-\(UUID().uuidString)")
