@@ -8337,14 +8337,18 @@ final class AppState {
             }) else { continue }
             let branch = rightPaneStore.currentBranchForWorktreePath(worktree.path.path)
                 ?? worktree.branch
+            let branchContext = ggWorktreeContext(
+                project: project,
+                worktree: worktree,
+                branch: branch,
+                ggInstalled: ggInstalled
+            )
             return (
                 project,
                 worktree,
-                ggWorktreeContext(
-                    project: project,
-                    worktree: worktree,
-                    branch: branch,
-                    ggInstalled: ggInstalled
+                rightPaneStore.effectiveGGContextForWorktreePath(
+                    worktree.path.path,
+                    branchContext: branchContext
                 )
             )
         }

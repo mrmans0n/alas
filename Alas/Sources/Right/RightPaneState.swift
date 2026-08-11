@@ -953,12 +953,14 @@ final class RightPaneState: GGSplitCommitServicing {
             currentBranch = branch
             ggStackCommitsKey = nil
         }
-        let context = ggContextProvider?(branch) ?? .inactive(reason: .policyOff)
-        if ggContext != context { ggContext = context }
+        let branchContext = ggContextProvider?(branch) ?? .inactive(reason: .policyOff)
+        if branchContext.isActive || !branchContext.permitsCurrentStackQuery || !ggContext.isActive {
+            if ggContext != branchContext { ggContext = branchContext }
+        }
         if ggStackLoadState == .loaded {
             invalidateOlderHistoryForDisplaySourceChange()
         }
-        ggStackLoadState = context.isActive ? .loading : .inactive
+        ggStackLoadState = branchContext.permitsCurrentStackQuery ? .loading : .inactive
     }
 
     @MainActor
@@ -966,10 +968,12 @@ final class RightPaneState: GGSplitCommitServicing {
         let snapshotGeneration = snapshotInvalidationGeneration
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
-        let context = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
-        if ggContext != context { ggContext = context }
+        let branchContext = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
+        if branchContext.isActive || !branchContext.permitsCurrentStackQuery || !ggContext.isActive {
+            if ggContext != branchContext { ggContext = branchContext }
+        }
         reconcilePausedOperation()
-        guard context.isActive else {
+        guard branchContext.permitsCurrentStackQuery else {
             if ggStackLoadState == .loaded {
                 invalidateOlderHistoryForDisplaySourceChange()
             }
@@ -1058,7 +1062,16 @@ final class RightPaneState: GGSplitCommitServicing {
             guard snapshotGeneration == snapshotInvalidationGeneration,
                   refreshGeneration == ggStackRefreshGeneration
             else { return }
-            ggStackCommitsKey = key
+            let resolvedContext: GGWorktreeContext
+            if branchContext.isActive {
+                resolvedContext = branchContext
+            } else if let stack {
+                resolvedContext = .active(stackName: stack.name)
+            } else {
+                resolvedContext = branchContext
+            }
+            if ggContext != resolvedContext { ggContext = resolvedContext }
+            ggStackCommitsKey = currentGGStackCommitsKey
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
@@ -1092,6 +1105,7 @@ final class RightPaneState: GGSplitCommitServicing {
             guard snapshotGeneration == snapshotInvalidationGeneration,
                   refreshGeneration == ggStackRefreshGeneration
             else { return }
+            if ggContext != branchContext { ggContext = branchContext }
             ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }
             if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }

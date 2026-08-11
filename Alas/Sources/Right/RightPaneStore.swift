@@ -428,9 +428,13 @@ final class RightPaneStore {
             return nil
         }
         let loadState: GGStackLoadState
+        let recoveredDetachedContext = !effectiveContext.isActive
+            && effectiveContext.permitsCurrentStackQuery
+            && state.ggContext.isActive
+            && state.ggStackLoadState == .loaded
         if state.ggStackLoadState == .loaded,
            (state.ggStackCommitsKey != state.currentGGStackCommitsKey
-            || state.ggContext != effectiveContext)
+            || (state.ggContext != effectiveContext && !recoveredDetachedContext))
         {
             loadState = effectiveContext.isActive ? .loading : .inactive
         } else {
@@ -440,6 +444,23 @@ final class RightPaneStore {
             stack: state.ggStack,
             loadState: loadState
         )
+    }
+
+    /// A detached branch cannot name its stack, but a loaded GG snapshot can.
+    /// Keep policy-denied contexts closed; only branch-derived uncertainty is
+    /// eligible to inherit the recovered context.
+    func effectiveGGContextForWorktreePath(
+        _ path: String,
+        branchContext: GGWorktreeContext
+    ) -> GGWorktreeContext {
+        guard !branchContext.isActive,
+              branchContext.permitsCurrentStackQuery,
+              let state = states.values.first(where: { $0.worktree.path.path == path }),
+              state.ggContext.isActive,
+              state.ggStackLoadState == .loaded,
+              state.ggStackCommitsKey == state.currentGGStackCommitsKey
+        else { return branchContext }
+        return state.ggContext
     }
 
     /// Latest branch observed by the active pane state. Quiescent cached panes
