@@ -342,17 +342,43 @@ final class RightPaneStore {
         projectId: String
     ) -> Task<Void, Never>? {
         let projectStates = states.values.filter { $0.worktree.projectId == projectId }
-        for state in projectStates {
+        return refreshActiveGGPresentation(invalidating: projectStates)
+    }
+
+    /// HEAD notifications identify the concrete worktrees whose checked-out
+    /// commits changed. Invalidate those panes even when the detached branch
+    /// label stayed the same, while preserving cached panes for other
+    /// worktrees in the project.
+    @discardableResult
+    func refreshActiveGGPresentationForHeadUpdates(
+        projectId: String,
+        worktreePaths: [URL]
+    ) -> Task<Void, Never>? {
+        let affectedPaths = Set(worktreePaths.map(Self.canonicalWorktreePath))
+        let affectedStates = states.values.filter {
+            $0.worktree.projectId == projectId
+                && affectedPaths.contains(Self.canonicalWorktreePath($0.worktree.path))
+        }
+        return refreshActiveGGPresentation(invalidating: affectedStates)
+    }
+
+    private func refreshActiveGGPresentation(
+        invalidating affectedStates: [RightPaneState]
+    ) -> Task<Void, Never>? {
+        for state in affectedStates {
             state.ggStackCommitsKey = nil
         }
         guard let activeId,
-              let state = states[activeId],
-              state.worktree.projectId == projectId,
+              let state = affectedStates.first(where: { $0.worktree.id == activeId }),
               state.ggContext.isActive
         else { return nil }
         return Task { @MainActor in
             await state.refreshGGStack()
         }
+    }
+
+    private static func canonicalWorktreePath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     /// Re-evaluate the gg gate for one cached worktree after its override

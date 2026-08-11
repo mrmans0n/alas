@@ -2,6 +2,23 @@ import Foundation
 import Testing
 @testable import Alas
 
+private actor HeadUpdateCountingGGRunner: GGCommandRunning {
+    private var callCount = 0
+
+    func run(args _: [String], cwd _: URL?) async throws -> ProcessResult {
+        callCount += 1
+        return ProcessResult(
+            exitCode: 0,
+            stdout: #"{"version":1,"stack":null}"#,
+            stderr: ""
+        )
+    }
+
+    func calls() -> Int {
+        callCount
+    }
+}
+
 struct GGWorktreeContextTests {
     @Test func policyResolverPreservesWorktreeSemantics() {
         #expect(GGWorktreeContextResolver.isPolicyEnabled(
@@ -488,7 +505,7 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(snapshot.loadState == .loaded)
     }
 
-    @Test func quiescentDetachedHeadRevisionInvalidatesRecoveredStackForACP() throws {
+    @Test func detachedHeadUpdateScopesRecoveredStackInvalidationToReportedWorktree() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-acp-detached-revision-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -509,43 +526,72 @@ struct AppStateGGACPWorktreeContextTests {
             ggMode: .off
         )
         let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
-        let path = root.appendingPathComponent("linked")
-        let worktree = Worktree(
-            id: Worktree.makeId(path: path),
+        let changedPath = root.appendingPathComponent("changed")
+        let unchangedPath = root.appendingPathComponent("unchanged")
+        let changedWorktree = Worktree(
+            id: Worktree.makeId(path: changedPath),
             projectId: project.id,
             name: "(detached)",
             branch: "(detached)",
-            path: path,
+            path: changedPath,
             status: .clean,
             lastActivity: .now
         )
-        state.projectsManager.insertOptimisticWorktree(worktree)
-        state.projectsManager.setGGWorktreeMode(
+        let unchangedWorktree = Worktree(
+            id: Worktree.makeId(path: unchangedPath),
             projectId: project.id,
-            worktreeId: worktree.id,
-            mode: .on
+            name: "(detached)",
+            branch: "(detached)",
+            path: unchangedPath,
+            status: .clean,
+            lastActivity: .now
         )
-        let pane = state.rightPaneStore.state(
-            for: worktree,
+        for worktree in [changedWorktree, unchangedWorktree] {
+            state.projectsManager.insertOptimisticWorktree(worktree)
+            state.projectsManager.setGGWorktreeMode(
+                projectId: project.id,
+                worktreeId: worktree.id,
+                mode: .on
+            )
+        }
+        let changedPane = state.rightPaneStore.state(
+            for: changedWorktree,
             baseBranch: "main",
             comparisonMode: .manual
         )
-        state.rightPaneStore.deactivate()
-        pane.currentBranch = ""
-        pane.ggContext = .active(stackName: "detached-a")
-        pane.ggStack = try GGStackSnapshot.decode(
+        let unchangedPane = state.rightPaneStore.state(
+            for: unchangedWorktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        changedPane.stop()
+        unchangedPane.stop()
+        defer { state.rightPaneStore.deactivate() }
+
+        let stack = try GGStackSnapshot.decode(
             fromJSON: Data(GGStackModelsTests.fixture.utf8)
         ).stack
-        pane.ggStackLoadState = .loaded
-        pane.ggStackCommitsKey = pane.currentGGStackCommitsKey
+        changedPane.currentBranch = ""
+        changedPane.ggContext = .active(stackName: "detached-a")
+        changedPane.ggStack = stack
+        changedPane.ggStackLoadState = .loaded
+        changedPane.ggStackCommitsKey = changedPane.currentGGStackCommitsKey
+        unchangedPane.currentBranch = ""
+        unchangedPane.ggContext = .active(stackName: "detached-b")
+        unchangedPane.ggStack = stack
+        unchangedPane.ggStackLoadState = .loaded
+        unchangedPane.ggStackCommitsKey = unchangedPane.currentGGStackCommitsKey
+        let unchangedKey = try #require(unchangedPane.ggStackCommitsKey)
+        let unchangedRunner = HeadUpdateCountingGGRunner()
+        unchangedPane.ggService = GGService(runner: unchangedRunner)
 
         let beforeRevision = try #require(state.ggACPWorktreeIntegration(
-            worktreePath: path.path,
+            worktreePath: changedPath.path,
             ggInstalled: true
         ))
         #expect(beforeRevision.context == .active(stackName: "detached-a"))
         let beforeSnapshot = try #require(state.rightPaneStore.ggStackSnapshotForWorktreePath(
-            path.path,
+            changedPath.path,
             effectiveContext: beforeRevision.context,
             liveBranch: "(detached)"
         ))
@@ -555,20 +601,35 @@ struct AppStateGGACPWorktreeContextTests {
         // watcher reports the same label for every detached HEAD.
         state.handleProjectHeadUpdates(
             projectId: project.id,
-            branchByWorktreePath: [path: "(detached)"]
+            branchByWorktreePath: [changedPath: "(detached)"]
         )
-        #expect(state.revisionChangeGeneration(worktreeID: worktree.id) == 1)
+        #expect(state.revisionChangeGeneration(worktreeID: changedWorktree.id) == 1)
 
         let afterRevision = try #require(state.ggACPWorktreeIntegration(
-            worktreePath: path.path,
+            worktreePath: changedPath.path,
             ggInstalled: true
         ))
         #expect(afterRevision.context == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
         let afterSnapshot = try #require(state.rightPaneStore.ggStackSnapshotForWorktreePath(
-            path.path,
+            changedPath.path,
             effectiveContext: afterRevision.context,
             liveBranch: "(detached)"
         ))
         #expect(afterSnapshot.loadState == .inactive)
+
+        let unchangedIntegration = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: unchangedPath.path,
+            ggInstalled: true
+        ))
+        #expect(unchangedIntegration.context == .active(stackName: "detached-b"))
+        let unchangedSnapshot = try #require(state.rightPaneStore.ggStackSnapshotForWorktreePath(
+            unchangedPath.path,
+            effectiveContext: unchangedIntegration.context,
+            liveBranch: "(detached)"
+        ))
+        #expect(unchangedSnapshot.loadState == .loaded)
+        #expect(unchangedPane.ggStackCommitsKey == unchangedKey)
+        await Task.yield()
+        #expect(await unchangedRunner.calls() == 0)
     }
 }
