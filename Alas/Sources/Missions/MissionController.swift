@@ -117,6 +117,8 @@ final class MissionController {
     @ObservationIgnored
     private var sourceRefreshGenerations: [MissionID: Int] = [:]
     @ObservationIgnored
+    private var isSuspended = false
+    @ObservationIgnored
     private lazy var coordinator = MissionCoordinator(environment: .init(
         persistence: environment.persistence,
         now: environment.now,
@@ -171,18 +173,36 @@ final class MissionController {
         self.openMission = openMission
     }
 
+    func resume() {
+        guard isSuspended else { return }
+        isSuspended = false
+        coordinator.resume()
+    }
+
+    func suspend() {
+        guard !isSuspended else { return }
+        isSuspended = true
+        sourceRefreshGenerations = sourceRefreshGenerations.mapValues { $0 &+ 1 }
+        for waiters in lifecycleWaiters.values {
+            for waiter in waiters { waiter.resume() }
+        }
+        lifecycleWaiters.removeAll()
+        coordinator.suspend()
+    }
+
     func load() async {
+        guard !isSuspended else { return }
         loadState = .loading
         loadError = nil
         do {
             let loaded = try await persistence.list(includeCompleted: true)
-            guard !Task.isCancelled else { return }
+            guard !isSuspended, !Task.isCancelled else { return }
             // A delete(_:) that completes while this load is in flight must not have
             // its result overwritten by a snapshot read before the deletion committed.
             aggregates = Self.sorted(loaded.filter { !deletedMissionIDs.contains($0.mission.id) })
             loadState = .loaded
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !isSuspended, !Task.isCancelled else { return }
             let message = error.localizedDescription
             loadError = message
             loadState = .failed(message)
@@ -190,11 +210,16 @@ final class MissionController {
     }
 
     func resolveLegacyBaseRemoteNames(using resolver: MissionLegacyBaseRemoteResolver) async {
+        guard !isSuspended else { return }
         do {
             var didChange = false
-            for aggregate in try await persistence.list(includeCompleted: true) {
+            let aggregates = try await persistence.list(includeCompleted: true)
+            guard !isSuspended, !Task.isCancelled else { return }
+            for aggregate in aggregates {
+                guard !isSuspended, !Task.isCancelled else { return }
                 for var leg in aggregate.legs where leg.baseRemoteName == nil {
                     guard let resolvedRemoteName = await resolver(leg.projectId, leg.baseRef) else { continue }
+                    guard !isSuspended, !Task.isCancelled else { return }
                     leg.baseRemoteName = resolvedRemoteName
                     try await persistence.updateLeg(leg, event: nil)
                     didChange = true
@@ -207,23 +232,27 @@ final class MissionController {
     }
 
     func create(_ draft: MissionDraft, allowDuplicate: Bool) async throws -> MissionID {
+        guard !isSuspended else { throw CancellationError() }
         let id = try await coordinator.create(draft, allowDuplicate: allowDuplicate)
         loadError = nil
         return id
     }
 
     func addLeg(_ draft: MissionLegDraft, to missionID: MissionID) async throws -> MissionLegID {
+        guard !isSuspended else { throw CancellationError() }
         let legID = try await coordinator.addLeg(missionID: missionID, draft: draft)
         loadError = nil
         return legID
     }
 
     func retry(_ id: MissionID, agentId: String? = nil) async {
+        guard !isSuspended else { return }
         guard let legID = aggregate(id: id)?.mission.primaryLegID else { return }
         await retry(id, legID: legID, agentId: agentId)
     }
 
     func retry(_ id: MissionID, legID: MissionLegID, agentId: String? = nil) async {
+        guard !isSuspended else { return }
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
@@ -267,12 +296,14 @@ final class MissionController {
     }
 
     func reconcileInterrupted() async {
+        guard !isSuspended else { return }
         loadError = nil
         await coordinator.reconcileInterrupted()
         await reconcileReadinessAtStartup()
     }
 
     func observeReview(worktreeId: String, baseRef: String, snapshot: ReviewLoopSnapshot) async {
+        guard !isSuspended else { return }
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
@@ -352,6 +383,7 @@ final class MissionController {
     }
 
     func discoverMergedReview(worktreeId: String, baseRef: String, snapshot: ReviewLoopSnapshot) async {
+        guard !isSuspended else { return }
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
@@ -386,11 +418,13 @@ final class MissionController {
     }
 
     func refreshReviewSnapshot(worktreeId: String, baseRef: String, snapshot: ReviewLoopSnapshot) async {
+        guard !isSuspended else { return }
         await observeReview(worktreeId: worktreeId, baseRef: baseRef, snapshot: snapshot)
         await discoverMergedReview(worktreeId: worktreeId, baseRef: baseRef, snapshot: snapshot)
     }
 
     func recordArchive(worktreeId: String) async {
+        guard !isSuspended else { return }
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
@@ -412,11 +446,13 @@ final class MissionController {
     }
 
     func recordMissingWorktree(_ id: MissionID, projectRemoved: Bool = false) async {
+        guard !isSuspended else { return }
         guard let legID = aggregate(id: id)?.mission.primaryLegID else { return }
         await recordMissingWorktree(id, legID: legID, projectRemoved: projectRemoved)
     }
 
     func recordMissingWorktree(_ id: MissionID, legID: MissionLegID, projectRemoved: Bool = false) async {
+        guard !isSuspended else { return }
         await apply(
             signal: projectRemoved ? .projectRemoved : .worktreeMissing,
             to: id,
@@ -425,14 +461,17 @@ final class MissionController {
     }
 
     func recordAvailableWorktree(_ id: MissionID) async {
+        guard !isSuspended else { return }
         await restoreReappearedWorktreeIfNeeded(id)
     }
 
     func recordAvailableWorktree(_ id: MissionID, legID: MissionLegID) async {
+        guard !isSuspended else { return }
         await restoreReappearedWorktreeIfNeeded(id, legID: legID)
     }
 
     func recordMissingWorktree(projectId: String, projectRemoved: Bool) async {
+        guard !isSuspended else { return }
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
@@ -452,6 +491,7 @@ final class MissionController {
 
     @discardableResult
     func refreshSource(_ id: MissionID) async -> MissionSourceRefreshResult {
+        guard !isSuspended else { return .unavailable }
         sourceRefreshGenerations[id, default: 0] &+= 1
         let generation = sourceRefreshGenerations[id, default: 0]
         do {
@@ -463,11 +503,11 @@ final class MissionController {
             do {
                 refreshed = try await sourceRefresh(loaded.source, leg.projectId)
             } catch {
-                guard sourceRefreshGenerations[id] == generation else { return .unavailable }
+                guard !isSuspended, sourceRefreshGenerations[id] == generation else { return .unavailable }
                 await persistRefreshFailure(error, aggregate: loaded)
                 return .failed(Self.sanitized(error.localizedDescription))
             }
-            guard sourceRefreshGenerations[id] == generation else { return .unavailable }
+            guard !isSuspended, sourceRefreshGenerations[id] == generation else { return .unavailable }
             if loaded.source.contentOrigin == .manual || refreshed.contentOrigin == .manual {
                 loadError = nil
                 return .confirmationRequired(.init(
@@ -493,7 +533,7 @@ final class MissionController {
             loadError = nil
             return .applied
         } catch {
-            guard sourceRefreshGenerations[id] == generation else { return .unavailable }
+            guard !isSuspended, sourceRefreshGenerations[id] == generation else { return .unavailable }
             loadError = error.localizedDescription
             return .failed(error.localizedDescription)
         }
@@ -501,8 +541,10 @@ final class MissionController {
 
     @discardableResult
     func confirmSourceRefresh(_ proposal: MissionSourceRefreshProposal) async -> Bool {
+        guard !isSuspended else { return false }
         do {
             guard let loaded = try await persistence.aggregate(id: proposal.missionID),
+                  !isSuspended,
                   loaded.source.identity == proposal.expectedIdentity,
                   loaded.source.capturedAt == proposal.expectedCapturedAt
             else {
@@ -532,8 +574,10 @@ final class MissionController {
 
     @discardableResult
     func updateManualSource(id: MissionID, title: String, body: String) async -> Bool {
+        guard !isSuspended else { return false }
         do {
             guard let aggregate = try await persistence.aggregate(id: id) else { return false }
+            guard !isSuspended else { return false }
             let event = makeEvent(
                 aggregate: aggregate,
                 kind: .sourceRefreshed,
@@ -555,6 +599,7 @@ final class MissionController {
     }
 
     func refreshLinkedReview(_ id: MissionID) async {
+        guard !isSuspended else { return }
         do {
             guard let aggregate = try await persistence.aggregate(id: id) else { return }
             for leg in aggregate.legs where leg.reviewIdentity != nil {
@@ -566,6 +611,7 @@ final class MissionController {
     }
 
     func refreshLinkedReview(_ id: MissionID, legID: MissionLegID) async {
+        guard !isSuspended else { return }
         do {
             guard let aggregate = try await persistence.aggregate(id: id),
                   let leg = aggregate.legs.first(where: { $0.id == legID }),
@@ -589,6 +635,7 @@ final class MissionController {
     }
 
     func refreshReviewWithoutWorktree(_ id: MissionID) async {
+        guard !isSuspended else { return }
         do {
             guard let aggregate = try await persistence.aggregate(id: id) else { return }
             for leg in aggregate.legs {
@@ -600,6 +647,7 @@ final class MissionController {
     }
 
     func refreshReviewWithoutWorktree(_ id: MissionID, legID: MissionLegID) async {
+        guard !isSuspended else { return }
         do {
             guard let aggregate = try await persistence.aggregate(id: id),
                   let leg = aggregate.legs.first(where: { $0.id == legID })
@@ -611,6 +659,7 @@ final class MissionController {
     }
 
     func refreshReviewBeforeWorktreeRemoval(_ worktreeID: String) async -> Bool {
+        guard !isSuspended else { return true }
         loadError = nil
         do {
             let active = try await persistence.list(includeCompleted: false)
@@ -630,6 +679,7 @@ final class MissionController {
     }
 
     func complete(_ id: MissionID) async {
+        guard !isSuspended else { return }
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
@@ -669,6 +719,7 @@ final class MissionController {
     }
 
     func delete(_ id: MissionID) async {
+        guard !isSuspended else { return }
         await withLifecycleMutation(id: id) { [weak self] in
             guard let self else { return }
             do {
@@ -685,6 +736,7 @@ final class MissionController {
     // skips the per-Mission lifecycle gate and deletes them in one transaction.
     @discardableResult
     func deleteCompleted(ids: [MissionID]) async -> [MissionID] {
+        guard !isSuspended else { return [] }
         let completed = ids.filter { aggregate(id: $0)?.mission.state == .completed }
         guard !completed.isEmpty else { return [] }
         do {
@@ -699,11 +751,13 @@ final class MissionController {
     }
 
     func aggregate(id: MissionID) -> MissionAggregate? {
-        aggregates.first { $0.mission.id == id }
+        guard !isSuspended else { return nil }
+        return aggregates.first { $0.mission.id == id }
     }
 
     func hasActiveMission(worktreeId: String) -> Bool {
-        aggregates.contains { aggregate in
+        guard !isSuspended else { return false }
+        return aggregates.contains { aggregate in
             aggregate.mission.state != .completed
                 && aggregate.legs.contains { $0.worktreeId == worktreeId }
         }
@@ -714,7 +768,15 @@ final class MissionController {
         existingProjectIds: [String],
         knownWorktreeIds: Set<String>
     ) -> MissionSidebarModel {
-        MissionSidebarModel.make(
+        guard !isSuspended else {
+            return MissionSidebarModel.make(
+                aggregates: [],
+                activeProjectIds: activeProjectIds,
+                existingProjectIds: existingProjectIds,
+                knownWorktreeIds: knownWorktreeIds
+            )
+        }
+        return MissionSidebarModel.make(
             aggregates: aggregates,
             activeProjectIds: activeProjectIds,
             existingProjectIds: existingProjectIds,
@@ -967,6 +1029,7 @@ final class MissionController {
         legID: MissionLegID? = nil,
         replaceReviewIdentity: Bool = false
     ) async {
+        guard !isSuspended else { return }
         await apply(
             signal: .review(state: request.state, identity: identity),
             to: id,
@@ -990,6 +1053,7 @@ final class MissionController {
     }
 
     private func applyArchive(to id: MissionID, legID: MissionLegID? = nil) async {
+        guard !isSuspended else { return }
         await apply(
             signal: .worktreeArchived,
             to: id,
@@ -1019,8 +1083,9 @@ final class MissionController {
         replaceReviewIdentity: Bool = false,
         validate: @escaping @MainActor (MissionAggregate) async -> Bool = { _ in true }
     ) async {
+        guard !isSuspended else { return }
         await withLifecycleMutation(id: id) { [weak self] in
-            guard let self else { return }
+            guard let self, !isSuspended else { return }
             do {
                 guard var aggregate = try await persistence.aggregate(id: id) else { return }
                 guard aggregate.mission.state != .completed else { return }
@@ -1033,7 +1098,7 @@ final class MissionController {
                     else { return }
                     aggregate = settled
                 }
-                guard await validate(aggregate) else { return }
+                guard await validate(aggregate), !isSuspended else { return }
                 guard let targetLeg = aggregate.legs.first(where: { $0.id == targetLegID }) else { return }
                 let decision = MissionReadinessEvaluator.evaluate(
                     currentState: targetLeg.state,
@@ -1136,6 +1201,7 @@ final class MissionController {
         _ error: Error,
         aggregate: MissionAggregate
     ) async {
+        guard !isSuspended else { return }
         let message = Self.sanitized(error.localizedDescription)
         let event = makeEvent(
             aggregate: aggregate,
@@ -1163,7 +1229,9 @@ final class MissionController {
     }
 
     private func publish(id: MissionID) async throws {
+        guard !isSuspended else { return }
         if let aggregate = try await persistence.aggregate(id: id) {
+            guard !isSuspended else { return }
             environment.notifyChanged(aggregate)
             replace(aggregate)
         }
@@ -1173,6 +1241,7 @@ final class MissionController {
         id: MissionID,
         operation: @escaping @MainActor () async -> Void
     ) async {
+        guard !isSuspended else { return }
         guard lifecycleMutations.insert(id).inserted else {
             await withCheckedContinuation { continuation in
                 lifecycleWaiters[id, default: []].append(continuation)
@@ -1275,6 +1344,7 @@ final class MissionController {
     // tombstone guard against a real MissionController without fabricating
     // real concurrency.
     func replace(_ aggregate: MissionAggregate) {
+        guard !isSuspended else { return }
         guard !deletedMissionIDs.contains(aggregate.mission.id) else { return }
         if let index = aggregates.firstIndex(where: { $0.mission.id == aggregate.mission.id }) {
             aggregates[index] = aggregate

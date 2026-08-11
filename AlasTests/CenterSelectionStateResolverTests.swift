@@ -17,11 +17,52 @@ struct CenterSelectionStateResolverTests {
             globalTabs: [.mission(mission)],
             worktreeTabs: [terminal],
             activeGlobalMissionTab: mission,
-            activeWorktreeTabId: terminal.id
+            activeWorktreeTabId: terminal.id,
+            missionsEnabled: true
         )
 
         #expect(composition.tabs == [.mission(mission), terminal])
         #expect(composition.activeId == mission.id)
+    }
+
+    @Test func disabledMissionsAreExcludedFromCenterComposition() {
+        let mission = MissionTabState.fixture
+        let terminal = Tab.terminal(TerminalTabState(
+            id: "terminal-1",
+            title: "Terminal",
+            sessionId: "session-1"
+        ))
+
+        let composition = CenterTabComposition(
+            globalTabs: [.mission(mission)],
+            worktreeTabs: [terminal],
+            activeGlobalMissionTab: mission,
+            activeWorktreeTabId: terminal.id,
+            missionsEnabled: false
+        )
+
+        #expect(composition.tabs == [terminal])
+        #expect(composition.activeId == terminal.id)
+    }
+
+    @Test func disabledMissionsExcludeLegacyWorktreeMissionAndKeepARegularTabActive() {
+        let mission = MissionTabState.fixture
+        let terminal = Tab.terminal(TerminalTabState(
+            id: "terminal-1",
+            title: "Terminal",
+            sessionId: "session-1"
+        ))
+
+        let composition = CenterTabComposition(
+            globalTabs: [],
+            worktreeTabs: [.mission(mission), terminal],
+            activeGlobalMissionTab: nil,
+            activeWorktreeTabId: mission.id,
+            missionsEnabled: false
+        )
+
+        #expect(composition.tabs == [terminal])
+        #expect(composition.activeId == terminal.id)
     }
 
     @Test func adjacentTabsFollowVisualOrderAndWrap() {

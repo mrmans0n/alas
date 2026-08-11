@@ -5,16 +5,31 @@ final class MissionLegCoordinator {
     private let environment: MissionCoordinator.Environment
     private var advancing: Set<MissionLegID> = []
     private var advanceWaiters: [MissionLegID: [CheckedContinuation<Void, Never>]] = [:]
+    private var isSuspended = false
 
     init(environment: MissionCoordinator.Environment) {
         self.environment = environment
     }
 
+    func resume() {
+        isSuspended = false
+    }
+
+    func suspend() {
+        isSuspended = true
+        for waiters in advanceWaiters.values {
+            for waiter in waiters { waiter.resume() }
+        }
+        advanceWaiters.removeAll()
+    }
+
     func advance(missionID: MissionID, legID: MissionLegID) async {
+        guard !isSuspended else { return }
         guard advancing.insert(legID).inserted else {
             await withCheckedContinuation { continuation in
                 advanceWaiters[legID, default: []].append(continuation)
             }
+            await advance(missionID: missionID, legID: legID)
             return
         }
 
@@ -27,6 +42,7 @@ final class MissionLegCoordinator {
     }
 
     func retry(missionID: MissionID, legID: MissionLegID, recreateWorktree: Bool = false) async {
+        guard !isSuspended else { return }
         let aggregate: MissionAggregate
         let leg: MissionLeg
         do {
@@ -77,6 +93,7 @@ final class MissionLegCoordinator {
     }
 
     func reconcileInterrupted() async {
+        guard !isSuspended else { return }
         let aggregates: [MissionAggregate]
         do {
             aggregates = try await environment.persistence.list(includeCompleted: false)
@@ -86,7 +103,9 @@ final class MissionLegCoordinator {
         }
 
         for aggregate in aggregates {
+            guard !isSuspended else { return }
             for leg in aggregate.legs where setupLeg(in: aggregate, legID: leg.id)?.state == .needsAttention {
+                guard !isSuspended else { return }
                 await reconcileArtifacts(missionID: aggregate.mission.id, legID: leg.id)
             }
         }
@@ -110,6 +129,7 @@ final class MissionLegCoordinator {
 
     private func performAdvance(missionID: MissionID, legID: MissionLegID) async {
         while true {
+            guard !isSuspended, !Task.isCancelled else { return }
             let aggregate: MissionAggregate
             let leg: MissionLeg
             do {
@@ -134,6 +154,7 @@ final class MissionLegCoordinator {
             case .running:
                 didAdvance = await settleRunning(aggregate: aggregate, leg: leg)
             }
+            guard !isSuspended, !Task.isCancelled else { return }
             if !didAdvance { return }
         }
     }
@@ -155,6 +176,7 @@ final class MissionLegCoordinator {
         } else {
             if leg.worktreeId == nil {
                 let planningResult = await environment.plannedWorktreeID(leg)
+                guard !isSuspended, !Task.isCancelled else { return false }
                 guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
                 switch planningResult {
                 case .success(let worktreeID):
@@ -179,6 +201,7 @@ final class MissionLegCoordinator {
                 }
             }
             let creationResult = await environment.createWorktree(leg)
+            guard !isSuspended, !Task.isCancelled else { return false }
             guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
             switch creationResult {
             case .success(let created):
@@ -276,6 +299,7 @@ final class MissionLegCoordinator {
         guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
 
         let startupResult = await environment.startACP(leg, worktree)
+        guard !isSuspended, !Task.isCancelled else { return false }
         guard !(await missionIsCompleted(aggregate.mission.id)) else { return false }
         switch startupResult {
         case .success:
@@ -378,8 +402,10 @@ final class MissionLegCoordinator {
         event: MissionEvent?,
         failureCheckpoint: MissionSetupCheckpoint? = nil
     ) async -> Bool {
+        guard !isSuspended, !Task.isCancelled else { return false }
         do {
             try await environment.persistence.updateLegSetup(missionID: missionID, leg: leg, event: event)
+            guard !isSuspended, !Task.isCancelled else { return false }
             await notify(id: missionID)
             return true
         } catch MissionStore.Error.missionCompleted {

@@ -55,13 +55,32 @@ final class MissionCoordinator {
     private let legCoordinator: MissionLegCoordinator
     private var addingLegs: Set<MissionID> = []
     private var addLegWaiters: [MissionID: [CheckedContinuation<Void, Never>]] = [:]
+    private var scheduledAdvances: [MissionLegID: Task<Void, Never>] = [:]
+    private var isSuspended = false
 
     init(environment: Environment) {
         self.environment = environment
         legCoordinator = MissionLegCoordinator(environment: environment)
     }
 
+    func resume() {
+        isSuspended = false
+        legCoordinator.resume()
+    }
+
+    func suspend() {
+        isSuspended = true
+        scheduledAdvances.values.forEach { $0.cancel() }
+        scheduledAdvances.removeAll()
+        for waiters in addLegWaiters.values {
+            for waiter in waiters { waiter.resume() }
+        }
+        addLegWaiters.removeAll()
+        legCoordinator.suspend()
+    }
+
     func create(_ draft: MissionDraft, allowDuplicate: Bool = false) async throws -> MissionID {
+        guard !isSuspended else { throw CancellationError() }
         let missionID = MissionID(rawValue: environment.makeID())
         let legID = MissionLegID(rawValue: environment.makeID())
         let now = environment.now()
@@ -109,13 +128,12 @@ final class MissionCoordinator {
 
         try await environment.persistence.insert(aggregate, allowDuplicate: allowDuplicate)
         environment.notifyChanged(aggregate)
-        Task { @MainActor [weak self] in
-            await self?.legCoordinator.advance(missionID: missionID, legID: legID)
-        }
+        scheduleAdvance(missionID: missionID, legID: legID)
         return missionID
     }
 
     func addLeg(missionID: MissionID, draft: MissionLegDraft) async throws -> MissionLegID {
+        guard !isSuspended else { throw CancellationError() }
         guard addingLegs.insert(missionID).inserted else {
             await withCheckedContinuation { continuation in
                 addLegWaiters[missionID, default: []].append(continuation)
@@ -167,13 +185,12 @@ final class MissionCoordinator {
         if let changed = try await environment.persistence.aggregate(id: missionID) {
             environment.notifyChanged(changed)
         }
-        Task { @MainActor [weak self] in
-            await self?.legCoordinator.advance(missionID: missionID, legID: legID)
-        }
+        scheduleAdvance(missionID: missionID, legID: legID)
         return legID
     }
 
     func advance(id: MissionID) async {
+        guard !isSuspended else { return }
         do {
             guard let aggregate = try await environment.persistence.aggregate(id: id) else { return }
             await legCoordinator.advance(missionID: id, legID: aggregate.mission.primaryLegID)
@@ -183,10 +200,12 @@ final class MissionCoordinator {
     }
 
     func advance(id: MissionID, legID: MissionLegID) async {
+        guard !isSuspended else { return }
         await legCoordinator.advance(missionID: id, legID: legID)
     }
 
     func retry(id: MissionID, recreateWorktree: Bool = false) async {
+        guard !isSuspended else { return }
         do {
             guard let aggregate = try await environment.persistence.aggregate(id: id) else { return }
             await retry(id: id, legID: aggregate.mission.primaryLegID, recreateWorktree: recreateWorktree)
@@ -196,6 +215,7 @@ final class MissionCoordinator {
     }
 
     func retry(id: MissionID, legID: MissionLegID, recreateWorktree: Bool = false) async {
+        guard !isSuspended else { return }
         await legCoordinator.retry(
             missionID: id,
             legID: legID,
@@ -204,7 +224,18 @@ final class MissionCoordinator {
     }
 
     func reconcileInterrupted() async {
+        guard !isSuspended else { return }
         await legCoordinator.reconcileInterrupted()
+    }
+
+    private func scheduleAdvance(missionID: MissionID, legID: MissionLegID) {
+        guard !isSuspended else { return }
+        scheduledAdvances[legID]?.cancel()
+        scheduledAdvances[legID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await legCoordinator.advance(missionID: missionID, legID: legID)
+            scheduledAdvances.removeValue(forKey: legID)
+        }
     }
 
     private func event(

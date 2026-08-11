@@ -14,10 +14,11 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
 enum RootWorkspaceVisibilityPolicy {
     static func showsWorkspace(
         hasProjects: Bool,
+        missionsEnabled: Bool,
         hasMissions: Bool,
         hasActiveMissionTab: Bool
     ) -> Bool {
-        hasProjects || hasMissions || hasActiveMissionTab
+        hasProjects || (missionsEnabled && (hasMissions || hasActiveMissionTab))
     }
 }
 
@@ -79,11 +80,7 @@ struct RootView: View {
             }
             .task {
                 state.startHarness()
-                state.restoreGlobalTabsForStartup()
-                async let topologyRefresh: Bool = state.refreshAllProjectTopologies()
-                async let missionLoad: Void = state.missions.load()
-
-                _ = await topologyRefresh
+                _ = await state.refreshAllProjectTopologies()
                 guard !Task.isCancelled else { return }
                 // Worktrees now exist — load any persisted tab files for them. Init
                 // can't do this because refreshAll runs async after init.
@@ -95,10 +92,7 @@ struct RootView: View {
                 }
                 state.startAllProjectGitWatchers()
                 state.rescanAgents()
-
-                await missionLoad
-                guard !Task.isCancelled else { return }
-                await state.reconcileLoadedMissionsForStartup()
+                await state.loadMissionsIfEnabledForStartup()
             }
     }
 
@@ -117,8 +111,9 @@ struct RootView: View {
     private var mainContent: some View {
         if !RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: !state.projects.isEmpty,
-            hasMissions: !state.missions.aggregates.isEmpty,
-            hasActiveMissionTab: state.globalTabs.activeMissionTab() != nil
+            missionsEnabled: state.missionsEnabled,
+            hasMissions: state.missionsEnabled && !state.missions.aggregates.isEmpty,
+            hasActiveMissionTab: state.missionsEnabled && state.globalTabs.activeMissionTab() != nil
         ) {
             EmptyState(
                 canCreateWorktree: false,
@@ -139,7 +134,7 @@ struct RootView: View {
                 sidebarVisible: state.config.sidebarVisible,
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
-                    && state.globalTabs.activeMissionTab() == nil,
+                    && (!state.missionsEnabled || state.globalTabs.activeMissionTab() == nil),
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { centerContent() },
@@ -170,6 +165,7 @@ struct RootView: View {
                 newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
             },
             onNewMission: {
+                guard state.missionsEnabled else { return }
                 newMissionPresentation = NewMissionPresentation()
             },
             onHideSidebar: {
@@ -237,7 +233,7 @@ struct RootView: View {
             projects: state.activeSpaceProjects,
             projectsManager: state.projectsManager,
             isRefreshingProjectTopologies: state.isRefreshingProjectTopologies,
-            activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
+            activeGlobalMissionTab: state.missionsEnabled ? state.globalTabs.activeMissionTab() : nil,
             allowsHiddenSelectedWorktree: allowsHiddenSelectedWorktreeForMission
         )
         switch resolver.resolve() {
@@ -247,9 +243,10 @@ struct RootView: View {
                     state: state,
                     worktree: worktree,
                     activeGlobalMissionTab: tabState,
+                    missionsEnabled: state.missionsEnabled,
                     allowsPaneFocus: !state.isKeyboardOverlayOpen
                 )
-            } else {
+            } else if state.missionsEnabled {
                 VStack(spacing: 0) {
                     GlobalMissionTabBarView(
                         tabs: state.globalTabs.tabs,
@@ -270,7 +267,8 @@ struct RootView: View {
             CenterPaneView(
                 state: state,
                 worktree: wt,
-                activeGlobalMissionTab: state.globalTabs.activeMissionTab(),
+                activeGlobalMissionTab: state.missionsEnabled ? state.globalTabs.activeMissionTab() : nil,
+                missionsEnabled: state.missionsEnabled,
                 allowsPaneFocus: !state.isKeyboardOverlayOpen
             )
         case .deleting(let wt):
@@ -292,7 +290,7 @@ struct RootView: View {
         case .loadingProject:
             LoadingProjectView()
         case .empty:
-            if let tabState = state.missingMissionTab {
+            if state.missionsEnabled, let tabState = state.missingMissionTab {
                 MissionTabView(state: state, worktree: nil, tabState: tabState)
             } else {
                 EmptyTabView(
@@ -308,7 +306,8 @@ struct RootView: View {
     }
 
     private var allowsHiddenSelectedWorktreeForMission: Bool {
-        guard let worktreeID = state.selectedWorktreeId,
+        guard state.missionsEnabled,
+              let worktreeID = state.selectedWorktreeId,
               let tab = state.globalTabs.activeMissionTab(),
               state.missions.aggregate(id: tab.missionID)?.primaryLeg?.worktreeId == worktreeID
         else { return false }
@@ -532,7 +531,10 @@ private struct RootPresentationHandlers: ViewModifier {
                 presetProjectId: presentation.projectId
             )
         }
-        .sheet(item: $newMissionPresentation) { _ in
+        .sheet(item: Binding(
+            get: { state.missionsEnabled ? newMissionPresentation : nil },
+            set: { newMissionPresentation = $0 }
+        )) { _ in
             NewMissionDialog(
                 presented: Binding(
                     get: { newMissionPresentation != nil },
@@ -541,6 +543,9 @@ private struct RootPresentationHandlers: ViewModifier {
                 projects: state.projects,
                 environment: .live(state: state)
             )
+        }
+        .onChange(of: state.missionsEnabled) { _, enabled in
+            if !enabled { newMissionPresentation = nil }
         }
         .sheet(item: $state.pendingRunScriptCreation) { presentation in
             NewRunScriptDialog(

@@ -238,7 +238,8 @@ private struct DialogFixture {
         ]
         state = AppState(
             store: DialogStore(projects: projects),
-            missionPersistence: persistence
+            missionPersistence: persistence,
+            missionsEnabled: true
         )
         self.aggregate = aggregate
     }

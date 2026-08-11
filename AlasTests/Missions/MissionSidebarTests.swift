@@ -6,6 +6,7 @@ struct MissionSidebarTests {
     @Test func orphanedMissionsKeepTheWorkspaceVisibleWithoutProjects() {
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
+            missionsEnabled: true,
             hasMissions: true,
             hasActiveMissionTab: false
         ))
@@ -14,7 +15,17 @@ struct MissionSidebarTests {
     @Test func activePersistedMissionTabKeepsTheWorkspaceVisibleWithoutProjectsOrMissions() {
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
+            missionsEnabled: true,
             hasMissions: false,
+            hasActiveMissionTab: true
+        ))
+    }
+
+    @Test func disabledMissionsDoNotKeepAnEmptyWorkspaceVisible() {
+        #expect(!RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            missionsEnabled: false,
+            hasMissions: true,
             hasActiveMissionTab: true
         ))
     }
