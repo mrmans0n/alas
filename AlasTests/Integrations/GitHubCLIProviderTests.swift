@@ -14,7 +14,7 @@ struct GitHubCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(issue.identity == MissionIssueIdentity(
+        #expect(issue.identity == CodeHostIssueIdentity(
             provider: .github,
             host: "github.example.com",
             repositorySlug: "mrmans0n/alas",

@@ -29,6 +29,7 @@ struct RepoGroupView: View {
     let canRemoveFromSpace: (_ spaceId: String) -> Bool
     let onToggleSpaceMembership: (_ spaceId: String) -> Void
     let onOpenTerminal: (Worktree) -> Void
+    var onOpenIssue: ((Worktree) -> (() -> Void)?)? = nil
     let onCopyPath: (Worktree) -> Void
     let onCopyBranch: (Worktree) -> Void
     let onRevealInFinder: (Worktree) -> Void
@@ -168,6 +169,7 @@ struct RepoGroupView: View {
                             ggMenuModel: ggMenuModel(wt),
                             onTap: { onSelect(wt) },
                             onOpenTerminal: { onOpenTerminal(wt) },
+                            onOpenIssue: onOpenIssue?(wt),
                             onCopyPath: { onCopyPath(wt) },
                             onCopyBranch: { onCopyBranch(wt) },
                             onRevealInFinder: { onRevealInFinder(wt) },

@@ -476,8 +476,8 @@ struct MissionPresentationTests {
 
     @Test func headerAndLegUseStoredIssueIdentityAndCapturedDetails() throws {
         var aggregate = Self.runningAggregate()
-        let issue = try #require(MissionIssueSnapshot(source: aggregate.source))
-        let storedIssue = MissionIssueSnapshot(
+        let issue = try #require(CodeHostIssueSnapshot(source: aggregate.source))
+        let storedIssue = CodeHostIssueSnapshot(
             identity: .init(
                 provider: .github,
                 host: "github.example.com",
@@ -494,7 +494,7 @@ struct MissionPresentationTests {
             capturedAt: Date(timeIntervalSince1970: 123),
             refreshError: aggregate.source.refreshError
         )
-        aggregate.source = MissionSourceSnapshot(issue: storedIssue)
+        aggregate.source = IssueSnapshot(codeHostIssue: storedIssue)
 
         let presentation = MissionTabPresentation(
             aggregate: aggregate,
@@ -545,7 +545,7 @@ struct MissionPresentationTests {
                 updatedAt: Date(timeIntervalSince1970: 120),
                 completedAt: nil
             ),
-            source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
+            source: IssueSnapshot(codeHostIssue: MissionFixtures.issue()),
             legs: [
                 Self.leg(
                     id: appLegID,

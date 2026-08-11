@@ -133,7 +133,7 @@ final class MissionStore {
         return try ids.compactMap { try aggregate(id: MissionID(rawValue: $0)) }
     }
 
-    func activeMission(sourceIdentity: MissionSourceIdentity) throws -> MissionAggregate? {
+    func activeMission(sourceIdentity: IssueIdentity) throws -> MissionAggregate? {
         let rows = try db.query("""
         SELECT missions.id
         FROM missions
@@ -273,7 +273,7 @@ final class MissionStore {
     @discardableResult
     func replaceSourceSnapshot(
         missionID: MissionID,
-        snapshot: MissionSourceSnapshot,
+        snapshot: IssueSnapshot,
         event: MissionEvent
     ) throws -> [MissionID] {
         try validate(event: event, for: missionID)
@@ -340,8 +340,8 @@ final class MissionStore {
 
     private func hasActiveSourceIdentityCollision(
         missionID: MissionID,
-        storedIdentity: MissionSourceIdentity,
-        replacementIdentity: MissionSourceIdentity
+        storedIdentity: IssueIdentity,
+        replacementIdentity: IssueIdentity
     ) throws -> Bool {
         let rows = try db.query("""
         SELECT 1
@@ -384,8 +384,8 @@ final class MissionStore {
 
     private func migrateActiveDuplicateSourceIdentities(
         excluding missionID: MissionID,
-        from storedSource: MissionSourceSnapshot,
-        to snapshot: MissionSourceSnapshot
+        from storedSource: IssueSnapshot,
+        to snapshot: IssueSnapshot
     ) throws -> [MissionID] {
         let duplicateIDs = try db.query("""
         SELECT missions.id
@@ -871,7 +871,7 @@ final class MissionStore {
         for row in legacySources {
             guard let missionID = row["mission_id"] as? String else { throw Error.malformedRecord }
             try insertSource(
-                MissionSourceSnapshot(issue: try decodeIssue(row)),
+                IssueSnapshot(codeHostIssue: try decodeIssue(row)),
                 missionID: MissionID(rawValue: missionID)
             )
         }
@@ -1070,7 +1070,7 @@ final class MissionStore {
         }
     }
 
-    private func source(missionID: MissionID) throws -> MissionSourceSnapshot {
+    private func source(missionID: MissionID) throws -> IssueSnapshot {
         let rows = try db.query(
             "SELECT * FROM mission_sources WHERE mission_id = ?",
             bindings: [missionID.rawValue]
@@ -1080,8 +1080,8 @@ final class MissionStore {
     }
 
     private static func isAllowedCodeHostRedirect(
-        from stored: MissionSourceSnapshot,
-        to replacement: MissionSourceSnapshot
+        from stored: IssueSnapshot,
+        to replacement: IssueSnapshot
     ) -> Bool {
         guard hasCoherentCodeHostIdentity(replacement),
               stored.identity.providerID == replacement.identity.providerID,
@@ -1096,7 +1096,7 @@ final class MissionStore {
         return true
     }
 
-    private static func hasCoherentCodeHostIdentity(_ source: MissionSourceSnapshot) -> Bool {
+    private static func hasCoherentCodeHostIdentity(_ source: IssueSnapshot) -> Bool {
         let expectedProvider: CodeHostKind
         switch source.identity.providerID {
         case .github:
@@ -1119,8 +1119,8 @@ final class MissionStore {
 
     private func migrateReviewIdentities(
         missionID: MissionID,
-        from oldIdentity: MissionRepositoryLocator,
-        to newIdentity: MissionRepositoryLocator
+        from oldIdentity: IssueRepositoryLocator,
+        to newIdentity: IssueRepositoryLocator
     ) throws {
         let rows = try db.query(
             "SELECT id, review_identity FROM mission_legs WHERE mission_id = ?",
@@ -1171,7 +1171,7 @@ final class MissionStore {
         ])
     }
 
-    private func insertSource(_ source: MissionSourceSnapshot, missionID: MissionID) throws {
+    private func insertSource(_ source: IssueSnapshot, missionID: MissionID) throws {
         try db.exec("""
         INSERT INTO mission_sources (
             mission_id, provider_id, stable_id, canonical_url, provider_label,
@@ -1182,7 +1182,7 @@ final class MissionStore {
         """, bindings: [missionID.rawValue] + sourceBindings(source))
     }
 
-    private func sourceBindings(_ source: MissionSourceSnapshot) throws -> [Any?] {
+    private func sourceBindings(_ source: IssueSnapshot) throws -> [Any?] {
         [
             source.identity.providerID.rawValue,
             source.identity.stableID,
@@ -1301,27 +1301,27 @@ final class MissionStore {
         )
     }
 
-    private func decodeSource(_ row: [String: Any?]) throws -> MissionSourceSnapshot {
+    private func decodeSource(_ row: [String: Any?]) throws -> IssueSnapshot {
         guard let providerID = row["provider_id"] as? String,
               let stableID = row["stable_id"] as? String,
               let canonicalURLRaw = row["canonical_url"] as? String,
               let canonicalURL = URL(string: canonicalURLRaw),
               let providerLabel = row["provider_label"] as? String,
               let stateRaw = row["provider_state"] as? String,
-              let state = MissionSourceState(rawValue: stateRaw),
+              let state = IssueState(rawValue: stateRaw),
               let labelsData = row["labels"] as? Data,
               let labels = try? decoder.decode([String].self, from: labelsData),
               let assigneesData = row["assignees"] as? Data,
               let assignees = try? decoder.decode([String].self, from: assigneesData),
               let capturedAt = date(from: row["captured_at"]),
               let contentOriginRaw = row["content_origin"] as? String,
-              let contentOrigin = MissionSourceContentOrigin(rawValue: contentOriginRaw),
+              let contentOrigin = IssueContentOrigin(rawValue: contentOriginRaw),
               let isEditable = row["is_editable"] as? Int64,
               let isRefreshable = row["is_refreshable"] as? Int64
         else { throw Error.malformedRecord }
-        let repositoryLocator: MissionRepositoryLocator?
+        let repositoryLocator: IssueRepositoryLocator?
         if let data = row["repository_locator"] as? Data {
-            guard let decoded = try? decoder.decode(MissionRepositoryLocator.self, from: data) else {
+            guard let decoded = try? decoder.decode(IssueRepositoryLocator.self, from: data) else {
                 throw Error.malformedRecord
             }
             repositoryLocator = decoded
@@ -1330,7 +1330,7 @@ final class MissionStore {
         }
         return .init(
             identity: .init(
-                providerID: MissionSourceProviderID(rawValue: providerID),
+                providerID: IssueProviderID(rawValue: providerID),
                 stableID: stableID
             ),
             canonicalURL: canonicalURL,
@@ -1351,7 +1351,7 @@ final class MissionStore {
         )
     }
 
-    private func decodeIssue(_ row: [String: Any?]) throws -> MissionIssueSnapshot {
+    private func decodeIssue(_ row: [String: Any?]) throws -> CodeHostIssueSnapshot {
         guard let providerRaw = row["provider"] as? String,
               let provider = CodeHostKind(rawValue: providerRaw),
               let host = row["host"] as? String,
@@ -1360,7 +1360,7 @@ final class MissionStore {
               let canonicalURLRaw = row["canonical_url"] as? String,
               let canonicalURL = URL(string: canonicalURLRaw),
               let stateRaw = row["provider_state"] as? String,
-              let state = MissionIssueState(rawValue: stateRaw),
+              let state = CodeHostIssueState(rawValue: stateRaw),
               let labelsData = row["labels"] as? Data,
               let labels = try? decoder.decode([String].self, from: labelsData),
               let assigneesData = row["assignees"] as? Data,

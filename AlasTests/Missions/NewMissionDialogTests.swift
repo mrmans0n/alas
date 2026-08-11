@@ -48,7 +48,7 @@ struct NewMissionDialogTests {
         #expect(model.base == "origin/main")
         #expect(model.branch == "feature/1842-fix-offline-sync-conflicts")
         #expect(model.agentId == "codex")
-        #expect(model.prompt.contains("## Work item context"))
+        #expect(model.prompt.contains("## Issue context"))
         #expect(model.prompt.contains("https://github.com/mrmans0n/alas/issues/1842"))
     }
 
@@ -135,7 +135,7 @@ struct NewMissionDialogTests {
             configuredBases: ["project-b": "main"],
             configuredPrefixes: ["project-b": "nacho/"],
             branchesByProject: ["project-b": ["main"]],
-            resolvedSource: ResolvedMissionSource(
+            resolvedSource: ResolvedIssue(
                 source: manual,
                 repositoryLocator: nil,
                 candidateProjectIDs: ["project-a", "project-b"],
@@ -148,7 +148,7 @@ struct NewMissionDialogTests {
         await model.resolve()
         #expect(model.phase == .confirmation)
         #expect(model.projectId == "project-b")
-        #expect(model.validationMessage == "Enter a work-item title.")
+        #expect(model.validationMessage == "Enter an issue title.")
 
         model.sourceTitle = "Fix login timeout"
         model.sourceBody = "Sessions expire during refresh."
@@ -168,7 +168,7 @@ struct NewMissionDialogTests {
             body: "Sessions expire during refresh."
         )
         let fake = NewMissionDialogFake(
-            resolvedSource: ResolvedMissionSource(
+            resolvedSource: ResolvedIssue(
                 source: manual,
                 repositoryLocator: nil,
                 candidateProjectIDs: ["alas"],
@@ -195,14 +195,14 @@ struct NewMissionDialogTests {
             title: "",
             body: ""
         )
-        let fallback = ResolvedMissionSource(
+        let fallback = ResolvedIssue(
             source: fallbackSource,
             repositoryLocator: .init(provider: .github, host: "github.com", repositorySlug: "mrmans0n/alas"),
             candidateProjectIDs: ["alas"],
             selectedProjectID: "alas"
         )
         let fake = NewMissionDialogFake(
-            resolutionFailure: MissionSourceResolutionFailure(
+            resolutionFailure: IssueResolutionFailure(
                 fallback: fallback,
                 message: "Authentication is required for github.com."
             )
@@ -228,14 +228,14 @@ struct NewMissionDialogTests {
             title: "",
             body: ""
         )
-        let fallback = ResolvedMissionSource(
+        let fallback = ResolvedIssue(
             source: fallbackSource,
             repositoryLocator: .init(provider: .github, host: "github.com", repositorySlug: "mrmans0n/alas"),
             candidateProjectIDs: ["alas"],
             selectedProjectID: "alas"
         )
         let fake = NewMissionDialogFake(
-            resolutionFailure: MissionSourceResolutionFailure(
+            resolutionFailure: IssueResolutionFailure(
                 fallback: fallback,
                 message: "Authentication is required for github.com."
             )
@@ -475,13 +475,13 @@ struct NewMissionDialogTests {
 
     @Test("duplicate identity comparison ignores host and repository casing")
     func duplicateIdentityComparisonIgnoresRepositoryCase() {
-        let stored = MissionIssueIdentity(
+        let stored = CodeHostIssueIdentity(
             provider: .github,
             host: "github.com",
             repositorySlug: "acme/alas",
             number: 1842
         )
-        let resolved = MissionIssueIdentity(
+        let resolved = CodeHostIssueIdentity(
             provider: .github,
             host: "GitHub.com",
             repositorySlug: "Acme/Alas",
@@ -493,7 +493,7 @@ struct NewMissionDialogTests {
 
     @Test("generated branch skips branches retained by an earlier Mission")
     func generatedBranchSkipsExistingMissionArtifacts() async {
-        let seed = MissionBranchName.make(
+        let seed = IssueBranchName.make(
             issueNumber: 1842,
             title: "Fix offline sync conflicts",
             prefix: "feature/"
@@ -511,7 +511,7 @@ struct NewMissionDialogTests {
 
     @Test("generated branch skips matching remote-tracking branches")
     func generatedBranchSkipsRemoteTrackingBranches() async {
-        let seed = MissionBranchName.make(
+        let seed = IssueBranchName.make(
             issueNumber: 1842,
             title: "Fix offline sync conflicts",
             prefix: "feature/"
@@ -529,7 +529,7 @@ struct NewMissionDialogTests {
 
     @Test("generated branch checks every configured remote")
     func generatedBranchSkipsCustomRemoteTrackingBranches() async {
-        let seed = MissionBranchName.make(
+        let seed = IssueBranchName.make(
             issueNumber: 1842,
             title: "Fix offline sync conflicts",
             prefix: "feature/"
@@ -549,7 +549,7 @@ struct NewMissionDialogTests {
 
     @Test("generated branch strips the longest slash-containing remote alias")
     func generatedBranchSkipsSlashRemoteTrackingBranches() async {
-        let seed = MissionBranchName.make(
+        let seed = IssueBranchName.make(
             issueNumber: 1842,
             title: "Fix offline sync conflicts",
             prefix: "feature/"
@@ -648,7 +648,7 @@ struct NewMissionDialogTests {
 
     @Test("duplicate suffix skips active Mission reservations")
     func duplicateSuffixSkipsActiveMissionReservations() async {
-        let seed = MissionBranchName.make(
+        let seed = IssueBranchName.make(
             issueNumber: 1842,
             title: "Fix offline sync conflicts",
             prefix: "feature/"
@@ -790,8 +790,8 @@ private final class NewMissionDialogFake {
         }
     }
 
-    let resolvedSource: ResolvedMissionSource
-    let resolutionFailure: MissionSourceResolutionFailure?
+    let resolvedSource: ResolvedIssue
+    let resolutionFailure: IssueResolutionFailure?
     let configuredBases: [String: String]
     let configuredPrefixes: [String: String]
     let branchesByProject: [String: [String]]
@@ -830,8 +830,8 @@ private final class NewMissionDialogFake {
         agents: [AgentDefinition] = [NewMissionDialogTests.agent(id: "codex")],
         duplicateMissionID: MissionID? = nil,
         createError: (any Error)? = nil,
-        resolvedSource: ResolvedMissionSource? = nil,
-        resolutionFailure: MissionSourceResolutionFailure? = nil,
+        resolvedSource: ResolvedIssue? = nil,
+        resolutionFailure: IssueResolutionFailure? = nil,
         destination: @escaping (String, String) -> URL = { projectID, branch in
             URL(fileURLWithPath: "/tmp/worktrees/\(projectID)/\(branch.replacingOccurrences(of: "/", with: "-"))")
         },
@@ -854,7 +854,7 @@ private final class NewMissionDialogFake {
         self.occupiedDestinationPaths = occupiedDestinationPaths
         self.reservedBranchesByProject = reservedBranchesByProject
         self.resolutionFailure = resolutionFailure
-        let snapshot = MissionIssueSnapshot(
+        let snapshot = CodeHostIssueSnapshot(
             identity: .init(
                 provider: .github,
                 host: "github.com",
@@ -871,8 +871,8 @@ private final class NewMissionDialogFake {
             capturedAt: Date(timeIntervalSince1970: 101),
             refreshError: nil
         )
-        self.resolvedSource = resolvedSource ?? ResolvedMissionSource(
-            source: MissionSourceSnapshot(issue: snapshot),
+        self.resolvedSource = resolvedSource ?? ResolvedIssue(
+            source: IssueSnapshot(codeHostIssue: snapshot),
             repositoryLocator: .init(
                 provider: .github,
                 host: "github.com",

@@ -55,6 +55,7 @@ final class ACPSessionManager: ObservableObject {
     /// `GGMCPProvider`'s gating so the preamble stays consistent with whether
     /// gg-mcp was actually attached.
     typealias GGPreambleProvider = @MainActor (_ worktreePath: String) -> GGPreambleSignal
+    typealias IssuePreambleProvider = @MainActor (_ worktreeID: String) -> IssuePreambleContext?
     /// Extra process env for locally spawned adapters so any agent's shell
     /// can drive the `alas` CLI. Nil (or a nil return) skips injection.
     typealias AlasCLIEnvProvider = @MainActor (
@@ -116,6 +117,7 @@ final class ACPSessionManager: ObservableObject {
     /// Reports gg stack state for the first-prompt preamble. Fetched per
     /// attach, mirroring `builtInMCPProvider`.
     private let ggPreambleProvider: GGPreambleProvider?
+    private let issuePreambleProvider: IssuePreambleProvider?
     /// Builds extra env for locally spawned adapter processes so the agent's
     /// shell can drive the `alas` CLI. Set post-init (unlike
     /// `builtInMCPProvider`) so AppState can wire it without threading it
@@ -468,7 +470,8 @@ final class ACPSessionManager: ObservableObject {
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
-         ggPreambleProvider: GGPreambleProvider? = nil)
+         ggPreambleProvider: GGPreambleProvider? = nil,
+         issuePreambleProvider: IssuePreambleProvider? = nil)
     {
         precondition(store != nil || persistence != nil, "ACPSessionManager requires persistence")
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
@@ -489,6 +492,7 @@ final class ACPSessionManager: ObservableObject {
         self.onSessionEnded = onSessionEnded
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
+        self.issuePreambleProvider = issuePreambleProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         self.delegatedMessageNotifier = delegatedMessageNotifier
             ?? DarwinChangeNotifier(worktreeId: worktreeId, channel: "delegated-inbox")
@@ -3568,7 +3572,8 @@ extension ACPSessionManager {
                         : (cliParentSessionId != nil),
                     userServerNames: userServerNames,
                     mode: preambleMode,
-                    ggStack: ggStackContext
+                    ggStack: ggStackContext,
+                    issue: issuePreambleProvider?(worktreeId)
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

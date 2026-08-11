@@ -120,7 +120,7 @@ struct AppStateCreateWorktreeSymlinkTests {
             lastActivity: .now
         ))
         let draft = MissionDraft(
-            source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
+            source: IssueSnapshot(codeHostIssue: MissionFixtures.issue()),
             projectId: project.id,
             baseRef: "missing-base",
             branch: "mission-symlink-branch",

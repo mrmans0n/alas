@@ -905,7 +905,7 @@ final class AppState {
                       worktreePath: URL(fileURLWithPath: project.path)
                   )
             else { return false }
-            let locator = MissionRepositoryLocator(
+            let locator = IssueRepositoryLocator(
                 provider: request.provider,
                 host: request.remote.host,
                 repositorySlug: request.remote.repositorySlug
@@ -1269,7 +1269,7 @@ final class AppState {
     }
 
     static func missionPaneBaseRef(
-        locator: MissionRepositoryLocator,
+        locator: IssueRepositoryLocator,
         baseRef: String,
         persistedRemoteName: String?,
         remotes: [GitRemote]
@@ -1311,17 +1311,17 @@ final class AppState {
     }
 
     private func refreshMissionSource(
-        _ source: MissionSourceSnapshot,
+        _ source: IssueSnapshot,
         projectID: String
-    ) async throws -> MissionSourceSnapshot {
+    ) async throws -> IssueSnapshot {
         guard let project = projectsManager.projects.first(where: { $0.id == projectID }) else {
             throw CodeHostProviderError.malformedOutput("The Mission project is no longer available.")
         }
         let issueProviders = CodeHostIssueProviderRegistry.live()
-        let registry = MissionSourceProviderRegistry([
-            CodeHostMissionSourceProvider(kind: .github, providers: issueProviders),
-            CodeHostMissionSourceProvider(kind: .gitlab, providers: issueProviders),
-            ManualMissionSourceProvider(),
+        let registry = IssueProviderRegistry([
+            CodeHostIssueSourceProvider(kind: .github, providers: issueProviders),
+            CodeHostIssueSourceProvider(kind: .gitlab, providers: issueProviders),
+            ManualIssueProvider(),
         ])
         guard let provider = registry.provider(for: source.identity.providerID) else {
             throw CodeHostProviderError.malformedOutput("Mission source refresh is unavailable.")
@@ -1332,7 +1332,7 @@ final class AppState {
     }
 
     static func missionRepositoryNeedsCanonicalRefresh(
-        locator: MissionRepositoryLocator,
+        locator: IssueRepositoryLocator,
         remotes: [GitRemote]
     ) -> Bool {
         let candidates = remotes
@@ -1461,7 +1461,7 @@ final class AppState {
     }
 
     static func missionReviewRemote(
-        locator: MissionRepositoryLocator,
+        locator: IssueRepositoryLocator,
         baseRef: String,
         persistedRemoteName: String? = nil,
         remotes: [GitRemote]
@@ -7365,6 +7365,20 @@ final class AppState {
                         integration.worktree.path.path,
                         effectiveContext: integration.context
                     )
+                )
+            },
+            issuePreambleProvider: { [weak self] worktreeID in
+                guard let self,
+                      let attachment = self.projectsManager.issueAttachment(
+                          projectId: worktree.projectId,
+                          worktreeId: worktreeID
+                      )
+                else { return nil }
+                return IssuePreambleContext(
+                    title: attachment.title,
+                    url: attachment.canonicalURL,
+                    providerLabel: attachment.providerLabel,
+                    displayReference: attachment.displayReference
                 )
             }
         )

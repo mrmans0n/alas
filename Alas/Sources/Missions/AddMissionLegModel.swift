@@ -162,7 +162,7 @@ final class AddMissionLegModel {
                 configuredDefault: environment.configuredBase(selectedProjectID)
             )
             branch = availableBranch(
-                seededBy: MissionBranchName.make(
+                seededBy: IssueBranchName.make(
                     displayReference: aggregate.source.displayReference,
                     title: aggregate.source.title,
                     prefix: environment.configuredBranchPrefix(selectedProjectID)

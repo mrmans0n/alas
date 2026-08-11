@@ -62,9 +62,9 @@ struct PairedAuthoredContentSurfaceTests {
         window.orderOut(nil)
     }
 
-    private func missionSource(body: String) -> MissionSourceSnapshot {
-        MissionSourceSnapshot(
-            identity: MissionSourceIdentity(providerID: .manual, stableID: "manual:42"),
+    private func missionSource(body: String) -> IssueSnapshot {
+        IssueSnapshot(
+            identity: IssueIdentity(providerID: .manual, stableID: "manual:42"),
             canonicalURL: URL(string: "https://example.com/issues/42")!,
             providerLabel: "Manual",
             displayReference: nil,

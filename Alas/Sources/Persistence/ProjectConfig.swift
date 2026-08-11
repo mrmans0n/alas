@@ -102,12 +102,14 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var ggMode: GGProjectMode = .auto
     /// Sparse per-worktree overrides. Missing entries inherit project policy.
     var ggWorktreeModes: [String: GGWorktreeMode] = [:]
+    /// Sparse Issue attachments, keyed by worktree ID.
+    var issueAttachments: [String: IssueAttachment] = [:]
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host, ggMode,
-             ggWorktreeModes
+             ggWorktreeModes, issueAttachments
     }
 
     init(
@@ -126,7 +128,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil,
         host: String? = nil,
         ggMode: GGProjectMode = .auto,
-        ggWorktreeModes: [String: GGWorktreeMode] = [:]
+        ggWorktreeModes: [String: GGWorktreeMode] = [:],
+        issueAttachments: [String: IssueAttachment] = [:]
     ) {
         self.id = id
         self.name = name
@@ -143,6 +146,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.host = host
         self.ggMode = ggMode
         self.ggWorktreeModes = ggWorktreeModes
+        self.issueAttachments = issueAttachments
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -171,6 +175,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         host = try? c.decode(String.self, forKey: .host)
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
+        issueAttachments = (try? c.decode([String: IssueAttachment].self, forKey: .issueAttachments)) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -193,6 +198,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         let sparseGGWorktreeModes = ggWorktreeModes.filter { $0.value != .inherit }
         if !sparseGGWorktreeModes.isEmpty {
             try c.encode(sparseGGWorktreeModes, forKey: .ggWorktreeModes)
+        }
+        if !issueAttachments.isEmpty {
+            try c.encode(issueAttachments, forKey: .issueAttachments)
         }
     }
 }

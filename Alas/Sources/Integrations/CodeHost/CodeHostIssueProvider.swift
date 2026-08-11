@@ -6,7 +6,7 @@ protocol CodeHostIssueProviding: Sendable {
 
     func isAvailable(cwd: URL) async -> Bool
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool
-    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> CodeHostIssueSnapshot
 }
 
 enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {
@@ -89,7 +89,7 @@ enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {
 }
 
 extension CodeHostRemote {
-    func missionIssueIdentity(number: Int) -> MissionIssueIdentity {
+    func codeHostIssueIdentity(number: Int) -> CodeHostIssueIdentity {
         let host = host.lowercased()
         let repositorySlug: String
         switch kind {
@@ -98,12 +98,12 @@ extension CodeHostRemote {
         case .gitlab:
             repositorySlug = self.repositorySlug.lowercased()
         }
-        return MissionIssueIdentity(provider: kind, host: host, repositorySlug: repositorySlug, number: number)
+        return CodeHostIssueIdentity(provider: kind, host: host, repositorySlug: repositorySlug, number: number)
     }
 }
 
 extension CodeHostKind {
-    var missionSourceProviderID: MissionSourceProviderID {
+    var issueProviderID: IssueProviderID {
         switch self {
         case .github: .github
         case .gitlab: .gitlab

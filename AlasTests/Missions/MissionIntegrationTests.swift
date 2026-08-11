@@ -600,7 +600,7 @@ private final class MissionControllerFake {
 @MainActor
 private final class MissionIntegrationHarness {
     let draft = MissionDraft(
-        source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
+        source: IssueSnapshot(codeHostIssue: MissionFixtures.issue()),
         projectId: "project-1",
         baseRef: "origin/main",
         baseRemoteName: "origin",
@@ -996,9 +996,9 @@ private final class MissionIntegrationRecorder {
     }
 
     func refreshSource(
-        _ source: MissionSourceSnapshot,
+        _ source: IssueSnapshot,
         projectID _: String
-    ) async throws -> MissionSourceSnapshot {
+    ) async throws -> IssueSnapshot {
         throw CodeHostProviderError.malformedOutput("No issue refresh configured.")
     }
 }
