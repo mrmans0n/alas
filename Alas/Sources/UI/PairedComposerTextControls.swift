@@ -528,17 +528,29 @@ struct PairedTextEditor: NSViewRepresentable {
 
     private func synchronizeLayout(of textView: PairedDelimiterTextView, in scrollView: NSScrollView) {
         let viewport = scrollView.contentView.bounds.size
-        let width = max(viewport.width, scrollView.contentSize.width, textView.frame.width)
-        let height = max(viewport.height, scrollView.contentSize.height)
-        textView.minSize = NSSize(width: 0, height: height)
+        let width = max(viewport.width, scrollView.contentSize.width)
+        let viewportHeight = max(viewport.height, scrollView.contentSize.height)
         textView.textContainer?.containerSize = NSSize(
             width: width,
             height: CGFloat.greatestFiniteMagnitude
         )
+        let contentHeight = Self.laidOutContentHeight(of: textView)
+        let height = max(viewportHeight, contentHeight)
+        textView.minSize = NSSize(width: 0, height: height)
         textView.frame.size = NSSize(
             width: width,
-            height: max(textView.frame.height, height)
+            height: height
         )
+    }
+
+    private static func laidOutContentHeight(of textView: PairedDelimiterTextView) -> CGFloat {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else { return 0 }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        return ceil(usedRect.height + textView.textContainerInset.height * 2)
     }
 
     private static func clamped(_ range: NSRange, in text: String) -> NSRange {

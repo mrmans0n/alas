@@ -312,6 +312,29 @@ struct PairedComposerTextControlsTests {
         await dismantle(model: model, controller: controller, window: window)
     }
 
+    @Test func textEditorEmptyDocumentShrinksWithViewport() async throws {
+        let model = ComposerControlModel(text: "", isFocused: false)
+        model.editorHeight = 220
+        let controller = NSHostingController(rootView: PairedTextEditorHarness(model: model))
+        let window = attach(controller, size: NSSize(width: 360, height: 300))
+        await drain(controller.view)
+
+        let textView = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
+        let scrollView = try #require(textView.enclosingScrollView)
+        let tallDocumentHeight = textView.frame.height
+        #expect(tallDocumentHeight >= scrollView.contentView.bounds.height)
+
+        model.editorHeight = 48
+        await drain(controller.view)
+
+        let shrunkenViewportHeight = scrollView.contentView.bounds.height
+        #expect(shrunkenViewportHeight < tallDocumentHeight)
+        #expect(textView.frame.height <= shrunkenViewportHeight + 1)
+        #expect(textView.frame.height >= shrunkenViewportHeight)
+
+        await dismantle(model: model, controller: controller, window: window)
+    }
+
     @Test func textFieldUpdatesExternalConfigurationAndDisabledState() async throws {
         let model = ComposerControlModel(text: "initial", isFocused: false)
         let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
@@ -461,6 +484,7 @@ private final class ComposerControlModel: ObservableObject {
     @Published var fontSize: CGFloat = 13
     @Published var textColor = NSColor.labelColor
     @Published var isPresented = true
+    @Published var editorHeight: CGFloat = 100
 
     init(text: String, isFocused: Bool) {
         self.text = text
@@ -507,7 +531,7 @@ private struct PairedTextEditorHarness: View {
                     isFocused: $model.isFocused,
                     textContainerInset: NSSize(width: 7, height: 9)
                 )
-                .frame(height: 100)
+                .frame(height: model.editorHeight)
             }
             ComposerFocusSinkRepresentable()
         }
