@@ -265,7 +265,7 @@ struct PairedTextField: NSViewRepresentable {
                   parent.isEnabled,
                   !textView.hasMarkedText(),
                   let replacementString,
-                  shouldApplyPairedDelimiterResolution(for: replacementString)
+                  shouldApplyPairedDelimiterResolution(for: replacementString, event: NSApp.currentEvent)
             else { return true }
 
             switch PairedDelimiterEditing.resolve(
@@ -331,17 +331,17 @@ struct PairedTextField: NSViewRepresentable {
             return insert()
         }
 
-        private func shouldApplyPairedDelimiterResolution(for replacementString: String) -> Bool {
+        func shouldApplyPairedDelimiterResolution(for replacementString: String, event: NSEvent?) -> Bool {
             if isApplyingKeyboardTextInput {
                 return true
             }
-            guard let event = NSApp.currentEvent, event.type == .keyDown else {
+            guard let event, event.type == .keyDown else {
                 return false
             }
 
-            let textInputModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
-            return event.modifierFlags.intersection(textInputModifiers).isEmpty
-                && (event.charactersIgnoringModifiers ?? event.characters) == replacementString
+            let commandModifiers: NSEvent.ModifierFlags = [.command, .control]
+            return event.modifierFlags.intersection(commandModifiers).isEmpty
+                && event.characters == replacementString
         }
 
         private static let nativePasteSelectors: Set<Selector> = [

@@ -242,6 +242,27 @@ struct PairedComposerTextControlsTests {
         await dismantle(model: model, controller: controller, window: window)
     }
 
+    @Test func textFieldOptionGeneratedDelimiterUsesKeyboardPairing() async throws {
+        let model = ComposerControlModel(text: "", isFocused: true)
+        let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
+        let window = attach(controller, size: NSSize(width: 360, height: 120))
+        await drain(controller.view)
+
+        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
+        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+
+        #expect(coordinator.shouldApplyPairedDelimiterResolution(
+            for: "{",
+            event: try keyEvent(characters: "{", modifiers: .option)
+        ))
+        #expect(!coordinator.shouldApplyPairedDelimiterResolution(
+            for: "{",
+            event: try keyEvent(characters: "{", modifiers: [.command, .option])
+        ))
+
+        await dismantle(model: model, controller: controller, window: window)
+    }
+
     @Test func textFieldPasteAndMatchStyleBypassesSingleDelimiterPairing() async throws {
         let model = ComposerControlModel(text: "", isFocused: true)
         let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
@@ -473,6 +494,21 @@ struct PairedComposerTextControlsTests {
         var matches = view.subviews.compactMap { $0 as? T }
         matches.append(contentsOf: view.subviews.flatMap { subviews(of: type, in: $0) })
         return matches
+    }
+
+    private func keyEvent(characters: String, modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: 0
+        ))
     }
 }
 
