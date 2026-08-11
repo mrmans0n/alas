@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-08-11
+
+### ✨ Features
+
+- Add Mission deletion (#995).
+- Add GG-ID copy actions to the commit menu (#996).
+- Support dragging paths and SHAs into agents and terminals (#998).
+- Filter files in the review diff rail (#999).
+- Show the full `gg` stack in Changes (#1007).
+- Add paired delimiters to authored composers (#1008).
+
+### 🐛 Fixes
+
+- Fix the global Mission center pane layout (#994).
+- Mention the folder picker in ACP context (#997).
+- Keep the commit description scroller at the right width (#1000).
+- Fix ACP tool card scrolling (#1001).
+- Ellipsize review rail feedback (#1002).
+- Clear stale editor undo actions (#1003).
+- Open restored review comment editors (#1004).
+- Highlight review replies (#1005).
+- Prevent post-sync `gg` refreshes from leaving actions loading (#1006).
+
 ## [0.14.6] - 2026-08-07
 
 ### ✨ Features
