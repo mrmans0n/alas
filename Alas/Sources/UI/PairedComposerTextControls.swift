@@ -55,6 +55,18 @@ class PairedDelimiterTextView: NSTextView {
         }
     }
 
+    override func pasteAsPlainText(_ sender: Any?) {
+        performNativeTextInsertion {
+            super.pasteAsPlainText(sender)
+        }
+    }
+
+    override func pasteAsRichText(_ sender: Any?) {
+        performNativeTextInsertion {
+            super.pasteAsRichText(sender)
+        }
+    }
+
     func performNativeTextInsertion(_ insert: () -> Void) {
         bypassesPairedDelimiterResolution = true
         defer { bypassesPairedDelimiterResolution = false }
@@ -291,7 +303,7 @@ struct PairedTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard commandSelector == #selector(NSText.paste(_:)) else { return false }
+            guard Self.nativePasteSelectors.contains(commandSelector) else { return false }
             isApplyingNativePaste = true
             defer {
                 isApplyingNativePaste = false
@@ -315,6 +327,12 @@ struct PairedTextField: NSViewRepresentable {
                 && (event.charactersIgnoringModifiers ?? event.characters) == replacementString
             return !isPlainMatchingKeyDown
         }
+
+        private static let nativePasteSelectors: Set<Selector> = [
+            #selector(NSText.paste(_:)),
+            #selector(NSTextView.pasteAsPlainText(_:)),
+            #selector(NSTextView.pasteAsRichText(_:)),
+        ]
 
         func synchronizeFocus(for field: NSTextField) {
             guard let binding = parent.isFocused, let window = field.window else { return }
