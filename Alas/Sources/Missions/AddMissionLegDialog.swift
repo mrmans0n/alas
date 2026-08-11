@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Observation
 import SwiftUI
 
@@ -159,10 +160,12 @@ struct AddMissionLegDialog: View {
                         agentPicker
                     }
                     DialogField(label: "Repository instructions") {
-                        TextEditor(text: $instructions)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(theme.color("fg"))
-                            .scrollContentBackground(.hidden)
+                        PairedTextEditor(
+                            text: $instructions,
+                            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                            textColor: NSColor(theme.color("fg")),
+                            isEnabled: !actions.isSubmitting
+                        )
                             .frame(minHeight: 110, maxHeight: 170)
                             .padding(8)
                             .background(theme.color("bg-0"))
@@ -170,7 +173,6 @@ struct AddMissionLegDialog: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
                             )
-                            .disabled(actions.isSubmitting)
                     }
                     if actions.isSubmitting {
                         progressRow("Adding Mission leg…")

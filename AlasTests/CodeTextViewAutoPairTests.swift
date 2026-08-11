@@ -93,6 +93,15 @@ struct CodeTextViewAutoPairTests {
         #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
     }
 
+    @Test func evenlyEscapedQuoteInsertsPair() {
+        let textView = makeTextView("\\\\")
+
+        textView.insertText("\"", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(textView.string == "\\\\\"\"")
+        #expect(textView.selectedRange() == NSRange(location: 3, length: 0))
+    }
+
     @Test func multiCharacterInsertionFallsBackToNormalTextInsertion() {
         let textView = makeTextView()
 

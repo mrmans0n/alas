@@ -678,14 +678,10 @@ struct ReviewDraftSummaryRail: View {
             }
 
             if editingCommentID == comment.id {
-                TextEditor(text: $editingBody)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(theme.color("fg"))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 62)
-                    .background(theme.color("bg-2"))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .accessibilityIdentifier("review-draft-summary-editor-\(comment.id)")
+                ReviewDraftSummaryCommentEditor(
+                    text: $editingBody,
+                    accessibilityIdentifier: "review-draft-summary-editor-\(comment.id)"
+                )
             } else {
                 DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
                     .frame(maxHeight: 80, alignment: .top)
@@ -790,6 +786,25 @@ struct ReviewDraftSummaryRail: View {
         case .dismissed:
             theme.color("fg-muted")
         }
+    }
+}
+
+struct ReviewDraftSummaryCommentEditor: View {
+    @Binding var text: String
+    let accessibilityIdentifier: String
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        PairedTextEditor(
+            text: $text,
+            font: .systemFont(ofSize: 11.5),
+            textColor: NSColor(theme.color("fg"))
+        )
+        .frame(minHeight: 62)
+        .background(theme.color("bg-2"))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 

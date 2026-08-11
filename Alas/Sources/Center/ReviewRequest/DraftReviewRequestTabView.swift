@@ -153,11 +153,11 @@ struct DraftReviewRequestTabView: View {
 
     private var reviewRequestEditor: some View {
         VStack(spacing: 0) {
-            CommitMessageEditorView(
-                subject: $title,
+            ReviewRequestMessageEditor(
+                title: $title,
                 bodyText: $bodyText,
                 aiToolId: appState.bind(\.changes.aiToolId),
-                title: editorTitle,
+                editorTitle: editorTitle,
                 busy: busy,
                 error: error,
                 availableAgents: appState.agentRegistry.enabled(),
@@ -168,7 +168,6 @@ struct DraftReviewRequestTabView: View {
                     showSavedState: false,
                     handler: createReviewRequest
                 ),
-                iconName: "branch",
                 editorDisabled: tabState.createdURL != nil,
                 onDismissError: { self.error = nil },
                 accessory: AnyView(
@@ -238,119 +237,6 @@ struct DraftReviewRequestTabView: View {
             )
         )
         .overlay(Divider().opacity(0.5), alignment: .bottom)
-    }
-
-    private var headerRow: some View {
-        HStack(spacing: 8) {
-            Icon(name: "branch", size: 12, color: theme.color("accent"))
-            Text("\(tabState.provider.displayName) \(tabState.provider.reviewRequestLabel)")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(theme.color("fg"))
-            Text(tabState.repositorySlug.isEmpty ? "Unknown repository" : tabState.repositorySlug)
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-dim"))
-            Text("\(tabState.branchName) -> \(tabState.baseBranch)")
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-faint"))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            Toggle(isOn: $createAsDraft) {
-                Text("Draft")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-dim"))
-            }
-            .toggleStyle(.checkbox)
-            .disabled(busy || tabState.createdURL != nil)
-            AiSplitButton(
-                availableAgents: appState.agentRegistry.enabled(),
-                selectedToolId: appState.bind(\.changes.aiToolId),
-                busy: busy,
-                onGenerate: handleGenerate
-            )
-            createButton
-            if let createdURL = tabState.createdURL {
-                AlasButton(title: "Open \(tabState.provider.reviewRequestLabel)", icon: "arrow.up.right.square") {
-                    NSWorkspace.shared.open(createdURL)
-                }
-            }
-        }
-    }
-
-    private var createButton: some View {
-        Button(action: createReviewRequest) {
-            HStack(spacing: 8) {
-                if busy {
-                    Spinner(lineWidth: 1.5, duration: 0.7)
-                        .frame(width: 12, height: 12)
-                }
-                Text("Create \(tabState.provider.reviewRequestLabel)")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 28)
-            .foregroundColor(.white)
-            .background(canCreate ? theme.color("accent") : theme.color("accent").opacity(0.4))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .disabled(!canCreate)
-    }
-
-    private var titleField: some View {
-        TextField("Title", text: $title)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundColor(theme.color("fg"))
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(theme.color("field-bg"))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(
-                        focused == .title ? theme.color("accent") : theme.color("line"),
-                        lineWidth: focused == .title ? 1 : 0.5
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(
-                        focused == .title ? theme.color("accent-glow-soft") : .clear,
-                        lineWidth: 2
-                    )
-                    .padding(-2)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .focused($focused, equals: .title)
-            .disabled(busy || tabState.createdURL != nil)
-    }
-
-    private var bodyEditor: some View {
-        TextEditor(text: $bodyText)
-            .font(.system(size: 12, design: .monospaced))
-            .frame(minHeight: 90, maxHeight: 180)
-            .scrollContentBackground(.hidden)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(theme.color("field-bg"))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(
-                        focused == .body ? theme.color("accent") : theme.color("line"),
-                        lineWidth: focused == .body ? 1 : 0.5
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(
-                        focused == .body ? theme.color("accent-glow-soft") : .clear,
-                        lineWidth: 2
-                    )
-                    .padding(-2)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .focused($focused, equals: .body)
-            .disabled(busy || tabState.createdURL != nil)
     }
 
     private var contextBrowser: some View {
@@ -865,5 +751,38 @@ struct DraftReviewRequestTabView: View {
         } catch {
             // The controller keeps the non-blocking error state for the review rail.
         }
+    }
+}
+
+struct ReviewRequestMessageEditor: View {
+    @Binding var title: String
+    @Binding var bodyText: String
+    @Binding var aiToolId: String
+    let editorTitle: String
+    let busy: Bool
+    let error: String?
+    let availableAgents: [AgentDefinition]
+    let onGenerate: () -> Void
+    let primaryAction: CommitPrimaryAction
+    let editorDisabled: Bool
+    let onDismissError: () -> Void
+    let accessory: AnyView?
+
+    var body: some View {
+        CommitMessageEditorView(
+            subject: $title,
+            bodyText: $bodyText,
+            aiToolId: $aiToolId,
+            title: editorTitle,
+            busy: busy,
+            error: error,
+            availableAgents: availableAgents,
+            onGenerate: onGenerate,
+            primaryAction: primaryAction,
+            iconName: "branch",
+            editorDisabled: editorDisabled,
+            onDismissError: onDismissError,
+            accessory: accessory
+        )
     }
 }

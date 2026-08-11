@@ -171,9 +171,20 @@ struct DiffInlineCommentCard: View {
                         .font(.system(size: 11))
                         .foregroundColor(.accentColor)
                     }
-                    TextEditor(text: editorStateBinding.replyDraft)
-                        .font(.system(size: 11))
-                        .focused($focusedEditor, equals: .reply)
+                    PairedTextEditor(
+                        text: editorStateBinding.replyDraft,
+                        font: .systemFont(ofSize: 11),
+                        isFocused: Binding(
+                            get: { focusedEditor == .reply },
+                            set: { value in
+                                if value {
+                                    focusedEditor = .reply
+                                } else if focusedEditor == .reply {
+                                    focusedEditor = nil
+                                }
+                            }
+                        )
+                    )
                         .frame(minHeight: 60)
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
@@ -267,9 +278,20 @@ struct DiffInlineCommentCard: View {
                 Text(comment.author)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.primary)
-                TextEditor(text: editorStateBinding.editDraft)
-                    .font(.system(size: 11))
-                    .focused($focusedEditor, equals: .edit(comment.id))
+                PairedTextEditor(
+                    text: editorStateBinding.editDraft,
+                        font: .systemFont(ofSize: 11),
+                        isFocused: Binding(
+                            get: { focusedEditor == .edit(comment.id) },
+                            set: { value in
+                                if value {
+                                    focusedEditor = .edit(comment.id)
+                                } else if focusedEditor == .edit(comment.id) {
+                                    focusedEditor = nil
+                                }
+                            }
+                        )
+                    )
                     .frame(minHeight: 60)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)

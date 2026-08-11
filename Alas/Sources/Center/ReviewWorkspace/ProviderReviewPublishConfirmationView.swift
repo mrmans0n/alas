@@ -49,10 +49,12 @@ struct ProviderReviewPublishConfirmationView: View {
                     Text("Review summary")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(theme.color("fg-muted"))
-                    TextEditor(text: $summaryBody)
-                        .font(.system(size: 12))
-                        .foregroundColor(theme.color("fg"))
-                        .scrollContentBackground(.hidden)
+                    PairedTextEditor(
+                        text: $summaryBody,
+                        font: .systemFont(ofSize: 12),
+                        textColor: NSColor(theme.color("fg")),
+                        isEnabled: !isPublishing
+                    )
                         .frame(minHeight: 72)
                         .padding(6)
                         .background(theme.color("bg-0"))
@@ -61,7 +63,6 @@ struct ProviderReviewPublishConfirmationView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(theme.color("line"), lineWidth: 0.75)
                         )
-                        .disabled(isPublishing)
                         .accessibilityIdentifier("provider-review-publish-summary")
                 }
                 .background(

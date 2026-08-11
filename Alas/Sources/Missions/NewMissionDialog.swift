@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Observation
 import SwiftUI
 
@@ -680,10 +681,12 @@ struct NewMissionDialog: View {
                                 .disabled(model.phase == .creating)
                         }
                         DialogField(label: "Work-item context") {
-                            TextEditor(text: $model.sourceBody)
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.color("fg"))
-                                .scrollContentBackground(.hidden)
+                            PairedTextEditor(
+                                text: $model.sourceBody,
+                                font: .systemFont(ofSize: 12),
+                                textColor: NSColor(theme.color("fg")),
+                                isEnabled: model.phase != .creating
+                            )
                                 .frame(minHeight: 80, maxHeight: 140)
                                 .padding(8)
                                 .background(theme.color("bg-0"))
@@ -691,7 +694,6 @@ struct NewMissionDialog: View {
                                     RoundedRectangle(cornerRadius: 6)
                                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                                 )
-                                .disabled(model.phase == .creating)
                         }
                     }
                 }
@@ -720,10 +722,12 @@ struct NewMissionDialog: View {
                     agentPicker
                 }
                 DialogField(label: "Initial prompt") {
-                    TextEditor(text: actions.prompt)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(theme.color("fg"))
-                        .scrollContentBackground(.hidden)
+                    PairedTextEditor(
+                        text: actions.prompt,
+                        font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                        textColor: NSColor(theme.color("fg")),
+                        isEnabled: model.phase != .creating
+                    )
                         .frame(minHeight: 130, maxHeight: 190)
                         .padding(8)
                         .background(theme.color("bg-0"))
@@ -731,7 +735,6 @@ struct NewMissionDialog: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
                         )
-                        .disabled(model.phase == .creating)
                 }
                 if model.phase == .creating {
                     HStack(spacing: 8) {

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @Observable
@@ -55,8 +56,11 @@ struct EditMissionSourceDialog: View {
                 .textSelection(.enabled)
             TextField("Title", text: $model.title)
                 .textFieldStyle(.roundedBorder)
-            TextEditor(text: $model.body)
-                .font(.system(size: 12))
+            PairedTextEditor(
+                text: $model.body,
+                font: .systemFont(ofSize: 12),
+                textColor: NSColor(theme.color("fg"))
+            )
                 .frame(minHeight: 140)
                 .overlay {
                     RoundedRectangle(cornerRadius: 6)

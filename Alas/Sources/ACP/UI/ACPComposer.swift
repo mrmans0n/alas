@@ -563,7 +563,7 @@ extension NSAttributedString.Key {
     static let imageAttachmentMime = NSAttributedString.Key("alas.acp.imageAttachmentMime")
 }
 
-final class ACPNSTextView: NSTextView {
+final class ACPNSTextView: PairedDelimiterTextView {
     weak var coordinator: ACPInputField.Coordinator?
     private var chatTypography: ACPChatTypography = .default
 
@@ -1048,7 +1048,9 @@ final class ACPNSTextView: NSTextView {
         )
         let attrs = baseTypingAttributes
         typingAttributes = attrs
-        insertText(text, replacementRange: boundedRange)
+        performNativeTextInsertion {
+            insertText(text, replacementRange: boundedRange)
+        }
         typingAttributes = attrs
         return true
     }

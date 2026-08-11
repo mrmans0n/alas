@@ -507,14 +507,10 @@ private struct ProjectDialog: View {
                     .foregroundColor(theme.color("fg"))
                 Seg(value: $sessionOpenMode, options: startupOptions)
                 if sessionOpenMode == .appendToGlobal || sessionOpenMode == .overrideGlobal {
-                    TextEditor(text: $sessionOpenScript)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(theme.color("fg"))
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 60)
-                        .padding(8)
-                        .background(theme.color("bg-0"))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                    ProjectStartupScriptEditor(
+                        text: $sessionOpenScript,
+                        minHeight: 60
+                    )
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -523,14 +519,10 @@ private struct ProjectDialog: View {
                     .foregroundColor(theme.color("fg"))
                 Seg(value: $worktreeCreateMode, options: startupOptions)
                 if worktreeCreateMode == .appendToGlobal || worktreeCreateMode == .overrideGlobal {
-                    TextEditor(text: $worktreeCreateScript)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(theme.color("fg"))
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 60)
-                        .padding(8)
-                        .background(theme.color("bg-0"))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                    ProjectStartupScriptEditor(
+                        text: $worktreeCreateScript,
+                        minHeight: 60
+                    )
                 }
             }
         }
@@ -822,6 +814,24 @@ private struct ProjectDialog: View {
         if sshSetupStatus == .verifying {
             sshSetupStatus = .connecting
         }
+    }
+}
+
+struct ProjectStartupScriptEditor: View {
+    @Binding var text: String
+    let minHeight: CGFloat
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        PairedTextEditor(
+            text: $text,
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            textColor: NSColor(theme.color("fg"))
+        )
+        .frame(minHeight: minHeight)
+        .padding(8)
+        .background(theme.color("bg-0"))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 }
 

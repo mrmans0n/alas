@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct VerdictSheet: View {
@@ -8,6 +9,26 @@ struct VerdictSheet: View {
     @State private var verdict: ReviewVerdict = .comment
     @State private var summaryBody = ""
     @Environment(\.theme) private var theme
+
+    init(
+        pendingCount: Int,
+        initialVerdict: ReviewVerdict = .comment,
+        onSubmit: @escaping (ReviewVerdict, String) -> Void = { _, _ in },
+        onCancel: @escaping () -> Void = {}
+    ) {
+        self.pendingCount = pendingCount
+        self.onSubmit = onSubmit
+        self.onCancel = onCancel
+        _verdict = State(initialValue: initialVerdict)
+    }
+
+    static func canSubmit(verdict: ReviewVerdict, summaryBody: String) -> Bool {
+        verdict != .requestChanges || !summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canSubmit: Bool {
+        Self.canSubmit(verdict: verdict, summaryBody: summaryBody)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -26,9 +47,11 @@ struct VerdictSheet: View {
                 Text(verdict == .requestChanges ? "Summary (required)" : "Summary (optional)")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.color("fg-dim"))
-                TextEditor(text: $summaryBody)
-                    .font(.system(size: 12))
-                    .scrollContentBackground(.hidden)
+                PairedTextEditor(
+                    text: $summaryBody,
+                    font: .systemFont(ofSize: 12),
+                    textColor: NSColor(theme.color("fg"))
+                )
                     .frame(minHeight: 80)
                     .background(theme.color("bg-1"))
                     .overlay(
@@ -43,7 +66,8 @@ struct VerdictSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
-                .disabled(verdict == .requestChanges && summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("verdict-submit-review")
+                .disabled(!canSubmit)
 
                 Button("Cancel") {
                     onCancel()
