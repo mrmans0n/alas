@@ -33,6 +33,7 @@ struct CommitRow: View {
     var onGGOpenPR: (() -> Void)? = nil
     /// Stack entry for this commit when the branch is a gg stack.
     var stackEntry: GGStackEntry? = nil
+    var currentPositionIndicator: GGCurrentPositionIndicator? = nil
     var codeHostKind: CodeHostKind? = nil
 
     @Environment(\.theme) private var theme
@@ -256,6 +257,18 @@ struct CommitRow: View {
                 Text("−\(commit.deletions)").foregroundColor(theme.color("del"))
             }
             Spacer(minLength: 0)
+            if let indicator = currentPositionIndicator {
+                Text(indicator.text)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundColor(theme.color("accent"))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(theme.color("accent").opacity(0.12))
+                    .clipShape(Capsule())
+                    .accessibilityLabel(indicator.accessibilityLabel)
+            }
         }
         .font(.system(size: 10.5, design: .monospaced))
     }

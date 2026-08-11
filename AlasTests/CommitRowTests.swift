@@ -105,6 +105,55 @@ struct CommitRowTests {
         #expect(GGCommitAction.checkout != .dropCommit)
     }
 
+    @Test func commitRowCarriesOffTipCurrentPositionIndicatorCopy() {
+        let indicator = GGCurrentPositionIndicator(
+            text: "Current · 2 of 4",
+            accessibilityLabel: "Current GG commit, position 2 of 4"
+        )
+        let row = CommitRow(
+            commit: commit(),
+            isLast: false,
+            onSelect: {},
+            onCopySHA: {},
+            currentPositionIndicator: indicator
+        )
+
+        #expect(row.currentPositionIndicator?.text == "Current · 2 of 4")
+        #expect(row.currentPositionIndicator?.accessibilityLabel == "Current GG commit, position 2 of 4")
+    }
+
+    @Test func aboveCurrentGGRowRetainsCheckoutAndGuardedMutations() {
+        let aboveCurrent = GGStackEntry(position: 4, sha: "four", title: "four")
+        let stack = GGStack(
+            name: "stack",
+            base: "main",
+            totalCommits: 4,
+            syncedCommits: 0,
+            currentPosition: 2,
+            behindBase: nil,
+            entries: [
+                GGStackEntry(position: 1, sha: "one", title: "one"),
+                GGStackEntry(position: 2, sha: "two", title: "two", isCurrent: true),
+                GGStackEntry(position: 3, sha: "three", title: "three"),
+                aboveCurrent,
+            ]
+        )
+        let menu = GGCommitMenuModel.make(context: GGCommitMenuContext(
+            entry: aboveCurrent,
+            stack: stack,
+            provider: nil,
+            capabilities: .init(structuredSplit: true, keepCurrentUnstack: true),
+            inFlightAction: nil,
+            pausedOperation: nil,
+            hasBlockingGitOperation: false,
+            selectionIsStale: false
+        ))
+
+        for action in [GGCommitAction.checkout, .splitCommit, .dropCommit, .unstackHere, .landThrough] {
+            #expect(menu.item(for: action) != nil)
+        }
+    }
+
     @Test func ggStackChipClickOpensProviderReviewWhenRemoteIsKnown() {
         let entry = GGStackEntry(
             position: 1,
@@ -175,5 +224,20 @@ struct CommitRowTests {
         #expect(feedback.message == "Copied title")
         try await waitUntil { feedback.message == nil }
         #expect(feedback.message == nil)
+    }
+
+    private func commit() -> CommitInfo {
+        CommitInfo(
+            sha: "deadbeef1234567890abcdef1234567890abcdef",
+            shortSha: "deadbee",
+            author: "Nacho Lopez",
+            authorInitials: "NL",
+            date: .now,
+            subject: "Show current stack position",
+            conventionalTag: nil,
+            filesChanged: 1,
+            insertions: 2,
+            deletions: 0
+        )
     }
 }

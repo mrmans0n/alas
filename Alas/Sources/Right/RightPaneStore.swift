@@ -333,6 +333,28 @@ final class RightPaneStore {
         for state in states.values { state.reevaluateGGGate() }
     }
 
+    /// Branch-ref rewrites can change commits above the checked-out GG entry
+    /// without changing HEAD or its reachable commit set. Force the active
+    /// presentation to reload instead of letting its reachable-SHA cache key
+    /// preserve stale upper rows.
+    @discardableResult
+    func refreshActiveGGPresentationForProjectRevision(
+        projectId: String
+    ) -> Task<Void, Never>? {
+        let projectStates = states.values.filter { $0.worktree.projectId == projectId }
+        for state in projectStates {
+            state.ggStackCommitsKey = nil
+        }
+        guard let activeId,
+              let state = states[activeId],
+              state.worktree.projectId == projectId,
+              state.ggContext.isActive
+        else { return nil }
+        return Task { @MainActor in
+            await state.refreshGGStack()
+        }
+    }
+
     /// Re-evaluate the gg gate for one cached worktree after its override
     /// changes. Returns nil when that worktree has no cached pane state.
     @discardableResult

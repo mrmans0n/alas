@@ -313,10 +313,10 @@ struct ChangesTabView: View {
             )
             Divider().opacity(0.4)
             CommitsSectionView(
-                commits: rps.commits,
+                commits: rps.commitsForDisplay,
                 olderCommits: rps.olderCommits,
                 comparisonRef: rps.comparisonRef,
-                hasMoreOlder: rps.hasMoreOlder,
+                hasMoreOlder: rps.hasMoreOlder && rps.ggStackLoadState != .loading,
                 isLoadingOlder: rps.isLoadingOlder,
                 behindBase: rps.showBehindBaseChip ? rps.behindBase : nil,
                 behindUpstream: rps.showBehindUpstreamChip ? rps.behindUpstream : nil,

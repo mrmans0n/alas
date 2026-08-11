@@ -123,6 +123,101 @@ struct GGStack: Decodable, Equatable {
     func entry(matchingCommitSHA sha: String) -> GGStackEntry? {
         entries.first { sha.hasPrefix($0.sha) || $0.sha.hasPrefix(sha) }
     }
+
+    func projectCommits(_ infosBySHA: [String: CommitInfo]) throws -> [CommitInfo] {
+        guard hasValidEntryShape,
+              infosBySHA.allSatisfy({ !$0.key.isEmpty && $0.key == $0.value.sha })
+        else {
+            throw GGStackCommitProjectionError.malformedStack
+        }
+
+        var resolvedSHAs: Set<String> = []
+        return try entries.sorted { $0.position > $1.position }.map { entry in
+            let matches = infosBySHA.filter {
+                $0.key.hasPrefix(entry.sha) || entry.sha.hasPrefix($0.key)
+            }
+            guard !matches.isEmpty else {
+                throw GGStackCommitProjectionError.missingCommit(sha: entry.sha)
+            }
+            guard matches.count == 1,
+                  let match = matches.first,
+                  resolvedSHAs.insert(match.key).inserted
+            else {
+                throw GGStackCommitProjectionError.malformedStack
+            }
+            let info = match.value
+            return info
+        }
+    }
+
+    func relation(for entry: GGStackEntry) -> GGStackCommitRelation {
+        guard entries.contains(entry),
+              let currentEntry = validatedCurrentEntry
+        else { return .unknown }
+        if entry.position > currentEntry.position { return .aboveCurrent }
+        if entry == currentEntry { return .current }
+        return .belowCurrent
+    }
+
+    func currentPositionIndicator(for entry: GGStackEntry) -> GGCurrentPositionIndicator? {
+        guard let currentEntry = validatedCurrentEntry,
+              entry == currentEntry,
+              currentEntry.position < totalCommits
+        else { return nil }
+        return GGCurrentPositionIndicator(
+            text: "Current · \(currentEntry.position) of \(totalCommits)",
+            accessibilityLabel: "Current GG commit, position \(currentEntry.position) of \(totalCommits)"
+        )
+    }
+
+    private var hasValidEntryShape: Bool {
+        guard totalCommits >= 0,
+              totalCommits == entries.count,
+              Set(entries.map(\.position)) == Set(entries.indices.map { $0 + 1 }),
+              entries.allSatisfy({ !$0.sha.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              Set(entries.map(\.sha)).count == entries.count
+        else { return false }
+        return true
+    }
+
+    private var validatedCurrentEntry: GGStackEntry? {
+        guard hasValidEntryShape,
+              let currentPosition,
+              currentPosition >= 1,
+              currentPosition <= totalCommits
+        else { return nil }
+        let currentEntries = entries.filter(\.isCurrent)
+        guard currentEntries.count == 1,
+              currentEntries[0].position == currentPosition
+        else { return nil }
+        return currentEntries[0]
+    }
+}
+
+enum GGStackCommitRelation: Equatable {
+    case aboveCurrent
+    case current
+    case belowCurrent
+    case unknown
+}
+
+struct GGCurrentPositionIndicator: Equatable {
+    let text: String
+    let accessibilityLabel: String
+}
+
+enum GGStackCommitProjectionError: Error, Equatable, LocalizedError {
+    case missingCommit(sha: String)
+    case malformedStack
+
+    var errorDescription: String? {
+        switch self {
+        case .missingCommit:
+            return "One or more GG stack commits are unavailable locally."
+        case .malformedStack:
+            return "GG returned incomplete or inconsistent stack metadata."
+        }
+    }
 }
 
 enum GGPRState: String, Equatable {
