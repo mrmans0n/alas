@@ -166,6 +166,13 @@ struct PairedComposerTextControlsTests {
         NSPasteboard.general.setString("(", forType: .string)
         defer { NSPasteboard.general.clearContents() }
 
+        #expect(coordinator.control(
+            field,
+            textView: editor,
+            shouldChangeCharactersIn: NSRange(location: 0, length: 0),
+            replacementString: "("
+        ))
+
         #expect(coordinator.control(field, textView: editor, doCommandBy: #selector(NSText.paste(_:))))
 
         #expect(field.stringValue == "(")

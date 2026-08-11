@@ -240,6 +240,10 @@ struct PairedTextField: NSViewRepresentable {
                   let replacementString
             else { return true }
 
+            if shouldUseNativePaste(for: replacementString) {
+                return true
+            }
+
             switch PairedDelimiterEditing.resolve(
                 insertedText: replacementString,
                 in: textView.string,
@@ -295,6 +299,21 @@ struct PairedTextField: NSViewRepresentable {
             }
             textView.paste(nil)
             return true
+        }
+
+        private func shouldUseNativePaste(for replacementString: String) -> Bool {
+            guard replacementString.count == 1,
+                  NSPasteboard.general.string(forType: .string) == replacementString
+            else { return false }
+
+            guard let event = NSApp.currentEvent, event.type == .keyDown else {
+                return true
+            }
+
+            let textInputModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
+            let isPlainMatchingKeyDown = event.modifierFlags.intersection(textInputModifiers).isEmpty
+                && (event.charactersIgnoringModifiers ?? event.characters) == replacementString
+            return !isPlainMatchingKeyDown
         }
 
         func synchronizeFocus(for field: NSTextField) {
