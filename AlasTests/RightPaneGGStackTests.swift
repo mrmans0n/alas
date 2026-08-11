@@ -1178,10 +1178,40 @@ struct RightPaneGGStackTests {
 
         let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
             worktree.path.path,
-            effectiveContext: .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+            effectiveContext: .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")),
+            liveBranch: ""
         ))
         #expect(snapshot.stack?.name == "agent-inbox")
         #expect(snapshot.loadState == .loaded)
+    }
+
+    @Test func quiescentActiveStackDoesNotPublishAsDetachedRecovery() throws {
+        let store = RightPaneStore()
+        let worktree = makeWorktree()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        store.deactivate()
+        state.currentBranch = "nacho/old-stack"
+        state.ggContext = .active(stackName: "old-stack")
+        state.ggStack = try GGStackSnapshot.decode(
+            fromJSON: Data(GGStackModelsTests.fixture.utf8)
+        ).stack
+        state.ggStackLoadState = .loaded
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
+
+        let detachedContext = GGWorktreeContext.inactive(
+            reason: .branchPrefixMismatch(expectedPrefix: "nacho/")
+        )
+        #expect(store.effectiveGGContextForWorktreePath(
+            worktree.path.path,
+            branchContext: detachedContext,
+            liveBranch: ""
+        ) == detachedContext)
+        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
+            worktree.path.path,
+            effectiveContext: detachedContext,
+            liveBranch: ""
+        ))
+        #expect(snapshot.loadState == .inactive)
     }
 
     @Test func detachedRefreshWithNoCurrentStackClearsPriorPresentation() async {
@@ -1562,7 +1592,8 @@ struct RightPaneGGStackTests {
         #expect(inactive.ggStackCommitsKey == nil)
         #expect(store.ggStackSnapshotForWorktreePath(
             inactiveWorktree.path.path,
-            effectiveContext: .active(stackName: "agent-inbox")
+            effectiveContext: .active(stackName: "agent-inbox"),
+            liveBranch: inactive.currentBranch
         )?.loadState == .loading)
         #expect(active.ggStackLoadState == .loaded)
     }
@@ -2074,7 +2105,8 @@ struct RightPaneGGStackTests {
         state.ggStackSourceCommits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
         let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
             worktree.path.path,
-            effectiveContext: .active(stackName: "stack")
+            effectiveContext: .active(stackName: "stack"),
+            liveBranch: state.currentBranch
         ))
 
         #expect(snapshot.stack != nil)
@@ -2095,7 +2127,8 @@ struct RightPaneGGStackTests {
 
         let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
             worktree.path.path,
-            effectiveContext: .active(stackName: "new-stack")
+            effectiveContext: .active(stackName: "new-stack"),
+            liveBranch: state.currentBranch
         ))
 
         #expect(snapshot.stack != nil)

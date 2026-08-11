@@ -422,7 +422,8 @@ final class RightPaneStore {
     /// exposed as loading so non-UI consumers cannot treat it as current.
     func ggStackSnapshotForWorktreePath(
         _ path: String,
-        effectiveContext: GGWorktreeContext
+        effectiveContext: GGWorktreeContext,
+        liveBranch: String
     ) -> RightPaneGGStackSnapshot? {
         guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
             return nil
@@ -430,6 +431,8 @@ final class RightPaneStore {
         let loadState: GGStackLoadState
         let recoveredDetachedContext = !effectiveContext.isActive
             && effectiveContext.permitsCurrentStackQuery
+            && liveBranch.isEmpty
+            && state.currentBranch == liveBranch
             && state.ggContext.isActive
             && state.ggStackLoadState == .loaded
         if state.ggStackLoadState == .loaded,
@@ -451,11 +454,14 @@ final class RightPaneStore {
     /// eligible to inherit the recovered context.
     func effectiveGGContextForWorktreePath(
         _ path: String,
-        branchContext: GGWorktreeContext
+        branchContext: GGWorktreeContext,
+        liveBranch: String
     ) -> GGWorktreeContext {
         guard !branchContext.isActive,
               branchContext.permitsCurrentStackQuery,
               let state = states.values.first(where: { $0.worktree.path.path == path }),
+              liveBranch.isEmpty,
+              state.currentBranch == liveBranch,
               state.ggContext.isActive,
               state.ggStackLoadState == .loaded,
               state.ggStackCommitsKey == state.currentGGStackCommitsKey

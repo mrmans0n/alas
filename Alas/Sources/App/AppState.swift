@@ -7492,7 +7492,10 @@ final class AppState {
                     context: integration.context,
                     snapshot: self.rightPaneStore.ggStackSnapshotForWorktreePath(
                         integration.worktree.path.path,
-                        effectiveContext: integration.context
+                        effectiveContext: integration.context,
+                        liveBranch: self.rightPaneStore.currentBranchForWorktreePath(
+                            integration.worktree.path.path
+                        ) ?? integration.worktree.branch
                     )
                 )
             },
@@ -8348,7 +8351,8 @@ final class AppState {
                 worktree,
                 rightPaneStore.effectiveGGContextForWorktreePath(
                     worktree.path.path,
-                    branchContext: branchContext
+                    branchContext: branchContext,
+                    liveBranch: branch
                 )
             )
         }
