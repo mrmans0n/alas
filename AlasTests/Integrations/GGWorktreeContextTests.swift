@@ -418,4 +418,73 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(AppState.ggPreambleSignal(context: reactivated.context, snapshot: nil) == .generic)
         #expect(reactivated.context == .active(stackName: "reactivated-stack"))
     }
+
+    @Test func quiescentDetachedTopologyLabelRetainsRecoveredStackForACP() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-acp-detached-topology-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git/gg"),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"defaults":{"branch_username":"nacho"}}"#.utf8).write(
+            to: root.appendingPathComponent(".git/gg/config.json")
+        )
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: root.path,
+            color: "teal",
+            addedAt: .now,
+            ggMode: .off
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let path = root.appendingPathComponent("linked")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: "nacho/old-stack",
+            branch: "nacho/old-stack",
+            path: path,
+            status: .clean,
+            lastActivity: .now
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.projectsManager.setGGWorktreeMode(
+            projectId: project.id,
+            worktreeId: worktree.id,
+            mode: .on
+        )
+        let pane = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        state.rightPaneStore.deactivate()
+        pane.currentBranch = ""
+        pane.ggContext = .active(stackName: "agent-inbox")
+        pane.ggStack = try GGStackSnapshot.decode(
+            fromJSON: Data(GGStackModelsTests.fixture.utf8)
+        ).stack
+        pane.ggStackLoadState = .loaded
+        pane.ggStackCommitsKey = pane.currentGGStackCommitsKey
+        state.projectsManager.applyHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [path: "(detached)"]
+        )
+        #expect(state.projectsManager.worktrees(projectId: project.id).first?.branch == "(detached)")
+
+        let integration = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(integration.context == .active(stackName: "agent-inbox"))
+        let snapshot = try #require(state.rightPaneStore.ggStackSnapshotForWorktreePath(
+            path.path,
+            effectiveContext: integration.context,
+            liveBranch: "(detached)"
+        ))
+        #expect(snapshot.loadState == .loaded)
+    }
 }

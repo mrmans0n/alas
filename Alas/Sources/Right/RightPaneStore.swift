@@ -428,11 +428,13 @@ final class RightPaneStore {
         guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
             return nil
         }
+        let liveBranchIdentity = Self.normalizedGGBranchIdentity(liveBranch)
+        let cachedBranchIdentity = Self.normalizedGGBranchIdentity(state.currentBranch)
         let loadState: GGStackLoadState
         let recoveredDetachedContext = !effectiveContext.isActive
             && effectiveContext.permitsCurrentStackQuery
-            && liveBranch.isEmpty
-            && state.currentBranch == liveBranch
+            && liveBranchIdentity.isEmpty
+            && cachedBranchIdentity == liveBranchIdentity
             && state.ggContext.isActive
             && state.ggStackLoadState == .loaded
         if state.ggStackLoadState == .loaded,
@@ -457,16 +459,21 @@ final class RightPaneStore {
         branchContext: GGWorktreeContext,
         liveBranch: String
     ) -> GGWorktreeContext {
+        let liveBranchIdentity = Self.normalizedGGBranchIdentity(liveBranch)
         guard !branchContext.isActive,
               branchContext.permitsCurrentStackQuery,
               let state = states.values.first(where: { $0.worktree.path.path == path }),
-              liveBranch.isEmpty,
-              state.currentBranch == liveBranch,
+              liveBranchIdentity.isEmpty,
+              Self.normalizedGGBranchIdentity(state.currentBranch) == liveBranchIdentity,
               state.ggContext.isActive,
               state.ggStackLoadState == .loaded,
               state.ggStackCommitsKey == state.currentGGStackCommitsKey
         else { return branchContext }
         return state.ggContext
+    }
+
+    private static func normalizedGGBranchIdentity(_ branch: String) -> String {
+        branch == "(detached)" ? "" : branch
     }
 
     /// Latest branch observed by the active pane state. Quiescent cached panes
